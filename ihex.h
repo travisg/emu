@@ -35,11 +35,14 @@ public:
 	int Open(const std::string &name);
 	void Close();
 
-	void SetCallback(void (*cb)(const void *ptr, size_t offset));
-	int Parse();
+	typedef boost::function<void (void *context, const uint8_t *ptr, size_t offset, size_t len)> iHexCallback;
 
+	void SetCallback(const iHexCallback &cb, void *context);
+	int Parse();
+	
 private:
 	std::ifstream mFile;
-	boost::function<void (const void *ptr, size_t offset)> mParseCallback;
+	iHexCallback mParseCallback;
+	void *mCallbackContext;
 };
 

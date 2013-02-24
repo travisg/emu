@@ -54,9 +54,10 @@ void iHex::Close()
 	mFile.close();
 }
 
-void iHex::SetCallback(void (*cb)(const void *ptr, size_t offset))
+void iHex::SetCallback(const iHexCallback &cb, void *context)
 {
 	mParseCallback = cb;
+	mCallbackContext = context;
 }
 
 static unsigned int hexnibble(char c)
@@ -113,7 +114,7 @@ int iHex::Parse()
 		unsigned int type = readhex8(line, pos);
 		pos += 2;
 
-		cout << "length " << length << " address " << address << " type " << type << endl;
+		//cout << "length " << length << " address " << address << " type " << type << endl;
 
 		switch (type) {
 			case 0: { // data record
@@ -127,7 +128,7 @@ int iHex::Parse()
 				unsigned int checksum = readhex8(line, pos);
 				//cout << "checksum " << checksum << endl;
 
-				mParseCallback(data, extAddress + address);
+				mParseCallback(mCallbackContext, data, extAddress + address, length);
 
 				delete[] data;
 				break;

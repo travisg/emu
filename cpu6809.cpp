@@ -22,18 +22,54 @@
  */
 #include <iostream>
 
-#include "system09.h"
+#include "cpu6809.h"
+#include "system.h"
 
 using namespace std;
 
-int main(int argc, char **argv)
+Cpu6809::Cpu6809()
 {
-	System *sys;
+}
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+Cpu6809::~Cpu6809()
+{
+}
+
+void Cpu6809::Reset()
+{
+	// put all the registers into their default values
+	mA = mB = mX = mY = 0;
+	mUP = mSP = 0;
+	mDP = 0;
+	mCC = 0;
+
+	//mPC = 0xfffe;
+	mPC = 0; // XXX incorrect
+}
+
+int Cpu6809::Run()
+{
+
+	bool done = false;
+	while (!done) {
+		uint8_t opcode;
+
+		opcode = mSys->MemRead8(mPC);
+		cout << "opcode " << hex << (unsigned int)opcode << endl;
+
+		done = true;
+
+	}
 
 	return 0;
 }
 
+void Cpu6809::Dump()
+{
+	char str[256];
+
+	snprintf(str, sizeof(str), "A 0x%02x B 0x%02x D 0x%04x X 0x%04x Y 0x%04x UP 0x%04x SP 0x%04x DP 0x%02x CC 0x%02x PC 0x%04x", 
+		mA, mB, mD, mX, mY, mUP, mSP, mDP, mCC, mPC);
+
+	cout << str << endl;
+}

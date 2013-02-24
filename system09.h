@@ -20,20 +20,33 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <iostream>
+#pragma once
 
-#include "system09.h"
+#include <stdint.h>
+#include "system.h"
 
-using namespace std;
+class Cpu6809;
+class Memory;
 
-int main(int argc, char **argv)
-{
-	System *sys;
+// a simple 6809 based system
+class System09 : public System {
+public:
+	System09();
+	virtual ~System09();
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+	virtual int Init();
 
-	return 0;
-}
+	virtual int Run();
+
+	virtual uint8_t MemRead8(size_t address);
+	virtual void    MemWrite8(size_t address, uint8_t val);
+
+private:
+	void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
+	static void iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len);
+
+	Cpu6809 *mCpu;
+	Memory *mMem;
+};
+
 

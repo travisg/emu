@@ -20,20 +20,22 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <iostream>
+#pragma once
 
-#include "system09.h"
+#include <boost/utility.hpp>
 
-using namespace std;
+#include <sys/types.h>
 
-int main(int argc, char **argv)
-{
-	System *sys;
+// top level object, representing the entire emulated system
+class System : boost::noncopyable {
+public:
+	System();
+	virtual ~System();
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+	virtual int Init() = 0;
+	virtual int Run() = 0;
 
-	return 0;
-}
+	virtual uint8_t MemRead8(size_t address) = 0;
+	virtual void    MemWrite8(size_t address, uint8_t val) = 0;
+};
 

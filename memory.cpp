@@ -20,19 +20,33 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <iostream>
+#include <cstring>
 
-#include "system09.h"
+#include "memory.h"
 
-using namespace std;
-
-int main(int argc, char **argv)
+Memory::Memory()
+:	mMem(0),
+	mSize(0)
 {
-	System *sys;
+}
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+Memory::~Memory()
+{
+	delete mMem;
+}
+
+int Memory::Alloc(size_t len)
+{
+	delete mMem;
+	mSize = 0;
+
+	mMem = new uint8_t[len];
+	if (!mMem)
+		return -1;
+
+	mSize = len;
+
+	memset(mMem, 0, len);
 
 	return 0;
 }

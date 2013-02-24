@@ -20,20 +20,12 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <iostream>
-
-#include "system09.h"
-
-using namespace std;
-
-int main(int argc, char **argv)
+#include "system.h"
+System::System()
 {
-	System *sys;
+}
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
-
-	return 0;
+System::~System()
+{
 }
 

@@ -20,20 +20,23 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <iostream>
+#pragma once
 
-#include "system09.h"
+class System;
 
-using namespace std;
+class Cpu {
+public:
+	Cpu() : mSys(0) {}
+	virtual ~Cpu() {}
 
-int main(int argc, char **argv)
-{
-	System *sys;
+	void SetSystem(System *sys) { mSys = sys; }
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+	virtual void Reset() = 0;
+	virtual int Run() = 0;
 
-	return 0;
-}
+	// debugging
+	virtual void Dump() = 0;
 
+protected:
+	System *mSys;
+};

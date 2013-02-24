@@ -20,20 +20,25 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <iostream>
+#pragma once
 
-#include "system09.h"
+#include <boost/utility.hpp>
 
-using namespace std;
+#include <stdint.h>
+#include <sys/types.h>
 
-int main(int argc, char **argv)
-{
-	System *sys;
+class Memory : boost::noncopyable {
+public:
+	Memory();
+	~Memory();
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+	int Alloc(size_t len);
 
-	return 0;
-}
+	// simple accessors, assumes bounds checking somewhere else
+	uint8_t ReadByte(size_t address) { return mMem[address]; }
+	void WriteByte(size_t address, uint8_t val) { mMem[address] = val; }
 
+private:
+	uint8_t *mMem;
+	size_t mSize;
+};

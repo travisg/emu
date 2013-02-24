@@ -20,20 +20,38 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <iostream>
+#pragma once
 
-#include "system09.h"
+#include <stdint.h>
 
-using namespace std;
+#include "cpu.h"
 
-int main(int argc, char **argv)
-{
-	System *sys;
+class Cpu6809 : public Cpu {
+public:
+	Cpu6809();
+	virtual ~Cpu6809();
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+	virtual void Reset();
+	virtual int Run();
 
-	return 0;
-}
+	virtual void Dump();
+
+private:
+	// register file
+	union {
+		struct { 
+			uint8_t mA;
+			uint8_t mB;
+		};
+		uint16_t mD; // D is a union of A & B
+	};
+	uint16_t mX;
+	uint16_t mY;
+	uint16_t mUP;
+	uint16_t mSP;
+	uint16_t mPC;
+	uint8_t  mDP;
+	uint8_t  mCC;
+};
+
 
