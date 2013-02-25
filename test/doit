@@ -1,0 +1,8 @@
+#!/bin/sh -v
+
+as6809 -gloaxff t6809 &&
+aslink -ni t6809
+
+as6809 -gloaxff rom &&
+aslink -niu rom
+
