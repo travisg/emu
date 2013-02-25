@@ -38,8 +38,11 @@ public:
 
 	virtual int Run();
 
-	virtual uint8_t MemRead8(size_t address);
-	virtual void    MemWrite8(size_t address, uint8_t val);
+	virtual uint8_t  MemRead8(size_t address);
+	virtual void     MemWrite8(size_t address, uint8_t val);
+
+	virtual uint16_t MemRead16(size_t address);
+	virtual void     MemWrite16(size_t address, uint16_t val);
 
 private:
 	void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);

@@ -40,10 +40,10 @@ private:
 	// register file
 	union {
 		struct { 
-			uint8_t mA;
 			uint8_t mB;
+			uint8_t mA;
 		};
-		uint16_t mD; // D is a union of A & B
+		uint16_t mD; // D is a union of A & B (XXX is endian specific)
 	};
 	uint16_t mX;
 	uint16_t mY;
@@ -52,6 +52,9 @@ private:
 	uint16_t mPC;
 	uint8_t  mDP;
 	uint8_t  mCC;
+
+	// any exceptions pending?
+	unsigned int mException;
 };
 
 

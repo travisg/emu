@@ -87,11 +87,11 @@ int iHex::Parse()
 	if (!mFile.is_open())
 		return -1;
 
-	string line;
 	bool done = false;
 	int err = 0;
 	uint32_t extAddress = 0;
 	while (!done && mFile.good()) {
+		string line;
 		getline(mFile, line);
 
 		//cout << "line: " << line <<endl;
@@ -118,7 +118,7 @@ int iHex::Parse()
 
 		switch (type) {
 			case 0: { // data record
-				uint8_t *data = new uint8_t(length);
+				uint8_t *data = new uint8_t[length];
 
 				for (size_t i = 0; i < length; i++) {
 					data[i] = readhex8(line, pos);
