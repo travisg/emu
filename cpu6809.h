@@ -26,6 +26,18 @@
 
 #include "cpu.h"
 
+/* registers */
+enum regnum {
+	REG_X,
+	REG_Y,
+	REG_U,
+	REG_S,
+	REG_A,
+	REG_B,
+	REG_D,
+	REG_PC,
+};
+
 class Cpu6809 : public Cpu {
 public:
 	Cpu6809();
@@ -37,6 +49,10 @@ public:
 	virtual void Dump();
 
 private:
+	uint16_t GetReg(regnum r);
+	void PutReg(regnum r, uint16_t val);
+	int RegWidth(regnum r);
+
 	// register file
 	union {
 		struct { 
@@ -47,8 +63,8 @@ private:
 	};
 	uint16_t mX;
 	uint16_t mY;
-	uint16_t mUP;
-	uint16_t mSP;
+	uint16_t mU;
+	uint16_t mS;
 	uint16_t mPC;
 	uint8_t  mDP;
 	uint8_t  mCC;

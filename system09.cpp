@@ -94,13 +94,18 @@ int System09::Run()
 
 uint8_t System09::MemRead8(size_t address)
 {
+	uint8_t val;
 	if (address < 0x10000)
-		return mMem->ReadByte(address);
-	return 0;
+		val = mMem->ReadByte(address);
+	else
+		val = 0;
+	//cout << "MemRead8 @0x" << hex << address << " val " << (unsigned int)val << endl;
+	return val;
 }
 
 void System09::MemWrite8(size_t address, uint8_t val)
 {
+	//cout << "MemWrite8 @0x" << hex << address << " val " << (unsigned int)val << endl;
 	if (address < 0x10000)
 		mMem->WriteByte(address, val);
 }

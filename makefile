@@ -3,7 +3,7 @@ TARGET := emu
 BUILDDIR := build-$(TARGET)
 
 # compiler flags, default libs to link against
-COMPILEFLAGS := -g -O2
+COMPILEFLAGS := -g -O2 -Wall -W
 CFLAGS :=
 CPPFLAGS :=
 ASMFLAGS :=

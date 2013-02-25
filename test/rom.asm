@@ -4,6 +4,17 @@
 	.org 0x8000
 
 rombase:
+	lda	 #1
+	lda	somedata
+	ldd	somedata+1
+
+	ldx	somedata+1
+
+	sta puthere
+	std puthere
+
+	abx
+
 	; immediate
 	adda #1
 	addb #1
@@ -20,10 +31,13 @@ rombase:
 	addd +0x1
 
 	; indexed
-	adda ,x     ; no offset
 	adda 1,x    ; 5 bit offset
+	adda -11,x    ; 5 bit offset
+	adda ,x     ; no offset
 	adda 100,x  ; 8 bit offset
+	adda -100,x  ; 8 bit offset
 	adda 1024,x ; 16 bit offset
+	adda -1024,x ; 16 bit offset
 	adda a,x    ; register offsets
 	adda b,x
 	adda d,x
@@ -52,6 +66,13 @@ rombase:
 
 unhandled_vector:
 	bra	.
+
+somedata:
+	.byte	0x99
+	.word	0x1024
+
+puthere:
+	.word	0
 
 	.area vectab (ABS)
 	.org 0xfff0
