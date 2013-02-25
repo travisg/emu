@@ -24,6 +24,7 @@
 
 #include <boost/utility.hpp>
 
+#include <stdint.h>
 #include <sys/types.h>
 
 // top level object, representing the entire emulated system

@@ -62,7 +62,7 @@ void iHex::SetCallback(const iHexCallback &cb, void *context)
 
 static unsigned int hexnibble(char c)
 {
-	if (!ishexnumber(c)) {
+	if (!isxdigit(c)) {
 		return 0;
 	}
 	return (c >= '0' && c <= '9') ? (c - '0') :

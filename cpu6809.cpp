@@ -21,6 +21,7 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include <iostream>
+#include <cstdio>
 #include <assert.h>
 
 #include "cpu6809.h"
