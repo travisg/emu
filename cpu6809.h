@@ -51,7 +51,8 @@ public:
 private:
 	uint16_t GetReg(regnum r);
 	void PutReg(regnum r, uint16_t val);
-	int RegWidth(regnum r);
+
+	bool TestBranchCond(unsigned int cond);
 
 	// register file
 	union {

@@ -74,12 +74,16 @@ int System09::Init()
 
 	// preload some stuff into memory
 	iHex hex;
-	hex.Open("test/t6809.ihx");
-
 	hex.SetCallback(&System09::iHexParseCallbackStatic, this);
+
+#if 0
+	hex.Open("test/t6809.ihx");
 	hex.Parse();
 	
 	hex.Open("test/rom.ihx");
+	hex.Parse();
+#endif
+	hex.Open("test/BASIC.HEX");
 	hex.Parse();
 
 	return 0;
@@ -106,7 +110,7 @@ uint8_t System09::MemRead8(size_t address)
 void System09::MemWrite8(size_t address, uint8_t val)
 {
 	//cout << "MemWrite8 @0x" << hex << address << " val " << (unsigned int)val << endl;
-	if (address < 0x10000)
+	if (address < 0x01000)
 		mMem->WriteByte(address, val);
 }
 
