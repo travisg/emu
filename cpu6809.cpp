@@ -68,6 +68,7 @@ enum addrMode {
 };
 
 enum op {
+	BADOP,
 	ADD,
 	ABX,
 	BRA,
@@ -87,7 +88,8 @@ struct opdecode {
 	};
 };
 
-static const opdecode ops[256] = {
+// opcode table, 0x10 extended opcodes are 0x100 -> 0x1ff, 0x11 is 0x200 -> 0x2ff
+static const opdecode ops[256 * 3] = {
 // alu ops
 [0x8b] = { "adda", IMMEDIATE, 1, ADD, REG_A, { 0 } },
 [0xcb] = { "addb", IMMEDIATE, 1, ADD, REG_B, { 0 } },
@@ -112,59 +114,56 @@ static const opdecode ops[256] = {
 [0x86] = { "lda",  IMMEDIATE, 1, LD, REG_A, { .store = false } },
 [0xc6] = { "ldb",  IMMEDIATE, 1, LD, REG_B, { .store = false } },
 [0xcc] = { "ldd",  IMMEDIATE, 2, LD, REG_D, { .store = false } },
+[0x1ce] = { "lds",  IMMEDIATE, 2, LD, REG_S, { .store = false } },
 [0xce] = { "ldu",  IMMEDIATE, 2, LD, REG_U, { .store = false } },
-//[0xce] = { "lds",  IMMEDIATE, 2, LD, REG_S, { .store = false } },
 [0x8e] = { "ldx",  IMMEDIATE, 2, LD, REG_X, { .store = false } },
-//[0x8e] = { "ldy",  IMMEDIATE, 2, LD, REG_Y, { .store = false } },
+[0x18e] = { "ldy",  IMMEDIATE, 2, LD, REG_Y, { .store = false } },
 
 [0x96] = { "lda",  DIRECT, 1, LD, REG_A, { .store = false } },
 [0xd6] = { "ldb",  DIRECT, 1, LD, REG_B, { .store = false } },
 [0xdc] = { "ldd",  DIRECT, 2, LD, REG_D, { .store = false } },
+[0x1de] = { "lds",  DIRECT, 2, LD, REG_S, { .store = false } },
 [0xde] = { "ldu",  DIRECT, 2, LD, REG_U, { .store = false } },
-//[0xde] = { "lds",  DIRECT, 2, LD, REG_S, { .store = false } },
 [0x9e] = { "ldx",  DIRECT, 2, LD, REG_X, { .store = false } },
-//[0x9e] = { "ldy",  DIRECT, 2, LD, REG_Y, { .store = false } },
-
-[0xb6] = { "lda",  EXTENDED, 1, LD, REG_A, { .store = false } },
-[0xf6] = { "ldb",  EXTENDED, 1, LD, REG_B, { .store = false } },
-[0xfc] = { "ldd",  EXTENDED, 2, LD, REG_D, { .store = false } },
-[0xfe] = { "ldu",  EXTENDED, 2, LD, REG_U, { .store = false } },
-//[0xfe] = { "lds",  EXTENDED, 2, LD, REG_S, { .store = false } },
-[0xbe] = { "ldx",  EXTENDED, 2, LD, REG_X, { .store = false } },
-//[0xbe] = { "ldy",  EXTENDED, 2, LD, REG_Y, { .store = false } },
+[0x19e] = { "ldy",  DIRECT, 2, LD, REG_Y, { .store = false } },
 
 [0xa6] = { "lda",  INDEXED, 1, LD, REG_A, { .store = false } },
 [0xe6] = { "ldb",  INDEXED, 1, LD, REG_B, { .store = false } },
 [0xec] = { "ldd",  INDEXED, 2, LD, REG_D, { .store = false } },
+[0x1ee] = { "lds",  INDEXED, 2, LD, REG_S, { .store = false } },
 [0xee] = { "ldu",  INDEXED, 2, LD, REG_U, { .store = false } },
-//[0xee] = { "lds",  INDEXED, 2, LD, REG_S, { .store = false } },
 [0xae] = { "ldx",  INDEXED, 2, LD, REG_X, { .store = false } },
-//[0xae] = { "ldy",  INDEXED, 2, LD, REG_Y, { .store = false } },
+[0x1ae] = { "ldy",  INDEXED, 2, LD, REG_Y, { .store = false } },
+
+[0xb6] = { "lda",  EXTENDED, 1, LD, REG_A, { .store = false } },
+[0xf6] = { "ldb",  EXTENDED, 1, LD, REG_B, { .store = false } },
+[0xfc] = { "ldd",  EXTENDED, 2, LD, REG_D, { .store = false } },
+[0x1fe] = { "lds",  EXTENDED, 2, LD, REG_S, { .store = false } },
+[0xfe] = { "ldu",  EXTENDED, 2, LD, REG_U, { .store = false } },
+[0xbe] = { "ldx",  EXTENDED, 2, LD, REG_X, { .store = false } },
+[0x1be] = { "ldy",  EXTENDED, 2, LD, REG_Y, { .store = false } },
 
 // stores
 [0x97] = { "sta",  DIRECT, 1, ST, REG_A, { .store = true } },
 [0xd7] = { "stb",  DIRECT, 1, ST, REG_B, { .store = true } },
 [0xdd] = { "std",  DIRECT, 2, ST, REG_D, { .store = true } },
 [0xdf] = { "stu",  DIRECT, 2, ST, REG_U, { .store = true } },
-//[0xdf] = { "sts",  DIRECT, 2, ST, REG_S, { .store = true } },
 [0x9f] = { "stx",  DIRECT, 2, ST, REG_X, { .store = true } },
-//[0x9f] = { "sty",  DIRECT, 2, ST, REG_Y, { .store = true } },
+[0x19f] = { "sty",  DIRECT, 2, ST, REG_Y, { .store = true } },
 
 [0xb7] = { "sta",  EXTENDED, 1, ST, REG_A, { .store = true } },
 [0xf7] = { "stb",  EXTENDED, 1, ST, REG_B, { .store = true } },
 [0xfd] = { "std",  EXTENDED, 2, ST, REG_D, { .store = true } },
 [0xff] = { "stu",  EXTENDED, 2, ST, REG_U, { .store = true } },
-//[0xff] = { "sts",  EXTENDED, 2, ST, REG_S, { .store = true } },
 [0xbf] = { "stx",  EXTENDED, 2, ST, REG_X, { .store = true } },
-//[0xbe] = { "sty",  EXTENDED, 2, ST, REG_Y, { .store = true } },
+[0x1bf] = { "sty",  EXTENDED, 2, ST, REG_Y, { .store = true } },
 
 [0xa7] = { "sta",  INDEXED, 1, ST, REG_A, { .store = true } },
 [0xe7] = { "stb",  INDEXED, 1, ST, REG_B, { .store = true } },
 [0xed] = { "std",  INDEXED, 2, ST, REG_D, { .store = true } },
 [0xef] = { "stu",  INDEXED, 2, ST, REG_U, { .store = true } },
-//[0xef] = { "sts",  INDEXED, 2, ST, REG_S, { .store = true } },
 [0xaf] = { "stx",  INDEXED, 2, ST, REG_X, { .store = true } },
-//[0xaf] = { "sty",  INDEXED, 2, ST, REG_Y, { .store = true } },
+[0x1af] = { "sty",  INDEXED, 2, ST, REG_Y, { .store = true } },
 
 // branches
 [0x20] = { "bra",  BRANCH, 1, BRA, REG_A, { .cond = COND_A } },
@@ -226,13 +225,34 @@ int Cpu6809::Run()
 		// fetch the first byte of the opcode
 		opcode = mSys->MemRead8(mPC++);
 
+		cout << "opcode ";
+
 		const opdecode *op = &ops[opcode];
+
+		// see if it's an extended opcode
+		if (opcode == 0x10) {
+			opcode = mSys->MemRead8(mPC++);
+			op = &ops[opcode + 0x100];
+			cout << hex << 0x10 << " ";
+		} else if (opcode == 0x11) {
+			opcode = mSys->MemRead8(mPC++);
+			op = &ops[opcode + 0x200];
+			cout << hex << 0x11 << " ";
+		} else {
+			op = &ops[opcode];
+		}
 
 		uint8_t temp8;
 		uint16_t temp16;
 		int arg = 0;
 
-		cout << "opcode " << hex << (unsigned int)opcode << " " << op->name;
+		cout << hex << (unsigned int)opcode << " " << op->name;
+
+		if (op->op == BADOP) {
+			cout << endl;
+			cerr << "unhandled opcode" << endl;
+			assert(0);
+		}
 
 		// get the addressing mode
 		switch (op->mode) {
@@ -353,6 +373,7 @@ int Cpu6809::Run()
 							break;
 						default:
 							// unhandled mode 0x7, 0xa, 0xe (6309 modes for E, F, and W register)
+							cerr << "unhandled indexed addressing mode" << endl;
 							assert(0);
 					}
 				}
@@ -400,8 +421,8 @@ int Cpu6809::Run()
 				break;
 			}
 			default:
+				cerr << "unhandled addressing mode" << endl;
 				assert(0);
-				;
 		}
 
 		cout << " arg 0x" << hex << arg;
@@ -440,6 +461,10 @@ int Cpu6809::Run()
 				else
 					mSys->MemWrite16(arg, GetReg(op->targetreg));
 				break;
+			case BADOP:
+			default:
+				cerr << "unhandled opcode " << op->op << endl;
+				done = true;
 		}
 
 		cout << endl;
