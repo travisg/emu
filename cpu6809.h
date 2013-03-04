@@ -36,6 +36,8 @@ enum regnum {
 	REG_B,
 	REG_D,
 	REG_PC,
+	REG_DP,
+	REG_CC,
 };
 
 class Cpu6809 : public Cpu {

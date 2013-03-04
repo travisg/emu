@@ -80,12 +80,24 @@ enum op {
 	BADOP,
 	ADD,
 	CMP,
+	AND,
+	BIT,
+	EOR,
+	OR,
 	ABX,
 	CLR,
 	COM,
+	DEC,
+	INC,
 	LEA,
 	TFR,
+	PUSH,
+	PULL,
 	BRA,
+	BSR,
+	JMP,
+	JSR,
+	RTS,
 	LD,
 	ST,
 };
@@ -108,15 +120,12 @@ static const opdecode ops[256 * 3] = {
 [0x8b] = { "adda", IMMEDIATE, 1, ADD, REG_A, { 0 } },
 [0xcb] = { "addb", IMMEDIATE, 1, ADD, REG_B, { 0 } },
 [0xc3] = { "addd", IMMEDIATE, 2, ADD, REG_D, { 0 } },
-
 [0x9b] = { "adda", DIRECT, 1, ADD, REG_A, { 0 } },
 [0xdb] = { "addb", DIRECT, 1, ADD, REG_B, { 0 } },
 [0xd3] = { "addd", DIRECT, 2, ADD, REG_D, { 0 } },
-
 [0xab] = { "adda", INDEXED, 1, ADD, REG_A, { 0 } },
 [0xeb] = { "addb", INDEXED, 1, ADD, REG_B, { 0 } },
 [0xe3] = { "addd", INDEXED, 2, ADD, REG_D, { 0 } },
-
 [0xbb] = { "adda", EXTENDED, 1, ADD, REG_A, { 0 } },
 [0xfb] = { "addb", EXTENDED, 1, ADD, REG_B, { 0 } },
 [0xf3] = { "addd", EXTENDED, 2, ADD, REG_D, { 0 } },
@@ -153,6 +162,44 @@ static const opdecode ops[256 * 3] = {
 [0xbc]  = { "cmpx", EXTENDED, 2, CMP, REG_X, { 0 } },
 [0x1bc] = { "cmpy", EXTENDED, 2, CMP, REG_Y, { 0 } },
 
+[0x84] = { "anda", IMMEDIATE, 1, AND, REG_A, { 0 } },
+[0xc4] = { "andb", IMMEDIATE, 1, AND, REG_B, { 0 } },
+[0x1c] = { "andcc", IMMEDIATE, 1, AND, REG_CC, { 0 } },
+[0x94] = { "anda", DIRECT, 1, AND, REG_A, { 0 } },
+[0xd4] = { "andb", DIRECT, 1, AND, REG_B, { 0 } },
+[0xa4] = { "anda", INDEXED, 1, AND, REG_A, { 0 } },
+[0xe4] = { "andb", INDEXED, 1, AND, REG_B, { 0 } },
+[0xb4] = { "anda", EXTENDED, 1, AND, REG_A, { 0 } },
+[0xf4] = { "andb", EXTENDED, 1, AND, REG_B, { 0 } },
+
+[0x85] = { "bita", IMMEDIATE, 1, BIT, REG_A, { 0 } },
+[0xc5] = { "bitb", IMMEDIATE, 1, BIT, REG_B, { 0 } },
+[0x95] = { "bita", DIRECT, 1, BIT, REG_A, { 0 } },
+[0xd5] = { "bitb", DIRECT, 1, BIT, REG_B, { 0 } },
+[0xa5] = { "bita", INDEXED, 1, BIT, REG_A, { 0 } },
+[0xe5] = { "bitb", INDEXED, 1, BIT, REG_B, { 0 } },
+[0xb5] = { "bita", EXTENDED, 1, BIT, REG_A, { 0 } },
+[0xf5] = { "bitb", EXTENDED, 1, BIT, REG_B, { 0 } },
+
+[0x88] = { "eora", IMMEDIATE, 1, EOR, REG_A, { 0 } },
+[0xc8] = { "eorb", IMMEDIATE, 1, EOR, REG_B, { 0 } },
+[0x98] = { "eora", DIRECT, 1, EOR, REG_A, { 0 } },
+[0xd8] = { "eorb", DIRECT, 1, EOR, REG_B, { 0 } },
+[0xa8] = { "eora", INDEXED, 1, EOR, REG_A, { 0 } },
+[0xe8] = { "eorb", INDEXED, 1, EOR, REG_B, { 0 } },
+[0xb8] = { "eora", EXTENDED, 1, EOR, REG_A, { 0 } },
+[0xf8] = { "eorb", EXTENDED, 1, EOR, REG_B, { 0 } },
+
+[0x8a] = { "ora", IMMEDIATE, 1, OR, REG_A, { 0 } },
+[0xca] = { "orb", IMMEDIATE, 1, OR, REG_B, { 0 } },
+[0x1a] = { "orcc", IMMEDIATE, 1, OR, REG_CC, { 0 } },
+[0x9a] = { "ora", DIRECT, 1, OR, REG_A, { 0 } },
+[0xda] = { "orb", DIRECT, 1, OR, REG_B, { 0 } },
+[0xaa] = { "ora", INDEXED, 1, OR, REG_A, { 0 } },
+[0xea] = { "orb", INDEXED, 1, OR, REG_B, { 0 } },
+[0xba] = { "ora", EXTENDED, 1, OR, REG_A, { 0 } },
+[0xfa] = { "orb", EXTENDED, 1, OR, REG_B, { 0 } },
+
 // misc
 [0x3a] = { "abx",  IMPLIED, 2, ABX, REG_X, { 0 } },
 [0x1f] = { "tfr",  IMPLIED, 1, TFR, REG_A, { 0 } },
@@ -169,10 +216,29 @@ static const opdecode ops[256 * 3] = {
 [0x63] = { "com",  INDEXED,  1, COM, REG_A, { .calcaddr = true } },
 [0x73] = { "com",  EXTENDED, 1, COM, REG_A, { .calcaddr = true } },
 
+[0x4a] = { "deca", IMPLIED,  1, DEC, REG_A, { 0 } },
+[0x5a] = { "decb", IMPLIED,  1, DEC, REG_B, { 0 } },
+[0x0a] = { "dec",  DIRECT,   1, DEC, REG_A, { .calcaddr = true } },
+[0x6a] = { "dec",  INDEXED,  1, DEC, REG_A, { .calcaddr = true } },
+[0x7a] = { "dec",  EXTENDED, 1, DEC, REG_A, { .calcaddr = true } },
+
+[0x4c] = { "inca", IMPLIED,  1, INC, REG_A, { 0 } },
+[0x5c] = { "incb", IMPLIED,  1, INC, REG_B, { 0 } },
+[0x0c] = { "inc",  DIRECT,   1, INC, REG_A, { .calcaddr = true } },
+[0x6c] = { "inc",  INDEXED,  1, INC, REG_A, { .calcaddr = true } },
+[0x7c] = { "inc",  EXTENDED, 1, INC, REG_A, { .calcaddr = true } },
+
 [0x32] = { "leas", INDEXED,  2, LEA, REG_S, { .calcaddr = true } },
 [0x33] = { "leau", INDEXED,  2, LEA, REG_U, { .calcaddr = true } },
 [0x30] = { "leax", INDEXED,  2, LEA, REG_X, { .calcaddr = true } },
 [0x31] = { "leay", INDEXED,  2, LEA, REG_Y, { .calcaddr = true } },
+
+// push/pull
+[0x34] = { "pshs", IMMEDIATE, 1, PUSH, REG_S, { 0 } },
+[0x36] = { "pshu", IMMEDIATE, 1, PUSH, REG_U, { 0 } },
+
+[0x35] = { "puls", IMMEDIATE, 1, PULL, REG_S, { 0 } },
+[0x37] = { "pulu", IMMEDIATE, 1, PULL, REG_U, { 0 } },
 
 // loads
 [0x86] = { "lda",  IMMEDIATE, 1, LD, REG_A, { 0 } },
@@ -246,6 +312,18 @@ static const opdecode ops[256 * 3] = {
 [0x2d] = { "blt",  BRANCH, 1, BRA, REG_A, { .cond = COND_LT } },
 [0x2e] = { "bgt",  BRANCH, 1, BRA, REG_A, { .cond = COND_GT } },
 [0x2f] = { "ble",  BRANCH, 1, BRA, REG_A, { .cond = COND_LE } },
+
+[0x8d] = { "bsr",  BRANCH, 1, BSR, REG_A, { .cond = COND_A } },
+
+[0x0e] = { "jmp",  DIRECT,   1, JMP, REG_A, { .calcaddr = true } },
+[0x6e] = { "jmp",  INDEXED,  1, JMP, REG_A, { .calcaddr = true } },
+[0x7e] = { "jmp",  EXTENDED, 1, JMP, REG_A, { .calcaddr = true } },
+
+[0x9d] = { "jsr",  DIRECT,   1, JSR, REG_A, { .calcaddr = true } },
+[0xad] = { "jsr",  INDEXED,  1, JSR, REG_A, { .calcaddr = true } },
+[0xbd] = { "jsr",  EXTENDED, 1, JSR, REG_A, { .calcaddr = true } },
+
+[0x39] = { "rts",  IMPLIED,  1, RTS, REG_A, { 0 } },
 };
 
 Cpu6809::Cpu6809()
@@ -332,6 +410,30 @@ bool Cpu6809::TestBranchCond(unsigned int cond)
 
 #define SET_HNVC1(a, b, result) do { SET_H(a, b, result); SET_N1(result); SET_V1(a, b, result); SET_C1(result); } while (0)
 #define SET_NVC2(a, b, result) do { SET_N2(result); SET_V2(a, b, result); SET_C2(result); } while (0)
+
+#define PUSH16(stack, val) do { \
+	uint16_t __sp = GetReg(stack); \
+	mSys->MemWrite8(--__sp, (val) & 0xff); \
+	mSys->MemWrite8(--__sp, ((val) >> 8) & 0xff); \
+	PutReg(stack, __sp); \
+} while (0)
+#define PUSH8(stack, val) do { \
+	uint16_t __sp = GetReg(stack); \
+	mSys->MemWrite8(--__sp, val); \
+	PutReg(stack, __sp); \
+} while (0)
+#define PULL16(stack, val) do { \
+	uint16_t __sp = GetReg(stack); \
+	uint16_t __temp = mSys->MemRead8(__sp++) << 8;\
+	__temp |= mSys->MemRead8(__sp++); \
+	PutReg(stack, __sp); \
+	val = __temp; \
+} while (0)
+#define PULL8(stack, val) do { \
+	uint16_t __sp = GetReg(stack); \
+	val = mSys->MemRead8(__sp++);\
+	PutReg(stack, __sp); \
+} while (0)
 
 int Cpu6809::Run()
 {
@@ -568,7 +670,7 @@ int Cpu6809::Run()
 					SET_NVC2(a, b, result);
 				}
 
-				PutReg(op->targetreg, temp16);
+				PutReg(op->targetreg, result);
 				break;
 			}
 			case CMP: { // cmp[abdsuxy]
@@ -582,7 +684,48 @@ int Cpu6809::Run()
 				} else {
 					SET_NVC2(a, b, result);
 				}
+				break;
+			}
+			case AND: { // and[ab],andcc
+				uint32_t a = GetReg(op->targetreg);
+				uint32_t b = arg;
+				uint32_t result = a & b;
 
+				SET_NZ1(result);
+				mCC = CLR_CC_BIT(CC_V);
+
+				PutReg(op->targetreg, result);
+				break;
+			}
+			case BIT: { // bit[ab]
+				uint32_t a = GetReg(op->targetreg);
+				uint32_t b = arg;
+				uint32_t result = a & b;
+
+				SET_NZ1(result);
+				mCC = CLR_CC_BIT(CC_V);
+				break;
+			}
+			case EOR: { // eor[ab],eorcc
+				uint32_t a = GetReg(op->targetreg);
+				uint32_t b = arg;
+				uint32_t result = a ^ b;
+
+				SET_NZ1(result);
+				mCC = CLR_CC_BIT(CC_V);
+
+				PutReg(op->targetreg, result);
+				break;
+			}
+			case OR: { // or[ab],orcc
+				uint32_t a = GetReg(op->targetreg);
+				uint32_t b = arg;
+				uint32_t result = a | b;
+
+				SET_NZ1(result);
+				mCC = CLR_CC_BIT(CC_V);
+
+				PutReg(op->targetreg, result);
 				break;
 			}
 
@@ -595,16 +738,36 @@ int Cpu6809::Run()
 			case COM: // com[ab],clr
 				if (op->mode == IMPLIED) {
 					temp8 = GetReg(op->targetreg);
-					temp8 = ~temp8;
 				} else {
 					temp8 = mSys->MemRead8(arg);
-					temp8 = ~temp8;
 				}
+				temp8 = ~temp8;
 
 				mCC = CLR_CC_BIT(CC_V);
 				mCC = SET_CC_BIT(CC_C);
+				goto shared_memwrite;
 
-				// fallthrough
+			case DEC: // dec[ab],dec
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+				temp8--;
+
+				mCC = (temp8 == 0x7f) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
+				goto shared_memwrite;
+
+			case INC: // inc[ab],inc
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+				temp8++;
+
+				mCC = (temp8 == 0x80) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
+				goto shared_memwrite;
 
 shared_memwrite:
 				if (op->mode == IMPLIED) {
@@ -671,6 +834,88 @@ shared_memwrite:
 				}
 				break;
 			}
+			case PUSH: { // pshs,pshu
+				cout << " push regs word 0x" << hex << arg;
+				if (BIT(arg, 7)) {
+					cout << " PC";
+					PUSH16(op->targetreg, mPC);
+				}
+				if (BIT(arg, 6)) {
+					if (op->targetreg == REG_U) {
+						cout << " SP";
+						PUSH16(op->targetreg, mS);
+					} else {
+						cout << " UP";
+						PUSH16(op->targetreg, mU);
+					}
+				}
+				if (BIT(arg, 5)) {
+					cout << " Y";
+					PUSH16(op->targetreg, mY);
+				}
+				if (BIT(arg, 4)) {
+					cout << " X";
+					PUSH16(op->targetreg, mX);
+				}
+				if (BIT(arg, 3)) {
+					cout << " DP";
+					PUSH8(op->targetreg, mDP);
+				}
+				if (BIT(arg, 2)) {
+					cout << " B";
+					PUSH8(op->targetreg, mB);
+				}
+				if (BIT(arg, 1)) {
+					cout << " A";
+					PUSH8(op->targetreg, mA);
+				}
+				if (BIT(arg, 0)) {
+					cout << " CC";
+					PUSH8(op->targetreg, mCC);
+				}
+				break;
+			}
+			case PULL: { // puls,pulu
+				cout << " pull regs word 0x" << hex << arg;
+				if (BIT(arg, 0)) {
+					cout << " CC";
+					PULL8(op->targetreg, mCC);
+				}
+				if (BIT(arg, 1)) {
+					cout << " A";
+					PULL8(op->targetreg, mA);
+				}
+				if (BIT(arg, 2)) {
+					cout << " B";
+					PULL8(op->targetreg, mB);
+				}
+				if (BIT(arg, 3)) {
+					cout << " DP";
+					PUSH8(op->targetreg, mDP);
+				}
+				if (BIT(arg, 4)) {
+					cout << " X";
+					PULL16(op->targetreg, mX);
+				}
+				if (BIT(arg, 5)) {
+					cout << " Y";
+					PULL16(op->targetreg, mY);
+				}
+				if (BIT(arg, 6)) {
+					if (op->targetreg == REG_U) {
+						cout << " SP";
+						PULL16(op->targetreg, mS);
+					} else {
+						cout << " UP";
+						PULL16(op->targetreg, mU);
+					}
+				}
+				if (BIT(arg, 7)) {
+					cout << " PC";
+					PULL16(op->targetreg, mPC);
+				}
+				break;
+			}
 			case BRA: { // branch
 				cout << " branch with arg " << dec << arg;
 
@@ -684,6 +929,37 @@ shared_memwrite:
 					}
 					cout << " target 0x" << hex << mPC;
 				}
+				break;
+			}
+			case BSR: { // bsr
+				cout << " bsr with arg " << dec << arg;
+
+				PUSH16(REG_S, mPC);
+
+				mPC += arg;
+				cout << " target 0x" << hex << mPC;
+				break;
+			}
+			case JMP: { // jmp
+				cout << " jmp with arg 0x" << hex << arg;
+
+				mPC = arg;
+				break;
+			}
+			case JSR: { // jsr
+				cout << " jsr with arg 0x" << hex << arg;
+
+				PUSH16(REG_S, mPC);
+
+				mPC = arg;
+				break;
+			}
+			case RTS: { // rts
+				PULL16(REG_S, temp16);
+				cout << " rts from stack 0x" << hex << temp16;
+
+				mPC = temp16;
+				break;
 			}
 			case LD: // ld[abdsuxy]
 				PutReg(op->targetreg, arg);
@@ -735,6 +1011,8 @@ uint16_t Cpu6809::GetReg(regnum r)
 		case REG_B: return mB;
 		case REG_D: return mD;
 		case REG_PC: return mPC;
+		case REG_DP: return mDP;
+		case REG_CC: return mCC;
 	}
 }
 
@@ -749,6 +1027,8 @@ void Cpu6809::PutReg(regnum r, uint16_t val)
 		case REG_B: mB = val; break;
 		case REG_D: mD = val; break;
 		case REG_PC: mPC = val; break;
+		case REG_DP: mDP = val; break;
+		case REG_CC: mCC = val; break;
 	}
 }
 
