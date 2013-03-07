@@ -28,6 +28,10 @@
 #include "system.h"
 #include "bits.h"
 
+#define TRACE 1
+
+#define TRACEF(str, x...) do { if (TRACE) printf(str, ## x); } while (0)
+
 using namespace std;
 
 /* exceptions */
@@ -454,7 +458,7 @@ int Cpu6809::Run()
 		// fetch the first byte of the opcode
 		opcode = mSys->MemRead8(mPC++);
 
-		cout << "opcode ";
+		TRACEF("opcode");
 
 		const opdecode *op = &ops[opcode];
 
@@ -462,11 +466,11 @@ int Cpu6809::Run()
 		if (opcode == 0x10) {
 			opcode = mSys->MemRead8(mPC++);
 			op = &ops[opcode + 0x100];
-			cout << hex << 0x10 << " ";
+			TRACEF(" x%#02x", 0x10);
 		} else if (opcode == 0x11) {
 			opcode = mSys->MemRead8(mPC++);
 			op = &ops[opcode + 0x200];
-			cout << hex << 0x11 << " ";
+			TRACEF(" x%#02x", 0x11);
 		} else {
 			op = &ops[opcode];
 		}
@@ -475,21 +479,23 @@ int Cpu6809::Run()
 		uint16_t temp16;
 		int arg = 0;
 
-		cout << hex << (unsigned int)opcode << " " << op->name;
+		TRACEF(" %#02x %s", opcode, op->name);
 
 		if (op->op == BADOP) {
-			cout << endl;
-			cerr << "unhandled opcode" << endl;
+			TRACEF("\n");
+			fflush(stdout);
+			fprintf(stderr, "unhandled opcode\n");
 			assert(0);
 		}
 
 		// get the addressing mode
+		TRACEF(" amode");
 		switch (op->mode) {
 			case IMPLIED:
-				cout << " IMP";
+				TRACEF(" IMP");
 				break;
 			case IMMEDIATE:
-				cout << " IMM";
+				TRACEF(" IMM");
 				if (op->width == 1)
 					arg = mSys->MemRead8(mPC++);
 				else {
@@ -498,7 +504,7 @@ int Cpu6809::Run()
 				}
 				break;
 			case DIRECT:
-				cout << " DIR";
+				TRACEF(" DIR");
 				temp8 = mSys->MemRead8(mPC++);
 				temp16 = (mDP << 8) | temp8;
 				if (op->calcaddr) {
@@ -511,7 +517,7 @@ int Cpu6809::Run()
 				}
 				break;
 			case EXTENDED:
-				cout << " EXT";
+				TRACEF(" EXT");
 				temp16 = mSys->MemRead16(mPC);
 				mPC += 2;
 				if (op->calcaddr) {
@@ -524,7 +530,7 @@ int Cpu6809::Run()
 				}
 				break;
 			case BRANCH:
-				cout << " BRA";
+				TRACEF(" BRA");
 				if (op->width == 1)
 					arg = SignExtend(mSys->MemRead8(mPC++));
 				else {
@@ -534,7 +540,7 @@ int Cpu6809::Run()
 				break;
 			case INDEXED: {
 				temp8 = mSys->MemRead8(mPC++);
-				cout << " IDX word 0x" << hex << (unsigned int)temp8;
+				TRACEF(" IDX word %#02x", temp8);
 
 				// parse the index word
 				int off = 0;
@@ -602,12 +608,12 @@ int Cpu6809::Run()
 							break;
 						default:
 							// unhandled mode 0x7, 0xa, 0xe (6309 modes for E, F, and W register)
-							cerr << "unhandled indexed addressing mode" << endl;
+							fprintf(stderr, "unhandled indexed addressing mode\n");
 							assert(0);
 					}
 				}
 
-				cout << " offset " << dec << off << " prepostinc " << prepostinc;
+				TRACEF(" offset %d prepostinc %d", off, prepostinc);
 
 				// register we're offsetting from in the usual case
 				if (!reg) {
@@ -630,12 +636,12 @@ int Cpu6809::Run()
 				if (prepostinc > 0)
 					*reg += prepostinc;
 
-				cout << " addr 0x" << hex << addr;
+				TRACEF(" addr %#04x", addr);
 
 				// if we're indirecting, load the address from addr
 				if (indirect) {
 					addr = mSys->MemRead16(addr);
-					cout << " [addr] 0x" << hex << addr;
+					TRACEF(" [addr] %#04x", addr);
 				}
 
 				if (!op->calcaddr) {
@@ -650,11 +656,11 @@ int Cpu6809::Run()
 				break;
 			}
 			default:
-				cerr << "unhandled addressing mode" << endl;
+				fprintf(stderr, "unhandled addressing mode\n");
 				assert(0);
 		}
 
-		cout << " arg 0x" << hex << arg;
+		TRACEF(" arg %#02x", arg);
 
 		// decode on our table based opcode
 		switch (op->op) {
@@ -792,7 +798,7 @@ shared_memwrite:
 				break;
 			case TFR: { // R <= R1
 				temp8 = mSys->MemRead8(mPC++);
-				cout << " arg 0x" << hex << (unsigned int)temp8;
+				TRACEF(" arg %#02x", temp8);
 
 				// source register
 				switch (BITS_SHIFT(temp8, 7, 4)) {
@@ -835,119 +841,119 @@ shared_memwrite:
 				break;
 			}
 			case PUSH: { // pshs,pshu
-				cout << " push regs word 0x" << hex << arg;
+				TRACEF(" push word %#02x", arg);
 				if (BIT(arg, 7)) {
-					cout << " PC";
+					TRACEF(" PC");
 					PUSH16(op->targetreg, mPC);
 				}
 				if (BIT(arg, 6)) {
 					if (op->targetreg == REG_U) {
-						cout << " SP";
+						TRACEF(" SP");
 						PUSH16(op->targetreg, mS);
 					} else {
-						cout << " UP";
+						TRACEF(" UP");
 						PUSH16(op->targetreg, mU);
 					}
 				}
 				if (BIT(arg, 5)) {
-					cout << " Y";
+					TRACEF(" Y");
 					PUSH16(op->targetreg, mY);
 				}
 				if (BIT(arg, 4)) {
-					cout << " X";
+					TRACEF(" X");
 					PUSH16(op->targetreg, mX);
 				}
 				if (BIT(arg, 3)) {
-					cout << " DP";
+					TRACEF(" DP");
 					PUSH8(op->targetreg, mDP);
 				}
 				if (BIT(arg, 2)) {
-					cout << " B";
+					TRACEF(" B");
 					PUSH8(op->targetreg, mB);
 				}
 				if (BIT(arg, 1)) {
-					cout << " A";
+					TRACEF(" A");
 					PUSH8(op->targetreg, mA);
 				}
 				if (BIT(arg, 0)) {
-					cout << " CC";
+					TRACEF(" CC");
 					PUSH8(op->targetreg, mCC);
 				}
 				break;
 			}
 			case PULL: { // puls,pulu
-				cout << " pull regs word 0x" << hex << arg;
+				TRACEF(" pull word %#02x", arg);
 				if (BIT(arg, 0)) {
-					cout << " CC";
+					TRACEF(" CC");
 					PULL8(op->targetreg, mCC);
 				}
 				if (BIT(arg, 1)) {
-					cout << " A";
+					TRACEF(" A");
 					PULL8(op->targetreg, mA);
 				}
 				if (BIT(arg, 2)) {
-					cout << " B";
+					TRACEF(" B");
 					PULL8(op->targetreg, mB);
 				}
 				if (BIT(arg, 3)) {
-					cout << " DP";
+					TRACEF(" DP");
 					PUSH8(op->targetreg, mDP);
 				}
 				if (BIT(arg, 4)) {
-					cout << " X";
+					TRACEF(" X");
 					PULL16(op->targetreg, mX);
 				}
 				if (BIT(arg, 5)) {
-					cout << " Y";
+					TRACEF(" Y");
 					PULL16(op->targetreg, mY);
 				}
 				if (BIT(arg, 6)) {
 					if (op->targetreg == REG_U) {
-						cout << " SP";
+						TRACEF(" SP");
 						PULL16(op->targetreg, mS);
 					} else {
-						cout << " UP";
+						TRACEF(" UP");
 						PULL16(op->targetreg, mU);
 					}
 				}
 				if (BIT(arg, 7)) {
-					cout << " PC";
+					TRACEF(" PC");
 					PULL16(op->targetreg, mPC);
 				}
 				break;
 			}
 			case BRA: { // branch
-				cout << " branch with arg " << dec << arg;
+				TRACEF(" arg %d", arg);
 
 				bool takebranch = TestBranchCond(op->cond);
 
 				if (takebranch) {
 					mPC += arg;
 					if (arg == -2) {
-						cerr << "infinite loop detected, aborting" << endl;
+						printf("infinite loop detected, aborting\n");
 						done = true;
 					}
-					cout << " target 0x" << hex << mPC;
+					TRACEF(" target %#04x", mPC);
 				}
 				break;
 			}
 			case BSR: { // bsr
-				cout << " bsr with arg " << dec << arg;
+				TRACEF(" arg %d", arg);
 
 				PUSH16(REG_S, mPC);
 
 				mPC += arg;
-				cout << " target 0x" << hex << mPC;
+				TRACEF(" target %#04x", mPC);
 				break;
 			}
 			case JMP: { // jmp
-				cout << " jmp with arg 0x" << hex << arg;
+				TRACEF(" arg %#04x", arg);
 
 				mPC = arg;
 				break;
 			}
 			case JSR: { // jsr
-				cout << " jsr with arg 0x" << hex << arg;
+				TRACEF(" arg %#04x", arg);
 
 				PUSH16(REG_S, mPC);
 
@@ -956,7 +962,7 @@ shared_memwrite:
 			}
 			case RTS: { // rts
 				PULL16(REG_S, temp16);
-				cout << " rts from stack 0x" << hex << temp16;
+				TRACEF(" from stack %#04x", temp16);
 
 				mPC = temp16;
 				break;
@@ -972,11 +978,12 @@ shared_memwrite:
 				break;
 			case BADOP:
 			default:
-				cerr << "unhandled opcode " << op->op << endl;
+				fflush(stdout);
+				fprintf(stderr, "unhandled opcode %#02x\n", op->op);
 				done = true;
 		}
 
-		cout << endl;
+		TRACEF("\n");
 
 		Dump();
 	}
