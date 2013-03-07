@@ -22,39 +22,24 @@
  */
 #pragma once
 
+#include <boost/utility.hpp>
+
 #include <stdint.h>
-#include "system.h"
+#include <sys/types.h>
 
-class Cpu6809;
-class MemoryDevice;
-class MC6850;
+#include "memory.h"
 
-// a simple 6809 based system
-class System09 : public System {
+class MC6850 : public MemoryDevice {
 public:
-	System09();
-	virtual ~System09();
+	MC6850();
+	virtual ~MC6850();
 
-	virtual int Init();
-
-	virtual int Run();
-
-	virtual uint8_t  MemRead8(size_t address);
-	virtual void     MemWrite8(size_t address, uint8_t val);
-
-	virtual uint16_t MemRead16(size_t address);
-	virtual void     MemWrite16(size_t address, uint16_t val);
+	virtual uint8_t ReadByte(size_t address);
+	virtual void WriteByte(size_t address, uint8_t val);
 
 private:
-	void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
-	static void iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len);
-
-	MemoryDevice *GetDeviceAtAddr(size_t *address);
-
-	Cpu6809 *mCpu;
-	MemoryDevice *mMem;
-	MemoryDevice *mRom;
-	MC6850 *mUart;
+	uint8_t mControl;
+	uint8_t mStatus;
+	int mPendingRx;
 };
-
 

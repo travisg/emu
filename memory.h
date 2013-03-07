@@ -27,16 +27,26 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-class Memory : boost::noncopyable {
+class MemoryDevice : boost::noncopyable {
+public:
+	MemoryDevice() {}
+	virtual ~MemoryDevice() {}
+
+	virtual uint8_t ReadByte(size_t address) = 0;
+	virtual void WriteByte(size_t address, uint8_t val) = 0;
+
+};
+
+class Memory : public MemoryDevice {
 public:
 	Memory();
-	~Memory();
+	virtual ~Memory();
 
 	int Alloc(size_t len);
 
 	// simple accessors, assumes bounds checking somewhere else
-	uint8_t ReadByte(size_t address) { return mMem[address]; }
-	void WriteByte(size_t address, uint8_t val) { mMem[address] = val; }
+	virtual uint8_t ReadByte(size_t address) { return mMem[address]; }
+	virtual void WriteByte(size_t address, uint8_t val) { mMem[address] = val; }
 
 private:
 	uint8_t *mMem;

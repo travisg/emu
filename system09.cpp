@@ -21,11 +21,13 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <cstdio>
 #include <iostream>
 
 #include "memory.h"
 #include "system09.h"
 #include "cpu6809.h"
+#include "mc6850.h"
 #include "ihex.h"
 
 using namespace std;
@@ -33,7 +35,9 @@ using namespace std;
 // a simple 6809 based system
 System09::System09()
 :	mCpu(0),
-	mMem(0)
+	mMem(0),
+	mRom(0),
+	mUart(0)
 {
 }
 
@@ -41,6 +45,8 @@ System09::~System09()
 {
 	delete mCpu;
 	delete mMem;
+	delete mRom;
+	delete mUart;
 }
 
 void System09::iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len)
@@ -49,13 +55,16 @@ void System09::iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t
 	s->iHexParseCallback(ptr, offset, len);
 }
 
-void System09::iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len)
+void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)
 {
-	//cout << "parsecallback " << (void *)ptr << " offset 0x" << hex << offset << " length 0x" << len << endl;
+	//printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
 
-	for (int i = 0; i < len; i++) {
-		//cout << "putting byte 0x" << hex << (unsigned int)ptr[i] << " at address " << offset + i << endl;
-		mMem->WriteByte(offset + i, ptr[i]);
+	for (size_t i = 0; i < len; i++) {
+		size_t addr = address;
+		MemoryDevice *mem = GetDeviceAtAddr(&addr);
+		mem->WriteByte(addr, ptr[i]);
+
+		address++;
 	}
 }
 
@@ -64,8 +73,18 @@ int System09::Init()
 	cout << "initializing a 6809 based system" << endl;
 
 	// create a bank of memory
-	mMem = new Memory();
-	mMem->Alloc(65536);
+	Memory *mem = new Memory();
+	mem->Alloc(32*1024);
+	mMem = mem;
+
+	// create a bank of rom
+	mem = new Memory();
+	mem->Alloc(16*1024);
+	mRom = mem;
+
+	// create a uart
+	MC6850 *uart = new MC6850();
+	mUart = uart;
 	
 	// create a 6809 based cpu
 	mCpu = new Cpu6809();
@@ -98,20 +117,25 @@ int System09::Run()
 
 uint8_t System09::MemRead8(size_t address)
 {
-	uint8_t val;
-	if (address < 0x10000)
-		val = mMem->ReadByte(address);
-	else
-		val = 0;
+	uint8_t val = 0;
+
+	MemoryDevice *mem = GetDeviceAtAddr(&address);
+	if (mem)
+		val = mem->ReadByte(address);
+
 	//cout << "MemRead8 @0x" << hex << address << " val " << (unsigned int)val << endl;
 	return val;
 }
 
 void System09::MemWrite8(size_t address, uint8_t val)
 {
+	address &= 0xffff;
+
+	MemoryDevice *mem = GetDeviceAtAddr(&address);
+	if (mem)
+		mem->WriteByte(address, val);
+
 	//cout << "MemWrite8 @0x" << hex << address << " val " << (unsigned int)val << endl;
-	if (address < 0x01000)
-		mMem->WriteByte(address, val);
 }
 
 uint16_t System09::MemRead16(size_t address)
@@ -123,6 +147,26 @@ void System09::MemWrite16(size_t address, uint16_t val)
 {
 	mMem->WriteByte(address, val >> 8);
 	mMem->WriteByte(address + 1, val);
+}
+
+MemoryDevice *System09::GetDeviceAtAddr(size_t *address)
+{
+	*address &= 0xffff;
+
+	// figure out which memory device this address belongs to
+	if (*address < 0x8000) {
+		return mMem;
+	} else if (*address >= 0xc000) {
+		*address -= 0xc000;
+		return mRom;
+	} else if (*address < 0xc000) {
+		// UART
+		*address -= 0xa000;
+		return mUart;
+	} else {
+		// unknown
+		return NULL;
+	}
 }
 
 

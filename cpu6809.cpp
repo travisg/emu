@@ -411,6 +411,7 @@ bool Cpu6809::TestBranchCond(unsigned int cond)
 #define SET_H(a, b, result) do { mCC = BIT((a)^(b)^(result), 4) ? SET_CC_BIT(CC_H) : CLR_CC_BIT(CC_H); } while (0)
 
 #define SET_NZ1(result) do { SET_N1(result); SET_Z(result); } while (0)
+#define SET_NZ2(result) do { SET_N2(result); SET_Z(result); } while (0)
 
 #define SET_HNVC1(a, b, result) do { SET_H(a, b, result); SET_N1(result); SET_V1(a, b, result); SET_C1(result); } while (0)
 #define SET_NVC2(a, b, result) do { SET_N2(result); SET_V2(a, b, result); SET_C2(result); } while (0)
@@ -739,7 +740,7 @@ int Cpu6809::Run()
 			case CLR: // clr[ab],clr
 				temp8 = 0;
 				mCC = CLR_CC_BIT(CC_V);
-				mCC = SET_CC_BIT(CC_C);
+				mCC = CLR_CC_BIT(CC_C);
 				goto shared_memwrite;
 			case COM: // com[ab],clr
 				if (op->mode == IMPLIED) {
@@ -968,13 +969,26 @@ shared_memwrite:
 				break;
 			}
 			case LD: // ld[abdsuxy]
+				if (op->width == 1) {
+					SET_NZ1(arg);
+				} else {
+					SET_NZ2(arg);
+				}
+				mCC = CLR_CC_BIT(CC_V);
+
 				PutReg(op->targetreg, arg);
 				break;
 			case ST: // sta,stb,std,sts,stu,stx,sty
-				if (op->width == 1)
-					mSys->MemWrite8(arg, GetReg(op->targetreg));
-				else
-					mSys->MemWrite16(arg, GetReg(op->targetreg));
+				if (op->width == 1) {
+					temp8 = GetReg(op->targetreg);
+					mSys->MemWrite8(arg, temp8);
+					SET_NZ1(temp8);
+				} else {
+					temp16 = GetReg(op->targetreg);
+					mSys->MemWrite16(arg, temp16);
+					SET_NZ2(temp16);
+				}
+				mCC = CLR_CC_BIT(CC_V);
 				break;
 			case BADOP:
 			default:
@@ -985,7 +999,8 @@ shared_memwrite:
 
 		TRACEF("\n");
 
-		Dump();
+		if (TRACE)
+			Dump();
 	}
 
 	return 0;

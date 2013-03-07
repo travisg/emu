@@ -38,7 +38,8 @@ OBJS := \
 
 OBJS += \
 	cpu6809.o \
-	system09.o
+	system09.o \
+	mc6850.o
 
 OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 
