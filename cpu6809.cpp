@@ -28,7 +28,7 @@
 #include "system.h"
 #include "bits.h"
 
-#define TRACE 1
+#define TRACE 0
 
 #define TRACEF(str, x...) do { if (TRACE) printf(str, ## x); } while (0)
 
@@ -83,6 +83,8 @@ enum addrMode {
 enum op {
 	BADOP,
 	ADD,
+	ADC,
+	SUB,
 	CMP,
 	AND,
 	BIT,
@@ -91,9 +93,16 @@ enum op {
 	ABX,
 	CLR,
 	COM,
+	NEG,
 	DEC,
 	INC,
+	TST,
 	LEA,
+	ASL,
+	ASR,
+	LSR,
+	ROL,
+	ROR,
 	TFR,
 	PUSH,
 	PULL,
@@ -134,11 +143,33 @@ static const opdecode ops[256 * 3] = {
 [0xfb] = { "addb", EXTENDED, 1, ADD, REG_B, { 0 } },
 [0xf3] = { "addd", EXTENDED, 2, ADD, REG_D, { 0 } },
 
+[0x89] = { "adca", IMMEDIATE, 1, ADC, REG_A, { 0 } },
+[0xc9] = { "adcb", IMMEDIATE, 1, ADC, REG_B, { 0 } },
+[0x99] = { "adca", DIRECT, 1, ADC, REG_A, { 0 } },
+[0xd9] = { "adcb", DIRECT, 1, ADC, REG_B, { 0 } },
+[0xa9] = { "adca", INDEXED, 1, ADC, REG_A, { 0 } },
+[0xe9] = { "adcb", INDEXED, 1, ADC, REG_B, { 0 } },
+[0xb9] = { "adca", EXTENDED, 1, ADC, REG_A, { 0 } },
+[0xf9] = { "adcb", EXTENDED, 1, ADC, REG_B, { 0 } },
+
+[0x80] = { "suba", IMMEDIATE, 1, SUB, REG_A, { 0 } },
+[0xc0] = { "subb", IMMEDIATE, 1, SUB, REG_B, { 0 } },
+[0x83] = { "subd", IMMEDIATE, 2, SUB, REG_D, { 0 } },
+[0x90] = { "suba", DIRECT, 1, SUB, REG_A, { 0 } },
+[0xd0] = { "subb", DIRECT, 1, SUB, REG_B, { 0 } },
+[0x93] = { "subd", DIRECT, 2, SUB, REG_D, { 0 } },
+[0xa0] = { "suba", INDEXED, 1, SUB, REG_A, { 0 } },
+[0xe0] = { "subb", INDEXED, 1, SUB, REG_B, { 0 } },
+[0xa3] = { "subd", INDEXED, 2, SUB, REG_D, { 0 } },
+[0xb0] = { "suba", EXTENDED, 1, SUB, REG_A, { 0 } },
+[0xf0] = { "subb", EXTENDED, 1, SUB, REG_B, { 0 } },
+[0xb3] = { "subd", EXTENDED, 2, SUB, REG_D, { 0 } },
+
 [0x81]  = { "cmpa", IMMEDIATE, 1, CMP, REG_A, { 0 } },
 [0xc1]  = { "cmpb", IMMEDIATE, 1, CMP, REG_B, { 0 } },
 [0x183] = { "cmpd", IMMEDIATE, 2, CMP, REG_D, { 0 } },
 [0x28c] = { "cmps", IMMEDIATE, 2, CMP, REG_S, { 0 } },
-[0x283] = { "cmpu", IMMEDIATE, 2, CMP, REG_U, { 0 } },
+[0x283] = { "cmpu", IMMEDIATE, 2, CMP, REG_U, { 0 } }  ,
 [0x8c]  = { "cmpx", IMMEDIATE, 2, CMP, REG_X, { 0 } },
 [0x18c] = { "cmpy", IMMEDIATE, 2, CMP, REG_Y, { 0 } },
 
@@ -220,6 +251,12 @@ static const opdecode ops[256 * 3] = {
 [0x63] = { "com",  INDEXED,  1, COM, REG_A, { .calcaddr = true } },
 [0x73] = { "com",  EXTENDED, 1, COM, REG_A, { .calcaddr = true } },
 
+[0x40] = { "nega", IMPLIED,  1, NEG, REG_A, { 0 } },
+[0x50] = { "negb", IMPLIED,  1, NEG, REG_B, { 0 } },
+[0x00] = { "neg",  DIRECT,   1, NEG, REG_A, { .calcaddr = true } },
+[0x60] = { "neg",  INDEXED,  1, NEG, REG_A, { .calcaddr = true } },
+[0x70] = { "neg",  EXTENDED, 1, NEG, REG_A, { .calcaddr = true } },
+
 [0x4a] = { "deca", IMPLIED,  1, DEC, REG_A, { 0 } },
 [0x5a] = { "decb", IMPLIED,  1, DEC, REG_B, { 0 } },
 [0x0a] = { "dec",  DIRECT,   1, DEC, REG_A, { .calcaddr = true } },
@@ -231,6 +268,42 @@ static const opdecode ops[256 * 3] = {
 [0x0c] = { "inc",  DIRECT,   1, INC, REG_A, { .calcaddr = true } },
 [0x6c] = { "inc",  INDEXED,  1, INC, REG_A, { .calcaddr = true } },
 [0x7c] = { "inc",  EXTENDED, 1, INC, REG_A, { .calcaddr = true } },
+
+[0x48] = { "asla", IMPLIED,  1, ASL, REG_A, { 0 } },
+[0x58] = { "aslb", IMPLIED,  1, ASL, REG_B, { 0 } },
+[0x08] = { "asl",  DIRECT,   1, ASL, REG_A, { .calcaddr = true } },
+[0x68] = { "asl",  INDEXED,  1, ASL, REG_A, { .calcaddr = true } },
+[0x78] = { "asl",  EXTENDED, 1, ASL, REG_A, { .calcaddr = true } },
+
+[0x47] = { "asra", IMPLIED,  1, ASR, REG_A, { 0 } },
+[0x57] = { "asrb", IMPLIED,  1, ASR, REG_B, { 0 } },
+[0x07] = { "asr",  DIRECT,   1, ASR, REG_A, { .calcaddr = true } },
+[0x67] = { "asr",  INDEXED,  1, ASR, REG_A, { .calcaddr = true } },
+[0x77] = { "asr",  EXTENDED, 1, ASR, REG_A, { .calcaddr = true } },
+
+[0x44] = { "lsra", IMPLIED,  1, LSR, REG_A, { 0 } },
+[0x54] = { "lsrb", IMPLIED,  1, LSR, REG_B, { 0 } },
+[0x04] = { "lsr",  DIRECT,   1, LSR, REG_A, { .calcaddr = true } },
+[0x64] = { "lsr",  INDEXED,  1, LSR, REG_A, { .calcaddr = true } },
+[0x74] = { "lsr",  EXTENDED, 1, LSR, REG_A, { .calcaddr = true } },
+
+[0x49] = { "rola", IMPLIED,  1, ROL, REG_A, { 0 } },
+[0x59] = { "rolb", IMPLIED,  1, ROL, REG_B, { 0 } },
+[0x09] = { "rol",  DIRECT,   1, ROL, REG_A, { .calcaddr = true } },
+[0x69] = { "rol",  INDEXED,  1, ROL, REG_A, { .calcaddr = true } },
+[0x79] = { "rol",  EXTENDED, 1, ROL, REG_A, { .calcaddr = true } },
+
+[0x46] = { "rora", IMPLIED,  1, ROR, REG_A, { 0 } },
+[0x56] = { "rorb", IMPLIED,  1, ROR, REG_B, { 0 } },
+[0x06] = { "ror",  DIRECT,   1, ROR, REG_A, { .calcaddr = true } },
+[0x66] = { "ror",  INDEXED,  1, ROR, REG_A, { .calcaddr = true } },
+[0x76] = { "ror",  EXTENDED, 1, ROR, REG_A, { .calcaddr = true } },
+
+[0x4d] = { "tsta", IMPLIED,  1, TST, REG_A, { 0 } },
+[0x5d] = { "tstb", IMPLIED,  1, TST, REG_B, { 0 } },
+[0x0d] = { "tst",  DIRECT,   1, TST, REG_A, { .calcaddr = true } },
+[0x6d] = { "tst",  INDEXED,  1, TST, REG_A, { .calcaddr = true } },
+[0x7d] = { "tst",  EXTENDED, 1, TST, REG_A, { .calcaddr = true } },
 
 [0x32] = { "leas", INDEXED,  2, LEA, REG_S, { .calcaddr = true } },
 [0x33] = { "leau", INDEXED,  2, LEA, REG_U, { .calcaddr = true } },
@@ -281,6 +354,7 @@ static const opdecode ops[256 * 3] = {
 [0x97] = { "sta",  DIRECT, 1, ST, REG_A, { .calcaddr = true } },
 [0xd7] = { "stb",  DIRECT, 1, ST, REG_B, { .calcaddr = true } },
 [0xdd] = { "std",  DIRECT, 2, ST, REG_D, { .calcaddr = true } },
+[0x1df] = { "sts",  DIRECT, 2, ST, REG_S, { .calcaddr = true } },
 [0xdf] = { "stu",  DIRECT, 2, ST, REG_U, { .calcaddr = true } },
 [0x9f] = { "stx",  DIRECT, 2, ST, REG_X, { .calcaddr = true } },
 [0x19f] = { "sty",  DIRECT, 2, ST, REG_Y, { .calcaddr = true } },
@@ -288,6 +362,7 @@ static const opdecode ops[256 * 3] = {
 [0xb7] = { "sta",  EXTENDED, 1, ST, REG_A, { .calcaddr = true } },
 [0xf7] = { "stb",  EXTENDED, 1, ST, REG_B, { .calcaddr = true } },
 [0xfd] = { "std",  EXTENDED, 2, ST, REG_D, { .calcaddr = true } },
+[0x1ff] = { "sts",  EXTENDED, 2, ST, REG_S, { .calcaddr = true } },
 [0xff] = { "stu",  EXTENDED, 2, ST, REG_U, { .calcaddr = true } },
 [0xbf] = { "stx",  EXTENDED, 2, ST, REG_X, { .calcaddr = true } },
 [0x1bf] = { "sty",  EXTENDED, 2, ST, REG_Y, { .calcaddr = true } },
@@ -295,6 +370,7 @@ static const opdecode ops[256 * 3] = {
 [0xa7] = { "sta",  INDEXED, 1, ST, REG_A, { .calcaddr = true } },
 [0xe7] = { "stb",  INDEXED, 1, ST, REG_B, { .calcaddr = true } },
 [0xed] = { "std",  INDEXED, 2, ST, REG_D, { .calcaddr = true } },
+[0x1ef] = { "sts",  INDEXED, 2, ST, REG_S, { .calcaddr = true } },
 [0xef] = { "stu",  INDEXED, 2, ST, REG_U, { .calcaddr = true } },
 [0xaf] = { "stx",  INDEXED, 2, ST, REG_X, { .calcaddr = true } },
 [0x1af] = { "sty",  INDEXED, 2, ST, REG_Y, { .calcaddr = true } },
@@ -316,8 +392,25 @@ static const opdecode ops[256 * 3] = {
 [0x2d] = { "blt",  BRANCH, 1, BRA, REG_A, { .cond = COND_LT } },
 [0x2e] = { "bgt",  BRANCH, 1, BRA, REG_A, { .cond = COND_GT } },
 [0x2f] = { "ble",  BRANCH, 1, BRA, REG_A, { .cond = COND_LE } },
-
 [0x8d] = { "bsr",  BRANCH, 1, BSR, REG_A, { .cond = COND_A } },
+
+[0x16] =  { "lbra",  BRANCH, 2, BRA, REG_A, { .cond = COND_A } },
+[0x121] = { "lbrn",  BRANCH, 2, BRA, REG_A, { .cond = COND_N } },
+[0x122] = { "lbhi",  BRANCH, 2, BRA, REG_A, { .cond = COND_HI } },
+[0x123] = { "lbls",  BRANCH, 2, BRA, REG_A, { .cond = COND_LS } },
+[0x124] = { "lbcc",  BRANCH, 2, BRA, REG_A, { .cond = COND_CC } },
+[0x125] = { "lbcs",  BRANCH, 2, BRA, REG_A, { .cond = COND_CS } },
+[0x126] = { "lbne",  BRANCH, 2, BRA, REG_A, { .cond = COND_NE } },
+[0x127] = { "lbeq",  BRANCH, 2, BRA, REG_A, { .cond = COND_EQ } },
+[0x128] = { "lbvc",  BRANCH, 2, BRA, REG_A, { .cond = COND_VC } },
+[0x129] = { "lbvs",  BRANCH, 2, BRA, REG_A, { .cond = COND_VS } },
+[0x12a] = { "lbpl",  BRANCH, 2, BRA, REG_A, { .cond = COND_PL } },
+[0x12b] = { "lbmi",  BRANCH, 2, BRA, REG_A, { .cond = COND_MI } },
+[0x12c] = { "lbge",  BRANCH, 2, BRA, REG_A, { .cond = COND_GE } },
+[0x12d] = { "lblt",  BRANCH, 2, BRA, REG_A, { .cond = COND_LT } },
+[0x12e] = { "lbgt",  BRANCH, 2, BRA, REG_A, { .cond = COND_GT } },
+[0x12f] = { "lble",  BRANCH, 2, BRA, REG_A, { .cond = COND_LE } },
+[0x17] =  { "lbsr",  BRANCH, 2, BSR, REG_A, { .cond = COND_A } },
 
 [0x0e] = { "jmp",  DIRECT,   1, JMP, REG_A, { .calcaddr = true } },
 [0x6e] = { "jmp",  INDEXED,  1, JMP, REG_A, { .calcaddr = true } },
@@ -467,11 +560,11 @@ int Cpu6809::Run()
 		if (opcode == 0x10) {
 			opcode = mSys->MemRead8(mPC++);
 			op = &ops[opcode + 0x100];
-			TRACEF(" x%#02x", 0x10);
+			TRACEF(" %#02x", 0x10);
 		} else if (opcode == 0x11) {
 			opcode = mSys->MemRead8(mPC++);
 			op = &ops[opcode + 0x200];
-			TRACEF(" x%#02x", 0x11);
+			TRACEF(" %#02x", 0x11);
 		} else {
 			op = &ops[opcode];
 		}
@@ -680,6 +773,40 @@ int Cpu6809::Run()
 				PutReg(op->targetreg, result);
 				break;
 			}
+			case ADC: { // adc[ab]
+				uint32_t a = GetReg(op->targetreg);
+				uint32_t b = arg;
+				uint32_t result = a + b;
+
+				if (!!(mCC & CC_C))
+					result += 1;
+
+				SET_Z(result);
+				if (op->width == 1) {
+					SET_HNVC1(a, b, result);
+				} else {
+					SET_NVC2(a, b, result);
+				}
+
+				PutReg(op->targetreg, result);
+				break;
+			}
+			case SUB: { // sub[abd]
+				uint32_t a = GetReg(op->targetreg);
+				uint32_t b = -arg;
+				uint32_t result = a + b;
+
+				// XXX make sure carry is okay
+				SET_Z(result);
+				if (op->width == 1) {
+					SET_HNVC1(a, b, result);
+				} else {
+					SET_NVC2(a, b, result);
+				}
+
+				PutReg(op->targetreg, result);
+				break;
+			}
 			case CMP: { // cmp[abdsuxy]
 				uint32_t a = GetReg(op->targetreg);
 				uint32_t b = arg;
@@ -736,13 +863,25 @@ int Cpu6809::Run()
 				break;
 			}
 
-			// XXX other instructions that have this form: ASL, ASR, DEC, INC, LSL, LSR, NEG, ROL, ROR
+			case TST: // tst[ab],tst
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+
+				mCC = CLR_CC_BIT(CC_V);
+				SET_NZ1(temp8);
+				break;
+
+			// class with a similar set of memory access pattern
 			case CLR: // clr[ab],clr
 				temp8 = 0;
 				mCC = CLR_CC_BIT(CC_V);
 				mCC = CLR_CC_BIT(CC_C);
 				goto shared_memwrite;
-			case COM: // com[ab],clr
+
+			case COM: // com[ab],com
 				if (op->mode == IMPLIED) {
 					temp8 = GetReg(op->targetreg);
 				} else {
@@ -753,6 +892,86 @@ int Cpu6809::Run()
 				mCC = CLR_CC_BIT(CC_V);
 				mCC = SET_CC_BIT(CC_C);
 				goto shared_memwrite;
+
+			case NEG: // neg[ab],neg
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+
+				mCC = (temp8 == 0x80) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
+				SET_V1(-temp8, 0, -temp8); // XXX verify
+
+				temp8 = -temp8;
+				goto shared_memwrite;
+
+			case ASL: // asl[ab],asl
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+
+				mCC = (BIT_SHIFT(temp8, 6) ^ BIT_SHIFT(temp8, 7)) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
+				mCC = BIT(temp8, 7) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
+
+				temp8 = (temp8 << 1) & 0xff;
+				goto shared_memwrite;
+
+			case ASR: // asr[ab],asr
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+
+				mCC = BIT(temp8, 0) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
+
+				temp8 = BIT(temp8, 7) | ((temp8 & 0xff) >> 1);
+				goto shared_memwrite;
+
+			case LSR: // lsr[ab],lsr
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+
+				mCC = BIT(temp8, 0) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
+
+				temp8 = ((temp8 & 0xff) >> 1);
+				goto shared_memwrite;
+
+			case ROL: { // rol[ab],rol
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+
+				bool oldc = !!(mCC & CC_C);
+
+				mCC = (BIT_SHIFT(temp8, 6) ^ BIT_SHIFT(temp8, 7)) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
+				mCC = BIT(temp8, 7) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
+
+				temp8 = ((temp8 << 1) & 0xff) | (oldc ? 1 : 0);
+				goto shared_memwrite;
+			}
+
+			case ROR: { // ror[ab],ror
+				if (op->mode == IMPLIED) {
+					temp8 = GetReg(op->targetreg);
+				} else {
+					temp8 = mSys->MemRead8(arg);
+				}
+
+				bool oldc = !!(mCC & CC_C);
+				mCC = BIT(temp8, 0) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
+
+				temp8 = (oldc ? 0x80 : 0) | ((temp8 & 0xff) >> 1);
+				goto shared_memwrite;
+			}
 
 			case DEC: // dec[ab],dec
 				if (op->mode == IMPLIED) {
@@ -929,11 +1148,12 @@ shared_memwrite:
 				bool takebranch = TestBranchCond(op->cond);
 
 				if (takebranch) {
-					mPC += arg;
 					if (arg == -2) {
 						printf("infinite loop detected, aborting\n");
 						done = true;
 					}
+					mPC += arg;
+					mPC &= 0xffff;
 					TRACEF(" target %#04x", mPC);
 				}
 				break;
