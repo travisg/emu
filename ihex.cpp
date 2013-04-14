@@ -42,7 +42,6 @@ int iHex::Open(const string &name)
 
 	mFile.open(name.c_str(), ios::in);
 	if (!mFile.is_open()) {
-		std::cerr << "Error opening file " << name << std::endl;
 		return -1;
 	}
 
