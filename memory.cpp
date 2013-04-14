@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -25,29 +26,29 @@
 #include "memory.h"
 
 Memory::Memory()
-:	mMem(0),
-	mSize(0)
+:   mMem(0),
+    mSize(0)
 {
 }
 
 Memory::~Memory()
 {
-	delete mMem;
+    delete mMem;
 }
 
 int Memory::Alloc(size_t len)
 {
-	delete mMem;
-	mSize = 0;
+    delete mMem;
+    mSize = 0;
 
-	mMem = new uint8_t[len];
-	if (!mMem)
-		return -1;
+    mMem = new uint8_t[len];
+    if (!mMem)
+        return -1;
 
-	mSize = len;
+    mSize = len;
 
-	memset(mMem, 0, len);
+    memset(mMem, 0, len);
 
-	return 0;
+    return 0;
 }
 

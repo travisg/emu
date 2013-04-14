@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -31,15 +32,15 @@
 
 class MC6850 : public MemoryDevice {
 public:
-	MC6850();
-	virtual ~MC6850();
+    MC6850();
+    virtual ~MC6850();
 
-	virtual uint8_t ReadByte(size_t address);
-	virtual void WriteByte(size_t address, uint8_t val);
+    virtual uint8_t ReadByte(size_t address);
+    virtual void WriteByte(size_t address, uint8_t val);
 
 private:
-	uint8_t mControl;
-	uint8_t mStatus;
-	int mPendingRx;
+    uint8_t mControl;
+    uint8_t mStatus;
+    int mPendingRx;
 };
 

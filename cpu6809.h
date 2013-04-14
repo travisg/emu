@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -28,52 +29,52 @@
 
 /* registers */
 enum regnum {
-	REG_X,
-	REG_Y,
-	REG_U,
-	REG_S,
-	REG_A,
-	REG_B,
-	REG_D,
-	REG_PC,
-	REG_DP,
-	REG_CC,
+    REG_X,
+    REG_Y,
+    REG_U,
+    REG_S,
+    REG_A,
+    REG_B,
+    REG_D,
+    REG_PC,
+    REG_DP,
+    REG_CC,
 };
 
 class Cpu6809 : public Cpu {
 public:
-	Cpu6809();
-	virtual ~Cpu6809();
+    Cpu6809();
+    virtual ~Cpu6809();
 
-	virtual void Reset();
-	virtual int Run();
+    virtual void Reset();
+    virtual int Run();
 
-	virtual void Dump();
+    virtual void Dump();
 
 private:
-	uint16_t GetReg(regnum r);
-	void PutReg(regnum r, uint16_t val);
+    uint16_t GetReg(regnum r);
+    void PutReg(regnum r, uint16_t val);
 
-	bool TestBranchCond(unsigned int cond);
+    bool TestBranchCond(unsigned int cond);
 
-	// register file
-	union {
-		struct { 
-			uint8_t mB;
-			uint8_t mA;
-		};
-		uint16_t mD; // D is a union of A & B (XXX is endian specific)
-	};
-	uint16_t mX;
-	uint16_t mY;
-	uint16_t mU;
-	uint16_t mS;
-	uint16_t mPC;
-	uint8_t  mDP;
-	uint8_t  mCC;
+    // register file
+    union {
+        struct { 
+            uint8_t mB;
+            uint8_t mA;
+        };
+        uint16_t mD; // D is a union of A & B (XXX is endian specific)
+    };
+    uint16_t mX;
+    uint16_t mY;
+    uint16_t mU;
+    uint16_t mS;
+    uint16_t mPC;
+    uint8_t  mDP;
+    uint8_t  mCC;
 
-	// any exceptions pending?
-	unsigned int mException;
+    // any exceptions pending?
+    unsigned int mException;
 };
 
 

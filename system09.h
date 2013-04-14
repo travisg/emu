@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -32,29 +33,29 @@ class MC6850;
 // a simple 6809 based system
 class System09 : public System {
 public:
-	System09();
-	virtual ~System09();
+    System09();
+    virtual ~System09();
 
-	virtual int Init();
+    virtual int Init();
 
-	virtual int Run();
+    virtual int Run();
 
-	virtual uint8_t  MemRead8(size_t address);
-	virtual void     MemWrite8(size_t address, uint8_t val);
+    virtual uint8_t  MemRead8(size_t address);
+    virtual void     MemWrite8(size_t address, uint8_t val);
 
-	virtual uint16_t MemRead16(size_t address);
-	virtual void     MemWrite16(size_t address, uint16_t val);
+    virtual uint16_t MemRead16(size_t address);
+    virtual void     MemWrite16(size_t address, uint16_t val);
 
 private:
-	void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
-	static void iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len);
+    void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
+    static void iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len);
 
-	MemoryDevice *GetDeviceAtAddr(size_t *address);
+    MemoryDevice *GetDeviceAtAddr(size_t *address);
 
-	Cpu6809 *mCpu;
-	MemoryDevice *mMem;
-	MemoryDevice *mRom;
-	MC6850 *mUart;
+    Cpu6809 *mCpu;
+    MemoryDevice *mMem;
+    MemoryDevice *mRom;
+    MC6850 *mUart;
 };
 
 

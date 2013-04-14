@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -30,15 +31,15 @@
 // top level object, representing the entire emulated system
 class System : boost::noncopyable {
 public:
-	System();
-	virtual ~System();
+    System();
+    virtual ~System();
 
-	virtual int Init() = 0;
-	virtual int Run() = 0;
+    virtual int Init() = 0;
+    virtual int Run() = 0;
 
-	virtual uint8_t  MemRead8(size_t address) = 0;
-	virtual void     MemWrite8(size_t address, uint8_t val) = 0;
-	virtual uint16_t MemRead16(size_t address) = 0;
-	virtual void     MemWrite16(size_t address, uint16_t val) = 0;
+    virtual uint8_t  MemRead8(size_t address) = 0;
+    virtual void     MemWrite8(size_t address, uint8_t val) = 0;
+    virtual uint16_t MemRead16(size_t address) = 0;
+    virtual void     MemWrite16(size_t address, uint16_t val) = 0;
 };
 

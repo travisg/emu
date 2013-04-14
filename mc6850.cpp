@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -40,11 +41,11 @@
 using namespace std;
 
 MC6850::MC6850()
-:	mControl(0),
-	mStatus(0),
-	mPendingRx(-1)
+:   mControl(0),
+    mStatus(0),
+    mPendingRx(-1)
 {
-	mStatus = STAT_TDRE;
+    mStatus = STAT_TDRE;
 }
 
 MC6850::~MC6850()
@@ -53,56 +54,56 @@ MC6850::~MC6850()
 
 uint8_t MC6850::ReadByte(size_t address)
 {
-	uint8_t val;
+    uint8_t val;
 
-//	printf("MC6850: readbyte address 0x%zx\n", address);
+//  printf("MC6850: readbyte address 0x%zx\n", address);
 
-	// XXX super nasty hack
-	if (mPendingRx < 0) {
-		mPendingRx = getchar();
-		if (mPendingRx == 0x3) {
-			// XXX 
-			exit(1);
-		} else if (mPendingRx == 0xa) {
-			mPendingRx = 0xd;
-		} else if (islower(mPendingRx)) {
-			mPendingRx = toupper(mPendingRx);
-		}
-	}
+    // XXX super nasty hack
+    if (mPendingRx < 0) {
+        mPendingRx = getchar();
+        if (mPendingRx == 0x3) {
+            // XXX 
+            exit(1);
+        } else if (mPendingRx == 0xa) {
+            mPendingRx = 0xd;
+        } else if (islower(mPendingRx)) {
+            mPendingRx = toupper(mPendingRx);
+        }
+    }
 
-	val = 0;
-	if (address == 0) {
-		// status register
-		val = mStatus;
-		if (mPendingRx >= 0)
-			val |= STAT_RDRF;
-	} else if (address == 1) {
-		// data register
-		if (mPendingRx >= 0) {
-			val = mPendingRx;
-			mPendingRx = -1;
-			//printf("cpu read data %d\n", val);
-		}
-	} else {
-		// unknown
-	}
-	return val;
+    val = 0;
+    if (address == 0) {
+        // status register
+        val = mStatus;
+        if (mPendingRx >= 0)
+            val |= STAT_RDRF;
+    } else if (address == 1) {
+        // data register
+        if (mPendingRx >= 0) {
+            val = mPendingRx;
+            mPendingRx = -1;
+            //printf("cpu read data %d\n", val);
+        }
+    } else {
+        // unknown
+    }
+    return val;
 }
 
 void MC6850::WriteByte(size_t address, uint8_t val)
 {
-//	printf("MC6850: writebyte address 0x%zx, val 0x%hhx\n", address, val);
+//  printf("MC6850: writebyte address 0x%zx, val 0x%hhx\n", address, val);
 
-	if (address == 0) {
-		// control register
-		// XXX ignore for now
-		mControl = val;
-	} else if (address == 1) {
-		// data register
-		putchar(val);
-	} else {
-		// unknown
-	}
+    if (address == 0) {
+        // control register
+        // XXX ignore for now
+        mControl = val;
+    } else if (address == 1) {
+        // data register
+        putchar(val);
+    } else {
+        // unknown
+    }
 }
 
 

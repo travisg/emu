@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -35,46 +36,46 @@ static struct termios oldstdout;
 
 static void resetconsole(void)
 {
-	tcsetattr(0, TCSANOW, &oldstdin);
-	tcsetattr(1, TCSANOW, &oldstdout);
+    tcsetattr(0, TCSANOW, &oldstdin);
+    tcsetattr(1, TCSANOW, &oldstdout);
 }
 
 static void setconsole(void)
 {
-	struct termios t;
+    struct termios t;
 
-	tcgetattr(0, &oldstdin);
-	tcgetattr(1, &oldstdout);
+    tcgetattr(0, &oldstdin);
+    tcgetattr(1, &oldstdout);
 
-	atexit(&resetconsole);
+    atexit(&resetconsole);
 
-	t = oldstdin;
-	t.c_lflag = ISIG; // no input processing
-	// Don't interpret various control characters, pass them through instead
-	t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
-	t.c_cc[VMIN]  = 0; // nonblocking read
-	t.c_cc[VTIME] = 0; // nonblocking read
-	tcsetattr(0, TCSANOW, &t);
+    t = oldstdin;
+    t.c_lflag = ISIG; // no input processing
+    // Don't interpret various control characters, pass them through instead
+    t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
+    t.c_cc[VMIN]  = 0; // nonblocking read
+    t.c_cc[VTIME] = 0; // nonblocking read
+    tcsetattr(0, TCSANOW, &t);
 
-	fcntl(0, F_SETFL, O_NONBLOCK);
+    fcntl(0, F_SETFL, O_NONBLOCK);
 
-	t = oldstdout;
-	t.c_lflag = ISIG; // no output processing
-	// Don't interpret various control characters, pass them through instead
-	t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
-	tcsetattr(1, TCSANOW, &t);
+    t = oldstdout;
+    t.c_lflag = ISIG; // no output processing
+    // Don't interpret various control characters, pass them through instead
+    t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
+    tcsetattr(1, TCSANOW, &t);
 }
 
 int main(int argc, char **argv)
 {
-	System *sys;
+    System *sys;
 
-	setconsole();
+    setconsole();
 
-	sys = new System09();
-	sys->Init();
-	sys->Run();
+    sys = new System09();
+    sys->Init();
+    sys->Run();
 
-	return 0;
+    return 0;
 }
 

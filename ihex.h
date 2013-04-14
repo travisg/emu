@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -29,20 +30,20 @@
 
 class iHex {
 public:
-	iHex();
-	~iHex();
+    iHex();
+    ~iHex();
 
-	int Open(const std::string &name);
-	void Close();
+    int Open(const std::string &name);
+    void Close();
 
-	typedef boost::function<void (void *context, const uint8_t *ptr, size_t offset, size_t len)> iHexCallback;
+    typedef boost::function<void (void *context, const uint8_t *ptr, size_t offset, size_t len)> iHexCallback;
 
-	void SetCallback(const iHexCallback &cb, void *context);
-	int Parse();
-	
+    void SetCallback(const iHexCallback &cb, void *context);
+    int Parse();
+
 private:
-	std::ifstream mFile;
-	iHexCallback mParseCallback;
-	void *mCallbackContext;
+    std::ifstream mFile;
+    iHexCallback mParseCallback;
+    void *mCallbackContext;
 };
 

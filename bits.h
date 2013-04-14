@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -34,19 +35,19 @@
 
 static inline int SignExtend(uint32_t in, unsigned int pos)
 {
-	if (!BIT(in, pos)) {
-		return in;
-	} else {
-		return ((int)in << (31 - pos)) >> (31 - pos);
-	}
+    if (!BIT(in, pos)) {
+        return in;
+    } else {
+        return ((int)in << (31 - pos)) >> (31 - pos);
+    }
 }
 
 static inline int SignExtend(uint8_t in)
 {
-	return SignExtend((uint32_t)in, 7);
+    return SignExtend((uint32_t)in, 7);
 }
 
 static inline int SignExtend(uint16_t in)
 {
-	return SignExtend((uint32_t)in, 15);
+    return SignExtend((uint32_t)in, 15);
 }

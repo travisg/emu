@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -33,113 +34,113 @@ iHex::iHex()
 
 iHex::~iHex()
 {
-	Close();
+    Close();
 }
 
 int iHex::Open(const string &name)
 {
-	Close();
+    Close();
 
-	mFile.open(name.c_str(), ios::in);
-	if (!mFile.is_open()) {
-		return -1;
-	}
+    mFile.open(name.c_str(), ios::in);
+    if (!mFile.is_open()) {
+        return -1;
+    }
 
-	return 0;
+    return 0;
 }
 
 void iHex::Close()
 {
-	mFile.close();
+    mFile.close();
 }
 
 void iHex::SetCallback(const iHexCallback &cb, void *context)
 {
-	mParseCallback = cb;
-	mCallbackContext = context;
+    mParseCallback = cb;
+    mCallbackContext = context;
 }
 
 static unsigned int hexnibble(char c)
 {
-	if (!isxdigit(c)) {
-		return 0;
-	}
-	return (c >= '0' && c <= '9') ? (c - '0') :
-	       (c >= 'a' && c <= 'f') ? (c - 'a' + 10) :
-	       (c - 'A' + 10);
+    if (!isxdigit(c)) {
+        return 0;
+    }
+    return (c >= '0' && c <= '9') ? (c - '0') :
+           (c >= 'a' && c <= 'f') ? (c - 'a' + 10) :
+           (c - 'A' + 10);
 }
 
 static unsigned int readhex8(const string &line, size_t offset)
 {
-	unsigned int val = hexnibble(line[offset]) << 4 | hexnibble(line[offset+1]);
-	return val;
+    unsigned int val = hexnibble(line[offset]) << 4 | hexnibble(line[offset+1]);
+    return val;
 }
 
 static unsigned int readhex16(const string &line, size_t offset)
 {
-	unsigned int val = (readhex8(line, offset) << 8) | readhex8(line, offset + 2);
-	return val;
+    unsigned int val = (readhex8(line, offset) << 8) | readhex8(line, offset + 2);
+    return val;
 }
 
 int iHex::Parse()
 {
-	if (!mFile.is_open())
-		return -1;
+    if (!mFile.is_open())
+        return -1;
 
-	bool done = false;
-	int err = 0;
-	uint32_t extAddress = 0;
-	while (!done && mFile.good()) {
-		string line;
-		getline(mFile, line);
+    bool done = false;
+    int err = 0;
+    uint32_t extAddress = 0;
+    while (!done && mFile.good()) {
+        string line;
+        getline(mFile, line);
 
-		//cout << "line: " << line <<endl;
+        //cout << "line: " << line <<endl;
 
-		size_t pos = 0;
+        size_t pos = 0;
 
-		/* starts with : */
-		if (line[pos++] != ':') {
-			err = -1;
-			break;
-		}
+        /* starts with : */
+        if (line[pos++] != ':') {
+            err = -1;
+            break;
+        }
 
-		/* length byte is next */
-		size_t length = readhex8(line, pos);
-		pos += 2;
+        /* length byte is next */
+        size_t length = readhex8(line, pos);
+        pos += 2;
 
-		uint16_t address = readhex16(line, pos);
-		pos += 4;
+        uint16_t address = readhex16(line, pos);
+        pos += 4;
 
-		unsigned int type = readhex8(line, pos);
-		pos += 2;
+        unsigned int type = readhex8(line, pos);
+        pos += 2;
 
-		//cout << "length " << length << " address " << address << " type " << type << endl;
+        //cout << "length " << length << " address " << address << " type " << type << endl;
 
-		switch (type) {
-			case 0: { // data record
-				uint8_t *data = new uint8_t[length];
+        switch (type) {
+            case 0: { // data record
+                uint8_t *data = new uint8_t[length];
 
-				for (size_t i = 0; i < length; i++) {
-					data[i] = readhex8(line, pos);
-					pos += 2;
-				}
+                for (size_t i = 0; i < length; i++) {
+                    data[i] = readhex8(line, pos);
+                    pos += 2;
+                }
 
-				unsigned int checksum = readhex8(line, pos);
-				//cout << "checksum " << checksum << endl;
+                unsigned int checksum = readhex8(line, pos);
+                //cout << "checksum " << checksum << endl;
 
-				mParseCallback(mCallbackContext, data, extAddress + address, length);
+                mParseCallback(mCallbackContext, data, extAddress + address, length);
 
-				delete[] data;
-				break;
-			}
-			case 1: // end of file
-				done = true;
-				break;
-			case 2 ... 5: // unhandled
-				cerr << "unhandled record type " << type << endl;
-				return -1;
-		}
-	}
+                delete[] data;
+                break;
+            }
+            case 1: // end of file
+                done = true;
+                break;
+            case 2 ... 5: // unhandled
+                cerr << "unhandled record type " << type << endl;
+                return -1;
+        }
+    }
 
-	return err;
+    return err;
 }

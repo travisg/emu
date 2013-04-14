@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -29,26 +30,26 @@
 
 class MemoryDevice : boost::noncopyable {
 public:
-	MemoryDevice() {}
-	virtual ~MemoryDevice() {}
+    MemoryDevice() {}
+    virtual ~MemoryDevice() {}
 
-	virtual uint8_t ReadByte(size_t address) = 0;
-	virtual void WriteByte(size_t address, uint8_t val) = 0;
+    virtual uint8_t ReadByte(size_t address) = 0;
+    virtual void WriteByte(size_t address, uint8_t val) = 0;
 
 };
 
 class Memory : public MemoryDevice {
 public:
-	Memory();
-	virtual ~Memory();
+    Memory();
+    virtual ~Memory();
 
-	int Alloc(size_t len);
+    int Alloc(size_t len);
 
-	// simple accessors, assumes bounds checking somewhere else
-	virtual uint8_t ReadByte(size_t address) { return mMem[address]; }
-	virtual void WriteByte(size_t address, uint8_t val) { mMem[address] = val; }
+    // simple accessors, assumes bounds checking somewhere else
+    virtual uint8_t ReadByte(size_t address) { return mMem[address]; }
+    virtual void WriteByte(size_t address, uint8_t val) { mMem[address] = val; }
 
 private:
-	uint8_t *mMem;
-	size_t mSize;
+    uint8_t *mMem;
+    size_t mSize;
 };

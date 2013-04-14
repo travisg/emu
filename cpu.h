@@ -1,3 +1,4 @@
+// vim: ts=4:sw=4:expandtab:
 /*
  * Copyright (c) 2013 Travis Geiselbrecht
  *
@@ -26,17 +27,17 @@ class System;
 
 class Cpu {
 public:
-	Cpu() : mSys(0) {}
-	virtual ~Cpu() {}
+    Cpu() : mSys(0) {}
+    virtual ~Cpu() {}
 
-	void SetSystem(System *sys) { mSys = sys; }
+    void SetSystem(System *sys) { mSys = sys; }
 
-	virtual void Reset() = 0;
-	virtual int Run() = 0;
+    virtual void Reset() = 0;
+    virtual int Run() = 0;
 
-	// debugging
-	virtual void Dump() = 0;
+    // debugging
+    virtual void Dump() = 0;
 
 protected:
-	System *mSys;
+    System *mSys;
 };
