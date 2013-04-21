@@ -86,10 +86,9 @@ int System09::Init()
     // create a uart
     MC6850 *uart = new MC6850();
     mUart = uart;
-    
+
     // create a 6809 based cpu
-    mCpu = new Cpu6809();
-    mCpu->SetSystem(this);
+    mCpu = new Cpu6809(*this);
     mCpu->Reset();
 
     // preload some stuff into memory
@@ -99,7 +98,7 @@ int System09::Init()
 #if 0
     hex.Open("test/t6809.ihx");
     hex.Parse();
-    
+
     hex.Open("test/rom.ihx");
     hex.Parse();
 #endif

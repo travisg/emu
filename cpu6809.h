@@ -43,7 +43,7 @@ enum regnum {
 
 class Cpu6809 : public Cpu {
 public:
-    Cpu6809();
+    Cpu6809(System &sys);
     virtual ~Cpu6809();
 
     virtual void Reset();

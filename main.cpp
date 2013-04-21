@@ -26,6 +26,7 @@
 #include <getopt.h>
 #include <fcntl.h>
 #include <termios.h>
+#include <getopt.h>
 
 #include "system09.h"
 
@@ -66,9 +67,42 @@ static void setconsole(void)
     tcsetattr(1, TCSANOW, &t);
 }
 
+static void usage(char **argv)
+{
+    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type]\n", argv[0]);
+
+    exit(1);
+}
+
 int main(int argc, char **argv)
 {
     System *sys;
+
+    // read in any overriding configuration from the command line
+    for(;;) {
+        int c;
+        int option_index = 0;
+
+        static struct option long_options[] = {
+            {"cpu", 1, 0, 'c'},
+            {0, 0, 0, 0},
+        };
+
+        c = getopt_long(argc, argv, "c:", long_options, &option_index);
+        if(c == -1)
+            break;
+
+        switch(c) {
+            case 'c':
+                printf("cpu option: '%s'\n", optarg);
+                //add_config_key("cpu", "core", optarg);
+                break;
+            default:
+                usage(argv);
+                break;
+        }
+    }
+
 
     setconsole();
 

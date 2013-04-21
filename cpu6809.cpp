@@ -424,7 +424,8 @@ static const opdecode ops[256 * 3] = {
 [0x39] = { "rts",  IMPLIED,  1, RTS, REG_A, { 0 } },
 };
 
-Cpu6809::Cpu6809()
+Cpu6809::Cpu6809(System &mSys)
+:   Cpu(mSys)
 {
 }
 
@@ -512,25 +513,25 @@ bool Cpu6809::TestBranchCond(unsigned int cond)
 
 #define PUSH16(stack, val) do { \
     uint16_t __sp = GetReg(stack); \
-    mSys->MemWrite8(--__sp, (val) & 0xff); \
-    mSys->MemWrite8(--__sp, ((val) >> 8) & 0xff); \
+    mSys.MemWrite8(--__sp, (val) & 0xff); \
+    mSys.MemWrite8(--__sp, ((val) >> 8) & 0xff); \
     PutReg(stack, __sp); \
 } while (0)
 #define PUSH8(stack, val) do { \
     uint16_t __sp = GetReg(stack); \
-    mSys->MemWrite8(--__sp, val); \
+    mSys.MemWrite8(--__sp, val); \
     PutReg(stack, __sp); \
 } while (0)
 #define PULL16(stack, val) do { \
     uint16_t __sp = GetReg(stack); \
-    uint16_t __temp = mSys->MemRead8(__sp++) << 8;\
-    __temp |= mSys->MemRead8(__sp++); \
+    uint16_t __temp = mSys.MemRead8(__sp++) << 8;\
+    __temp |= mSys.MemRead8(__sp++); \
     PutReg(stack, __sp); \
     val = __temp; \
 } while (0)
 #define PULL8(stack, val) do { \
     uint16_t __sp = GetReg(stack); \
-    val = mSys->MemRead8(__sp++);\
+    val = mSys.MemRead8(__sp++);\
     PutReg(stack, __sp); \
 } while (0)
 
@@ -544,14 +545,14 @@ int Cpu6809::Run()
         if (mException) {
             if (mException & EXC_RESET) {
                 // reset, branch to the reset vector
-                mPC = mSys->MemRead16(0xfffe);
+                mPC = mSys.MemRead16(0xfffe);
                 mException = 0; // clear the rest of the pending irqs
             }
             assert(!mException);
         }
 
         // fetch the first byte of the opcode
-        opcode = mSys->MemRead8(mPC++);
+        opcode = mSys.MemRead8(mPC++);
 
         TRACEF("opcode");
 
@@ -559,11 +560,11 @@ int Cpu6809::Run()
 
         // see if it's an extended opcode
         if (opcode == 0x10) {
-            opcode = mSys->MemRead8(mPC++);
+            opcode = mSys.MemRead8(mPC++);
             op = &ops[opcode + 0x100];
             TRACEF(" %#02x", 0x10);
         } else if (opcode == 0x11) {
-            opcode = mSys->MemRead8(mPC++);
+            opcode = mSys.MemRead8(mPC++);
             op = &ops[opcode + 0x200];
             TRACEF(" %#02x", 0x11);
         } else {
@@ -592,49 +593,49 @@ int Cpu6809::Run()
             case IMMEDIATE:
                 TRACEF(" IMM");
                 if (op->width == 1)
-                    arg = mSys->MemRead8(mPC++);
+                    arg = mSys.MemRead8(mPC++);
                 else {
-                    arg = mSys->MemRead16(mPC);
+                    arg = mSys.MemRead16(mPC);
                     mPC += 2;
                 }
                 break;
             case DIRECT:
                 TRACEF(" DIR");
-                temp8 = mSys->MemRead8(mPC++);
+                temp8 = mSys.MemRead8(mPC++);
                 temp16 = (mDP << 8) | temp8;
                 if (op->calcaddr) {
                     arg = temp16;
                 } else {
                     if (op->width == 1)
-                        arg = mSys->MemRead8(temp16);
+                        arg = mSys.MemRead8(temp16);
                     else
-                        arg = mSys->MemRead16(temp16); // XXX doesn't handle wraparound
+                        arg = mSys.MemRead16(temp16); // XXX doesn't handle wraparound
                 }
                 break;
             case EXTENDED:
                 TRACEF(" EXT");
-                temp16 = mSys->MemRead16(mPC);
+                temp16 = mSys.MemRead16(mPC);
                 mPC += 2;
                 if (op->calcaddr) {
                     arg = temp16;
                 } else {
                     if (op->width == 1)
-                        arg = mSys->MemRead8(temp16);
+                        arg = mSys.MemRead8(temp16);
                     else
-                        arg = mSys->MemRead16(temp16);
+                        arg = mSys.MemRead16(temp16);
                 }
                 break;
             case BRANCH:
                 TRACEF(" BRA");
                 if (op->width == 1)
-                    arg = SignExtend(mSys->MemRead8(mPC++));
+                    arg = SignExtend(mSys.MemRead8(mPC++));
                 else {
-                    arg = SignExtend(mSys->MemRead16(mPC));
+                    arg = SignExtend(mSys.MemRead16(mPC));
                     mPC += 2;
                 }
                 break;
             case INDEXED: {
-                temp8 = mSys->MemRead8(mPC++);
+                temp8 = mSys.MemRead8(mPC++);
                 TRACEF(" IDX word %#02x", temp8);
 
                 // parse the index word
@@ -672,11 +673,11 @@ int Cpu6809::Run()
                             off = SignExtend(mA);
                             break;
                         case 0x8: // n,R (8 bit offset)
-                            temp8 = mSys->MemRead8(mPC++);
+                            temp8 = mSys.MemRead8(mPC++);
                             off = SignExtend(temp8);
                             break;
                         case 0x9: // n,R (16 bit offset)
-                            temp16 = mSys->MemRead16(mPC);
+                            temp16 = mSys.MemRead16(mPC);
                             mPC += 2;
                             off = SignExtend(temp16);
                             break;
@@ -684,18 +685,18 @@ int Cpu6809::Run()
                             off = SignExtend(mD);
                             break;
                         case 0xc: // n,PC (8 bit offset)
-                            temp8 = mSys->MemRead8(mPC++);
+                            temp8 = mSys.MemRead8(mPC++);
                             off = SignExtend(temp8);
                             reg = &mPC;
                             break;
                         case 0xd: // n,PC (16 bit offset)
-                            temp16 = mSys->MemRead16(mPC);
+                            temp16 = mSys.MemRead16(mPC);
                             mPC += 2;
                             off = SignExtend(temp16);
                             reg = &mPC;
                             break;
                         case 0xf: // [n] (16 bit absolute indirect)
-                            temp16 = mSys->MemRead16(mPC);
+                            temp16 = mSys.MemRead16(mPC);
                             mPC += 2;
                             off = SignExtend(temp16);
                             reg = &zero;
@@ -735,15 +736,15 @@ int Cpu6809::Run()
 
                 // if we're indirecting, load the address from addr
                 if (indirect) {
-                    addr = mSys->MemRead16(addr);
+                    addr = mSys.MemRead16(addr);
                     TRACEF(" [addr] %#04x", addr);
                 }
 
                 if (!op->calcaddr) {
                     if (op->width == 1) {
-                        arg = mSys->MemRead8(addr);
+                        arg = mSys.MemRead8(addr);
                     } else {
-                        arg = mSys->MemRead16(addr);
+                        arg = mSys.MemRead16(addr);
                     }
                 } else {
                     arg = addr;
@@ -868,7 +869,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
 
                 mCC = CLR_CC_BIT(CC_V);
@@ -886,7 +887,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
                 temp8 = ~temp8;
 
@@ -898,7 +899,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
 
                 mCC = (temp8 == 0x80) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
@@ -911,7 +912,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
 
                 mCC = (BIT_SHIFT(temp8, 6) ^ BIT_SHIFT(temp8, 7)) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
@@ -924,7 +925,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
 
                 mCC = BIT(temp8, 0) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
@@ -936,7 +937,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
 
                 mCC = BIT(temp8, 0) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
@@ -948,7 +949,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
 
                 bool oldc = !!(mCC & CC_C);
@@ -964,7 +965,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
 
                 bool oldc = !!(mCC & CC_C);
@@ -978,7 +979,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
                 temp8--;
 
@@ -989,7 +990,7 @@ int Cpu6809::Run()
                 if (op->mode == IMPLIED) {
                     temp8 = GetReg(op->targetreg);
                 } else {
-                    temp8 = mSys->MemRead8(arg);
+                    temp8 = mSys.MemRead8(arg);
                 }
                 temp8++;
 
@@ -1001,9 +1002,9 @@ shared_memwrite:
                     PutReg(op->targetreg, temp8);
                 } else {
                     if (op->width == 1)
-                        mSys->MemWrite8(arg, temp8);
+                        mSys.MemWrite8(arg, temp8);
                     else
-                        mSys->MemWrite16(arg, temp8);
+                        mSys.MemWrite16(arg, temp8);
                 }
 
                 SET_NZ1(temp8);
@@ -1018,7 +1019,7 @@ shared_memwrite:
                 PutReg(REG_X, GetReg(REG_X) + GetReg(REG_B));
                 break;
             case TFR: { // R <= R1
-                temp8 = mSys->MemRead8(mPC++);
+                temp8 = mSys.MemRead8(mPC++);
                 TRACEF(" arg %#02x", temp8);
 
                 // source register
@@ -1202,11 +1203,11 @@ shared_memwrite:
             case ST: // sta,stb,std,sts,stu,stx,sty
                 if (op->width == 1) {
                     temp8 = GetReg(op->targetreg);
-                    mSys->MemWrite8(arg, temp8);
+                    mSys.MemWrite8(arg, temp8);
                     SET_NZ1(temp8);
                 } else {
                     temp16 = GetReg(op->targetreg);
-                    mSys->MemWrite16(arg, temp16);
+                    mSys.MemWrite16(arg, temp16);
                     SET_NZ2(temp16);
                 }
                 mCC = CLR_CC_BIT(CC_V);

@@ -27,10 +27,8 @@ class System;
 
 class Cpu {
 public:
-    Cpu() : mSys(0) {}
+    Cpu(System &sys) : mSys(sys) {}
     virtual ~Cpu() {}
-
-    void SetSystem(System *sys) { mSys = sys; }
 
     virtual void Reset() = 0;
     virtual int Run() = 0;
@@ -39,5 +37,5 @@ public:
     virtual void Dump() = 0;
 
 protected:
-    System *mSys;
+    System &mSys;
 };

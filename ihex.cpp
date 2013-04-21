@@ -126,6 +126,7 @@ int iHex::Parse()
                 }
 
                 unsigned int checksum = readhex8(line, pos);
+                (void)checksum;
                 //cout << "checksum " << checksum << endl;
 
                 mParseCallback(mCallbackContext, data, extAddress + address, length);
