@@ -903,7 +903,7 @@ int Cpu6809::Run()
                 }
 
                 mCC = (temp8 == 0x80) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V);
-                SET_V1(-temp8, 0, -temp8); // XXX verify
+                mCC = (temp8 != 0x00) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C);
 
                 temp8 = -temp8;
                 goto shared_memwrite;
