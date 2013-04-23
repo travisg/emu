@@ -20,9 +20,11 @@ ARCH := $(shell uname -m)
 ifeq ($(UNAME),Darwin)
 CC := clang
 COMPILEFLAGS += -I/opt/local/include
+OTOOL := otool
 endif
 ifeq ($(UNAME),Linux)
 CC := clang
+OBJDUMP := objdump
 endif
 
 CFLAGS += $(COMPILEFLAGS)
@@ -45,8 +47,18 @@ OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 
 DEPS := $(OBJS:.o=.d)
 
+.PHONY: all
+all: $(BUILDDIR)/$(TARGET) $(BUILDDIR)/$(TARGET).lst
+
 $(BUILDDIR)/$(TARGET):  $(OBJS)
 	$(CC) $(LDFLAGS) $(OBJS) -o $@ $(LDLIBS)
+
+$(BUILDDIR)/$(TARGET).lst: $(BUILDDIR)/$(TARGET)
+ifeq ($(UNAME),Darwin)
+	$(OTOOL) -Vt $< | c++filt > $@
+else
+	$(OBJDUMP) -Cd $< > $@
+endif
 
 clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET)

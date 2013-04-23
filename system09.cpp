@@ -22,14 +22,17 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include "system09.h"
+
 #include <cstdio>
 #include <iostream>
 
 #include "memory.h"
-#include "system09.h"
 #include "cpu6809.h"
 #include "mc6850.h"
 #include "ihex.h"
+
+#define DEFAULT_ROM "test/BASIC.HEX"
 
 using namespace std;
 
@@ -38,7 +41,8 @@ System09::System09()
 :   mCpu(0),
     mMem(0),
     mRom(0),
-    mUart(0)
+    mUart(0),
+    mRomString(DEFAULT_ROM)
 {
 }
 
@@ -50,6 +54,16 @@ System09::~System09()
     delete mUart;
 }
 
+void System09::SetRom(const char *rom)
+{
+    mRomString = rom;
+}
+
+void System09::SetCpu(const char *cpu)
+{
+    mCpuString = cpu;
+}
+
 void System09::iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len)
 {
     System09 *s = static_cast<System09 *>(context);
@@ -58,7 +72,7 @@ void System09::iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t
 
 void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)
 {
-    //printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
+    printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
 
     for (size_t i = 0; i < len; i++) {
         size_t addr = address;
@@ -95,14 +109,9 @@ int System09::Init()
     iHex hex;
     hex.SetCallback(&System09::iHexParseCallbackStatic, this);
 
-#if 0
-    hex.Open("test/t6809.ihx");
-    hex.Parse();
+    cout << "rom is " << mRomString << endl;
 
-    hex.Open("test/rom.ihx");
-    hex.Parse();
-#endif
-    hex.Open("test/BASIC.HEX");
+    hex.Open(mRomString);
     hex.Parse();
 
     return 0;

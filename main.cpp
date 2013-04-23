@@ -30,6 +30,7 @@
 #include <getopt.h>
 
 #include "system09.h"
+#include <boost/scoped_ptr.hpp>
 
 using namespace std;
 
@@ -77,7 +78,8 @@ static void usage(char **argv)
 
 int main(int argc, char **argv)
 {
-    System *sys;
+    const char *romOption = NULL;
+    const char *cpuOption = NULL;
 
     // read in any overriding configuration from the command line
     for(;;) {
@@ -86,17 +88,22 @@ int main(int argc, char **argv)
 
         static struct option long_options[] = {
             {"cpu", 1, 0, 'c'},
+            {"rom", 1, 0, 'r'},
             {0, 0, 0, 0},
         };
 
-        c = getopt_long(argc, argv, "c:", long_options, &option_index);
+        c = getopt_long(argc, argv, "c:r:", long_options, &option_index);
         if(c == -1)
             break;
 
         switch(c) {
             case 'c':
                 printf("cpu option: '%s'\n", optarg);
-                //add_config_key("cpu", "core", optarg);
+                cpuOption = optarg;
+                break;
+            case 'r':
+                printf("rom option: '%s'\n", optarg);
+                romOption = optarg;
                 break;
             default:
                 usage(argv);
@@ -107,7 +114,11 @@ int main(int argc, char **argv)
 
     setconsole();
 
-    sys = new System09();
+    boost::scoped_ptr<System> sys(new System09());
+    if (romOption)
+        sys->SetRom(romOption);
+    if (cpuOption)
+        sys->SetCpu(cpuOption);
     sys->Init();
     sys->Run();
 

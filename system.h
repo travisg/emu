@@ -25,6 +25,7 @@
 
 #include <boost/utility.hpp>
 
+#include <string>
 #include <stdint.h>
 #include <sys/types.h>
 
@@ -36,6 +37,9 @@ public:
 
     virtual int Init() = 0;
     virtual int Run() = 0;
+
+    virtual void SetRom(const char *rom) = 0;
+    virtual void SetCpu(const char *cpu) = 0;
 
     virtual uint8_t  MemRead8(size_t address) = 0;
     virtual void     MemWrite8(size_t address, uint8_t val) = 0;

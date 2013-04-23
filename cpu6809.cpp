@@ -21,11 +21,11 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "cpu6809.h"
 #include <iostream>
 #include <cstdio>
 #include <assert.h>
 
-#include "cpu6809.h"
 #include "system.h"
 #include "bits.h"
 
@@ -580,7 +580,7 @@ int Cpu6809::Run()
         if (op->op == BADOP) {
             TRACEF("\n");
             fflush(stdout);
-            fprintf(stderr, "unhandled opcode\n");
+            fprintf(stderr, "unhandled opcode %#02x at %#04x\n", opcode, mPC - 1);
             assert(0);
         }
 

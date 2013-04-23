@@ -24,6 +24,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <string>
 #include "system.h"
 
 class Cpu6809;
@@ -39,6 +40,9 @@ public:
     virtual int Init();
 
     virtual int Run();
+
+    virtual void SetRom(const char *rom);
+    virtual void SetCpu(const char *cpu);
 
     virtual uint8_t  MemRead8(size_t address);
     virtual void     MemWrite8(size_t address, uint8_t val);
@@ -56,6 +60,9 @@ private:
     MemoryDevice *mMem;
     MemoryDevice *mRom;
     MC6850 *mUart;
+
+    std::string mRomString;
+    std::string mCpuString;
 };
 
 
