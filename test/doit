@@ -4,5 +4,10 @@ as6809 -gloaxff t6809 &&
 aslink -ni t6809
 
 as6809 -gloaxff rom &&
-aslink -niu rom
+aslink -niu rom &&
+../ihextobin/build-ihextobin/ihextobin -o 0xc000 rom.ihx rom.bin &&
+(echo "prog_uchar rom[] PROGMEM = {" > rom.h;
+hexdump -v -e '16/1 "0x%02x, "' -e '"\n"' rom.bin >> rom.h;
+echo "};" >> rom.h
+)
 

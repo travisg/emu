@@ -5,9 +5,10 @@ puthere = 0x1234
 stacktop = 0x8000
 
 ; uart registers
-uart_status  = 0xa000 ; read
-uart_control = 0xa000 ; write
-uart_data    = 0xa001 ; read/write
+uart_base    = 0x8000
+uart_status  = uart_base + 0 ; read
+uart_control = uart_base + 1 ; write
+uart_data    = uart_base + 1 ; read/write
 
 ; start of rom
     .area rom (ABS)
@@ -16,14 +17,18 @@ uart_data    = 0xa001 ; read/write
 rombase:
     lds     #stacktop
 
+; configure the uart
+    lda     #0x15 ; /16 + 8n1
+    sta     uart_control
 
+romloop:
     lda     #'a
     bsr     uartwrite
     lda     #'b
     bsr     uartwrite
     lda     #'\n
     bsr     uartwrite
-    bra     .
+    bra     romloop
 
 uartwrite:
     sta     uart_data
