@@ -169,18 +169,34 @@ MemoryDevice *System09::GetDeviceAtAddr(size_t *address)
     *address &= 0xffff;
 
     // figure out which memory device this address belongs to
-    if (*address < 0x8000) {
-        return mMem;
-    } else if (*address >= 0xc000) {
-        *address -= 0xc000;
-        return mRom;
-    } else if (*address < 0xc000) {
-        // UART
-        *address -= 0xa000;
-        return mUart;
-    } else {
-        // unknown
-        return NULL;
+    switch (*address) {
+        // main memory bank
+        case 0x0000 ... 0x7fff:
+            return mMem;
+
+#if 0
+        // device space
+        // 8 slots of 0x800 bytes
+        case 0x8000 ... 0x87ff:
+            *address -= 0x8000;
+            return mUart;
+
+        // only the 1st slot is used at the moment
+        case 0x8800 ... 0xbfff:
+            return NULL;
+#else
+        // old location for BASIC.HEX
+        case 0xa000 ... 0xa7ff:
+            *address -= 0xa000;
+            return mUart;
+#endif
+
+        // rom
+        case 0xc000 ... 0xffff:
+            *address -= 0xc000;
+            return mRom;
+        default:
+            return NULL;
     }
 }
 
