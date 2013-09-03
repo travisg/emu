@@ -26,6 +26,7 @@ ifeq ($(UNAME),Linux)
 CC := clang
 OBJDUMP := objdump
 endif
+NOECHO ?= @
 
 CFLAGS += $(COMPILEFLAGS)
 CPPFLAGS += $(COMPILEFLAGS)
@@ -72,17 +73,17 @@ MKDIR = if [ ! -d $(dir $@) ]; then mkdir -p $(dir $@); fi
 $(BUILDDIR)/%.o: %.c
 	@$(MKDIR)
 	@echo compiling $<
-	@$(CC) $(CFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+	$(NOECHO)$(CC) $(CFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
 
 $(BUILDDIR)/%.o: %.cpp
 	@$(MKDIR)
 	@echo compiling $<
-	@$(CC) $(CPPFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+	$(NOECHO)$(CC) $(CPPFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
 
 $(BUILDDIR)/%.o: %.S
 	@$(MKDIR)
 	@echo compiling $<
-	@$(CC) $(ASMFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+	$(NOECHO)$(CC) $(ASMFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
 
 ifeq ($(filter $(MAKECMDGOALS), clean), )
 -include $(DEPS)
