@@ -37,8 +37,9 @@
 using namespace std;
 
 // a simple 6809 based system
-System09::System09()
-:   mCpu(0),
+System09::System09(const std::string &subsystem)
+:   System(subsystem),
+    mCpu(0),
     mMem(0),
     mRom(0),
     mUart(0),
@@ -54,14 +55,18 @@ System09::~System09()
     delete mUart;
 }
 
-void System09::SetRom(const char *rom)
+int System09::SetRom(const std::string &rom)
 {
     mRomString = rom;
+
+    return 0;
 }
 
-void System09::SetCpu(const char *cpu)
+int System09::SetCpu(const std::string &cpu)
 {
     mCpuString = cpu;
+
+    return 0;
 }
 
 void System09::iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len)
@@ -72,7 +77,7 @@ void System09::iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t
 
 void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)
 {
-    printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
+    //printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
 
     for (size_t i = 0; i < len; i++) {
         size_t addr = address;
@@ -85,7 +90,8 @@ void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)
 
 int System09::Init()
 {
-    cout << "initializing a 6809 based system" << endl;
+    cout << "initializing a 6809 based system. ";
+    cout << "subsystem '" << mSubSystemString << "'" << endl;
 
     // create a bank of memory
     Memory *mem = new Memory();

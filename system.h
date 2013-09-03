@@ -32,18 +32,23 @@
 // top level object, representing the entire emulated system
 class System : boost::noncopyable {
 public:
-    System();
+    System(const std::string &subSystem);
     virtual ~System();
 
     virtual int Init() = 0;
     virtual int Run() = 0;
 
-    virtual void SetRom(const char *rom) = 0;
-    virtual void SetCpu(const char *cpu) = 0;
+    virtual int SetRom(const std::string &rom) = 0;
+    virtual int SetCpu(const std::string &cpu) = 0;
 
     virtual uint8_t  MemRead8(size_t address) = 0;
     virtual void     MemWrite8(size_t address, uint8_t val) = 0;
     virtual uint16_t MemRead16(size_t address) = 0;
     virtual void     MemWrite16(size_t address, uint16_t val) = 0;
+
+    static System *Factory(const std::string &system);
+
+protected:
+    std::string mSubSystemString;
 };
 

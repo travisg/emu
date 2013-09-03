@@ -34,15 +34,15 @@ class MC6850;
 // a simple 6809 based system
 class System09 : public System {
 public:
-    System09();
+    System09(const std::string &subsystem);
     virtual ~System09();
 
     virtual int Init();
 
     virtual int Run();
 
-    virtual void SetRom(const char *rom);
-    virtual void SetCpu(const char *cpu);
+    virtual int SetRom(const std::string &rom);
+    virtual int SetCpu(const std::string &cpu);
 
     virtual uint8_t  MemRead8(size_t address);
     virtual void     MemWrite8(size_t address, uint8_t val);

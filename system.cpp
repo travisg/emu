@@ -22,7 +22,12 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "system.h"
-System::System()
+#include "system09.h"
+
+using namespace std;
+
+System::System(const string &subsystem)
+:   mSubSystemString(subsystem)
 {
 }
 
@@ -30,3 +35,19 @@ System::~System()
 {
 }
 
+System *System::Factory(const string &system)
+{
+    // split the system string into a few pieces
+    size_t pos = system.find('-');
+    string mainsystem = system.substr(0, pos);
+
+    string subsystem;
+    if (pos != string::npos) 
+        subsystem = system.substr(pos + 1, string::npos);
+
+    if (mainsystem == "6809") {
+        return new System09(subsystem);
+    } else {
+        return NULL;
+    }
+}

@@ -61,8 +61,8 @@ uint8_t MC6850::ReadByte(size_t address)
     // XXX super nasty hack
     if (mPendingRx < 0) {
         mPendingRx = getchar();
-        if (mPendingRx == 0x3) {
-            // XXX 
+        if (mPendingRx == 0x4) {
+            // XXX
             exit(1);
         } else if (mPendingRx == 0xa) {
             mPendingRx = 0xd;

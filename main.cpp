@@ -71,15 +71,16 @@ static void setconsole(void)
 
 static void usage(char **argv)
 {
-    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type]\n", argv[0]);
+    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system]\n", argv[0]);
 
     exit(1);
 }
 
 int main(int argc, char **argv)
 {
-    const char *romOption = NULL;
-    const char *cpuOption = NULL;
+    string romOption;
+    string cpuOption;
+    string systemOption = "6809";
 
     // read in any overriding configuration from the command line
     for(;;) {
@@ -87,12 +88,14 @@ int main(int argc, char **argv)
         int option_index = 0;
 
         static struct option long_options[] = {
+            {"help", 0, 0, 'h'},
             {"cpu", 1, 0, 'c'},
             {"rom", 1, 0, 'r'},
+            {"system", 1, 0, 's'},
             {0, 0, 0, 0},
         };
 
-        c = getopt_long(argc, argv, "c:r:", long_options, &option_index);
+        c = getopt_long(argc, argv, "c:hr:s:", long_options, &option_index);
         if(c == -1)
             break;
 
@@ -105,21 +108,42 @@ int main(int argc, char **argv)
                 printf("rom option: '%s'\n", optarg);
                 romOption = optarg;
                 break;
+            case 's':
+                printf("system option: '%s'\n", optarg);
+                systemOption = optarg;
+                break;
+            case 'h':
             default:
                 usage(argv);
                 break;
         }
     }
 
-
     setconsole();
 
-    boost::scoped_ptr<System> sys(new System09());
-    if (romOption)
-        sys->SetRom(romOption);
-    if (cpuOption)
-        sys->SetCpu(cpuOption);
-    sys->Init();
+    boost::scoped_ptr<System> sys(System::Factory(systemOption));
+    if (sys == NULL) {
+        fprintf(stderr, "error creating system, aborting\n");
+        return 1;
+    }
+
+    if (cpuOption != "") {
+        if (sys->SetCpu(cpuOption) < 0) {
+            fprintf(stderr, "error setting cpu, aborting\n");
+            return 1;
+        }
+    }
+    if (romOption != "") {
+        if (sys->SetRom(romOption) < 0) {
+            fprintf(stderr, "error setting rom, aborting\n");
+            return 1;
+        }
+    }
+
+    if (sys->Init() < 0) {
+        fprintf(stderr, "error initializing system, aborting\n");
+        return 1;
+    }
     sys->Run();
 
     return 0;
