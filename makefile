@@ -8,7 +8,7 @@ CFLAGS :=
 CPPFLAGS :=
 ASMFLAGS :=
 LDFLAGS :=
-LDLIBS := -lstdc++
+LDLIBS :=
 
 UNAME := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -19,11 +19,13 @@ ARCH := $(shell uname -m)
 # endif
 ifeq ($(UNAME),Darwin)
 CC := clang
+CPLUSPLUS := clang++
 COMPILEFLAGS += -I/opt/local/include
 OTOOL := otool
 endif
 ifeq ($(UNAME),Linux)
 CC := clang
+CPLUSPLUS := clang++
 OBJDUMP := objdump
 endif
 NOECHO ?= @
@@ -52,7 +54,7 @@ DEPS := $(OBJS:.o=.d)
 all: $(BUILDDIR)/$(TARGET) $(BUILDDIR)/$(TARGET).lst
 
 $(BUILDDIR)/$(TARGET):  $(OBJS)
-	$(CC) $(LDFLAGS) $(OBJS) -o $@ $(LDLIBS)
+	$(CPLUSPLUS) $(LDFLAGS) $(OBJS) -o $@ $(LDLIBS)
 
 $(BUILDDIR)/$(TARGET).lst: $(BUILDDIR)/$(TARGET)
 ifeq ($(UNAME),Darwin)
@@ -78,7 +80,7 @@ $(BUILDDIR)/%.o: %.c
 $(BUILDDIR)/%.o: %.cpp
 	@$(MKDIR)
 	@echo compiling $<
-	$(NOECHO)$(CC) $(CPPFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+	$(NOECHO)$(CPLUSPLUS) $(CPPFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
 
 $(BUILDDIR)/%.o: %.S
 	@$(MKDIR)
