@@ -8,7 +8,7 @@ CFLAGS :=
 CPPFLAGS :=
 ASMFLAGS :=
 LDFLAGS :=
-LDLIBS :=
+LDLIBS := -lboost_system-mt -lboost_thread-mt
 
 UNAME := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -21,6 +21,7 @@ ifeq ($(UNAME),Darwin)
 CC := clang
 CPLUSPLUS := clang++
 COMPILEFLAGS += -I/opt/local/include
+LDFLAGS += -L/opt/local/lib
 OTOOL := otool
 endif
 ifeq ($(UNAME),Linux)
@@ -37,6 +38,7 @@ ASMFLAGS += $(COMPILEFLAGS)
 OBJS := \
 	main.o \
 	ihex.o \
+	console.o \
 	cpu.o \
 	memory.o \
 	system.o
@@ -44,7 +46,8 @@ OBJS := \
 OBJS += \
 	cpu6809.o \
 	system09.o \
-	mc6850.o
+	mc6850.o \
+	uart16550.o
 
 OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 

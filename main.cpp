@@ -27,51 +27,16 @@
 #include <getopt.h>
 #include <fcntl.h>
 #include <termios.h>
-#include <getopt.h>
 
 #include "system09.h"
+#include "console.h"
 #include <boost/scoped_ptr.hpp>
 
 using namespace std;
 
-static struct termios oldstdin;
-static struct termios oldstdout;
-
-static void resetconsole(void)
-{
-    tcsetattr(0, TCSANOW, &oldstdin);
-    tcsetattr(1, TCSANOW, &oldstdout);
-}
-
-static void setconsole(void)
-{
-    struct termios t;
-
-    tcgetattr(0, &oldstdin);
-    tcgetattr(1, &oldstdout);
-
-    atexit(&resetconsole);
-
-    t = oldstdin;
-    t.c_lflag = ISIG; // no input processing
-    // Don't interpret various control characters, pass them through instead
-    t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
-    t.c_cc[VMIN]  = 0; // nonblocking read
-    t.c_cc[VTIME] = 0; // nonblocking read
-    tcsetattr(0, TCSANOW, &t);
-
-    fcntl(0, F_SETFL, O_NONBLOCK);
-
-    t = oldstdout;
-    t.c_lflag = ISIG; // no output processing
-    // Don't interpret various control characters, pass them through instead
-    t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
-    tcsetattr(1, TCSANOW, &t);
-}
-
 static void usage(char **argv)
 {
-    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system]\n", argv[0]);
+    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile]\n", argv[0]);
 
     exit(1);
 }
@@ -119,9 +84,10 @@ int main(int argc, char **argv)
         }
     }
 
-    setconsole();
+    // create a console object to pass to the system
+    Console console;
 
-    boost::scoped_ptr<System> sys(System::Factory(systemOption));
+    boost::scoped_ptr<System> sys(System::Factory(systemOption, console));
     if (sys == NULL) {
         fprintf(stderr, "error creating system, aborting\n");
         return 1;
@@ -144,7 +110,18 @@ int main(int argc, char **argv)
         fprintf(stderr, "error initializing system, aborting\n");
         return 1;
     }
-    sys->Run();
+
+    // start system thread
+    sys->RunThreaded();
+
+    // enter the main console run loop
+    console.Run();
+
+    printf("exiting run\n");
+
+    sys->ShutdownThreaded();
+
+    printf("main system thread stopped\n");
 
     return 0;
 }

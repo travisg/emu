@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013 Travis Geiselbrecht
+ * Copyright (c) 2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -29,20 +29,15 @@
 #include <sys/types.h>
 
 #include "memory.h"
-#include "console.h"
 
-class MC6850 : public MemoryDevice {
+class uart16550 : public MemoryDevice {
 public:
-    MC6850(Console &con);
-    virtual ~MC6850();
+    uart16550();
+    virtual ~uart16550();
 
     virtual uint8_t ReadByte(size_t address);
     virtual void WriteByte(size_t address, uint8_t val);
 
 private:
-    uint8_t mControl;
-    uint8_t mStatus;
-    int mPendingRx;
-    Console &mConsole;
 };
 

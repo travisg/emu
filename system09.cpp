@@ -37,8 +37,8 @@
 using namespace std;
 
 // a simple 6809 based system
-System09::System09(const std::string &subsystem)
-:   System(subsystem),
+System09::System09(const std::string &subsystem, Console &con)
+:   System(subsystem, con),
     mCpu(0),
     mMem(0),
     mRom(0),
@@ -104,7 +104,7 @@ int System09::Init()
     mRom = mem;
 
     // create a uart
-    MC6850 *uart = new MC6850();
+    MC6850 *uart = new MC6850(mConsole);
     mUart = uart;
 
     // create a 6809 based cpu

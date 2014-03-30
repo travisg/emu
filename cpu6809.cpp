@@ -579,9 +579,8 @@ int Cpu6809::Run()
 
         if (op->op == BADOP) {
             TRACEF("\n");
-            fflush(stdout);
-            fprintf(stderr, "unhandled opcode %#02x at %#04x\n", opcode, mPC - 1);
-            assert(0);
+            fprintf(stdout, "unhandled opcode %#02x at %#04x\n", opcode, mPC - 1);
+            return -1;
         }
 
         // get the addressing mode
@@ -704,7 +703,9 @@ int Cpu6809::Run()
                             break;
                         default:
                             // unhandled mode 0x7, 0xa, 0xe (6309 modes for E, F, and W register)
+                            fflush(stdout);
                             fprintf(stderr, "unhandled indexed addressing mode\n");
+                            fflush(stderr);
                             assert(0);
                     }
                 }
@@ -1223,6 +1224,10 @@ shared_memwrite:
 
         if (TRACE)
             Dump();
+
+        // see if the system has requested a shutdown
+        if (mSys.isShutdown())
+            done = true;
     }
 
     return 0;
@@ -1241,7 +1246,7 @@ void Cpu6809::Dump()
         (mCC & CC_C) ? 'c' : ' ',
         mPC);
 
-    cout << str << endl;
+    printf("%s\n", str);
 }
 
 uint16_t Cpu6809::GetReg(regnum r)

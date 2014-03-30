@@ -24,19 +24,25 @@
 #pragma once
 
 #include <boost/utility.hpp>
+#include <boost/thread.hpp>
 
 #include <string>
 #include <stdint.h>
 #include <sys/types.h>
 
+class Console;
+
 // top level object, representing the entire emulated system
 class System : boost::noncopyable {
 public:
-    System(const std::string &subSystem);
+    System(const std::string &subSystem, Console &con);
     virtual ~System();
 
     virtual int Init() = 0;
     virtual int Run() = 0;
+
+    virtual int RunThreaded();
+    virtual void ShutdownThreaded();
 
     virtual int SetRom(const std::string &rom) = 0;
     virtual int SetCpu(const std::string &cpu) = 0;
@@ -46,9 +52,14 @@ public:
     virtual uint16_t MemRead16(size_t address) = 0;
     virtual void     MemWrite16(size_t address, uint16_t val) = 0;
 
-    static System *Factory(const std::string &system);
+    static System *Factory(const std::string &system, Console &con);
+
+    bool isShutdown() { return mShutdown; }
 
 protected:
     std::string mSubSystemString;
+    Console &mConsole;
+    boost::thread *mThread;
+    volatile bool mShutdown;
 };
 

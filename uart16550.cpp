@@ -27,7 +27,7 @@
 #include <iostream>
 
 #include "memory.h"
-#include "mc6850.h"
+#include "uart16550.h"
 
 #define STAT_RDRF (1<<0)
 #define STAT_TDRE (1<<1)
@@ -40,28 +40,28 @@
 
 using namespace std;
 
-MC6850::MC6850(Console &con)
-:   mControl(0),
-    mStatus(0),
-    mPendingRx(-1),
-    mConsole(con)
-{
-    mStatus = STAT_TDRE;
-}
-
-MC6850::~MC6850()
+uart16550::uart16550()
 {
 }
 
-uint8_t MC6850::ReadByte(size_t address)
+uart16550::~uart16550()
+{
+}
+
+uint8_t uart16550::ReadByte(size_t address)
 {
     uint8_t val;
 
-//  printf("MC6850: readbyte address 0x%zx\n", address);
+    printf("uart16550: readbyte address 0x%zx\n", address);
 
+#if 0
+    // XXX super nasty hack
     if (mPendingRx < 0) {
-        mPendingRx = mConsole.GetNextChar();
-        if (mPendingRx == 0xa) {
+        mPendingRx = getchar();
+        if (mPendingRx == 0x4) {
+            // XXX
+            exit(1);
+        } else if (mPendingRx == 0xa) {
             mPendingRx = 0xd;
         } else if (islower(mPendingRx)) {
             mPendingRx = toupper(mPendingRx);
@@ -84,23 +84,27 @@ uint8_t MC6850::ReadByte(size_t address)
     } else {
         // unknown
     }
+#endif
+    val = 0;
     return val;
 }
 
-void MC6850::WriteByte(size_t address, uint8_t val)
+void uart16550::WriteByte(size_t address, uint8_t val)
 {
-//  printf("MC6850: writebyte address 0x%zx, val 0x%hhx\n", address, val);
+  printf("uart16550: writebyte address 0x%zx, val 0x%hhx\n", address, val);
 
+#if 0
     if (address == 0) {
         // control register
         // XXX ignore for now
         mControl = val;
     } else if (address == 1) {
         // data register
-        mConsole.Putchar(val);
+        putchar(val);
     } else {
         // unknown
     }
+#endif
 }
 
 

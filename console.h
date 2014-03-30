@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013 Travis Geiselbrecht
+ * Copyright (c) 2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -25,24 +25,20 @@
 
 #include <boost/utility.hpp>
 
-#include <stdint.h>
-#include <sys/types.h>
+/* encapsulates the console the emulator is started on */
 
-#include "memory.h"
-#include "console.h"
-
-class MC6850 : public MemoryDevice {
+class Console : boost::noncopyable {
 public:
-    MC6850(Console &con);
-    virtual ~MC6850();
+    Console();
+    virtual ~Console();
 
-    virtual uint8_t ReadByte(size_t address);
-    virtual void WriteByte(size_t address, uint8_t val);
+    int Run();
+
+    void Putchar(char c);
+    int GetNextChar();
 
 private:
-    uint8_t mControl;
-    uint8_t mStatus;
-    int mPendingRx;
-    Console &mConsole;
+    int mNextChar;
+
 };
 

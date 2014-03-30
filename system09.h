@@ -27,6 +27,7 @@
 #include <string>
 #include "system.h"
 
+class Console;
 class Cpu6809;
 class MemoryDevice;
 class MC6850;
@@ -34,7 +35,7 @@ class MC6850;
 // a simple 6809 based system
 class System09 : public System {
 public:
-    System09(const std::string &subsystem);
+    System09(const std::string &subsystem, Console &con);
     virtual ~System09();
 
     virtual int Init();
