@@ -1,14 +1,22 @@
 ; vim: ts=4 sw=4 expandtab:
     .title  6809 rom
 
-puthere = 0x1234
 stacktop = 0x8000
 
 ; uart registers
-uart_base    = 0x8000
-uart_status  = uart_base + 0 ; read
-uart_control = uart_base + 1 ; write
-uart_data    = uart_base + 1 ; read/write
+uart_base   = 0x8000
+uart_rbr    = uart_base + 0 ; receiver buffer
+uart_thr    = uart_base + 0 ; transmitter hold
+uart_ier    = uart_base + 1 ; interrupt enable
+uart_iir    = uart_base + 2 ; interrupt ident
+uart_fcr    = uart_base + 2 ; fifo control
+uart_lcr    = uart_base + 3 ; line control
+uart_mcr    = uart_base + 4 ; modem control
+uart_lsr    = uart_base + 5 ; line status
+uart_msr    = uart_base + 6 ; modem status
+uart_scr    = uart_base + 7 ; scratch
+uart_dll    = uart_base + 0 ; divisor latch low
+uart_dlm    = uart_base + 1 ; divisor latch high
 
 ; start of rom
     .area rom (ABS)
@@ -18,89 +26,87 @@ rombase:
     lds     #stacktop
 
 ; configure the uart
-    lda     #0x15 ; /16 + 8n1
-    sta     uart_control
+    bsr     uart_config
 
 romloop:
-    lda     #'a
-    bsr     uartwrite
-    lda     #'b
-    bsr     uartwrite
-    lda     #'\n
-    bsr     uartwrite
+    ldx     #0x0
+    bsr     memtest_bank
+    ldx     #0x4000
+    bsr     memtest_bank
+    ldx     #0x8000
+    bsr     memtest_bank
+    ldx     #0x8800
+    bsr     memtest_bank
+    ldx     #0x9000
+    bsr     memtest_bank
+    ldx     #0x9800
+    bsr     memtest_bank
+    ldx     #0xa000
+    bsr     memtest_bank
+    ldx     #0xa800
+    bsr     memtest_bank
+    ldx     #0xb000
+    bsr     memtest_bank
+    ldx     #0xb800
+    bsr     memtest_bank
+
+    ldx     #0xc000
+    bsr     memtest_bank
+    ldx     #0xd000
+    bsr     memtest_bank
+    ldx     #0xe000
+    bsr     memtest_bank
+    ldx     #0xf000
+    bsr     memtest_bank
+
     bra     romloop
 
-uartwrite:
-    sta     uart_data
+    ; test a bank of memory, address passed in X
+memtest_bank:
+    ; write value out and read it back
+    lda     #0x1
+
+.memtest_bank_loop:
+    sta     ,x
+    ldb     ,x
+    lsla
+    bne     .memtest_bank_loop
+
     rts
 
-asmtest:
-    lda     #1
-    lda     somedata
-    ldd     somedata+1
+uart_config:
+    ; config for n81
+    lda     #0x13 ; n81, DLAB
+    sta     uart_lcr
 
-    ldx     somedata+1
+    ; divisor bits active, div 2 (57600 at 1.8Mhz)
+    lda     #0x2
+    sta     uart_dll
+    lda     #0
+    sta     uart_dlm
 
-    sta     puthere
-    std     puthere
+    ; clear divisor bits
+    lda     #0x03; n81
+    sta     uart_lcr
 
-    abx
+    ; disable fifo
+    lda     #0x0
+    sta     uart_fcr
 
-    ; immediate
-    adda    #1
-    addb    #1
-    addd    #1
+    ; disable interrupts
+    sta     uart_ier
 
-    ; direct page
-    adda    *1
-    addb    *1
-    addd    *1
+    rts
 
-    ; extended addressing
-    adda    +0x1
-    addb    +0x1
-    addd    +0x1
-
-    ; indexed
-    adda    1,x    ; 5 bit offset
-    adda    -11,x    ; 5 bit offset
-    adda    ,x     ; no offset
-    adda    100,x  ; 8 bit offset
-    adda    -100,x  ; 8 bit offset
-    adda    1024,x ; 16 bit offset
-    adda    -1024,x ; 16 bit offset
-    adda    a,x    ; register offsets
-    adda    b,x
-    adda    d,x
-    adda    ,x+    ; auto increment 1
-    adda    ,x++   ; auto increment 2
-    adda    ,-x    ; auto decrement 1
-    adda    ,--x   ; auto decrement 2
-    adda    1,pc    ; 8 bit offset from pc
-    adda    1024,pc ; 16 bit offset from pc
-
-    ; indirect indexed
-    adda    [0x1234] ; absolute indirect
-    adda    [,x]     ; no offset
-    adda    [1,x]    ; 5 bit offset
-    adda    [100,x]  ; 8 bit offset
-    adda    [1024,x] ; 16 bit offset
-    adda    [a,x]    ; register offsets
-    adda    [b,x]
-    adda    [d,x]
-    adda    [,x++]   ; auto increment 2
-    adda    [,--x]   ; auto decrement 2
-    adda    [1,pc]    ; 8 bit offset from pc
-    adda    [1024,pc] ; 16 bit offset from pc
-
-    bra     .
+uartwrite:
+    ldb     uart_lcr
+    andb    #0x20    ; test if transmitter hold is empty
+    bne     uartwrite
+    sta     uart_thr
+    rts
 
 unhandled_vector:
     bra     .
-
-somedata:
-    .byte   0x99
-    .word   0x1024
 
     .area   vectab (ABS)
     .org    0xfff0

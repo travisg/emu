@@ -1,8 +1,14 @@
-#!/bin/sh -v
+#!/bin/sh
 
+echo "buildling t6809"
 as6809 -gloaxff t6809 &&
 aslink -ni t6809
 
+echo "buildling test"
+as6809 -gloaxff test &&
+aslink -ni test
+
+echo "buildling rom"
 as6809 -gloaxff rom &&
 aslink -niu rom &&
 make -C ../ihextobin &&
