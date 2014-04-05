@@ -21,14 +21,16 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "ihex.h"
+
 #include <iostream>
 #include <cctype>
-
-#include "ihex.h"
 
 using namespace std;
 
 iHex::iHex()
+:   mParseCallback(0),
+    mCallbackContext(0)
 {
 }
 
@@ -129,7 +131,8 @@ int iHex::Parse()
                 (void)checksum;
                 //cout << "checksum " << checksum << endl;
 
-                mParseCallback(mCallbackContext, data, extAddress + address, length);
+                if (mParseCallback)
+                    mParseCallback(mCallbackContext, data, extAddress + address, length);
 
                 delete[] data;
                 break;

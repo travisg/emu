@@ -24,7 +24,8 @@
 #include "system.h"
 #include "system09.h"
 
-#include <boost/thread.hpp>
+#include <cstdio>
+#include <cassert>
 
 using namespace std;
 
@@ -79,7 +80,7 @@ int System::RunThreaded()
 
     assert(!mThread);
 
-    mThread = new boost::thread(starter);
+    mThread = new std::thread(starter);
 
     return 0;
 }
@@ -91,7 +92,6 @@ void System::ShutdownThreaded()
 
     // tell the run loop to shut down
     mShutdown = true;
-    mThread->interrupt();
     mThread->join();
 
     delete mThread;

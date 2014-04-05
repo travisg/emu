@@ -120,7 +120,7 @@ struct opdecode {
     const char *name;
     addrMode mode;
     int width; // 1 or 2
-    op op;
+    enum op op;
     regnum targetreg;
     union {
         unsigned int cond;

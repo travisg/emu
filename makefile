@@ -5,10 +5,10 @@ BUILDDIR := build-$(TARGET)
 # compiler flags, default libs to link against
 COMPILEFLAGS := -g -O2 -Wall -W
 CFLAGS :=
-CPPFLAGS :=
+CXXFLAGS := -std=c++11
 ASMFLAGS :=
 LDFLAGS :=
-LDLIBS := -lboost_system-mt -lboost_thread-mt
+LDLIBS :=
 
 UNAME := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -22,17 +22,19 @@ CC := clang
 CPLUSPLUS := clang++
 COMPILEFLAGS += -I/opt/local/include
 LDFLAGS += -L/opt/local/lib
+LDLIBS +=
 OTOOL := otool
 endif
 ifeq ($(UNAME),Linux)
 CC := clang
 CPLUSPLUS := clang++
 OBJDUMP := objdump
+LDLIBS += -lpthread
 endif
 NOECHO ?= @
 
 CFLAGS += $(COMPILEFLAGS)
-CPPFLAGS += $(COMPILEFLAGS)
+CXXFLAGS += $(COMPILEFLAGS)
 ASMFLAGS += $(COMPILEFLAGS)
 
 OBJS := \
@@ -83,7 +85,7 @@ $(BUILDDIR)/%.o: %.c
 $(BUILDDIR)/%.o: %.cpp
 	@$(MKDIR)
 	@echo compiling $<
-	$(NOECHO)$(CPLUSPLUS) $(CPPFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+	$(NOECHO)$(CPLUSPLUS) $(CXXFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
 
 $(BUILDDIR)/%.o: %.S
 	@$(MKDIR)

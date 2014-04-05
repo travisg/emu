@@ -10,10 +10,10 @@
 
 using namespace std;
 
-size_t fileoffset = 0;
-string inputfile;
-string outputfile;
-ofstream out;
+static size_t fileoffset = 0;
+static string inputfile;
+static string outputfile;
+static ofstream out;
 
 static void usage(int, char **argv)
 {

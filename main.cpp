@@ -21,6 +21,7 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include <memory>
 #include <cstdio>
 #include <iostream>
 #include <unistd.h>
@@ -30,7 +31,6 @@
 
 #include "system09.h"
 #include "console.h"
-#include <boost/scoped_ptr.hpp>
 
 using namespace std;
 
@@ -87,8 +87,8 @@ int main(int argc, char **argv)
     // create a console object to pass to the system
     Console console;
 
-    boost::scoped_ptr<System> sys(System::Factory(systemOption, console));
-    if (sys == NULL) {
+    std::unique_ptr<System> sys(System::Factory(systemOption, console));
+    if (!sys) {
         fprintf(stderr, "error creating system, aborting\n");
         return 1;
     }

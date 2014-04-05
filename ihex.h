@@ -24,9 +24,9 @@
 #pragma once
 
 #include <string>
+#include <stdint.h>
 #include <iostream>
 #include <fstream>
-#include <boost/function.hpp>
 
 class iHex {
 public:
@@ -36,7 +36,7 @@ public:
     int Open(const std::string &name);
     void Close();
 
-    typedef boost::function<void (void *context, const uint8_t *ptr, size_t offset, size_t len)> iHexCallback;
+    typedef void (*iHexCallback)(void *context, const uint8_t *ptr, size_t offset, size_t len);
 
     void SetCallback(const iHexCallback &cb, void *context);
     int Parse();

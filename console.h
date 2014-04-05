@@ -23,14 +23,16 @@
  */
 #pragma once
 
-#include <boost/utility.hpp>
-
 /* encapsulates the console the emulator is started on */
 
-class Console : boost::noncopyable {
+class Console {
 public:
     Console();
     virtual ~Console();
+
+    // non copyable
+    Console(const Console &) = delete;
+    Console& operator=(const Console &) = delete;
 
     int Run();
 

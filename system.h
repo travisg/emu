@@ -23,20 +23,22 @@
  */
 #pragma once
 
-#include <boost/utility.hpp>
-#include <boost/thread.hpp>
-
 #include <string>
 #include <stdint.h>
 #include <sys/types.h>
+#include <thread>
 
 class Console;
 
 // top level object, representing the entire emulated system
-class System : boost::noncopyable {
+class System {
 public:
     System(const std::string &subSystem, Console &con);
     virtual ~System();
+
+    // non copyable
+    System(const System &) = delete;
+    System& operator=(const System &) = delete;
 
     virtual int Init() = 0;
     virtual int Run() = 0;
@@ -59,7 +61,7 @@ public:
 protected:
     std::string mSubSystemString;
     Console &mConsole;
-    boost::thread *mThread;
+    std::thread *mThread;
     volatile bool mShutdown;
 };
 
