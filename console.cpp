@@ -65,7 +65,6 @@ static void setconsole(void)
 }
 
 Console::Console()
-:   mNextChar(-1)
 {
     setconsole();
 }
@@ -85,21 +84,36 @@ int Console::Run()
         } else if (c == EOF) {
             return -1;
         } else {
-            mNextChar = c;
+            mLock.lock();
+            mInBuffer.push(c);
+            mLock.unlock();
         }
     }
 }
 
 void Console::Putchar(char c)
 {
+#if 1
     putchar(c);
+    fflush(stdout);
+#else
+    mLock.lock();
+    mOutBuffer.push(c);
+    mLock.unlock();
+#endif
 }
 
 int Console::GetNextChar()
 {
-    // XXX thread safe
-    int nc = mNextChar;
-    mNextChar = -1;
+    mLock.lock();
+
+    int nc = -1;
+    if (!mInBuffer.empty()) {
+        nc = mInBuffer.front();
+        mInBuffer.pop();
+    }
+
+    mLock.unlock();
 
     return nc;
 }

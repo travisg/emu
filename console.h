@@ -23,6 +23,9 @@
  */
 #pragma once
 
+#include <queue>
+#include <mutex>
+
 /* encapsulates the console the emulator is started on */
 
 class Console {
@@ -40,7 +43,8 @@ public:
     int GetNextChar();
 
 private:
-    int mNextChar;
-
+    std::queue<char> mOutBuffer;
+    std::queue<char> mInBuffer;
+    std::mutex mLock;
 };
 
