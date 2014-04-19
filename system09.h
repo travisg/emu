@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013 Travis Geiselbrecht
+ * Copyright (c) 2013-2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -36,20 +36,20 @@ class MC6850;
 class System09 : public System {
 public:
     System09(const std::string &subsystem, Console &con);
-    virtual ~System09();
+    virtual ~System09() override;
 
-    virtual int Init();
+    virtual int Init() override;
 
-    virtual int Run();
+    virtual int Run() override;
 
-    virtual int SetRom(const std::string &rom);
-    virtual int SetCpu(const std::string &cpu);
+    virtual int SetRom(const std::string &rom) override;
+    virtual int SetCpu(const std::string &cpu) override;
 
-    virtual uint8_t  MemRead8(size_t address);
-    virtual void     MemWrite8(size_t address, uint8_t val);
+    virtual uint8_t  MemRead8(size_t address) override;
+    virtual void     MemWrite8(size_t address, uint8_t val) override;
 
-    virtual uint16_t MemRead16(size_t address);
-    virtual void     MemWrite16(size_t address, uint16_t val);
+    virtual uint16_t MemRead16(size_t address) override;
+    virtual void     MemWrite16(size_t address, uint16_t val) override;
 
 private:
     void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);

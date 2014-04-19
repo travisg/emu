@@ -31,10 +31,10 @@
 class uart16550 : public MemoryDevice {
 public:
     uart16550();
-    virtual ~uart16550();
+    virtual ~uart16550() override;
 
-    virtual uint8_t ReadByte(size_t address);
-    virtual void WriteByte(size_t address, uint8_t val);
+    virtual uint8_t ReadByte(size_t address) override;
+    virtual void WriteByte(size_t address, uint8_t val) override;
 
 private:
 };

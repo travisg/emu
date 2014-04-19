@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013 Travis Geiselbrecht
+ * Copyright (c) 2013-2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -43,13 +43,13 @@ enum regnum {
 
 class Cpu6809 : public Cpu {
 public:
-    Cpu6809(System &sys);
-    virtual ~Cpu6809();
+    explicit Cpu6809(System &sys);
+    virtual ~Cpu6809() override;
 
-    virtual void Reset();
-    virtual int Run();
+    virtual void Reset() override;
+    virtual int Run() override;
 
-    virtual void Dump();
+    virtual void Dump() override;
 
 private:
     uint16_t GetReg(regnum r);

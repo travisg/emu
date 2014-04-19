@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013 Travis Geiselbrecht
+ * Copyright (c) 2013-2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files

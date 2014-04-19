@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013 Travis Geiselbrecht
+ * Copyright (c) 2013-2014 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -23,7 +23,7 @@
  */
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 
 class MemoryDevice {
@@ -37,19 +37,18 @@ public:
 
     virtual uint8_t ReadByte(size_t address) = 0;
     virtual void WriteByte(size_t address, uint8_t val) = 0;
-
 };
 
 class Memory : public MemoryDevice {
 public:
     Memory();
-    virtual ~Memory();
+    virtual ~Memory() override;
 
     int Alloc(size_t len);
 
     // simple accessors, assumes bounds checking somewhere else
-    virtual uint8_t ReadByte(size_t address) { return mMem[address]; }
-    virtual void WriteByte(size_t address, uint8_t val) { mMem[address] = val; }
+    virtual uint8_t ReadByte(size_t address) override { return mMem[address]; }
+    virtual void WriteByte(size_t address, uint8_t val) override { mMem[address] = val; }
 
 private:
     uint8_t *mMem;
