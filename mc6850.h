@@ -23,7 +23,7 @@
  */
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 
 #include "memory.h"
@@ -38,9 +38,9 @@ public:
     virtual void WriteByte(size_t address, uint8_t val) override;
 
 private:
-    uint8_t mControl;
-    uint8_t mStatus;
-    int mPendingRx;
+    uint8_t mControl = 0;
+    uint8_t mStatus = 0;
+    int mPendingRx = -1;
     Console &mConsole;
 };
 

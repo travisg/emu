@@ -23,8 +23,9 @@
  */
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <string>
+#include <memory>
 #include "system.h"
 
 class Console;
@@ -53,14 +54,13 @@ public:
 
 private:
     void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
-    static void iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len);
 
     MemoryDevice *GetDeviceAtAddr(size_t *address);
 
-    Cpu6809 *mCpu;
-    MemoryDevice *mMem;
-    MemoryDevice *mRom;
-    MC6850 *mUart;
+    std::unique_ptr<Cpu6809> mCpu;
+    std::unique_ptr<MemoryDevice> mMem;
+    std::unique_ptr<MemoryDevice> mRom;
+    std::unique_ptr<MC6850> mUart;
 
     std::string mRomString;
     std::string mCpuString;

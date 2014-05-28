@@ -23,7 +23,7 @@
  */
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
 
 #include "memory.h"

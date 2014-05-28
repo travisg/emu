@@ -84,9 +84,8 @@ int Console::Run()
         } else if (c == EOF) {
             return -1;
         } else {
-            mLock.lock();
+            std::lock_guard<std::mutex> lck(mLock);
             mInBuffer.push(c);
-            mLock.unlock();
         }
     }
 }
@@ -97,23 +96,20 @@ void Console::Putchar(char c)
     putchar(c);
     fflush(stdout);
 #else
-    mLock.lock();
+    std::lock_guard<std::mutex> lck(mLock);
     mOutBuffer.push(c);
-    mLock.unlock();
 #endif
 }
 
 int Console::GetNextChar()
 {
-    mLock.lock();
+    std::lock_guard<std::mutex> lck(mLock);
 
     int nc = -1;
     if (!mInBuffer.empty()) {
         nc = mInBuffer.front();
         mInBuffer.pop();
     }
-
-    mLock.unlock();
 
     return nc;
 }

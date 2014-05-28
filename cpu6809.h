@@ -23,9 +23,10 @@
  */
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 
 #include "cpu.h"
+
 
 /* registers */
 enum regnum {
@@ -59,7 +60,7 @@ private:
 
     // register file
     union {
-        struct { 
+        struct {
             uint8_t mB;
             uint8_t mA;
         };

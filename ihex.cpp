@@ -29,8 +29,6 @@
 using namespace std;
 
 iHex::iHex()
-:   mParseCallback(0),
-    mCallbackContext(0)
 {
 }
 
@@ -56,10 +54,9 @@ void iHex::Close()
     mFile.close();
 }
 
-void iHex::SetCallback(const iHexCallback &cb, void *context)
+void iHex::SetCallback(const iHexCallback &cb)
 {
     mParseCallback = cb;
-    mCallbackContext = context;
 }
 
 static unsigned int hexnibble(char c)
@@ -132,7 +129,7 @@ int iHex::Parse()
                 //cout << "checksum " << checksum << endl;
 
                 if (mParseCallback)
-                    mParseCallback(mCallbackContext, data, extAddress + address, length);
+                    mParseCallback(data, extAddress + address, length);
 
                 delete[] data;
                 break;

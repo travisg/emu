@@ -26,28 +26,25 @@
 #include <cstring>
 
 Memory::Memory()
-:   mMem(0),
-    mSize(0)
 {
 }
 
 Memory::~Memory()
 {
-    delete mMem;
 }
 
 int Memory::Alloc(size_t len)
 {
-    delete mMem;
+    mMem.release();
     mSize = 0;
 
-    mMem = new uint8_t[len];
+    mMem.reset(new uint8_t[len]);
     if (!mMem)
         return -1;
 
     mSize = len;
 
-    memset(mMem, 0, len);
+    memset(mMem.get(), 0, len);
 
     return 0;
 }

@@ -23,9 +23,10 @@
  */
 #pragma once
 
-#include <string>
-#include <stdint.h>
+#include <cstdint>
 #include <sys/types.h>
+#include <string>
+#include <memory>
 #include <thread>
 
 class Console;
@@ -56,12 +57,12 @@ public:
 
     static System *Factory(const std::string &system, Console &con);
 
-    bool isShutdown() { return mShutdown; }
+    bool isShutdown() const { return mShutdown; }
 
 protected:
     std::string mSubSystemString;
     Console &mConsole;
-    std::thread *mThread;
-    volatile bool mShutdown;
+    std::unique_ptr<std::thread> mThread;
+    volatile bool mShutdown = false;
 };
 

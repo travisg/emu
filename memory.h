@@ -24,6 +24,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <sys/types.h>
 
 class MemoryDevice {
@@ -51,6 +52,6 @@ public:
     virtual void WriteByte(size_t address, uint8_t val) override { mMem[address] = val; }
 
 private:
-    uint8_t *mMem;
-    size_t mSize;
+    std::unique_ptr<uint8_t[]> mMem;
+    size_t mSize = 0;
 };

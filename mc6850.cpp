@@ -41,10 +41,7 @@
 using namespace std;
 
 MC6850::MC6850(Console &con)
-:   mControl(0),
-    mStatus(0),
-    mPendingRx(-1),
-    mConsole(con)
+:   mConsole(con)
 {
     mStatus = STAT_TDRE;
 }

@@ -23,10 +23,11 @@
  */
 #pragma once
 
-#include <string>
-#include <stdint.h>
+#include <cstring>
+#include <cstdint>
 #include <iostream>
 #include <fstream>
+#include <functional>
 
 class iHex {
 public:
@@ -36,14 +37,13 @@ public:
     int Open(const std::string &name);
     void Close();
 
-    typedef void (*iHexCallback)(void *context, const uint8_t *ptr, size_t offset, size_t len);
+    using iHexCallback = std::function<void(const uint8_t *ptr, size_t offset, size_t len)>;
 
-    void SetCallback(const iHexCallback &cb, void *context);
+    void SetCallback(const iHexCallback &cb);
     int Parse();
 
 private:
     std::ifstream mFile;
     iHexCallback mParseCallback;
-    void *mCallbackContext;
 };
 

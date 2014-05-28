@@ -31,16 +31,13 @@ using namespace std;
 
 System::System(const string &subsystem, Console &con)
 :   mSubSystemString(subsystem),
-    mConsole(con),
-    mThread(0),
-    mShutdown(false)
+    mConsole(con)
 {
 }
 
 System::~System()
 {
-    if (mThread)
-        ShutdownThreaded();
+    ShutdownThreaded();
 }
 
 System *System::Factory(const string &system, Console &con)
@@ -60,27 +57,16 @@ System *System::Factory(const string &system, Console &con)
     }
 }
 
-struct thread_starter
-{
-    System *sys;
-    void operator()();
-};
-
-void thread_starter::operator()()
-{
-    printf("Starting system thread\n");
-
-    this->sys->Run();
-}
-
 int System::RunThreaded()
 {
-    thread_starter starter;
-    starter.sys = this;
-
     assert(!mThread);
 
-    mThread = new std::thread(starter);
+    auto start = [this]() {
+                    printf("Starting system thread\n");
+                    this->Run();
+                };
+
+    mThread.reset(new std::thread(start));
 
     return 0;
 }
@@ -94,6 +80,5 @@ void System::ShutdownThreaded()
     mShutdown = true;
     mThread->join();
 
-    delete mThread;
-    mThread = 0;
+    mThread.release();
 }

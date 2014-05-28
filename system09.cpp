@@ -39,20 +39,12 @@ using namespace std;
 // a simple 6809 based system
 System09::System09(const std::string &subsystem, Console &con)
 :   System(subsystem, con),
-    mCpu(0),
-    mMem(0),
-    mRom(0),
-    mUart(0),
     mRomString(DEFAULT_ROM)
 {
 }
 
 System09::~System09()
 {
-    delete mCpu;
-    delete mMem;
-    delete mRom;
-    delete mUart;
 }
 
 int System09::SetRom(const std::string &rom)
@@ -67,12 +59,6 @@ int System09::SetCpu(const std::string &cpu)
     mCpuString = cpu;
 
     return 0;
-}
-
-void System09::iHexParseCallbackStatic(void *context, const uint8_t *ptr, size_t offset, size_t len)
-{
-    System09 *s = static_cast<System09 *>(context);
-    s->iHexParseCallback(ptr, offset, len);
 }
 
 void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)
@@ -92,30 +78,35 @@ int System09::Init()
 {
     cout << "initializing a 6809 based system. ";
     cout << "subsystem '" << mSubSystemString << "'" << endl;
+    cout << "rom is " << mRomString << endl;
 
     // create a bank of memory
     Memory *mem = new Memory();
     mem->Alloc(32*1024);
-    mMem = mem;
+    mMem.reset(mem);
 
     // create a bank of rom
     mem = new Memory();
     mem->Alloc(16*1024);
-    mRom = mem;
+    mRom.reset(mem);
 
     // create a uart
     MC6850 *uart = new MC6850(mConsole);
-    mUart = uart;
+    mUart.reset(uart);
 
     // create a 6809 based cpu
-    mCpu = new Cpu6809(*this);
+    mCpu.reset(new Cpu6809(*this));
     mCpu->Reset();
 
     // preload some stuff into memory
     iHex hex;
-    hex.SetCallback(&System09::iHexParseCallbackStatic, this);
 
-    cout << "rom is " << mRomString << endl;
+    // use the ihex library to parse the rom file
+    hex.SetCallback(
+        [this](const uint8_t *ptr, size_t offset, size_t len) {
+            this->iHexParseCallback(ptr, offset, len);
+        }
+    );
 
     hex.Open(mRomString);
     hex.Parse();
@@ -172,14 +163,14 @@ MemoryDevice *System09::GetDeviceAtAddr(size_t *address)
     switch (*address) {
         // main memory bank
         case 0x0000 ... 0x7fff:
-            return mMem;
+            return mMem.get();
 
 #if 0
         // device space
         // 8 slots of 0x800 bytes
         case 0x8000 ... 0x87ff:
             *address -= 0x8000;
-            return mUart;
+            return mUart.get();
 
         // only the 1st slot is used at the moment
         case 0x8800 ... 0xbfff:
@@ -188,13 +179,13 @@ MemoryDevice *System09::GetDeviceAtAddr(size_t *address)
         // old location for BASIC.HEX
         case 0xa000 ... 0xa7ff:
             *address -= 0xa000;
-            return mUart;
+            return mUart.get();
 #endif
 
         // rom
         case 0xc000 ... 0xffff:
             *address -= 0xc000;
-            return mRom;
+            return mRom.get();
         default:
             return NULL;
     }

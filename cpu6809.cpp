@@ -22,9 +22,10 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "cpu6809.h"
-#include <iostream>
+
 #include <cstdio>
-#include <assert.h>
+#include <cassert>
+#include <iostream>
 
 #include "system.h"
 #include "bits.h"
@@ -427,6 +428,7 @@ static const opdecode ops[256 * 3] = {
 Cpu6809::Cpu6809(System &mSys)
 :   Cpu(mSys)
 {
+    Reset();
 }
 
 Cpu6809::~Cpu6809()
