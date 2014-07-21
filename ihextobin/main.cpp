@@ -21,7 +21,7 @@ static void usage(int, char **argv)
 
     exit(1);
 }
-void ihexcallback(void *context, const uint8_t *ptr, size_t offset, size_t len)
+void ihexcallback(const uint8_t *ptr, size_t offset, size_t len)
 {
     //printf("callback: offset %#zx, len %zu\n", offset, len);
 
@@ -88,7 +88,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    hex.SetCallback(&ihexcallback, NULL);
+    hex.SetCallback(&ihexcallback);
     hex.Parse();
 
     hex.Close();

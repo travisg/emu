@@ -5,7 +5,7 @@ BUILDDIR := build-$(TARGET)
 # compiler flags, default libs to link against
 COMPILEFLAGS := -g -O2 -Wall -W -Wno-unused-parameter
 CFLAGS :=
-CPPFLAGS :=
+CXXFLAGS := -std=c++11
 ASMFLAGS :=
 LDFLAGS :=
 LDLIBS := -lstdc++
@@ -58,12 +58,12 @@ $(BUILDDIR)/%.o: %.c
 $(BUILDDIR)/%.o: %.cpp
 	@$(MKDIR)
 	@echo compiling $<
-	@$(CC) $(CPPFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+	@$(CXX) $(CXXFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
 
 $(BUILDDIR)/DOTDOT/%.o: ../%.cpp
 	@$(MKDIR)
 	@echo compiling $<
-	@$(CC) $(CPPFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
+	@$(CXX) $(CXXFLAGS) -c $< -MD -MT $@ -MF $(@:%o=%d) -o $@
 
 $(BUILDDIR)/%.o: %.S
 	@$(MKDIR)
