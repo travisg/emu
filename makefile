@@ -3,12 +3,12 @@ TARGET := emu
 BUILDDIR := build-$(TARGET)
 
 # compiler flags, default libs to link against
-COMPILEFLAGS := -g -O2 -Wall -W
+COMPILEFLAGS := -g -O2 -Wall -W -I../libihex
 CFLAGS :=
 CXXFLAGS := -std=c++11
 ASMFLAGS :=
 LDFLAGS :=
-LDLIBS :=
+LDLIBS := ../libihex/libihex.a
 
 UNAME := $(shell uname -s)
 ARCH := $(shell uname -m)
@@ -39,7 +39,6 @@ ASMFLAGS += $(COMPILEFLAGS)
 
 OBJS := \
 	main.o \
-	ihex.o \
 	console.o \
 	cpu.o \
 	memory.o \
