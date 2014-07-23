@@ -29,18 +29,31 @@
 #include "memory.h"
 #include "uart16550.h"
 
-#define STAT_RDRF (1<<0)
-#define STAT_TDRE (1<<1)
-#define STAT_DCD  (1<<2)
-#define STAT_CTS  (1<<3)
-#define STAT_FE   (1<<4)
-#define STAT_OVRN (1<<5)
-#define STAT_PE   (1<<6)
-#define STAT_IRQ  (1<<7)
+//#define TRACEF(str, x...) do { printf("uart16550: " str, ## x); } while (0)
+#define TRACEF(str, x...) do { } while (0)
 
 using namespace std;
 
-uart16550::uart16550()
+// registers
+#define RBR 0
+#define THR 0
+#define IER 1
+#define IIR 2
+#define FCR 2
+#define LCR 3
+#define MCR 4
+#define LSR 5
+#define MSR 6
+#define SCR 7
+#define DLL 8 // if DLAB = 0
+#define DLM 9
+
+// control bits
+#define LCR_DLAB (1<<7)
+
+
+uart16550::uart16550(Console &con)
+:   mConsole(con)
 {
 }
 
@@ -52,59 +65,110 @@ uint8_t uart16550::ReadByte(size_t address)
 {
     uint8_t val;
 
-    printf("uart16550: readbyte address 0x%zx\n", address);
+    TRACEF("uart16550: readbyte address 0x%zx\n", address);
 
-#if 0
-    // XXX super nasty hack
+    /* device is mirrored for the entire address space */
+    address &= 0x7;
+
     if (mPendingRx < 0) {
-        mPendingRx = getchar();
-        if (mPendingRx == 0x4) {
-            // XXX
-            exit(1);
-        } else if (mPendingRx == 0xa) {
+        mPendingRx = mConsole.GetNextChar();
+        if (mPendingRx == 0xa) {
             mPendingRx = 0xd;
-        } else if (islower(mPendingRx)) {
-            mPendingRx = toupper(mPendingRx);
         }
     }
 
     val = 0;
-    if (address == 0) {
-        // status register
-        val = mStatus;
-        if (mPendingRx >= 0)
-            val |= STAT_RDRF;
-    } else if (address == 1) {
-        // data register
-        if (mPendingRx >= 0) {
-            val = mPendingRx;
-            mPendingRx = -1;
-            //printf("cpu read data %d\n", val);
-        }
-    } else {
-        // unknown
+    switch (address) {
+        case RBR:
+            if (mRegisters[LCR] & LCR_DLAB) {
+                // DLL
+                val = mRegisters[DLL];
+            } else {
+                // pseudo reg, read what's in the fifo
+                if (mPendingRx >= 0) {
+                    val = mPendingRx;
+                    mPendingRx = -1;
+                }
+            }
+            break;
+        case IER:
+            if (mRegisters[LCR] & LCR_DLAB) {
+                // DLM
+                val = mRegisters[DLM];
+            } else {
+                val = mRegisters[IER];
+            }
+            break;
+        case IIR:
+            // pseudo register, interrrupt status
+            val = 0;
+            break;
+        case LCR:
+            val = mRegisters[LCR];
+            break;
+        case MCR:
+            val = mRegisters[MCR];
+            break;
+        case LSR:
+            // line status + the transmitter hold register and transmitter empty always set
+            val = (1<<5) | (1<<6);
+
+            // if we have any pending receive data, set the Data Ready bit
+            val |= (mPendingRx >= 0) ? (1<<0) : 0;
+            break;
+        case MSR:
+            break;
+        case SCR:
+            val = mRegisters[SCR];
+            break;
     }
-#endif
-    val = 0;
+
+    TRACEF("returning val 0x%hhx\n", val);
     return val;
 }
 
 void uart16550::WriteByte(size_t address, uint8_t val)
 {
-  printf("uart16550: writebyte address 0x%zx, val 0x%hhx\n", address, val);
+    TRACEF("uart16550: writebyte address 0x%zx, val 0x%hhx\n", address, val);
 
-#if 0
-    if (address == 0) {
-        // control register
-        // XXX ignore for now
-        mControl = val;
-    } else if (address == 1) {
-        // data register
-        putchar(val);
-    } else {
-        // unknown
+    /* device is mirrored for the entire address space */
+    address &= 0x7;
+
+    switch (address) {
+        case THR: // DLL
+            if (mRegisters[LCR] & LCR_DLAB) {
+                // DLL
+                mRegisters[DLL] = val;
+            } else {
+                // pseudo reg, write
+                mConsole.Putchar(val);
+            }
+            break;
+        case IER: // DLM
+            if (mRegisters[LCR] & LCR_DLAB) {
+                // DLM
+                mRegisters[DLM] = val;
+            } else {
+                mRegisters[IER] = val;
+            }
+            break;
+        case FCR:
+            mRegisters[FCR] = val;
+            break;
+        case LCR:
+            mRegisters[LCR] = val;
+            break;
+        case MCR:
+            mRegisters[MCR] = val;
+            break;
+        case LSR:
+            break;
+        case MSR:
+            break;
+        case SCR:
+            mRegisters[SCR] = val;
+            break;
     }
-#endif
 }
 
 

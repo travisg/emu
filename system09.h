@@ -55,15 +55,20 @@ public:
 private:
     void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
 
-    MemoryDevice *GetDeviceAtAddr(size_t *address);
+    MemoryDevice *GetDeviceAtAddr(size_t &address);
 
     std::unique_ptr<Cpu6809> mCpu;
     std::unique_ptr<MemoryDevice> mMem;
     std::unique_ptr<MemoryDevice> mRom;
-    std::unique_ptr<MC6850> mUart;
+    std::unique_ptr<MemoryDevice> mUart;
 
     std::string mRomString;
     std::string mCpuString;
+
+    enum class MemoryLayout {
+        STANDARD,
+        OBC,
+    } mMemoryLayout = MemoryLayout::STANDARD;
 };
 
 

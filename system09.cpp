@@ -30,6 +30,7 @@
 #include "memory.h"
 #include "cpu6809.h"
 #include "mc6850.h"
+#include "uart16550.h"
 #include "ihex.h"
 
 #define DEFAULT_ROM "test/BASIC.HEX"
@@ -67,7 +68,7 @@ void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)
 
     for (size_t i = 0; i < len; i++) {
         size_t addr = address;
-        MemoryDevice *mem = GetDeviceAtAddr(&addr);
+        MemoryDevice *mem = GetDeviceAtAddr(addr);
         mem->WriteByte(addr, ptr[i]);
 
         address++;
@@ -90,13 +91,24 @@ int System09::Init()
     mem->Alloc(16*1024);
     mRom.reset(mem);
 
-    // create a uart
-    MC6850 *uart = new MC6850(mConsole);
-    mUart.reset(uart);
-
     // create a 6809 based cpu
     mCpu.reset(new Cpu6809(*this));
     mCpu->Reset();
+
+    // add some peripherals
+    if (mSubSystemString == "obc") {
+        // create a 16550 uart
+        uart16550 *uart = new uart16550(mConsole);
+        mUart.reset(uart);
+
+        mMemoryLayout = MemoryLayout::OBC;
+    } else {
+        // create a MC6850 uart
+        MC6850 *uart = new MC6850(mConsole);
+        mUart.reset(uart);
+
+        mMemoryLayout = MemoryLayout::STANDARD;
+    }
 
     // preload some stuff into memory
     iHex hex;
@@ -125,7 +137,7 @@ uint8_t System09::MemRead8(size_t address)
 {
     uint8_t val = 0;
 
-    MemoryDevice *mem = GetDeviceAtAddr(&address);
+    MemoryDevice *mem = GetDeviceAtAddr(address);
     if (mem)
         val = mem->ReadByte(address);
 
@@ -137,7 +149,7 @@ void System09::MemWrite8(size_t address, uint8_t val)
 {
     address &= 0xffff;
 
-    MemoryDevice *mem = GetDeviceAtAddr(&address);
+    MemoryDevice *mem = GetDeviceAtAddr(address);
     if (mem)
         mem->WriteByte(address, val);
 
@@ -155,37 +167,39 @@ void System09::MemWrite16(size_t address, uint16_t val)
     mMem->WriteByte(address + 1, val);
 }
 
-MemoryDevice *System09::GetDeviceAtAddr(size_t *address)
+MemoryDevice *System09::GetDeviceAtAddr(size_t &address)
 {
-    *address &= 0xffff;
+    address &= 0xffff;
 
     // figure out which memory device this address belongs to
-    switch (*address) {
+    switch (address) {
         // main memory bank
         case 0x0000 ... 0x7fff:
             return mMem.get();
 
-#if 0
         // device space
         // 8 slots of 0x800 bytes
-        case 0x8000 ... 0x87ff:
-            *address -= 0x8000;
-            return mUart.get();
 
-        // only the 1st slot is used at the moment
-        case 0x8800 ... 0xbfff:
+        case 0x8000 ... 0x87ff:
+            if (mMemoryLayout == MemoryLayout::OBC) {
+                address -= 0x8000;
+                return mUart.get();
+            }
             return NULL;
-#else
+
         // old location for BASIC.HEX
         case 0xa000 ... 0xa7ff:
-            *address -= 0xa000;
-            return mUart.get();
-#endif
+            if (mMemoryLayout == MemoryLayout::STANDARD) {
+                address -= 0xa000;
+                return mUart.get();
+            }
+            return NULL;
 
         // rom
         case 0xc000 ... 0xffff:
-            *address -= 0xc000;
+            address -= 0xc000;
             return mRom.get();
+
         default:
             return NULL;
     }
