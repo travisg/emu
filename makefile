@@ -57,7 +57,7 @@ DEPS := $(OBJS:.o=.d)
 .PHONY: all
 all: $(BUILDDIR)/$(TARGET) $(BUILDDIR)/$(TARGET).lst
 
-$(BUILDDIR)/$(TARGET):  $(OBJS)
+$(BUILDDIR)/$(TARGET): $(OBJS) libihex/libihex.a
 	$(CPLUSPLUS) $(LDFLAGS) $(OBJS) -o $@ $(LDLIBS)
 
 $(BUILDDIR)/$(TARGET).lst: $(BUILDDIR)/$(TARGET)
@@ -67,8 +67,12 @@ else
 	$(OBJDUMP) -Cd $< > $@
 endif
 
+libihex/libihex.a:
+	$(MAKE) -C libihex
+
 clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET)
+	$(MAKE) -C libihex clean
 
 spotless:
 	rm -rf build-*
