@@ -27,7 +27,7 @@
 #include <cassert>
 #include <iostream>
 
-#include "system.h"
+#include "system/system.h"
 #include "bits.h"
 
 #define TRACE 0

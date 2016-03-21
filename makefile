@@ -3,7 +3,7 @@ TARGET := emu
 BUILDDIR := build-$(TARGET)
 
 # compiler flags, default libs to link against
-COMPILEFLAGS := -g -O2 -Wall -W -Ilibihex
+COMPILEFLAGS := -g -O2 -Wall -W -Ilibihex -I.
 CFLAGS :=
 CXXFLAGS := -std=c++11
 ASMFLAGS :=
@@ -40,15 +40,16 @@ ASMFLAGS += $(COMPILEFLAGS)
 OBJS := \
 	main.o \
 	console.o \
-	cpu.o \
-	memory.o \
-	system.o
+\
+	cpu/cpu.o \
+	dev/memory.o \
+	system/system.o
 
 OBJS += \
-	cpu6809.o \
-	system09.o \
-	mc6850.o \
-	uart16550.o
+	cpu/cpu6809.o \
+	dev/mc6850.o \
+	dev/uart16550.o \
+	system/system09.o
 
 OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 

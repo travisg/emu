@@ -34,7 +34,7 @@ class MemoryDevice;
 class MC6850;
 
 // a simple 6809 based system
-class System09 : public System {
+class System09 final : public System {
 public:
     System09(const std::string &subsystem, Console &con);
     virtual ~System09() override;

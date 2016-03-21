@@ -42,7 +42,7 @@ enum regnum {
     REG_CC,
 };
 
-class Cpu6809 : public Cpu {
+class Cpu6809 final : public Cpu {
 public:
     explicit Cpu6809(System &sys);
     virtual ~Cpu6809() override;

@@ -27,10 +27,10 @@
 #include <cstdio>
 #include <iostream>
 
-#include "memory.h"
-#include "cpu6809.h"
-#include "mc6850.h"
-#include "uart16550.h"
+#include "cpu/cpu6809.h"
+#include "dev/memory.h"
+#include "dev/mc6850.h"
+#include "dev/uart16550.h"
 #include "ihex.h"
 
 #define DEFAULT_ROM "test/BASIC.HEX"
@@ -163,8 +163,8 @@ uint16_t System09::MemRead16(size_t address)
 
 void System09::MemWrite16(size_t address, uint16_t val)
 {
-    mMem->WriteByte(address, val >> 8);
-    mMem->WriteByte(address + 1, val);
+    MemWrite8(address, val >> 8);
+    MemWrite8(address + 1, val);
 }
 
 MemoryDevice *System09::GetDeviceAtAddr(size_t &address)
