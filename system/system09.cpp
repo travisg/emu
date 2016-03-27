@@ -39,27 +39,13 @@ using namespace std;
 
 // a simple 6809 based system
 System09::System09(const std::string &subsystem, Console &con)
-:   System(subsystem, con),
-    mRomString(DEFAULT_ROM)
+:   System(subsystem, con)
 {
+    mRomString = DEFAULT_ROM;
 }
 
 System09::~System09()
 {
-}
-
-int System09::SetRom(const std::string &rom)
-{
-    mRomString = rom;
-
-    return 0;
-}
-
-int System09::SetCpu(const std::string &cpu)
-{
-    mCpuString = cpu;
-
-    return 0;
 }
 
 void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)

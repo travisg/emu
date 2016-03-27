@@ -94,16 +94,10 @@ int main(int argc, char **argv)
     }
 
     if (cpuOption != "") {
-        if (sys->SetCpu(cpuOption) < 0) {
-            fprintf(stderr, "error setting cpu, aborting\n");
-            return 1;
-        }
+        sys->SetCpu(cpuOption);
     }
     if (romOption != "") {
-        if (sys->SetRom(romOption) < 0) {
-            fprintf(stderr, "error setting rom, aborting\n");
-            return 1;
-        }
+        sys->SetRom(romOption);
     }
 
     if (sys->Init() < 0) {

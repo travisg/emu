@@ -47,13 +47,17 @@ public:
     virtual int RunThreaded();
     virtual void ShutdownThreaded();
 
-    virtual int SetRom(const std::string &rom) = 0;
-    virtual int SetCpu(const std::string &cpu) = 0;
+    void SetRom(const std::string &rom) { mRomString = rom; }
+    void SetCpu(const std::string &cpu) { mCpuString = cpu; }
 
     virtual uint8_t  MemRead8(size_t address) = 0;
     virtual void     MemWrite8(size_t address, uint8_t val) = 0;
     virtual uint16_t MemRead16(size_t address) = 0;
     virtual void     MemWrite16(size_t address, uint16_t val) = 0;
+
+    // for cpus with io space
+    virtual uint8_t  IORead8(size_t) { return 0; }
+    virtual void     IOWrite8(size_t, uint8_t) {}
 
     static std::unique_ptr<System> Factory(const std::string &system, Console &con);
 
@@ -63,6 +67,8 @@ protected:
     std::string mSubSystemString;
     Console &mConsole;
     std::unique_ptr<std::thread> mThread;
+    std::string mRomString;
+    std::string mCpuString;
     volatile bool mShutdown = false;
 };
 

@@ -47,9 +47,11 @@ OBJS := \
 
 OBJS += \
 	cpu/cpu6809.o \
+	cpu/cpuz80.o \
 	dev/mc6850.o \
 	dev/uart16550.o \
-	system/system09.o
+	system/system09.o \
+	system/system_kaypro.o
 
 OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 

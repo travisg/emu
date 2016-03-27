@@ -43,9 +43,6 @@ public:
 
     virtual int Run() override;
 
-    virtual int SetRom(const std::string &rom) override;
-    virtual int SetCpu(const std::string &cpu) override;
-
     virtual uint8_t  MemRead8(size_t address) override;
     virtual void     MemWrite8(size_t address, uint8_t val) override;
 
@@ -61,9 +58,6 @@ private:
     std::unique_ptr<MemoryDevice> mMem;
     std::unique_ptr<MemoryDevice> mRom;
     std::unique_ptr<MemoryDevice> mUart;
-
-    std::string mRomString;
-    std::string mCpuString;
 
     enum class MemoryLayout {
         STANDARD,

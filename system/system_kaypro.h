@@ -24,39 +24,51 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <memory>
-#include <sys/types.h>
+#include "system.h"
 
-class MemoryDevice {
+class Console;
+class CpuZ80;
+class MemoryDevice;
+class Memory;
+
+// a Z80 based Kaypro
+class SystemKaypro final : public System {
 public:
-    MemoryDevice() {}
-    virtual ~MemoryDevice() {}
+    SystemKaypro(const std::string &subsystem, Console &con);
+    virtual ~SystemKaypro() override;
 
-    // non copyable
-    MemoryDevice(const MemoryDevice &) = delete;
-    MemoryDevice& operator=(const MemoryDevice &) = delete;
+    virtual int Init() override;
 
-    virtual uint8_t ReadByte(size_t address) = 0;
-    virtual void WriteByte(size_t address, uint8_t val) = 0;
-};
+    virtual int Run() override;
 
-class Memory : public MemoryDevice {
-public:
-    Memory();
-    virtual ~Memory() override;
+    virtual uint8_t  MemRead8(size_t address) override;
+    virtual void     MemWrite8(size_t address, uint8_t val) override;
 
-    int Alloc(size_t len);
+    virtual uint16_t MemRead16(size_t address) override;
+    virtual void     MemWrite16(size_t address, uint16_t val) override;
 
-    // simple accessors, assumes bounds checking somewhere else
-    virtual uint8_t ReadByte(size_t address) override { return mMem[address]; }
-    virtual void WriteByte(size_t address, uint8_t val) override { mMem[address] = val; }
-
-    size_t GetSize() const { return mSize; }
-
-    // grab a raw pointer to it, don't abuse!
-    void *GetPtr() { return mMem.get(); }
+    virtual uint8_t  IORead8(size_t address) override;
+    virtual void     IOWrite8(size_t address, uint8_t val) override;
 
 private:
-    std::unique_ptr<uint8_t[]> mMem;
-    size_t mSize = 0;
+    void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
+
+    MemoryDevice *GetDeviceAtAddr(size_t &address);
+
+    std::unique_ptr<CpuZ80> mCpu;
+    std::unique_ptr<Memory> mMem;
+    std::unique_ptr<Memory> mVideoMem;
+    std::unique_ptr<Memory> mRom;
+    std::unique_ptr<Memory> mVideoRom;
+
+    std::string mVideoRomString;
+
+    enum {
+        BANK0,
+        BANK1
+    } mBankSwitch = BANK1;
 };
+
+

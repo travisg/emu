@@ -23,6 +23,7 @@
  */
 #include "system.h"
 #include "system09.h"
+#include "system_kaypro.h"
 
 #include <cstdio>
 #include <cassert>
@@ -52,6 +53,8 @@ std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
 
     if (mainsystem == "6809") {
         return std::unique_ptr<System>(new System09(subsystem, con));
+    } else if (mainsystem == "kaypro") {
+        return std::unique_ptr<System>(new SystemKaypro(subsystem, con));
     } else {
         return NULL;
     }
