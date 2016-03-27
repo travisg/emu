@@ -87,7 +87,7 @@ int main(int argc, char **argv)
     // create a console object to pass to the system
     Console console;
 
-    std::unique_ptr<System> sys(System::Factory(systemOption, console));
+    auto sys = System::Factory(systemOption, console);
     if (!sys) {
         fprintf(stderr, "error creating system, aborting\n");
         return 1;

@@ -40,7 +40,7 @@ System::~System()
     ShutdownThreaded();
 }
 
-System *System::Factory(const string &system, Console &con)
+std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
 {
     // split the system string into a few pieces
     size_t pos = system.find('-');
@@ -51,7 +51,7 @@ System *System::Factory(const string &system, Console &con)
         subsystem = system.substr(pos + 1, string::npos);
 
     if (mainsystem == "6809") {
-        return new System09(subsystem, con);
+        return std::unique_ptr<System>(new System09(subsystem, con));
     } else {
         return NULL;
     }

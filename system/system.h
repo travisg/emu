@@ -55,7 +55,7 @@ public:
     virtual uint16_t MemRead16(size_t address) = 0;
     virtual void     MemWrite16(size_t address, uint16_t val) = 0;
 
-    static System *Factory(const std::string &system, Console &con);
+    static std::unique_ptr<System> Factory(const std::string &system, Console &con);
 
     bool isShutdown() const { return mShutdown; }
 
