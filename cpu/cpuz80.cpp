@@ -389,7 +389,7 @@ int CpuZ80::Run() {
                 case 0x00: // NOP
                     LPRINTF("NOP\n");
                     break;
-                case 0xc3: // JP nn
+                case 0b11000011: // JP nn
                     LPRINTF("JP nn\n");
                     mRegs.pc = read_nn();
                     break;
@@ -409,7 +409,7 @@ int CpuZ80::Run() {
                         mRegs.pc = temp16;
                     break;
                 }
-                case 0xcd: // CALL nn
+                case 0b11001101: // CALL nn
                     LPRINTF("CALL nn\n");
                     temp16 = read_nn();
                     push_pc();
@@ -434,7 +434,7 @@ int CpuZ80::Run() {
                     break;
                 }
 
-                case 0xc9: // RET
+                case 0b11001001: // RET
                     LPRINTF("RET\n");
                     mRegs.pc = pop16();
                     break;
@@ -456,7 +456,7 @@ int CpuZ80::Run() {
                     break;
                 }
 
-                case 0x10: { // DJNZ
+                case 0b00010000: { // DJNZ
                     LPRINTF("DJNZ, e\n");
                     int8_t rel = read_n();
                     mRegs.b--;
@@ -499,11 +499,11 @@ int CpuZ80::Run() {
                         mRegs.pc += rel;
                     break;
                 }
-                case 0xf3: // DI
+                case 0b11110011: // DI
                     LPRINTF("DI\n");
                     mRegs.iff = 0;
                     break;
-                case 0xfb: // EI
+                case 0b11111011: // EI
                     LPRINTF("EI\n");
                     mRegs.iff = 1;
                     break;
@@ -722,39 +722,39 @@ int CpuZ80::Run() {
                     break;
                 }
 
-                case 0b10100000 ... 0b10100111: // AND r
+                case 0b10100000 ... 0b10100111: // AND r, AND (HL)
                     LPRINTF("AND r\n");
                     mRegs.a &= read_r_reg_or_hl(BITS(op, 2, 0));
                     set_flags(mRegs.a);
                     set_flag(FLAG_H, 1);
                     break;
 
-                case 0b10110000 ... 0b10110111: // OR r
-                    LPRINTF("OR r\n");
-                    mRegs.a |= read_r_reg_or_hl(BITS(op, 2, 0));
-                    set_flags(mRegs.a);
-                    break;
-
-                case 0b10101000 ... 0b10101111: // XOR r
-                    LPRINTF("XOR r\n");
-                    mRegs.a ^= read_r_reg_or_hl(BITS(op, 2, 0));
-                    set_flags(mRegs.a);
-                    break;
-
-                case 0b10111000 ... 0b10111111: // CP r
-                    LPRINTF("CP r\n");
-                    temp8 = mRegs.a - read_r_reg_or_hl(BITS(op, 2, 0));
-                    set_flags(temp8);
-                    break;
-
-                case 0xe6: // AND n
+                case 0b11100110: // AND n
                     LPRINTF("AND n\n");
                     mRegs.a &= mSys.MemRead8(read_n());
                     set_flags(mRegs.a);
                     set_flag(FLAG_H, 1);
                     break;
 
-                case 0xfe: // CP n
+                case 0b10110000 ... 0b10110111: // OR r, OR (HL)
+                    LPRINTF("OR r\n");
+                    mRegs.a |= read_r_reg_or_hl(BITS(op, 2, 0));
+                    set_flags(mRegs.a);
+                    break;
+
+                case 0b10101000 ... 0b10101111: // XOR r, XOR (HL)
+                    LPRINTF("XOR r\n");
+                    mRegs.a ^= read_r_reg_or_hl(BITS(op, 2, 0));
+                    set_flags(mRegs.a);
+                    break;
+
+                case 0b10111000 ... 0b10111111: // CP r, CP (HL)
+                    LPRINTF("CP r\n");
+                    temp8 = mRegs.a - read_r_reg_or_hl(BITS(op, 2, 0));
+                    set_flags(temp8);
+                    break;
+
+                case 0b11111110: // CP n
                     LPRINTF("CP n\n");
                     temp8 = mSys.MemRead8(read_n());
                     temp8 = mRegs.a - temp8;
@@ -791,7 +791,15 @@ int CpuZ80::Run() {
 
                 case 0b00111111: // CCF
                     LPRINTF("CCF\n");
+                    set_flag(FLAG_H, get_flag(FLAG_C));
                     set_flag(FLAG_C, !(mRegs.f & FLAG_C));
+                    set_flag(FLAG_N, 0);
+                    break;
+
+                case 0b00110111: // SCF
+                    LPRINTF("SCF\n");
+                    set_flag(FLAG_C, 1);
+                    set_flag(FLAG_H, 0);
                     set_flag(FLAG_N, 0);
                     break;
 
