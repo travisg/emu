@@ -31,7 +31,7 @@
 #include "bits.h"
 #include "trace.h"
 
-#define LOCAL_TRACE 1
+#define LOCAL_TRACE 0
 
 #define FLAG_C  (0)
 #define FLAG_N  (1)
@@ -801,7 +801,8 @@ int CpuZ80::Run() {
             }
         }
 
-        Dump();
+        if (LOCAL_TRACE)
+            Dump();
     }
 
     return 0;
