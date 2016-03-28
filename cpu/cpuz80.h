@@ -42,8 +42,12 @@ private:
     void write_qq_reg(int dd, uint16_t val);
     uint16_t read_dd_reg(int dd);
     void write_dd_reg(int dd, uint16_t val);
+
     uint8_t read_r_reg(int r);
+    uint8_t read_r_reg_or_hl(int r);
     void write_r_reg(int r, uint8_t val);
+    void write_r_reg_or_hl(int r, uint8_t val);
+
     uint16_t read_nn(void);
     uint8_t read_n(void);
     void push8(uint8_t val);
@@ -53,8 +57,11 @@ private:
     uint16_t pop16(void);
     void set_flag(int flag, int val);
     void set_flags(uint8_t val);
+    bool get_flag(int flag);
+    bool test_cond(int cond);
 
     void out(uint8_t addr, uint8_t val);
+    uint8_t in(uint8_t addr);
 
     // register file
     struct {

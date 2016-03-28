@@ -35,7 +35,7 @@
 #define DEFAULT_ROM "rom/kaypro/kayproii_u47.bin"
 #define VIDEO_ROM "rom/kaypro/kayproii_u43.bin"
 
-#define LOCAL_TRACE 1
+#define LOCAL_TRACE 0
 
 using namespace std;
 
@@ -163,28 +163,28 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val)
 {
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
 
-#if 0
-//  LTRACEF("OUT 0x%hhx = 0x%hhx\n", addr, val);
-//  fLTRACEF(stderr, "OUT 0x%hhx = 0x%hhx\n", addr, val);
-//  dump_mRegs(stderr);
+    if (LOCAL_TRACE) {
+        for (uint i = 0; i <= 7; i++)
+            LTRACEF("A%u %zu\n", i, (address >> i) & 0x1);
+    }
 
-    switch (addr) {
+    switch (address) {
         case 0x00: // baud rate generator A
             // dont care
             break;
         case 0x04: // serial port A, data
         case 0x06: // serial port A, control
-            sio_out(1, addr - 4, val);
+            //sio_out(1, addr - 4, val);
             break;
         case 0x05: // serial port B, data
         case 0x07: // serial port B, control
-            sio_out(2, addr - 5, val);
+            //sio_out(2, addr - 5, val);
             break;
         case 0x08: // PIO 1 channel A, data
         case 0x09: // PIO 1 channel A, control
         case 0x0a: // PIO 1 channel B, data
         case 0x0b: // PIO 1 channel B, control
-            pio_out(1, addr - 0x8, val);
+            //pio_out(1, addr - 0x8, val);
             break;
         case 0x0c: // baud rate generator B
             // dont care
@@ -193,19 +193,25 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val)
         case 0x11: // floppy track
         case 0x12: // floppy sector
         case 0x13: // floppy data
-            floppy_out(addr - 0x10, val);
+            //floppy_out(addr - 0x10, val);
             break;
+        case 0x14:
+        case 0x15:
+        case 0x16:
+        case 0x17: // bank register and floppy PIO
+            mBankSwitch = (val & 0x1) ? BANK1 : BANK0;
+            break;
+
         case 0x1c: // PIO 2 channel A, data
         case 0x1d: // PIO 2 channel A, control
         case 0x1e: // PIO 2 channel B, data
         case 0x1f: // PIO 2 channel B, control
-            pio_out(2, addr - 0x1c, val);
+            //pio_out(2, addr - 0x1c, val);
             break;
         default:
-            fprintf(stderr, "out to unknown port 0x%hhx\n", addr);
+            fprintf(stderr, "out to unknown port 0x%zx\n", address);
             break;
     }
-#endif
 }
 
 MemoryDevice *SystemKaypro::GetDeviceAtAddr(size_t &address)

@@ -113,32 +113,52 @@ void CpuZ80::write_dd_reg(int dd, uint16_t val)
 uint8_t CpuZ80::read_r_reg(int r)
 {
     switch (r) {
-        case BOOST_BINARY(000): return mRegs.b;
-        case BOOST_BINARY(001): return mRegs.c;
-        case BOOST_BINARY(010): return mRegs.d;
-        case BOOST_BINARY(011): return mRegs.e;
-        case BOOST_BINARY(100): return mRegs.h;
-        case BOOST_BINARY(101): return mRegs.l;
-        case BOOST_BINARY(111): return mRegs.a;
+        case 0b000: return mRegs.b;
+        case 0b001: return mRegs.c;
+        case 0b010: return mRegs.d;
+        case 0b011: return mRegs.e;
+        case 0b100: return mRegs.h;
+        case 0b101: return mRegs.l;
+        case 0b111: return mRegs.a;
         default:
             /* no 0xb110 */
             assert(0);
     }
 }
 
+// for opcodes where the missing register encoding hole is for (HL)
+uint8_t CpuZ80::read_r_reg_or_hl(int r)
+{
+    if (r == 0b110) {
+        return mSys.MemRead8(READ_HL());
+    } else {
+        return read_r_reg(r);
+    }
+}
+
 void CpuZ80::write_r_reg(int r, uint8_t val)
 {
     switch (r) {
-        case BOOST_BINARY(000): mRegs.b = val; break;
-        case BOOST_BINARY(001): mRegs.c = val; break;
-        case BOOST_BINARY(010): mRegs.d = val; break;
-        case BOOST_BINARY(011): mRegs.e = val; break;
-        case BOOST_BINARY(100): mRegs.h = val; break;
-        case BOOST_BINARY(101): mRegs.l = val; break;
-        case BOOST_BINARY(111): mRegs.a = val; break;
+        case 0b000: mRegs.b = val; break;
+        case 0b001: mRegs.c = val; break;
+        case 0b010: mRegs.d = val; break;
+        case 0b011: mRegs.e = val; break;
+        case 0b100: mRegs.h = val; break;
+        case 0b101: mRegs.l = val; break;
+        case 0b111: mRegs.a = val; break;
         default:
             /* no 0xb110 */
             assert(0);
+    }
+}
+
+// for opcodes where the missing register encoding hole is for (HL)
+void CpuZ80::write_r_reg_or_hl(int r, uint8_t val)
+{
+    if (r == 0b110) {
+        mSys.MemWrite8(READ_HL(), val);
+    } else {
+        write_r_reg(r, val);
     }
 }
 
@@ -195,12 +215,40 @@ void CpuZ80::out(uint8_t addr, uint8_t val)
     mSys.IOWrite8(addr, val);
 }
 
+uint8_t CpuZ80::in(uint8_t addr)
+{
+    LTRACEF("IN 0x%hhx\n", addr);
+
+    return mSys.IORead8(addr);
+}
+
 void CpuZ80::set_flag(int flag, int val)
 {
     if (val)
         mRegs.f |= (1 << flag);
     else
         mRegs.f &= ~(1 << flag);
+}
+
+bool CpuZ80::get_flag(int flag)
+{
+    return !!(mRegs.f & (1<<flag));
+}
+
+
+bool CpuZ80::test_cond(int cond)
+{
+    switch (cond) {
+        case 0: if (!get_flag(FLAG_Z)) return true; break; // NZ
+        case 1: if (get_flag(FLAG_Z))  return true; break; // Z
+        case 2: if (!get_flag(FLAG_C)) return true; break; // NC
+        case 3: if (get_flag(FLAG_C))  return true; break; // C
+        case 4: if (!get_flag(FLAG_PV)) return true; break; // PO
+        case 5: if (get_flag(FLAG_PV)) return true; break; // PE
+        case 6: if (!get_flag(FLAG_S)) return true; break; // P
+        case 7: if (get_flag(FLAG_S))  return true; break; // M
+    }
+    return false;
 }
 
 /* count even number of bits */
@@ -242,14 +290,12 @@ int CpuZ80::Run() {
 
         uint8_t op = mSys.MemRead8(mRegs.pc++);
 
-        LPRINTF("PC 0x%04hx: op %02hhx", (uint16_t)(mRegs.pc - 1), op);
-
         // look for certain prefixes
         if (op == 0xed) {
             // ed prefix is a whole new space
             op = mSys.MemRead8(mRegs.pc++);
 
-            LPRINTF("%02hhx - ", op);
+            LPRINTF("PC 0x%04hx: op ed%02hhx - ", (uint16_t)(mRegs.pc - 2), op);
             switch (op) {
                 case BOOST_BINARY(01000001):
                 case BOOST_BINARY(01001001):
@@ -260,7 +306,11 @@ int CpuZ80::Run() {
 //              case BOOST_BINARY(01110001): /* doesn't officially exist */
                 case BOOST_BINARY(01111001): // OUT (C), r
                     LPRINTF("OUT (C), r\n");
-                    temp8 = read_r_reg(BITS_SHIFT(op, 5, 3));
+                    if (BITS_SHIFT(op, 5, 3) == 0b110) { // OUT (c), 0
+                        temp8 = 0;
+                    } else {
+                        temp8 = read_r_reg(BITS_SHIFT(op, 5, 3));
+                    }
                     out(mRegs.c, temp8);
                     break;
                 case BOOST_BINARY(10110000): // LDIR
@@ -281,12 +331,62 @@ int CpuZ80::Run() {
                     set_flag(FLAG_PV, 0);
                     set_flag(FLAG_N, 0);
                     break;
+                case 0b01000011:
+                case 0b01010011:
+                case 0b01100011:
+                case 0b01110011: // LD (nn), dd
+                    LPRINTF("LD (nn), dd\n");
+
+                    temp16 = read_dd_reg(BITS_SHIFT(op, 5, 4));
+                    mSys.MemWrite16(read_nn(), temp16);
+                    break;
+                case 0b01001011:
+                case 0b01011011:
+                case 0b01101011:
+                case 0b01111011: // LD dd, (nn)
+                    LPRINTF("LD dd, (nn)\n");
+
+                    temp16 = mSys.MemRead16(read_nn());
+                    write_dd_reg(BITS_SHIFT(op, 5, 4), temp16);
+                    break;
                 default:
                     fprintf(stderr, "unhandled ED prefixed-opcode 0x%hhx\n", op);
                     return -1;
             }
+        } else if (op == 0xcb) {
+            // cb prefix are for bit instructions
+            op = mSys.MemRead8(mRegs.pc++);
+
+            LPRINTF("PC 0x%04hx: op cb%02hhx - ", (uint16_t)(mRegs.pc - 2), op);
+            switch (op) {
+                case 0x40 ... 0x7f: { // BIT
+                    uint8_t bit = BITS_SHIFT(op, 6, 3);
+                    LPRINTF("RES %u, r\n", bit);
+
+                    temp8 = read_r_reg_or_hl(BITS(op, 2, 0)) & (1<<bit);
+                    set_flag(FLAG_Z, temp8);
+                    break;
+                }
+                case 0x80 ... 0xbf: { // RES
+                    uint8_t bit = BITS_SHIFT(op, 6, 3);
+                    LPRINTF("RES %u, r\n", bit);
+
+                    write_r_reg_or_hl(BITS(op, 2, 0), read_r_reg_or_hl(BITS(op, 2, 0)) & ~(1<<bit));
+                    break;
+                }
+                case 0xc0 ... 0xff: { // SET
+                    uint8_t bit = BITS_SHIFT(op, 6, 3);
+                    LPRINTF("SET %u, r\n", bit);
+
+                    write_r_reg_or_hl(BITS(op, 2, 0), read_r_reg_or_hl(BITS(op, 2, 0)) | (1<<bit));
+                    break;
+                }
+                default:
+                    fprintf(stderr, "unhandled CB prefixed-opcode 0x%hhx\n", op);
+                    return -1;
+            }
         } else {
-            LPRINTF(" - ");
+            LPRINTF("PC 0x%04hx: op %02hhx - ", (uint16_t)(mRegs.pc - 1), op);
             switch (op) {
                 case 0x00: // NOP
                     LPRINTF("NOP\n");
@@ -307,16 +407,8 @@ int CpuZ80::Run() {
                     int cond = BITS_SHIFT(op, 5, 3);
                     temp16 = read_nn();
 
-                    switch (cond) {
-                        case 0: if (!(mRegs.f & FLAG_Z)) mRegs.pc = temp16; break; // NZ
-                        case 1: if (mRegs.f & FLAG_Z) mRegs.pc = temp16; break; // Z
-                        case 2: if (!(mRegs.f & FLAG_C)) mRegs.pc = temp16; break; // NC
-                        case 3: if (mRegs.f & FLAG_C) mRegs.pc = temp16; break; // C
-                        case 4: if (!(mRegs.f & FLAG_PV)) mRegs.pc = temp16; break; // PO
-                        case 5: if (mRegs.f & FLAG_PV) mRegs.pc = temp16; break; // PE
-                        case 6: if (!(mRegs.f & FLAG_S)) mRegs.pc = temp16; break; // P
-                        case 7: if (mRegs.f & FLAG_S) mRegs.pc = temp16; break; // M
-                    }
+                    if (test_cond(cond))
+                        mRegs.pc = temp16;
                     break;
                 }
                 case 0xcd: // CALL nn
@@ -334,23 +426,10 @@ int CpuZ80::Run() {
                 case BOOST_BINARY(11110100):
                 case BOOST_BINARY(11111100): { // CALL cc, nn
                     LPRINTF("CALL cc, nn\n");
-                    int dobranch = 0;
                     int cond = BITS_SHIFT(op, 5, 3);
                     temp16 = read_nn();
 
-                    switch (cond) {
-                        case 0: if (!(mRegs.f & FLAG_Z)) dobranch = 1; break; // NZ
-                        case 1: if (mRegs.f & FLAG_Z) dobranch = 1; break; // Z
-                        case 2: if (!(mRegs.f & FLAG_C)) dobranch = 1; break; // NC
-                        case 3: if (mRegs.f & FLAG_C) dobranch = 1; break; // C
-                        case 4: if (!(mRegs.f & FLAG_PV)) dobranch = 1; break; // PO
-                        case 5: if (mRegs.f & FLAG_PV) dobranch = 1; break; // PE
-                        case 6: if (!(mRegs.f & FLAG_S)) dobranch = 1; break; // P
-                        case 7: if (mRegs.f & FLAG_S) dobranch = 1; break; // M
-                    }
-
-                    if (dobranch) {
-                        temp16 = read_nn();
+                    if (test_cond(cond)) {
                         push_pc();
                         mRegs.pc = temp16;
                     }
@@ -371,21 +450,9 @@ int CpuZ80::Run() {
                 case BOOST_BINARY(11110000):
                 case BOOST_BINARY(11111000): { // RET cc
                     LPRINTF("RET cc\n");
-                    int doret = 0;
                     int cond = BITS_SHIFT(op, 5, 3);
 
-                    switch (cond) {
-                        case 0: if (!(mRegs.f & FLAG_Z)) doret = 1; break; // NZ
-                        case 1: if (mRegs.f & FLAG_Z) doret = 1; break; // Z
-                        case 2: if (!(mRegs.f & FLAG_C)) doret = 1; break; // NC
-                        case 3: if (mRegs.f & FLAG_C) doret = 1; break; // C
-                        case 4: if (!(mRegs.f & FLAG_PV)) doret = 1; break; // PO
-                        case 5: if (mRegs.f & FLAG_PV) doret = 1; break; // PE
-                        case 6: if (!(mRegs.f & FLAG_S)) doret = 1; break; // P
-                        case 7: if (mRegs.f & FLAG_S) doret = 1; break; // M
-                    }
-
-                    if (doret) {
+                    if (test_cond(cond)) {
                         mRegs.pc = pop16();
                     }
                     break;
@@ -409,28 +476,28 @@ int CpuZ80::Run() {
                 case BOOST_BINARY(00111000): { // JR C, e
                     LPRINTF("JR C, e\n");
                     int8_t rel = read_n();
-                    if (mRegs.f & FLAG_C)
+                    if (get_flag(FLAG_C))
                         mRegs.pc += rel;
                     break;
                 }
                 case BOOST_BINARY(00110000): { // JR NC, e
                     LPRINTF("JR NC, e\n");
                     int8_t rel = read_n();
-                    if (!(mRegs.f & FLAG_C))
+                    if (!get_flag(FLAG_C))
                         mRegs.pc += rel;
                     break;
                 }
                 case BOOST_BINARY(00101000): { // JR Z, e
                     LPRINTF("JR Z, e\n");
                     int8_t rel = read_n();
-                    if (mRegs.f & FLAG_Z)
+                    if (get_flag(FLAG_Z))
                         mRegs.pc += rel;
                     break;
                 }
                 case BOOST_BINARY(00100000): { // JR NZ, e
                     LPRINTF("JR NZ, e\n");
                     int8_t rel = read_n();
-                    if (!(mRegs.f & FLAG_Z))
+                    if (!get_flag(FLAG_Z))
                         mRegs.pc += rel;
                     break;
                 }
@@ -448,19 +515,23 @@ int CpuZ80::Run() {
                     out(read_n(), mRegs.a);
                     break;
 
+                case BOOST_BINARY(11011011): // IN A, (n)
+                    LPRINTF("IN A, (n)\n");
+                    mRegs.a = in(read_n());
+                    break;
+
                 case BOOST_BINARY(01000000) ... BOOST_BINARY(01111111): { // LD r, r or LD r, (HL)
+                    LPRINTF("LD r, r\n");
 
                     int r = BITS_SHIFT(op, 5, 3);
                     int r2 = BITS_SHIFT(op, 2, 0);
 
-                    if (r2 == BOOST_BINARY(110)) { // (HL)
-                        LPRINTF("LD r, (HL)\n");
-                        temp8 = mSys.MemRead8(READ_HL());
-                        write_r_reg(r, temp8);
-                    } else {
-                        LPRINTF("LD r, r\n");
-                        write_r_reg(r, read_r_reg(r2));
+                    if (r == r2 && r == 0b110) { // HALT
+                        printf("unhandled halt opcode\n");
+                        return -1;
                     }
+
+                    write_r_reg_or_hl(r, read_r_reg_or_hl(r2));
                     break;
                 }
 
@@ -514,6 +585,12 @@ int CpuZ80::Run() {
                     mRegs.l = mSys.MemRead8(temp16);
                     mRegs.h = mSys.MemRead8(temp16 + 1);
                     break;
+                case BOOST_BINARY(00111010): // LD A, (nn)
+                    LPRINTF("LD A, (nn)\n");
+                    temp16 = read_nn();
+
+                    mRegs.a = mSys.MemRead8(temp16);
+                    break;
                 case BOOST_BINARY(00001010): // LD A, (BC)
                     LPRINTF("LD A, (BC)\n");
                     mRegs.a = mSys.MemRead8(READ_BC());
@@ -530,6 +607,15 @@ int CpuZ80::Run() {
                     push16(read_qq_reg(BITS_SHIFT(op, 5, 4)));
                     break;
 
+                case BOOST_BINARY(11000001):
+                case BOOST_BINARY(11010001):
+                case BOOST_BINARY(11100001):
+                case BOOST_BINARY(11110001): // POP qq
+                    LPRINTF("POP qq\n");
+                    temp16 = pop16();
+                    write_qq_reg(BITS_SHIFT(op, 5, 4), temp16);
+                    break;
+
                 case BOOST_BINARY(11100011): // EX (SP), HL
                     LPRINTF("EX (SP), HL\n");
                     temp16 = pop16();
@@ -537,12 +623,28 @@ int CpuZ80::Run() {
                     WRITE_HL(temp16);
                     break;
 
-                case BOOST_BINARY(00001000): { // EX AF, AF'
+                case BOOST_BINARY(00001000): // EX AF, AF'
                     LPRINTF("EX AF, AF'\n");
 
-                    uint16_t temp16 = READ_AF();
+                    temp16 = READ_AF();
                     WRITE_AF(READ_AF_ALT());
                     WRITE_AF_ALT(temp16);
+                    break;
+
+                case BOOST_BINARY(00001001):
+                case BOOST_BINARY(00011001):
+                case BOOST_BINARY(00101001):
+                case BOOST_BINARY(00111001): { // ADD HL, ss
+                    LPRINTF("ADD HL, ss\n");
+                    dd = BITS_SHIFT(op, 5, 4);
+                    temp16 = read_dd_reg(dd);
+                    uint16_t hl = READ_HL();
+                    WRITE_HL(hl + temp16);
+
+                    // compute the flags
+                    set_flag(FLAG_C, (uint32_t)hl + temp16 > 0xff); // carry out of bit 15
+                    set_flag(FLAG_H, (hl & 0xfff) + (temp16 & 0xfff) > 0xfff); // carry out of bit 11
+                    set_flag(FLAG_N, 0);
                     break;
                 }
                 case BOOST_BINARY(00001011):
@@ -573,9 +675,9 @@ int CpuZ80::Run() {
                     int r = BITS_SHIFT(op, 5, 3);
                     uint8_t old;
 
-                    old = read_r_reg(r);
+                    old = read_r_reg_or_hl(r);
                     temp8 = old + 1;
-                    write_r_reg(r, temp8);
+                    write_r_reg_or_hl(r, temp8);
 
                     set_flag(FLAG_PV, old == 0x7f);
                     set_flag(FLAG_S, temp8 & 0x80);
@@ -603,9 +705,9 @@ int CpuZ80::Run() {
                     int r = BITS_SHIFT(op, 5, 3);
                     uint8_t old;
 
-                    old = read_r_reg(r);
+                    old = read_r_reg_or_hl(r);
                     temp8 = old - 1;
-                    write_r_reg(r, temp8);
+                    write_r_reg_or_hl(r, temp8);
 
                     set_flag(FLAG_PV, old == 0x80);
                     set_flag(FLAG_S, temp8 & 0x80);
@@ -622,16 +724,43 @@ int CpuZ80::Run() {
                     break;
                 }
 
+                case BOOST_BINARY(10100000) ... BOOST_BINARY(10100111): // AND r
+                    LPRINTF("AND r\n");
+                    mRegs.a &= read_r_reg_or_hl(BITS(op, 2, 0));
+                    set_flags(mRegs.a);
+                    set_flag(FLAG_H, 1);
+                    break;
+
                 case BOOST_BINARY(10110000) ... BOOST_BINARY(10110111): // OR r
                     LPRINTF("OR r\n");
-                    mRegs.a = mRegs.a | read_r_reg(BITS(op, 2, 0));
+                    mRegs.a |= read_r_reg_or_hl(BITS(op, 2, 0));
                     set_flags(mRegs.a);
                     break;
 
                 case BOOST_BINARY(10101000) ... BOOST_BINARY(10101111): // XOR r
                     LPRINTF("XOR r\n");
-                    mRegs.a = mRegs.a ^ read_r_reg(BITS(op, 2, 0));
+                    mRegs.a ^= read_r_reg_or_hl(BITS(op, 2, 0));
                     set_flags(mRegs.a);
+                    break;
+
+                case BOOST_BINARY(10111000) ... BOOST_BINARY(10111111): // CP r
+                    LPRINTF("CP r\n");
+                    temp8 = mRegs.a - read_r_reg_or_hl(BITS(op, 2, 0));
+                    set_flags(temp8);
+                    break;
+
+                case 0xe6: // AND n
+                    LPRINTF("AND n\n");
+                    mRegs.a &= mSys.MemRead8(read_n());
+                    set_flags(mRegs.a);
+                    set_flag(FLAG_H, 1);
+                    break;
+
+                case 0xfe: // CP n
+                    LPRINTF("CP n\n");
+                    temp8 = mSys.MemRead8(read_n());
+                    temp8 = mRegs.a - temp8;
+                    set_flags(temp8);
                     break;
 
                 case BOOST_BINARY(00000111): // RLCA
@@ -652,8 +781,18 @@ int CpuZ80::Run() {
                     mRegs.a = temp8;
                     break;
 
+                case BOOST_BINARY(00011111): // RRA
+                    LPRINTF("RRA\n");
+                    temp8 = (mRegs.a >> 1);
+                    temp8 |= get_flag(FLAG_C) ? (1 << 7) : 0;
+                    set_flag(FLAG_C, mRegs.a & 0x1);
+                    set_flag(FLAG_H, 0);
+                    set_flag(FLAG_N, 0);
+                    mRegs.a = temp8;
+                    break;
+
                 case BOOST_BINARY(00111111): // CCF
-                    LPRINTF("ccf\n");
+                    LPRINTF("CCF\n");
                     set_flag(FLAG_C, !(mRegs.f & FLAG_C));
                     set_flag(FLAG_N, 0);
                     break;
