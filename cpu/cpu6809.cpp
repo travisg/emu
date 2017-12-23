@@ -87,11 +87,13 @@ enum op {
     ADD,
     ADC,
     SUB,
+    SBC,
     CMP,
     AND,
     BIT,
     EOR,
     OR,
+    NOP,
     ABX,
     CLR,
     COM,
@@ -167,6 +169,15 @@ static const opdecode ops[256 * 3] = {
 [0xf0] = { "subb", EXTENDED, 1, SUB, REG_B, { 0 } },
 [0xb3] = { "subd", EXTENDED, 2, SUB, REG_D, { 0 } },
 
+[0x82] = { "sbca", IMMEDIATE, 1, SBC, REG_A, { 0 } },
+[0xc2] = { "sbcb", IMMEDIATE, 1, SBC, REG_B, { 0 } },
+[0x92] = { "sbca", DIRECT, 1, SBC, REG_A, { 0 } },
+[0xd2] = { "sbcb", DIRECT, 1, SBC, REG_B, { 0 } },
+[0xa2] = { "sbca", INDEXED, 1, SBC, REG_A, { 0 } },
+[0xe2] = { "sbcb", INDEXED, 1, SBC, REG_B, { 0 } },
+[0xb2] = { "sbca", EXTENDED, 1, SBC, REG_A, { 0 } },
+[0xf2] = { "sbcb", EXTENDED, 1, SBC, REG_B, { 0 } },
+
 [0x81]  = { "cmpa", IMMEDIATE, 1, CMP, REG_A, { 0 } },
 [0xc1]  = { "cmpb", IMMEDIATE, 1, CMP, REG_B, { 0 } },
 [0x183] = { "cmpd", IMMEDIATE, 2, CMP, REG_D, { 0 } },
@@ -238,6 +249,7 @@ static const opdecode ops[256 * 3] = {
 [0xfa] = { "orb", EXTENDED, 1, OR, REG_B, { 0 } },
 
 // misc
+[0x12] = { "nop",  IMPLIED, 1, NOP, REG_X, { 0 } },
 [0x3a] = { "abx",  IMPLIED, 2, ABX, REG_X, { 0 } },
 [0x1f] = { "tfr",  IMPLIED, 1, TFR, REG_A, { 0 } },
 
@@ -812,6 +824,24 @@ int Cpu6809::Run()
                 PutReg(op->targetreg, result);
                 break;
             }
+            case SBC: { // sbc[ab]
+                uint32_t a = GetReg(op->targetreg);
+                uint32_t b = arg;
+                uint32_t result = a - b;
+
+                if (!!(mCC & CC_C))
+                    result -= 1;
+
+                SET_Z(result);
+                if (op->width == 1) {
+                    SET_HNVC1(a, b, result);
+                } else {
+                    SET_NVC2(a, b, result);
+                }
+
+                PutReg(op->targetreg, result);
+                break;
+            }
             case CMP: { // cmp[abdsuxy]
                 uint32_t a = GetReg(op->targetreg);
                 uint32_t b = arg;
@@ -1017,6 +1047,8 @@ shared_memwrite:
 
                 if (op->targetreg == REG_X || op->targetreg == REG_Y)
                     SET_Z(arg);
+                break;
+            case NOP: // nop
                 break;
             case ABX: // X += B
                 PutReg(REG_X, GetReg(REG_X) + GetReg(REG_B));
