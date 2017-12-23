@@ -48,20 +48,17 @@ static void setconsole(void)
     atexit(&resetconsole);
 
     t = oldstdin;
-    t.c_lflag = ISIG; // no input processing
+
+    t.c_lflag &= ~(ICANON | ECHO | ISIG); // no input processing
     // Don't interpret various control characters, pass them through instead
     t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
-    t.c_cc[VMIN]  = 0; // nonblocking read
-    t.c_cc[VTIME] = 0; // nonblocking read
+    t.c_cc[VMIN]  = 1;
+    t.c_cc[VTIME] = 0;
     tcsetattr(0, TCSANOW, &t);
 
-//    fcntl(0, F_SETFL, O_NONBLOCK);
-
-    t = oldstdout;
-    t.c_lflag = ISIG; // no output processing
-    // Don't interpret various control characters, pass them through instead
-    t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
-    tcsetattr(1, TCSANOW, &t);
+    //tcgetattr(1, &t);
+    //t.c_lflag &= ~(ICANON | ECHO); // no input processing
+    //tcsetattr(1, TCSANOW, &t);
 }
 
 Console::Console()
@@ -80,8 +77,10 @@ int Console::Run()
         int c = getchar();
 
         if (c == 0x4) {
+            printf("ctrl-d on console, exiting\n");
             return -1;
         } else if (c == EOF) {
+            printf("EOF on console, exiting\n");
             return -1;
         } else {
             std::lock_guard<std::mutex> lck(mLock);
