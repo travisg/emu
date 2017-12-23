@@ -645,6 +645,15 @@ int Cpu6809::Run()
                 uint16_t *reg = NULL;
                 uint16_t zero = 0;
                 bool indirect = !!BIT(temp8, 4);
+
+                // register we're offsetting from in the usual case
+                switch (BITS_SHIFT(temp8, 6, 5)) {
+                    case 0: reg = &mX; break;
+                    case 1: reg = &mY; break;
+                    case 2: reg = &mU; break;
+                    case 3: reg = &mS; break;
+                }
+
                 if (BIT(temp8, 7) == 0) {
                     // 5 bit offset
                     off = SignExtend(BITS(temp8, 4, 0), 4);
@@ -714,16 +723,6 @@ int Cpu6809::Run()
 
                 TRACEF(" offset %d prepostinc %d", off, prepostinc);
 
-                // register we're offsetting from in the usual case
-                if (!reg) {
-                    switch (BITS_SHIFT(temp8, 6, 5)) {
-                        case 0: reg = &mX; break;
-                        case 1: reg = &mY; break;
-                        case 2: reg = &mU; break;
-                        case 3: reg = &mS; break;
-                    }
-                }
-
                 // handle predecrement
                 if (prepostinc < 0)
                     *reg += prepostinc;
@@ -756,6 +755,7 @@ int Cpu6809::Run()
             }
             default:
                 fprintf(stderr, "unhandled addressing mode\n");
+                fflush(stderr);
                 assert(0);
         }
 
@@ -1154,7 +1154,8 @@ shared_memwrite:
 
                 if (takebranch) {
                     if (arg == -2) {
-                        printf("infinite loop detected, aborting\n");
+                        fprintf(stderr, "infinite loop detected, aborting cpu\n");
+                        fflush(stderr);
                         done = true;
                     }
                     mPC += arg;
@@ -1174,6 +1175,12 @@ shared_memwrite:
             }
             case JMP: { // jmp
                 TRACEF(" arg %#04x", arg);
+
+                if (arg == mPC) {
+                    fprintf(stderr, "infinite loop detected, aborting cpu\n");
+                    fflush(stderr);
+                    done = true;
+                }
 
                 mPC = arg;
                 break;
@@ -1219,17 +1226,22 @@ shared_memwrite:
             default:
                 fflush(stdout);
                 fprintf(stderr, "unhandled opcode %#02x\n", op->op);
+                fflush(stderr);
                 done = true;
         }
 
         TRACEF("\n");
 
-        if (TRACE)
+        if (TRACE) {
             Dump();
+            fflush(stdout);
+        }
 
         // see if the system has requested a shutdown
-        if (mSys.isShutdown())
+        if (mSys.isShutdown()) {
+            printf("cpu: exiting due to shutdown\n");
             done = true;
+        }
     }
 
     return 0;
