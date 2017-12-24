@@ -512,7 +512,8 @@ bool Cpu6809::TestBranchCond(unsigned int cond)
 #define SET_CC_BIT(bit) (mCC | (bit))
 #define CLR_CC_BIT(bit) (mCC & ~(bit))
 
-#define SET_Z(result) do { mCC = ((result) == 0) ? SET_CC_BIT(CC_Z) : CLR_CC_BIT(CC_Z); } while (0)
+#define SET_Z1(result) do { mCC = ((result & 0xff) == 0) ? SET_CC_BIT(CC_Z) : CLR_CC_BIT(CC_Z); } while (0)
+#define SET_Z2(result) do { mCC = ((result & 0xffff) == 0) ? SET_CC_BIT(CC_Z) : CLR_CC_BIT(CC_Z); } while (0)
 #define SET_N1(result) do { mCC = BIT(result, 7) ? SET_CC_BIT(CC_N) : CLR_CC_BIT(CC_N); } while (0)
 #define SET_N2(result) do { mCC = BIT(result, 15) ? SET_CC_BIT(CC_N) : CLR_CC_BIT(CC_N); } while (0)
 #define SET_C1(result) do { mCC = BIT(result, 8) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C); } while (0)
@@ -521,11 +522,11 @@ bool Cpu6809::TestBranchCond(unsigned int cond)
 #define SET_V2(a, b, result) do { mCC = BIT((a)^(b)^(result)^((result)>>1), 15) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); } while (0)
 #define SET_H(a, b, result) do { mCC = BIT((a)^(b)^(result), 4) ? SET_CC_BIT(CC_H) : CLR_CC_BIT(CC_H); } while (0)
 
-#define SET_NZ1(result) do { SET_N1(result); SET_Z(result); } while (0)
-#define SET_NZ2(result) do { SET_N2(result); SET_Z(result); } while (0)
+#define SET_NZ1(result) do { SET_N1(result); SET_Z1(result); } while (0)
+#define SET_NZ2(result) do { SET_N2(result); SET_Z2(result); } while (0)
 
-#define SET_HNVC1(a, b, result) do { SET_H(a, b, result); SET_N1(result); SET_V1(a, b, result); SET_C1(result); } while (0)
-#define SET_NVC2(a, b, result) do { SET_N2(result); SET_V2(a, b, result); SET_C2(result); } while (0)
+#define SET_HNZVC1(a, b, result) do { SET_H(a, b, result); SET_N1(result); SET_Z1(result); SET_V1(a, b, result); SET_C1(result); } while (0)
+#define SET_NZVC2(a, b, result) do { SET_N2(result); SET_Z2(result); SET_V2(a, b, result); SET_C2(result); } while (0)
 
 #define PUSH16(stack, val) do { \
     uint16_t __sp = GetReg(stack); \
@@ -782,11 +783,10 @@ int Cpu6809::Run()
                 uint32_t b = arg;
                 uint32_t result = a + b;
 
-                SET_Z(result);
                 if (op->width == 1) {
-                    SET_HNVC1(a, b, result);
+                    SET_HNZVC1(a, b, result);
                 } else {
-                    SET_NVC2(a, b, result);
+                    SET_NZVC2(a, b, result);
                 }
 
                 PutReg(op->targetreg, result);
@@ -800,11 +800,10 @@ int Cpu6809::Run()
                 if (!!(mCC & CC_C))
                     result += 1;
 
-                SET_Z(result);
                 if (op->width == 1) {
-                    SET_HNVC1(a, b, result);
+                    SET_HNZVC1(a, b, result);
                 } else {
-                    SET_NVC2(a, b, result);
+                    SET_NZVC2(a, b, result);
                 }
 
                 PutReg(op->targetreg, result);
@@ -816,11 +815,10 @@ int Cpu6809::Run()
                 uint32_t result = a + b;
 
                 // XXX make sure carry is okay
-                SET_Z(result);
                 if (op->width == 1) {
-                    SET_HNVC1(a, b, result);
+                    SET_HNZVC1(a, b, result);
                 } else {
-                    SET_NVC2(a, b, result);
+                    SET_NZVC2(a, b, result);
                 }
 
                 PutReg(op->targetreg, result);
@@ -828,17 +826,16 @@ int Cpu6809::Run()
             }
             case SBC: { // sbc[ab]
                 uint32_t a = GetReg(op->targetreg);
-                uint32_t b = arg;
-                uint32_t result = a - b;
+                uint32_t b = -arg;
+                uint32_t result = a + b;
 
                 if (!!(mCC & CC_C))
                     result -= 1;
 
-                SET_Z(result);
                 if (op->width == 1) {
-                    SET_HNVC1(a, b, result);
+                    SET_HNZVC1(a, b, result);
                 } else {
-                    SET_NVC2(a, b, result);
+                    SET_NZVC2(a, b, result);
                 }
 
                 PutReg(op->targetreg, result);
@@ -849,11 +846,10 @@ int Cpu6809::Run()
                 uint32_t b = arg;
                 uint32_t result = a - b;
 
-                SET_Z(result);
                 if (op->width == 1) {
-                    SET_HNVC1(a, b, result);
+                    SET_HNZVC1(a, b, result);
                 } else {
-                    SET_NVC2(a, b, result);
+                    SET_NZVC2(a, b, result);
                 }
                 break;
             }
@@ -1048,7 +1044,7 @@ shared_memwrite:
                 PutReg(op->targetreg, (uint16_t)arg);
 
                 if (op->targetreg == REG_X || op->targetreg == REG_Y)
-                    SET_Z(arg);
+                    SET_Z2(arg);
                 break;
             case NOP: // nop
                 break;
@@ -1060,9 +1056,11 @@ shared_memwrite:
                 temp8 = mSys.MemRead8(mPC++);
                 TRACEF(" arg %#02x", temp8);
 
+                // note: some illegal combinations and illegal to copy from dissimilar sized regs
+
                 // source register
                 switch (BITS_SHIFT(temp8, 7, 4)) {
-                    case 0: temp16 = GetReg(REG_A) << 8 | GetReg(REG_B); break;
+                    case 0: temp16 = GetReg(REG_D); break;
                     case 1: temp16 = GetReg(REG_X); break;
                     case 2: temp16 = GetReg(REG_Y); break;
                     case 3: temp16 = GetReg(REG_U); break;
@@ -1082,11 +1080,7 @@ shared_memwrite:
                 // dest register
                 uint16_t olddest;
                 switch (BITS_SHIFT(temp8, 3, 0)) {
-                    case 0:
-                        olddest = GetReg(REG_A) << 8 | GetReg(REG_B);
-                        PutReg(REG_A, temp16 >> 8);
-                        PutReg(REG_B, temp16);
-                        break;
+                    case 0: olddest = PutReg(REG_D, temp16); break;
                     case 1: olddest = PutReg(REG_X, temp16); break;
                     case 2: olddest = PutReg(REG_Y, temp16); break;
                     case 3: olddest = PutReg(REG_U, temp16); break;
@@ -1095,7 +1089,7 @@ shared_memwrite:
 
                     case 8: olddest = PutReg(REG_A, temp16); break;
                     case 9: olddest = PutReg(REG_B, temp16); break;
-                    case 10: olddest = mCC; mCC = temp16; break; // XXX deal with bits that are masked?
+                    case 10: olddest = mCC; mCC = temp16; break;
                     case 11: olddest = mDP; mDP = temp16; break;
                     default: // undefined
                         break;
@@ -1104,10 +1098,7 @@ shared_memwrite:
                 // if this is an exchange, put the destination back in the source
                 if (op->op == EXG) {
                     switch (BITS_SHIFT(temp8, 7, 4)) {
-                        case 0:
-                            PutReg(REG_A, olddest >> 8);
-                            PutReg(REG_B, olddest);
-                            break;
+                        case 0: PutReg(REG_D, olddest); break;
                         case 1: PutReg(REG_X, olddest); break;
                         case 2: PutReg(REG_Y, olddest); break;
                         case 3: PutReg(REG_U, olddest); break;
@@ -1116,7 +1107,7 @@ shared_memwrite:
 
                         case 8: PutReg(REG_A, olddest); break;
                         case 9: PutReg(REG_B, olddest); break;
-                        case 10: mCC = olddest; break; // XXX deal with bits that are masked?
+                        case 10: mCC = olddest; break;
                         case 11: mDP = olddest; break;
                         default: // undefined
                             break;
