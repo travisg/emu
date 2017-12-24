@@ -54,7 +54,7 @@ public:
 
 private:
     uint16_t GetReg(regnum r);
-    void PutReg(regnum r, uint16_t val);
+    uint16_t PutReg(regnum r, uint16_t val);
 
     bool TestBranchCond(unsigned int cond);
 

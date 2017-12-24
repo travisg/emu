@@ -94,6 +94,7 @@ enum op {
     EOR,
     OR,
     NOP,
+    EXG,
     ABX,
     CLR,
     COM,
@@ -250,6 +251,7 @@ static const opdecode ops[256 * 3] = {
 
 // misc
 [0x12] = { "nop",  IMPLIED, 1, NOP, REG_X, { 0 } },
+[0x1e] = { "exg",  IMPLIED, 1, EXG, REG_X, { 0 } },
 [0x3a] = { "abx",  IMPLIED, 2, ABX, REG_X, { 0 } },
 [0x1f] = { "tfr",  IMPLIED, 1, TFR, REG_A, { 0 } },
 
@@ -1053,6 +1055,7 @@ shared_memwrite:
             case ABX: // X += B
                 PutReg(REG_X, GetReg(REG_X) + GetReg(REG_B));
                 break;
+            case EXG: // exchange R1, R2
             case TFR: { // R <= R1
                 temp8 = mSys.MemRead8(mPC++);
                 TRACEF(" arg %#02x", temp8);
@@ -1077,23 +1080,47 @@ shared_memwrite:
                 }
 
                 // dest register
+                uint16_t olddest;
                 switch (BITS_SHIFT(temp8, 3, 0)) {
                     case 0:
+                        olddest = GetReg(REG_A) << 8 | GetReg(REG_B);
                         PutReg(REG_A, temp16 >> 8);
                         PutReg(REG_B, temp16);
                         break;
-                    case 1: PutReg(REG_X, temp16); break;
-                    case 2: PutReg(REG_Y, temp16); break;
-                    case 3: PutReg(REG_U, temp16); break;
-                    case 4: PutReg(REG_S, temp16); break;
-                    case 5: PutReg(REG_PC, temp16); break;
+                    case 1: olddest = PutReg(REG_X, temp16); break;
+                    case 2: olddest = PutReg(REG_Y, temp16); break;
+                    case 3: olddest = PutReg(REG_U, temp16); break;
+                    case 4: olddest = PutReg(REG_S, temp16); break;
+                    case 5: olddest = PutReg(REG_PC, temp16); break;
 
-                    case 8: PutReg(REG_A, temp16); break;
-                    case 9: PutReg(REG_B, temp16); break;
-                    case 10: mCC = temp16; break; // XXX deal with bits that are masked?
-                    case 11: mDP = temp16; break;
+                    case 8: olddest = PutReg(REG_A, temp16); break;
+                    case 9: olddest = PutReg(REG_B, temp16); break;
+                    case 10: olddest = mCC; mCC = temp16; break; // XXX deal with bits that are masked?
+                    case 11: olddest = mDP; mDP = temp16; break;
                     default: // undefined
                         break;
+                }
+
+                // if this is an exchange, put the destination back in the source
+                if (op->op == EXG) {
+                    switch (BITS_SHIFT(temp8, 7, 4)) {
+                        case 0:
+                            PutReg(REG_A, olddest >> 8);
+                            PutReg(REG_B, olddest);
+                            break;
+                        case 1: PutReg(REG_X, olddest); break;
+                        case 2: PutReg(REG_Y, olddest); break;
+                        case 3: PutReg(REG_U, olddest); break;
+                        case 4: PutReg(REG_S, olddest); break;
+                        case 5: PutReg(REG_PC, olddest); break;
+
+                        case 8: PutReg(REG_A, olddest); break;
+                        case 9: PutReg(REG_B, olddest); break;
+                        case 10: mCC = olddest; break; // XXX deal with bits that are masked?
+                        case 11: mDP = olddest; break;
+                        default: // undefined
+                            break;
+                    }
                 }
                 break;
             }
@@ -1311,19 +1338,21 @@ uint16_t Cpu6809::GetReg(regnum r)
     }
 }
 
-void Cpu6809::PutReg(regnum r, uint16_t val)
+uint16_t Cpu6809::PutReg(regnum r, uint16_t val)
 {
+    uint16_t old;
     switch (r) {
-        case REG_X: mX = val; break;
-        case REG_Y: mY = val; break;
-        case REG_U: mU = val; break;
-        case REG_S: mS = val; break;
-        case REG_A: mA = val; break;
-        case REG_B: mB = val; break;
-        case REG_D: mD = val; break;
-        case REG_PC: mPC = val; break;
-        case REG_DP: mDP = val; break;
-        case REG_CC: mCC = val; break;
+        case REG_X: old = mX; mX = val; return old;
+        case REG_Y: old = mY; mY = val; return old;
+        case REG_U: old = mU; mU = val; return old;
+        case REG_S: old = mS; mS = val; return old;
+        case REG_A: old = mA; mA = val; return old;
+        case REG_B: old = mB; mB = val; return old;
+        case REG_D: old = mD; mD = val; return old;
+        case REG_PC: old = mPC; mPC = val; return old;
+        case REG_DP: old = mDP; mDP = val; return old;
+        case REG_CC: old = mCC; mCC = val; return old;
     }
 }
+
 
