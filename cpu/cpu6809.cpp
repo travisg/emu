@@ -109,6 +109,7 @@ enum op {
     ROL,
     ROR,
     TFR,
+    SEX,
     PUSH,
     PULL,
     BRA,
@@ -254,6 +255,7 @@ static const opdecode ops[256 * 3] = {
 [0x1e] = { "exg",  IMPLIED, 1, EXG, REG_X, { 0 } },
 [0x3a] = { "abx",  IMPLIED, 2, ABX, REG_X, { 0 } },
 [0x1f] = { "tfr",  IMPLIED, 1, TFR, REG_A, { 0 } },
+[0x1d] = { "sex",  IMPLIED, 1, SEX, REG_A, { 0 } },
 
 [0x4f] = { "clra", IMPLIED,  1, CLR, REG_A, { 0 } },
 [0x5f] = { "clrb", IMPLIED,  1, CLR, REG_B, { 0 } },
@@ -1113,6 +1115,12 @@ shared_memwrite:
                             break;
                     }
                 }
+                break;
+            }
+            case SEX: { // sex (sign extend B into A)
+                temp8 = BIT(GetReg(REG_B), 7) ? 0xff : 0x0;
+                PutReg(REG_A, temp8);
+                SET_NZ1(temp8);
                 break;
             }
             case PUSH: { // pshs,pshu
