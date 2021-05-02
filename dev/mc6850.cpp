@@ -41,17 +41,14 @@
 using namespace std;
 
 MC6850::MC6850(Console &con)
-:   mConsole(con)
-{
+    :   mConsole(con) {
     mStatus = STAT_TDRE;
 }
 
-MC6850::~MC6850()
-{
+MC6850::~MC6850() {
 }
 
-uint8_t MC6850::ReadByte(size_t address)
-{
+uint8_t MC6850::ReadByte(size_t address) {
     uint8_t val;
 
 //  printf("MC6850: readbyte address 0x%zx\n", address);
@@ -84,8 +81,7 @@ uint8_t MC6850::ReadByte(size_t address)
     return val;
 }
 
-void MC6850::WriteByte(size_t address, uint8_t val)
-{
+void MC6850::WriteByte(size_t address, uint8_t val) {
 //  printf("MC6850: writebyte address 0x%zx, val 0x%hhx\n", address, val);
 
     if (address == 0) {

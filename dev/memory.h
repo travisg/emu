@@ -34,7 +34,7 @@ public:
 
     // non copyable
     MemoryDevice(const MemoryDevice &) = delete;
-    MemoryDevice& operator=(const MemoryDevice &) = delete;
+    MemoryDevice &operator=(const MemoryDevice &) = delete;
 
     virtual uint8_t ReadByte(size_t address) = 0;
     virtual void WriteByte(size_t address, uint8_t val) = 0;

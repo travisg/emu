@@ -25,16 +25,13 @@
 
 #include <cstring>
 
-Memory::Memory()
-{
+Memory::Memory() {
 }
 
-Memory::~Memory()
-{
+Memory::~Memory() {
 }
 
-int Memory::Alloc(size_t len)
-{
+int Memory::Alloc(size_t len) {
     mMem.release();
     mSize = 0;
 

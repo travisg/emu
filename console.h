@@ -35,7 +35,7 @@ public:
 
     // non copyable
     Console(const Console &) = delete;
-    Console& operator=(const Console &) = delete;
+    Console &operator=(const Console &) = delete;
 
     int Run();
 

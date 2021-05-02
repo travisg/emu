@@ -39,7 +39,7 @@ public:
 
     // non copyable
     System(const System &) = delete;
-    System& operator=(const System &) = delete;
+    System &operator=(const System &) = delete;
 
     virtual int Init() = 0;
     virtual int Run() = 0;

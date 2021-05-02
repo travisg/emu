@@ -64,60 +64,86 @@
 #define WRITE_DE_ALT(val) do { mRegs.d_alt = ((val) >> 8) & 0xff; mRegs.e_alt = (val) & 0xff; } while (0)
 #define WRITE_HL_ALT(val) do { mRegs.h_alt = ((val) >> 8) & 0xff; mRegs.l_alt = (val) & 0xff; } while (0)
 
-uint16_t CpuZ80::read_qq_reg(int dd)
-{
+uint16_t CpuZ80::read_qq_reg(int dd) {
     switch (dd) {
         default:
-        case 0b00: return READ_BC();
-        case 0b01: return READ_DE();
-        case 0b10: return READ_HL();
-        case 0b11: return READ_AF();
+        case 0b00:
+            return READ_BC();
+        case 0b01:
+            return READ_DE();
+        case 0b10:
+            return READ_HL();
+        case 0b11:
+            return READ_AF();
     }
 }
 
-void CpuZ80::write_qq_reg(int dd, uint16_t val)
-{
+void CpuZ80::write_qq_reg(int dd, uint16_t val) {
     switch (dd) {
         default:
-        case 0b00: WRITE_BC(val); break;
-        case 0b01: WRITE_DE(val); break;
-        case 0b10: WRITE_HL(val); break;
-        case 0b11: WRITE_AF(val); break;
+        case 0b00:
+            WRITE_BC(val);
+            break;
+        case 0b01:
+            WRITE_DE(val);
+            break;
+        case 0b10:
+            WRITE_HL(val);
+            break;
+        case 0b11:
+            WRITE_AF(val);
+            break;
     }
 }
 
-uint16_t CpuZ80::read_dd_reg(int dd)
-{
+uint16_t CpuZ80::read_dd_reg(int dd) {
     switch (dd) {
         default:
-        case 0b00: return READ_BC();
-        case 0b01: return READ_DE();
-        case 0b10: return READ_HL();
-        case 0b11: return READ_SP();
+        case 0b00:
+            return READ_BC();
+        case 0b01:
+            return READ_DE();
+        case 0b10:
+            return READ_HL();
+        case 0b11:
+            return READ_SP();
     }
 }
 
-void CpuZ80::write_dd_reg(int dd, uint16_t val)
-{
+void CpuZ80::write_dd_reg(int dd, uint16_t val) {
     switch (dd) {
         default:
-        case 0b00: WRITE_BC(val); break;
-        case 0b01: WRITE_DE(val); break;
-        case 0b10: WRITE_HL(val); break;
-        case 0b11: WRITE_SP(val); break;
+        case 0b00:
+            WRITE_BC(val);
+            break;
+        case 0b01:
+            WRITE_DE(val);
+            break;
+        case 0b10:
+            WRITE_HL(val);
+            break;
+        case 0b11:
+            WRITE_SP(val);
+            break;
     }
 }
 
-uint8_t CpuZ80::read_r_reg(int r)
-{
+uint8_t CpuZ80::read_r_reg(int r) {
     switch (r) {
-        case 0b000: return mRegs.b;
-        case 0b001: return mRegs.c;
-        case 0b010: return mRegs.d;
-        case 0b011: return mRegs.e;
-        case 0b100: return mRegs.h;
-        case 0b101: return mRegs.l;
-        case 0b111: return mRegs.a;
+        case 0b000:
+            return mRegs.b;
+        case 0b001:
+            return mRegs.c;
+        case 0b010:
+            return mRegs.d;
+        case 0b011:
+            return mRegs.e;
+        case 0b100:
+            return mRegs.h;
+        case 0b101:
+            return mRegs.l;
+        case 0b111:
+            return mRegs.a;
         default:
             /* no 0xb110 */
             assert(0);
@@ -125,8 +151,7 @@ uint8_t CpuZ80::read_r_reg(int r)
 }
 
 // for opcodes where the missing register encoding hole is for (HL)
-uint8_t CpuZ80::read_r_reg_or_hl(int r)
-{
+uint8_t CpuZ80::read_r_reg_or_hl(int r) {
     if (r == 0b110) {
         return mSys.MemRead8(READ_HL());
     } else {
@@ -134,16 +159,29 @@ uint8_t CpuZ80::read_r_reg_or_hl(int r)
     }
 }
 
-void CpuZ80::write_r_reg(int r, uint8_t val)
-{
+void CpuZ80::write_r_reg(int r, uint8_t val) {
     switch (r) {
-        case 0b000: mRegs.b = val; break;
-        case 0b001: mRegs.c = val; break;
-        case 0b010: mRegs.d = val; break;
-        case 0b011: mRegs.e = val; break;
-        case 0b100: mRegs.h = val; break;
-        case 0b101: mRegs.l = val; break;
-        case 0b111: mRegs.a = val; break;
+        case 0b000:
+            mRegs.b = val;
+            break;
+        case 0b001:
+            mRegs.c = val;
+            break;
+        case 0b010:
+            mRegs.d = val;
+            break;
+        case 0b011:
+            mRegs.e = val;
+            break;
+        case 0b100:
+            mRegs.h = val;
+            break;
+        case 0b101:
+            mRegs.l = val;
+            break;
+        case 0b111:
+            mRegs.a = val;
+            break;
         default:
             /* no 0xb110 */
             assert(0);
@@ -151,8 +189,7 @@ void CpuZ80::write_r_reg(int r, uint8_t val)
 }
 
 // for opcodes where the missing register encoding hole is for (HL)
-void CpuZ80::write_r_reg_or_hl(int r, uint8_t val)
-{
+void CpuZ80::write_r_reg_or_hl(int r, uint8_t val) {
     if (r == 0b110) {
         mSys.MemWrite8(READ_HL(), val);
     } else {
@@ -160,42 +197,35 @@ void CpuZ80::write_r_reg_or_hl(int r, uint8_t val)
     }
 }
 
-uint16_t CpuZ80::read_nn(void)
-{
+uint16_t CpuZ80::read_nn(void) {
     uint16_t val = mSys.MemRead8(mRegs.pc) + (mSys.MemRead8(mRegs.pc + 1) << 8);
     mRegs.pc += 2;
     return val;
 }
 
-uint8_t CpuZ80::read_n(void)
-{
+uint8_t CpuZ80::read_n(void) {
     return mSys.MemRead8(mRegs.pc++);
 }
 
-void CpuZ80::push8(uint8_t val)
-{
+void CpuZ80::push8(uint8_t val) {
     mSys.MemWrite8(--mRegs.sp, val);
 }
 
-void CpuZ80::push16(uint16_t val)
-{
+void CpuZ80::push16(uint16_t val) {
     LTRACEF("pushing 0x%hx\n", val);
     push8((val >> 8) & 0xff);
     push8(val & 0xff);
 }
 
-void CpuZ80::push_pc(void)
-{
+void CpuZ80::push_pc(void) {
     push16(mRegs.pc);
 }
 
-uint8_t CpuZ80::pop8(void)
-{
+uint8_t CpuZ80::pop8(void) {
     return mSys.MemRead8(mRegs.sp++);
 }
 
-uint16_t CpuZ80::pop16(void)
-{
+uint16_t CpuZ80::pop16(void) {
     uint16_t val;
 
     val = pop8();
@@ -206,52 +236,62 @@ uint16_t CpuZ80::pop16(void)
     return val;
 }
 
-void CpuZ80::out(uint8_t addr, uint8_t val)
-{
+void CpuZ80::out(uint8_t addr, uint8_t val) {
     LTRACEF("OUT 0x%hhx = 0x%hhx\n", addr, val);
 
     mSys.IOWrite8(addr, val);
 }
 
-uint8_t CpuZ80::in(uint8_t addr)
-{
+uint8_t CpuZ80::in(uint8_t addr) {
     LTRACEF("IN 0x%hhx\n", addr);
 
     return mSys.IORead8(addr);
 }
 
-void CpuZ80::set_flag(int flag, int val)
-{
+void CpuZ80::set_flag(int flag, int val) {
     if (val)
         mRegs.f |= (1 << flag);
     else
         mRegs.f &= ~(1 << flag);
 }
 
-bool CpuZ80::get_flag(int flag)
-{
+bool CpuZ80::get_flag(int flag) {
     return !!(mRegs.f & (1<<flag));
 }
 
 
-bool CpuZ80::test_cond(int cond)
-{
+bool CpuZ80::test_cond(int cond) {
     switch (cond) {
-        case 0: if (!get_flag(FLAG_Z)) return true; break; // NZ
-        case 1: if (get_flag(FLAG_Z))  return true; break; // Z
-        case 2: if (!get_flag(FLAG_C)) return true; break; // NC
-        case 3: if (get_flag(FLAG_C))  return true; break; // C
-        case 4: if (!get_flag(FLAG_PV)) return true; break; // PO
-        case 5: if (get_flag(FLAG_PV)) return true; break; // PE
-        case 6: if (!get_flag(FLAG_S)) return true; break; // P
-        case 7: if (get_flag(FLAG_S))  return true; break; // M
+        case 0:
+            if (!get_flag(FLAG_Z)) return true;
+            break; // NZ
+        case 1:
+            if (get_flag(FLAG_Z))  return true;
+            break; // Z
+        case 2:
+            if (!get_flag(FLAG_C)) return true;
+            break; // NC
+        case 3:
+            if (get_flag(FLAG_C))  return true;
+            break; // C
+        case 4:
+            if (!get_flag(FLAG_PV)) return true;
+            break; // PO
+        case 5:
+            if (get_flag(FLAG_PV)) return true;
+            break; // PE
+        case 6:
+            if (!get_flag(FLAG_S)) return true;
+            break; // P
+        case 7:
+            if (get_flag(FLAG_S))  return true;
+            break; // M
     }
     return false;
 }
 
 /* count even number of bits */
-static int calc_parity(uint8_t val)
-{
+static int calc_parity(uint8_t val) {
     int count;
 
     count = 0;
@@ -267,8 +307,7 @@ static int calc_parity(uint8_t val)
         return 0;
 }
 
-void CpuZ80::set_flags(uint8_t val)
-{
+void CpuZ80::set_flags(uint8_t val) {
     set_flag(FLAG_S, BIT(val, 7)); // sign flag
     set_flag(FLAG_Z, val == 0); // zero flag
     set_flag(FLAG_PV, calc_parity(val));
@@ -818,9 +857,9 @@ int CpuZ80::Run() {
 
 void CpuZ80::Dump() {
     printf("a 0x%02hhx f 0x%02hhx b 0x%02hhx c 0x%02hhx d 0x%02hhx e 0x%02hhx h 0x%02hhx l 0x%02hhx ",
-        mRegs.a, mRegs.f, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h, mRegs.l);
+           mRegs.a, mRegs.f, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h, mRegs.l);
     printf("sp 0x%04hx ix 0x%04hx iy 0x%04hx, pc 0x%04hx\n",
-        mRegs.sp, mRegs.ix, mRegs.iy, mRegs.pc);
+           mRegs.sp, mRegs.ix, mRegs.iy, mRegs.pc);
 }
 
 void CpuZ80::Reset() {

@@ -33,8 +33,7 @@
 #define ISNEG(x) BIT((x), 31)
 #define ISPOS(x) (!(BIT(x, 31)))
 
-static inline int SignExtend(uint32_t in, unsigned int pos)
-{
+static inline int SignExtend(uint32_t in, unsigned int pos) {
     if (!BIT(in, pos)) {
         return in;
     } else {
@@ -42,12 +41,10 @@ static inline int SignExtend(uint32_t in, unsigned int pos)
     }
 }
 
-static inline int SignExtend(uint8_t in)
-{
+static inline int SignExtend(uint8_t in) {
     return SignExtend((uint32_t)in, 7);
 }
 
-static inline int SignExtend(uint16_t in)
-{
+static inline int SignExtend(uint16_t in) {
     return SignExtend((uint32_t)in, 15);
 }

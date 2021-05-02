@@ -32,14 +32,12 @@
 static struct termios oldstdin;
 static struct termios oldstdout;
 
-static void resetconsole(void)
-{
+static void resetconsole(void) {
     tcsetattr(0, TCSANOW, &oldstdin);
     tcsetattr(1, TCSANOW, &oldstdout);
 }
 
-static void setconsole(void)
-{
+static void setconsole(void) {
     struct termios t;
 
     tcgetattr(0, &oldstdin);
@@ -61,18 +59,15 @@ static void setconsole(void)
     //tcsetattr(1, TCSANOW, &t);
 }
 
-Console::Console()
-{
+Console::Console() {
     setconsole();
 }
 
-Console::~Console()
-{
+Console::~Console() {
     resetconsole();
 }
 
-int Console::Run()
-{
+int Console::Run() {
     for (;;) {
         int c = getchar();
 
@@ -89,8 +84,7 @@ int Console::Run()
     }
 }
 
-void Console::Putchar(char c)
-{
+void Console::Putchar(char c) {
 #if 1
     putchar(c);
     fflush(stdout);
@@ -100,8 +94,7 @@ void Console::Putchar(char c)
 #endif
 }
 
-int Console::GetNextChar()
-{
+int Console::GetNextChar() {
     std::lock_guard<std::mutex> lck(mLock);
 
     int nc = -1;

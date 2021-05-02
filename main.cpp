@@ -34,21 +34,19 @@
 
 using namespace std;
 
-static void usage(char **argv)
-{
+static void usage(char **argv) {
     fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile]\n", argv[0]);
 
     exit(1);
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     string romOption;
     string cpuOption;
     string systemOption = "6809";
 
     // read in any overriding configuration from the command line
-    for(;;) {
+    for (;;) {
         int c;
         int option_index = 0;
 
@@ -61,10 +59,10 @@ int main(int argc, char **argv)
         };
 
         c = getopt_long(argc, argv, "c:hr:s:", long_options, &option_index);
-        if(c == -1)
+        if (c == -1)
             break;
 
-        switch(c) {
+        switch (c) {
             case 'c':
                 printf("cpu option: '%s'\n", optarg);
                 cpuOption = optarg;

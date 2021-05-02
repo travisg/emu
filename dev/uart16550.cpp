@@ -53,16 +53,13 @@ using namespace std;
 
 
 uart16550::uart16550(Console &con)
-:   mConsole(con)
-{
+    :   mConsole(con) {
 }
 
-uart16550::~uart16550()
-{
+uart16550::~uart16550() {
 }
 
-uint8_t uart16550::ReadByte(size_t address)
-{
+uint8_t uart16550::ReadByte(size_t address) {
     uint8_t val;
 
     TRACEF("uart16550: readbyte address 0x%zx\n", address);
@@ -127,8 +124,7 @@ uint8_t uart16550::ReadByte(size_t address)
     return val;
 }
 
-void uart16550::WriteByte(size_t address, uint8_t val)
-{
+void uart16550::WriteByte(size_t address, uint8_t val) {
     TRACEF("uart16550: writebyte address 0x%zx, val 0x%hhx\n", address, val);
 
     /* device is mirrored for the entire address space */

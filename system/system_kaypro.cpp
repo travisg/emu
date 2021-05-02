@@ -41,17 +41,14 @@ using namespace std;
 
 // a simple 6809 based system
 SystemKaypro::SystemKaypro(const std::string &subsystem, Console &con)
-:   System(subsystem, con)
-{
+    :   System(subsystem, con) {
     mRomString = DEFAULT_ROM;
 }
 
-SystemKaypro::~SystemKaypro()
-{
+SystemKaypro::~SystemKaypro() {
 }
 
-int SystemKaypro::Init()
-{
+int SystemKaypro::Init() {
     cout << "initializing a Z80 based system. ";
     cout << "subsystem '" << mSubSystemString << "'" << endl;
     cout << "rom is " << mRomString << endl;
@@ -109,15 +106,13 @@ int SystemKaypro::Init()
     return 0;
 }
 
-int SystemKaypro::Run()
-{
+int SystemKaypro::Run() {
     cout << "starting main run loop" << endl;
 
     return mCpu->Run();
 }
 
-uint8_t SystemKaypro::MemRead8(size_t address)
-{
+uint8_t SystemKaypro::MemRead8(size_t address) {
     uint8_t val = 0;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
@@ -128,8 +123,7 @@ uint8_t SystemKaypro::MemRead8(size_t address)
     return val;
 }
 
-void SystemKaypro::MemWrite8(size_t address, uint8_t val)
-{
+void SystemKaypro::MemWrite8(size_t address, uint8_t val) {
     address &= 0xffff;
 
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
@@ -139,19 +133,16 @@ void SystemKaypro::MemWrite8(size_t address, uint8_t val)
         mem->WriteByte(address, val);
 }
 
-uint16_t SystemKaypro::MemRead16(size_t address)
-{
+uint16_t SystemKaypro::MemRead16(size_t address) {
     return MemRead8(address) << 8 | MemRead8(address + 1);
 }
 
-void SystemKaypro::MemWrite16(size_t address, uint16_t val)
-{
+void SystemKaypro::MemWrite16(size_t address, uint16_t val) {
     MemWrite8(address, val >> 8);
     MemWrite8(address + 1, val);
 }
 
-uint8_t SystemKaypro::IORead8(size_t address)
-{
+uint8_t SystemKaypro::IORead8(size_t address) {
     uint8_t val = 0;
 
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
@@ -159,8 +150,7 @@ uint8_t SystemKaypro::IORead8(size_t address)
     return val;
 }
 
-void SystemKaypro::IOWrite8(size_t address, uint8_t val)
-{
+void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
 
     if (LOCAL_TRACE) {
@@ -214,8 +204,7 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val)
     }
 }
 
-MemoryDevice *SystemKaypro::GetDeviceAtAddr(size_t &address)
-{
+MemoryDevice *SystemKaypro::GetDeviceAtAddr(size_t &address) {
     address &= 0xffff;
 
     if (mBankSwitch == 0 || address >= 0x4000) {

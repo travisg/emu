@@ -31,24 +31,21 @@
 using namespace std;
 
 System::System(const string &subsystem, Console &con)
-:   mSubSystemString(subsystem),
-    mConsole(con)
-{
+    :   mSubSystemString(subsystem),
+        mConsole(con) {
 }
 
-System::~System()
-{
+System::~System() {
     ShutdownThreaded();
 }
 
-std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
-{
+std::unique_ptr<System> System::Factory(const std::string &system, Console &con) {
     // split the system string into a few pieces
     size_t pos = system.find('-');
     string mainsystem = system.substr(0, pos);
 
     string subsystem;
-    if (pos != string::npos) 
+    if (pos != string::npos)
         subsystem = system.substr(pos + 1, string::npos);
 
     if (mainsystem == "6809") {
@@ -60,22 +57,20 @@ std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
     }
 }
 
-int System::RunThreaded()
-{
+int System::RunThreaded() {
     assert(!mThread);
 
     auto start = [this]() {
-                    printf("Starting system thread\n");
-                    this->Run();
-                };
+        printf("Starting system thread\n");
+        this->Run();
+    };
 
     mThread.reset(new std::thread(start));
 
     return 0;
 }
 
-void System::ShutdownThreaded()
-{
+void System::ShutdownThreaded() {
     if (!mThread)
         return;
 
