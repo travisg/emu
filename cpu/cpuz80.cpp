@@ -197,13 +197,13 @@ void CpuZ80::write_r_reg_or_hl(int r, uint8_t val) {
     }
 }
 
-uint16_t CpuZ80::read_nn(void) {
+uint16_t CpuZ80::read_nn() {
     uint16_t val = mSys.MemRead8(mRegs.pc) + (mSys.MemRead8(mRegs.pc + 1) << 8);
     mRegs.pc += 2;
     return val;
 }
 
-uint8_t CpuZ80::read_n(void) {
+uint8_t CpuZ80::read_n() {
     return mSys.MemRead8(mRegs.pc++);
 }
 
@@ -217,15 +217,15 @@ void CpuZ80::push16(uint16_t val) {
     push8(val & 0xff);
 }
 
-void CpuZ80::push_pc(void) {
+void CpuZ80::push_pc() {
     push16(mRegs.pc);
 }
 
-uint8_t CpuZ80::pop8(void) {
+uint8_t CpuZ80::pop8() {
     return mSys.MemRead8(mRegs.sp++);
 }
 
-uint16_t CpuZ80::pop16(void) {
+uint16_t CpuZ80::pop16() {
     uint16_t val;
 
     val = pop8();

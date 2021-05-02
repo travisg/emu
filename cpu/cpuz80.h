@@ -48,13 +48,13 @@ private:
     void write_r_reg(int r, uint8_t val);
     void write_r_reg_or_hl(int r, uint8_t val);
 
-    uint16_t read_nn(void);
-    uint8_t read_n(void);
+    uint16_t read_nn();
+    uint8_t read_n();
     void push8(uint8_t val);
     void push16(uint16_t val);
-    void push_pc(void);
-    uint8_t pop8(void);
-    uint16_t pop16(void);
+    void push_pc();
+    uint8_t pop8();
+    uint16_t pop16();
     void set_flag(int flag, int val);
     void set_flags(uint8_t val);
     bool get_flag(int flag);

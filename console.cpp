@@ -32,12 +32,12 @@
 static struct termios oldstdin;
 static struct termios oldstdout;
 
-static void resetconsole(void) {
+static void resetconsole() {
     tcsetattr(0, TCSANOW, &oldstdin);
     tcsetattr(1, TCSANOW, &oldstdout);
 }
 
-static void setconsole(void) {
+static void setconsole() {
     struct termios t;
 
     tcgetattr(0, &oldstdin);
