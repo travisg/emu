@@ -24,6 +24,7 @@
 #include "system.h"
 #include "system09.h"
 #include "system_kaypro.h"
+#include "system_rc2014.h"
 
 #include <cstdio>
 #include <cassert>
@@ -52,6 +53,8 @@ std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
         return std::unique_ptr<System>(new System09(subsystem, con));
     } else if (mainsystem == "kaypro") {
         return std::unique_ptr<System>(new SystemKaypro(subsystem, con));
+    } else if (mainsystem == "rc2014") {
+        return std::unique_ptr<System>(new SystemRC2014(subsystem, con));
     } else {
         return NULL;
     }
@@ -62,7 +65,9 @@ int System::RunThreaded() {
 
     auto start = [this]() {
         printf("Starting system thread\n");
-        this->Run();
+        auto ret = this->Run();
+        printf("system thread stopping with err %d\n", ret);
+        fflush(stdout);
     };
 
     mThread.reset(new std::thread(start));

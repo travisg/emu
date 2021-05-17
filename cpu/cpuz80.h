@@ -57,6 +57,8 @@ private:
     uint16_t pop16();
     void set_flag(int flag, int val);
     void set_flags(uint8_t val);
+    void set_s_flag(uint8_t val);
+    void set_z_flag(uint8_t val);
     bool get_flag(int flag);
     bool test_cond(int cond);
 
