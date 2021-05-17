@@ -56,7 +56,8 @@ OBJS += \
 	dev/z80sio.o \
 	system/altair680.o \
 	system/system09.o \
-	system/system_kaypro.o
+	system/system_kaypro.o \
+	system/system_rc2014.o
 
 OBJS := $(addprefix $(BUILDDIR)/,$(OBJS))
 

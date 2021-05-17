@@ -25,6 +25,7 @@
 #include "altair680.h"
 #include "system09.h"
 #include "system_kaypro.h"
+#include "system_rc2014.h"
 
 #include <cassert>
 #include <cstdio>
@@ -62,6 +63,8 @@ std::unique_ptr<System> System::Factory(const std::string &system) {
         return std::unique_ptr<System>(new Altair680(subsystem));
     } else if (mainsystem == "kaypro") {
         return std::unique_ptr<System>(new SystemKaypro(subsystem));
+    } else if (mainsystem == "rc2014") {
+        return std::unique_ptr<System>(new SystemRC2014(subsystem));
     } else {
         return NULL;
     }
@@ -72,6 +75,7 @@ std::vector<System::SystemInfo> System::GetSupportedSystems() {
         System09::GetSystemInfo(),
         Altair680::GetSystemInfo(),
         SystemKaypro::GetSystemInfo(),
+        SystemRC2014::GetSystemInfo(),
     };
 }
 
@@ -80,7 +84,9 @@ int System::RunThreaded() {
 
     auto start = [this]() {
         printf("Starting system thread\n");
-        this->Run();
+        auto ret = this->Run();
+        printf("system thread stopping with err %d\n", ret);
+        fflush(stdout);
     };
 
     mThread.reset(new std::thread(start));

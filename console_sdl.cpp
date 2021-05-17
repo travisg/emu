@@ -42,13 +42,13 @@ int ConsoleSDL::Run() {
                 mQuit = true;
             } else if (e.type == SDL_TEXTINPUT) {
                 printf("ConsoleSDL: TextInput: %s\n", e.text.text);
-                std::lock_guard<std::mutex> lck(mLock);
+                std::lock_guard<std::recursive_mutex> lck(mLock);
                 for (int i = 0; e.text.text[i] != '\0'; i++) {
                     mInBuffer.push(e.text.text[i]);
                 }
             } else if (e.type == SDL_KEYDOWN) {
                 printf("ConsoleSDL: KeyDown: sym=%d mod=%d\n", e.key.keysym.sym, e.key.keysym.mod);
-                std::lock_guard<std::mutex> lck(mLock);
+                std::lock_guard<std::recursive_mutex> lck(mLock);
                 // Handle non-printable keys manually
                 switch(e.key.keysym.sym) {
                     case SDLK_BACKSPACE: mInBuffer.push(0x08); break;

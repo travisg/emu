@@ -24,6 +24,7 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 
 #include "cpu.h"
 
@@ -35,6 +36,13 @@ public:
     virtual int Run() override;
 
     virtual void Dump() override;
+
+    void RaiseIRQ();
+    void RaiseNMI();
+    void LowerIRQ();
+    void LowerNMI();
+
+    uint16_t GetPC() { return mRegs.pc; }
 
 private:
     // internal routines
@@ -57,6 +65,8 @@ private:
     uint16_t pop16();
     void set_flag(int flag, int val);
     void set_flags(uint8_t val);
+    void set_s_flag(uint8_t val);
+    void set_z_flag(uint8_t val);
     bool get_flag(int flag);
     bool test_cond(int cond);
 
@@ -90,6 +100,10 @@ private:
 
         int iff;
     } mRegs = {};
+
+    // interrupts asserted
+    std::atomic<bool> mIRQLevel = {};
+    std::atomic<bool> mNMILevel = {};
 };
 
 

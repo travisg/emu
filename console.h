@@ -25,6 +25,7 @@
 
 #include <queue>
 #include <mutex>
+#include <functional>
 
 /* encapsulates the console the emulator is started on */
 
@@ -42,9 +43,16 @@ public:
     virtual void Putchar(char c);
     virtual int GetNextChar();
 
+    // register a callback hook when the receive buffer has any characters received
+    using InBufferCountAdd = void(size_t count);
+    void RegisterInBufferCountAdd(const std::function<InBufferCountAdd> &func);
+
 protected:
     std::queue<char> mOutBuffer;
     std::queue<char> mInBuffer;
-    std::mutex mLock;
+    std::recursive_mutex mLock;
+
+private:
+    std::function<InBufferCountAdd> mInBufferCountAddHook;
 };
 

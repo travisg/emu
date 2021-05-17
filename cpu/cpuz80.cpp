@@ -48,6 +48,8 @@ using Endian = System::Endian;
 #define READ_BC() ((mRegs.b << 8) | mRegs.c)
 #define READ_DE() ((mRegs.d << 8) | mRegs.e)
 #define READ_HL() ((mRegs.h << 8) | mRegs.l)
+#define READ_IX() (mRegs.ix)
+#define READ_IY() (mRegs.iy)
 #define READ_SP() (mRegs.sp)
 
 #define READ_AF_ALT() ((mRegs.a_alt << 8) | mRegs.f_alt)
@@ -55,30 +57,14 @@ using Endian = System::Endian;
 #define READ_DE_ALT() ((mRegs.d_alt << 8) | mRegs.e_alt)
 #define READ_HL_ALT() ((mRegs.h_alt << 8) | mRegs.l_alt)
 
-#define WRITE_AF(val)                  \
-    do {                               \
-        mRegs.a = ((val) >> 8) & 0xff; \
-        mRegs.f = (val) & 0xff;        \
-    } while (0)
-#define WRITE_BC(val)                  \
-    do {                               \
-        mRegs.b = ((val) >> 8) & 0xff; \
-        mRegs.c = (val) & 0xff;        \
-    } while (0)
-#define WRITE_DE(val)                  \
-    do {                               \
-        mRegs.d = ((val) >> 8) & 0xff; \
-        mRegs.e = (val) & 0xff;        \
-    } while (0)
-#define WRITE_HL(val)                  \
-    do {                               \
-        mRegs.h = ((val) >> 8) & 0xff; \
-        mRegs.l = (val) & 0xff;        \
-    } while (0)
-#define WRITE_SP(val)     \
-    do {                  \
-        mRegs.sp = (val); \
-    } while (0)
+#define WRITE_AF(val) do { mRegs.a = ((val) >> 8) & 0xff; mRegs.f = (val) & 0xff; } while (0)
+#define WRITE_BC(val) do { mRegs.b = ((val) >> 8) & 0xff; mRegs.c = (val) & 0xff; } while (0)
+#define WRITE_DE(val) do { mRegs.d = ((val) >> 8) & 0xff; mRegs.e = (val) & 0xff; } while (0)
+#define WRITE_HL(val) do { mRegs.h = ((val) >> 8) & 0xff; mRegs.l = (val) & 0xff; } while (0)
+#define WRITE_IX(val) do { mRegs.ix = (val); } while (0)
+#define WRITE_IY(val) do { mRegs.iy = (val); } while (0)
+#define WRITE_SP(val) do { mRegs.sp = (val); } while (0)
+
 
 #define WRITE_AF_ALT(val)                  \
     do {                                   \
@@ -362,9 +348,17 @@ static int calc_parity(uint8_t val) {
     }
 }
 
-void CpuZ80::set_flags(uint8_t val) {
+void CpuZ80::set_z_flag(uint8_t val) {
+    set_flag(FLAG_Z, val == 0); // zero flag
+}
+
+void CpuZ80::set_s_flag(uint8_t val) {
     set_flag(FLAG_S, BIT(val, 7)); // sign flag
-    set_flag(FLAG_Z, val == 0);    // zero flag
+}
+
+void CpuZ80::set_flags(uint8_t val) {
+    set_s_flag(val);
+    set_z_flag(val);
     set_flag(FLAG_PV, calc_parity(val));
     set_flag(FLAG_H, 0);
     set_flag(FLAG_N, 0);
@@ -374,7 +368,6 @@ void CpuZ80::set_flags(uint8_t val) {
 int CpuZ80::Run() {
     LTRACEF("Run\n");
 
-    int dd;
     extern int64_t g_cycle_limit;
 
     for (;;) {
@@ -393,11 +386,42 @@ int CpuZ80::Run() {
 
         uint8_t temp8;
         uint16_t temp16;
+        int dd;
+        uint8_t op;
 
-        uint8_t op = mSys.MemRead8(mRegs.pc++);
+        // two z80 prefixes that modify the next instruction
+        bool prefix_dd = false, prefix_fd = false;
 
+        // debugging to make sure the prefix is consumed
+        // instructions that use up the prefix must set this to true
+        bool consume_prefix_dd = false, consume_prefix_fd = false;
+
+        // see if we need to service an irq
+        if (mIRQLevel && mRegs.iff != 0) {
+            printf("handling IRQ\n");
+            // TODO: handle anything other than interrupt mode 1
+            op = 0b11111111; // rst 0x38
+            // TODO: deal with IFF1/IFF2 emulation
+            mRegs.iff = 0;
+            goto decode;
+        }
+
+        // fetch the instruction op
+restart:
+        op = mSys.MemRead8(mRegs.pc++);
+
+decode:
         // look for certain prefixes
-        if (op == 0xed) {
+        if (op == 0xdd) {
+            // ix prefix
+            prefix_dd = true;
+            // Question: what happens if more than one prefix is seen in a row?
+            goto restart;
+        } else if (op == 0xfd) {
+            // iy prefix
+            prefix_fd = true;
+            goto restart;
+        } else if (op == 0xed) {
             // ed prefix is a whole new space
             op = mSys.MemRead8(mRegs.pc++);
 
@@ -545,7 +569,25 @@ int CpuZ80::Run() {
                     temp16 = mSys.MemRead16(read_nn(), Endian::LITTLE);
                     write_dd_reg(BITS_SHIFT(op, 5, 4), temp16);
                     break;
+
+                // TODO: actually do something about this
+                case 0b01000110: // IM 0
+                    LPRINTF("IM 0\n");
+                    break;
+                case 0b01010110: // IM 1
+                    LPRINTF("IM 1\n");
+                    break;
+                case 0b01011110: // IM 2
+                    LPRINTF("IM 2\n");
+
+                case 0b01001101: // RETI
+                    LPRINTF("RETI\n");
+                    mRegs.pc = pop16();
+                    // TODO: not exactly right, acts like a RET right now
+                    break;
+
                 default:
+                    fflush(stdout);
                     fprintf(stderr, "unhandled ED prefixed-opcode 0x%hhx\n", op);
                     return -1;
             }
@@ -582,6 +624,7 @@ int CpuZ80::Run() {
                     break;
                 }
                 default:
+                    fflush(stdout);
                     fprintf(stderr, "unhandled CB prefixed-opcode 0x%hhx\n", op);
                     return -1;
             }
@@ -636,6 +679,8 @@ int CpuZ80::Run() {
                     }
                     break;
                 }
+
+
 
                 case 0b11001001: // RET
                     LPRINTF("RET\n");
@@ -726,7 +771,6 @@ int CpuZ80::Run() {
                     break;
 
                 case 0b01000000 ... 0b01111111: { // LD r, r or LD r, (HL)
-                    LPRINTF("LD r, r\n");
 
                     int r = BITS_SHIFT(op, 5, 3);
                     int r2 = BITS_SHIFT(op, 2, 0);
@@ -734,9 +778,28 @@ int CpuZ80::Run() {
                     if (r == r2 && r == 0b110) { // HALT
                         LPRINTF("HALT (treating as NOP)\n");
                         break;
+                    } else if (prefix_dd && r2 == 0b110) {
+                        LPRINTF("LD r, (IX+d)\n");
+                        temp16 = READ_IX() + read_n();
+                        temp8 = mSys.MemRead8(temp16);
+                        if (r != 0b110) { // no (HL) form
+                            write_r_reg(r, temp8);
+                        }
+                        consume_prefix_dd = true;
+                    } else if (prefix_fd && r2 == 0b110) {
+                        LPRINTF("LD r, (IY+d)\n");
+                        temp16 = READ_IY() + read_n();
+                        temp8 = mSys.MemRead8(temp16);
+                        if (r != 0b110) { // no (HL) form
+                            write_r_reg(r, temp8);
+                        }
+                        consume_prefix_fd = true;
+                    } else {
+                        LPRINTF("LD r, r\n");
+                        write_r_reg_or_hl(r, read_r_reg_or_hl(r2));
+
                     }
 
-                    write_r_reg_or_hl(r, read_r_reg_or_hl(r2));
                     break;
                 }
 
@@ -772,8 +835,21 @@ int CpuZ80::Run() {
                 case 0b00100001:
                 case 0b00110001: // LD dd, nn
                     LPRINTF("LD dd, nn\n");
-                    dd = BITS_SHIFT(op, 5, 4);
-                    write_dd_reg(dd, read_nn());
+                    if (prefix_dd && op == 0x21) {
+                        WRITE_IX(read_nn());
+                        consume_prefix_dd = true;
+                    } else if (prefix_fd && op == 0x21) {
+                        WRITE_IY(read_nn());
+                        consume_prefix_fd = true;
+                    } else {
+                        dd = BITS_SHIFT(op, 5, 4);
+                        write_dd_reg(dd, read_nn());
+                    }
+                    break;
+
+                case 0b11111001: // LD SP, HL
+                    LPRINTF("LD SP, HL\n");
+                    WRITE_SP(READ_HL());
                     break;
 
                 case 0b00100010: // LD (nn), HL
@@ -842,6 +918,14 @@ int CpuZ80::Run() {
                     break;
                 }
 
+                case 0b11101011: // EX DE, HL
+                    LPRINTF("EX DE, HL\n");
+
+                    temp16 = READ_DE();
+                    WRITE_DE(READ_HL());
+                    WRITE_HL(temp16);
+                    break;
+
                 case 0b00001000: // EX AF, AF'
                     LPRINTF("EX AF, AF'\n");
 
@@ -884,6 +968,8 @@ int CpuZ80::Run() {
                     write_dd_reg(dd, read_dd_reg(dd) + 1);
                     break;
 
+                // 8 bit alu
+
                 case 0b00000100:
                 case 0b00001100:
                 case 0b00010100:
@@ -900,8 +986,8 @@ int CpuZ80::Run() {
                     write_r_reg_or_hl(r, temp8);
 
                     set_flag(FLAG_PV, old == 0x7f);
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
+                    set_s_flag(temp8);
+                    set_z_flag(temp8);
                     set_flag(FLAG_N, 0);
 
                     // half carry
@@ -930,8 +1016,8 @@ int CpuZ80::Run() {
                     write_r_reg_or_hl(r, temp8);
 
                     set_flag(FLAG_PV, old == 0x80);
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
+                    set_s_flag(temp8);
+                    set_z_flag(temp8);
                     set_flag(FLAG_N, 0);
 
                     // half carry
@@ -958,6 +1044,25 @@ int CpuZ80::Run() {
                     break;
                 }
 
+                case 0b10001000 ... 0b10001111: { // ADC A, r / ADC A, (HL)
+                    LPRINTF("ADC A, r/(HL)\n");
+                    uint8_t b = read_r_reg_or_hl(BITS(op, 2, 0));
+                    uint8_t c = get_flag(FLAG_C) ? 1 : 0;
+
+                    uint8_t res = mRegs.a + b + c;
+                    int res_i = (int)mRegs.a + (int)b + (int)c;
+
+                    set_flag(FLAG_C, (uint16_t)mRegs.a + b + c > 0xff);
+                    set_flag(FLAG_N, 0);
+                    set_flag(FLAG_PV, (res_i > 127) || (res_i < -128));
+                    set_flag(FLAG_H, (mRegs.a ^ res ^ b) & (1 << 4));
+                    set_s_flag(res);
+                    set_z_flag(res);
+
+                    mRegs.a = res;
+                    break;
+                }
+
                 case 0b10010000 ... 0b10010111: { // SUB r, SUB (HL)
                     LPRINTF("SUB r\n");
                     uint8_t val = read_r_reg_or_hl(BITS(op, 2, 0));
@@ -972,8 +1077,27 @@ int CpuZ80::Run() {
                     break;
                 }
 
+                case 0b10011000 ... 0b10011111: { // SBC A, r / SBC A, (HL)
+                    LPRINTF("SBC A, r/(HL)\n");
+                    uint8_t b = read_r_reg_or_hl(BITS(op, 2, 0));
+                    uint8_t c = get_flag(FLAG_C) ? 1 : 0;
+
+                    uint8_t res = mRegs.a - b - c;
+                    int res_i = (int)mRegs.a - (int)b - (int)c;
+
+                    set_flag(FLAG_C, mRegs.a < (b + c));
+                    set_flag(FLAG_N, 1);
+                    set_flag(FLAG_PV, (res_i < -128) || (res_i > 127));
+                    set_flag(FLAG_H, (mRegs.a ^ res ^ b) & (1 << 4));
+                    set_s_flag(res);
+                    set_z_flag(res);
+
+                    mRegs.a = res;
+                    break;
+                }
+
                 case 0b10100000 ... 0b10100111: // AND r, AND (HL)
-                    LPRINTF("AND r\n");
+                    LPRINTF("AND r/(HL)\n");
                     mRegs.a &= read_r_reg_or_hl(BITS(op, 2, 0));
                     set_flags(mRegs.a);
                     set_flag(FLAG_H, 1);
@@ -984,10 +1108,11 @@ int CpuZ80::Run() {
                     mRegs.a &= read_n();
                     set_flags(mRegs.a);
                     set_flag(FLAG_H, 1);
+                    // TODO: check on overflow
                     break;
 
                 case 0b10110000 ... 0b10110111: // OR r, OR (HL)
-                    LPRINTF("OR r\n");
+                    LPRINTF("OR r/(HL)\n");
                     mRegs.a |= read_r_reg_or_hl(BITS(op, 2, 0));
                     set_flags(mRegs.a);
                     break;
@@ -996,10 +1121,11 @@ int CpuZ80::Run() {
                     LPRINTF("OR n\n");
                     mRegs.a |= read_n();
                     set_flags(mRegs.a);
+
                     break;
 
                 case 0b10101000 ... 0b10101111: // XOR r, XOR (HL)
-                    LPRINTF("XOR r\n");
+                    LPRINTF("XOR r/(HL)\n");
                     mRegs.a ^= read_r_reg_or_hl(BITS(op, 2, 0));
                     set_flags(mRegs.a);
                     break;
@@ -1126,38 +1252,66 @@ int CpuZ80::Run() {
                     }
                     break;
 
-                case 0b11101011: // EX DE, HL
-                    LPRINTF("EX DE, HL\n");
-                    {
-                        uint8_t th = mRegs.h, tl = mRegs.l;
-                        mRegs.h = mRegs.d;
-                        mRegs.l = mRegs.e;
-                        mRegs.d = th;
-                        mRegs.e = tl;
-                    }
-                    break;
 
                 default:
+                    fflush(stdout);
                     fprintf(stderr, "unhandled opcode 0x%hhx\n", op);
                     return -1;
             }
+
+
         }
 
+        // instruction is completed, make sure we 'consumed' the dd or fd prefix
+        if (consume_prefix_dd)
+            prefix_dd = false;
+        if (consume_prefix_fd)
+            prefix_fd = false;
+
+        if (prefix_dd) {
+            fflush(stdout);
+            fprintf(stderr, "unhandled opcode dd prefix\n");
+            return -1;
+        }
+        if (prefix_fd) {
+            fflush(stdout);
+            fprintf(stderr, "unhandled opcode dd prefix\n");
+            return -1;
+        }
+
+        // dump the state of the cpu if tracing is on
         if (LOCAL_TRACE) {
             Dump();
         }
+
     }
 
     return 0;
 }
 
+void CpuZ80::RaiseIRQ() {
+    mIRQLevel = true;
+}
+
+void CpuZ80::RaiseNMI() {
+    mNMILevel = true;
+}
+
+void CpuZ80::LowerIRQ() {
+    mIRQLevel = false;
+}
+
+void CpuZ80::LowerNMI() {
+    mNMILevel = false;
+}
+
 void CpuZ80::Dump() {
-    printf("a 0x%02hhx f 0x%02hhx b 0x%02hhx c 0x%02hhx d 0x%02hhx e 0x%02hhx h "
-           "0x%02hhx l 0x%02hhx ",
-           mRegs.a, mRegs.f, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h,
-           mRegs.l);
-    printf("sp 0x%04hx ix 0x%04hx iy 0x%04hx, pc 0x%04hx\n", mRegs.sp, mRegs.ix,
-           mRegs.iy, mRegs.pc);
+    printf("f 0x%02hhx (%c%c%c%c%c%c) a 0x%02hhx b 0x%02hhx c 0x%02hhx d 0x%02hhx e 0x%02hhx h 0x%02hhx l 0x%02hhx ",
+           mRegs.f, get_flag(FLAG_C) ? 'c' : ' ', get_flag(FLAG_N) ? 'n' : ' ', get_flag(FLAG_PV) ? 'p' : ' ',
+           get_flag(FLAG_H) ? 'h' : ' ', get_flag(FLAG_Z) ? 'z' : ' ', get_flag(FLAG_S) ? 's' : ' ',
+           mRegs.a, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h, mRegs.l);
+    printf("sp 0x%04hx ix 0x%04hx iy 0x%04hx pc 0x%04hx\n",
+           mRegs.sp, mRegs.ix, mRegs.iy, mRegs.pc);
 }
 
 void CpuZ80::Reset() {
