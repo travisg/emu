@@ -46,6 +46,8 @@
 #define READ_BC() ((mRegs.b << 8) | mRegs.c)
 #define READ_DE() ((mRegs.d << 8) | mRegs.e)
 #define READ_HL() ((mRegs.h << 8) | mRegs.l)
+#define READ_IX() (mRegs.ix)
+#define READ_IY() (mRegs.iy)
 #define READ_SP() (mRegs.sp)
 
 #define READ_AF_ALT() ((mRegs.a_alt << 8) | mRegs.f_alt)
@@ -57,6 +59,8 @@
 #define WRITE_BC(val) do { mRegs.b = ((val) >> 8) & 0xff; mRegs.c = (val) & 0xff; } while (0)
 #define WRITE_DE(val) do { mRegs.d = ((val) >> 8) & 0xff; mRegs.e = (val) & 0xff; } while (0)
 #define WRITE_HL(val) do { mRegs.h = ((val) >> 8) & 0xff; mRegs.l = (val) & 0xff; } while (0)
+#define WRITE_IX(val) do { mRegs.ix = (val); } while (0)
+#define WRITE_IY(val) do { mRegs.iy = (val); } while (0)
 #define WRITE_SP(val) do { mRegs.sp = (val); } while (0)
 
 #define WRITE_AF_ALT(val) do { mRegs.a_alt = ((val) >> 8) & 0xff; mRegs.f_alt = (val) & 0xff; } while (0)
@@ -327,16 +331,33 @@ void CpuZ80::set_flags(uint8_t val) {
 int CpuZ80::Run() {
     LTRACEF("Run\n");
 
-    int dd;
-
     for (;;) {
         uint8_t temp8;
         uint16_t temp16;
+        int dd;
 
+        // two z80 prefixes that modify the next instruction
+        bool prefix_dd = false, prefix_fd = false;
+
+        // debugging to make sure the prefix is consumed
+        // instructions that use up the prefix must set this to true
+        bool consume_prefix_dd = false, consume_prefix_fd = false;
+
+        // fetch the instruction op
+restart:
         uint8_t op = mSys.MemRead8(mRegs.pc++);
 
         // look for certain prefixes
-        if (op == 0xed) {
+        if (op == 0xdd) {
+            // ix prefix
+            prefix_dd = true;
+            // Question: what happens if more than one prefix is seen in a row?
+            goto restart;
+        } else if (op == 0xfd) {
+            // iy prefix
+            prefix_fd = true;
+            goto restart;
+        } else if (op == 0xed) {
             // ed prefix is a whole new space
             op = mSys.MemRead8(mRegs.pc++);
 
@@ -589,7 +610,6 @@ int CpuZ80::Run() {
                     break;
 
                 case 0b01000000 ... 0b01111111: { // LD r, r or LD r, (HL)
-                    LPRINTF("LD r, r\n");
 
                     int r = BITS_SHIFT(op, 5, 3);
                     int r2 = BITS_SHIFT(op, 2, 0);
@@ -597,9 +617,27 @@ int CpuZ80::Run() {
                     if (r == r2 && r == 0b110) { // HALT
                         printf("unhandled halt opcode\n");
                         return -1;
+                    } else if (prefix_dd && r2 == 0b110) {
+                        LPRINTF("LD r, (IX+d)\n");
+                        temp16 = READ_IX() + read_n();
+                        temp8 = mSys.MemRead8(temp16);
+                        if (r != 0b110) { // no (HL) form
+                            write_r_reg(r, temp8);
+                        }
+                        consume_prefix_dd = true;
+                    } else if (prefix_fd && r2 == 0b110) {
+                        LPRINTF("LD r, (IY+d)\n");
+                        temp16 = READ_IX() + read_n();
+                        temp8 = mSys.MemRead8(temp16);
+                        if (r != 0b110) { // no (HL) form
+                            write_r_reg(r, temp8);
+                        }
+                        consume_prefix_fd = true;
+                    } else {
+                        LPRINTF("LD r, r\n");
+                        write_r_reg_or_hl(r, read_r_reg_or_hl(r2));
                     }
 
-                    write_r_reg_or_hl(r, read_r_reg_or_hl(r2));
                     break;
                 }
 
@@ -635,8 +673,16 @@ int CpuZ80::Run() {
                 case 0b00100001:
                 case 0b00110001: // LD dd, nn
                     LPRINTF("LD dd, nn\n");
-                    dd = BITS_SHIFT(op, 5, 4);
-                    write_dd_reg(dd, read_nn());
+                    if (prefix_dd && op == 0x21) {
+                        WRITE_IX(read_nn());
+                        consume_prefix_dd = true;
+                    } else if (prefix_fd && op == 0x21) {
+                        WRITE_IY(read_nn());
+                        consume_prefix_fd = true;
+                    } else {
+                        dd = BITS_SHIFT(op, 5, 4);
+                        write_dd_reg(dd, read_nn());
+                    }
                     break;
 
                 case 0b11111001: // LD SP, HL
@@ -693,6 +739,14 @@ int CpuZ80::Run() {
                     LPRINTF("EX (SP), HL\n");
                     temp16 = pop16();
                     push16(READ_HL());
+                    WRITE_HL(temp16);
+                    break;
+
+                case 0b11101011: // EX DE, HL
+                    LPRINTF("EX DE, HL\n");
+
+                    temp16 = READ_DE();
+                    WRITE_DE(READ_HL());
                     WRITE_HL(temp16);
                     break;
 
@@ -978,8 +1032,28 @@ int CpuZ80::Run() {
                     fprintf(stderr, "unhandled opcode 0x%hhx\n", op);
                     return -1;
             }
+
+
         }
 
+        // instruction is completed, make sure we 'consumed' the dd or fd prefix
+        if (consume_prefix_dd)
+            prefix_dd = false;
+        if (consume_prefix_fd)
+            prefix_fd = false;
+
+        if (prefix_dd) {
+            fflush(stdout);
+            fprintf(stderr, "unhandled opcode dd prefix\n");
+            return -1;
+        }
+        if (prefix_fd) {
+            fflush(stdout);
+            fprintf(stderr, "unhandled opcode dd prefix\n");
+            return -1;
+        }
+
+        // dump the state of the cpu if tracing is on
         if (LOCAL_TRACE) {
             Dump();
         }

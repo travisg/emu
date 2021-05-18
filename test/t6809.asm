@@ -53,8 +53,8 @@
 	com	,x		;63 84
 	coma			;43
 	comb			;53
-	cwai	#0x12		;3c 12
-	daa			;19
+; XXX	cwai	#0x12		;3c 12
+; XXX	daa			;19
 	dec	,x		;6a 84
 	deca			;4a
 	decb			;5a

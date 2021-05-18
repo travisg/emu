@@ -60,7 +60,7 @@ private:
         size_t offset;
     };
 
-    MemDeviceDesc GetDeviceAtAddr(size_t &address);
+    MemDeviceDesc GetDeviceAtAddr(size_t address);
 
     std::unique_ptr<CpuZ80> mCpu;
     std::unique_ptr<Memory> mMem;

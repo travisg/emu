@@ -29,6 +29,7 @@
 
 #include "cpu/cpuz80.h"
 #include "dev/memory.h"
+#include "console.h"
 #include "ihex.h"
 #include "trace.h"
 
@@ -137,9 +138,24 @@ uint8_t SystemRC2014::IORead8(size_t address) {
 void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
 
-    if (LOCAL_TRACE) {
-        for (uint i = 0; i <= 7; i++)
-            LTRACEF("A%u %zu\n", i, (address >> i) & 0x1);
+    for (uint i = 0; i <= 7; i++) {
+        LTRACEF_LEVEL(2, "A%u %zu\n", i, (address >> i) & 0x1);
+    }
+
+    switch (address) {
+        case 0x80: // SIO/A control port
+            break;
+        case 0x81: // SIO/A data port
+            // cheezy!
+            mConsole.Putchar(val);
+            break;
+        case 0x82: // SIO/B control port
+            break;
+        case 0x83: // SIO/B data port
+            break;
+        default:
+            fprintf(stderr, "out to unknown port 0x%zx\n", address);
+            break;
     }
 
 #if 0
@@ -191,7 +207,7 @@ void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
 #endif
 }
 
-SystemRC2014::MemDeviceDesc SystemRC2014::GetDeviceAtAddr(size_t &address) {
+SystemRC2014::MemDeviceDesc SystemRC2014::GetDeviceAtAddr(size_t address) {
     address &= 0xffff;
 
     // at the moment decode
@@ -202,7 +218,7 @@ SystemRC2014::MemDeviceDesc SystemRC2014::GetDeviceAtAddr(size_t &address) {
     if (address < 0x2000) {
         return { mRom.get(), mRomBankSel * 0x2000};
     } else if (address >= 0x8000) {
-        return { mMem.get(), 0x8000};
+        return { mMem.get(), 0};
     } else {
         return { nullptr, 0 };
     }
