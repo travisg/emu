@@ -24,6 +24,7 @@
 
 #include "system_rc2014.h"
 
+#include <cassert>
 #include <cstdio>
 #include <iostream>
 
@@ -43,6 +44,11 @@
 #define DEFAULT_ROM "rom/rc2014/24886009.BIN"
 
 #define LOCAL_TRACE 0
+#define TRACE_MEM 0
+#define TRACE_IO 0
+
+#define MTRACEF(x...) { if (TRACE_MEM) printf("MEM: " x); } while (0)
+#define ITRACEF(x...) { if (TRACE_IO) printf("IO: " x); } while (0)
 
 using namespace std;
 
@@ -88,7 +94,27 @@ int SystemRC2014::Init() {
         }
     }
 
+    // register a receive hook
+    mConsole.RegisterInBufferCountAdd([this](size_t count) { return OnConsoleInBufferAdd(count); });
+
     return 0;
+}
+
+// callback from the console when a character is put in the input buffer
+void SystemRC2014::OnConsoleInBufferAdd(size_t count) {
+    if (count > 0 && !mSIORecvByte_valid) {
+        int c = mConsole.GetNextChar();
+        if (c < 0) {
+            // doesn't make any sense!
+            assert(0);
+        }
+        LTRACEF("consuming char '%c' from console input queue\n", c);
+        mSIORecvByte = c;
+        mSIORecvByte_valid = true;
+
+        // TODO: interrupt
+        mCpu->RaiseIRQ();
+    }
 }
 
 int SystemRC2014::Run() {
@@ -104,14 +130,14 @@ uint8_t SystemRC2014::MemRead8(size_t address) {
     if (memdesc.mem)
         val = memdesc.mem->ReadByte(address + memdesc.offset);
 
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
+    MTRACEF("R %#zx val %#x\n", address, val);
     return val;
 }
 
 void SystemRC2014::MemWrite8(size_t address, uint8_t val) {
     address &= 0xffff;
 
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
+    MTRACEF("W %#zx val %#x\n", address, val);
 
     auto memdesc = GetDeviceAtAddr(address);
     if (memdesc.mem)
@@ -130,17 +156,43 @@ void SystemRC2014::MemWrite16(size_t address, uint16_t val) {
 uint8_t SystemRC2014::IORead8(size_t address) {
     uint8_t val = 0;
 
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
+    switch (address) {
+        case 0x80: // SIO/A control port
+            if (mSIORecvByte_valid) {
+                val |= 0b1; // receive character available
+                val |= 0b10; // interrupt condition
+            }
+            break;
+        case 0x81: // SIO/A data port
+            if (mSIORecvByte_valid) {
+                val = mSIORecvByte;
+                mSIORecvByte_valid = false;
+                // TODO: latch another value
+                mCpu->LowerIRQ();
+            }
+            break;
+        case 0x82: // SIO/B control port
+            break;
+        case 0x83: // SIO/B data port
+            break;
+        default:
+            fprintf(stderr, "in from unknown port 0x%zx\n", address);
+            break;
+    }
+
+    ITRACEF("PC 0x%04x R %#zx val 0x%02x\n", mCpu->GetPC(), address, val);
 
     return val;
 }
 
 void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
+    ITRACEF("PC 0x%04x W %#zx val 0x%02x\n", mCpu->GetPC(), address, val);
 
+#if 0
     for (uint i = 0; i <= 7; i++) {
-        LTRACEF_LEVEL(2, "A%u %zu\n", i, (address >> i) & 0x1);
+        ITRACEF("A%u %zu\n", i, (address >> i) & 0x1);
     }
+#endif
 
     switch (address) {
         case 0x80: // SIO/A control port

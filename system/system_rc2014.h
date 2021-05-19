@@ -55,6 +55,8 @@ public:
 private:
     void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
 
+    void OnConsoleInBufferAdd(size_t count);
+
     struct MemDeviceDesc {
         MemoryDevice *mem;
         size_t offset;
@@ -68,6 +70,10 @@ private:
 
     // which rom bank is active
     unsigned int mRomBankSel = 0;
+
+    // simple one byte fifo for serial port (move into serial class)
+    bool mSIORecvByte_valid = false;
+    char mSIORecvByte = 0;
 };
 
 

@@ -335,6 +335,7 @@ int CpuZ80::Run() {
         uint8_t temp8;
         uint16_t temp16;
         int dd;
+        uint8_t op;
 
         // two z80 prefixes that modify the next instruction
         bool prefix_dd = false, prefix_fd = false;
@@ -343,10 +344,21 @@ int CpuZ80::Run() {
         // instructions that use up the prefix must set this to true
         bool consume_prefix_dd = false, consume_prefix_fd = false;
 
+        // see if we need to service an irq
+        if (mIRQLevel && mRegs.iff != 0) {
+            printf("handling IRQ\n");
+            // TODO: handle anything other than interrupt mode 1
+            op = 0b11111111; // rst 0x38
+            // TODO: deal with IFF1/IFF2 emulation
+            mRegs.iff = 0;
+            goto decode;
+        }
+
         // fetch the instruction op
 restart:
-        uint8_t op = mSys.MemRead8(mRegs.pc++);
+        op = mSys.MemRead8(mRegs.pc++);
 
+decode:
         // look for certain prefixes
         if (op == 0xdd) {
             // ix prefix
@@ -415,11 +427,21 @@ restart:
                     temp16 = mSys.MemRead16(read_nn());
                     write_dd_reg(BITS_SHIFT(op, 5, 4), temp16);
                     break;
+
+                // TODO: actually do something about this
                 case 0b01000110: // IM 0
+                    LPRINTF("IM 0\n");
+                    break;
                 case 0b01010110: // IM 1
+                    LPRINTF("IM 1\n");
+                    break;
                 case 0b01011110: // IM 2
-                    LPRINTF("IM n\n");
-                    // TODO: actually do something about this
+                    LPRINTF("IM 2\n");
+
+                case 0b01001101: // RETI
+                    LPRINTF("RETI\n");
+                    mRegs.pc = pop16();
+                    // TODO: not exactly right, acts like a RET right now
                     break;
 
                 default:
@@ -1066,6 +1088,22 @@ restart:
     }
 
     return 0;
+}
+
+void CpuZ80::RaiseIRQ() {
+    mIRQLevel = true;
+}
+
+void CpuZ80::RaiseNMI() {
+    mNMILevel = true;
+}
+
+void CpuZ80::LowerIRQ() {
+    mIRQLevel = false;
+}
+
+void CpuZ80::LowerNMI() {
+    mNMILevel = false;
 }
 
 void CpuZ80::Dump() {

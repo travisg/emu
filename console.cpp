@@ -25,6 +25,7 @@
 
 #include <cstdio>
 #include <iostream>
+#include <mutex>
 #include <unistd.h>
 #include <fcntl.h>
 #include <termios.h>
@@ -67,6 +68,11 @@ Console::~Console() {
     resetconsole();
 }
 
+void Console::RegisterInBufferCountAdd(const std::function<InBufferCountAdd> &func) {
+    std::lock_guard<std::recursive_mutex> lck(mLock);
+    mInBufferCountAddHook = std::move(func);
+}
+
 int Console::Run() {
     for (;;) {
         int c = getchar();
@@ -78,8 +84,14 @@ int Console::Run() {
             printf("EOF on console, exiting\n");
             return -1;
         } else {
-            std::lock_guard<std::mutex> lck(mLock);
+            std::lock_guard<std::recursive_mutex> lck(mLock);
+
             mInBuffer.push(c);
+
+            // a byte is pushed, notify any waiters for it
+            if (mInBufferCountAddHook) {
+                mInBufferCountAddHook(mInBuffer.size());
+            }
         }
     }
 }
@@ -95,7 +107,7 @@ void Console::Putchar(char c) {
 }
 
 int Console::GetNextChar() {
-    std::lock_guard<std::mutex> lck(mLock);
+    std::lock_guard<std::recursive_mutex> lck(mLock);
 
     int nc = -1;
     if (!mInBuffer.empty()) {
