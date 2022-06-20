@@ -5,7 +5,7 @@ BUILDDIR := build-$(TARGET)
 # compiler flags, default libs to link against
 COMPILEFLAGS := -g -O2 -Wall -W -Ilibihex -I.
 CFLAGS :=
-CXXFLAGS := -std=c++11
+CXXFLAGS := -std=c++11 -Wno-c99-designator
 ASMFLAGS :=
 LDFLAGS :=
 LDLIBS := libihex/libihex.a
