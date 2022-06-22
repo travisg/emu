@@ -22,31 +22,29 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "system09.h"
+#include "altair680.h"
 
 #include <cstdio>
 #include <iostream>
 
-#include "cpu/cpu6809.h"
+#include "cpu/cpu6800.h"
 #include "dev/memory.h"
 #include "dev/mc6850.h"
-#include "dev/uart16550.h"
 #include "ihex.h"
 
-#define DEFAULT_ROM "test/BASIC.HEX"
+#define DEFAULT_ROM "mits680b.bin"
 
 using namespace std;
 
-// a simple 6809 based system
-System09::System09(const std::string &subsystem, Console &con)
+Altair680::Altair680(const std::string &subsystem, Console &con)
     :   System(subsystem, con) {
     mRomString = DEFAULT_ROM;
 }
 
-System09::~System09() {
+Altair680::~Altair680() {
 }
 
-void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len) {
+void Altair680::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len) {
     //printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
 
     for (size_t i = 0; i < len; i++) {
@@ -58,9 +56,8 @@ void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len)
     }
 }
 
-int System09::Init() {
-    cout << "initializing a 6809 based system. ";
-    cout << "subsystem '" << mSubSystemString << "'" << endl;
+int Altair680::Init() {
+    cout << "initializing an Altair 680..." << endl;
     cout << "rom is " << mRomString << endl;
 
     // create a bank of memory
@@ -68,74 +65,70 @@ int System09::Init() {
     mem->Alloc(32*1024);
     mMem.reset(mem);
 
-    // create a bank of rom
-    mem = new Memory();
-    mem->Alloc(16*1024);
-    mRom.reset(mem);
+    // create a bank of rom for the monitor
+    Memory *rommem = new Memory();
+    rommem->Alloc(256);
+    mRom_monitor.reset(rommem);
 
-    // create a 6809 based cpu
-    mCpu.reset(new Cpu6809(*this));
+    // set a bank for the VTL rom
+    Memory *rom_vtl = new Memory();
+    rom_vtl->Alloc(768);
+    mRom_vtl.reset(rom_vtl);
+
+    // read the prom directly from file
+    FILE *fp = fopen(mRomString.c_str(), "rb");
+    if (!fp) {
+        cerr << "Error opening rom file " << mRomString << endl;
+        return -errno;
+    }
+
+    if (fread(rommem->GetPtr(), 256, 1, fp) != 1) {
+        fclose(fp);
+        cerr << "Error reading from rom file " << mRomString << endl;
+        return -errno;
+    }
+
+    fclose(fp);
+
+    // create a 6800 based cpu
+    mCpu.reset(new Cpu6800(*this));
     mCpu->Reset();
 
     // add some peripherals
-    if (mSubSystemString == "obc") {
-        // create a 16550 uart
-        uart16550 *uart = new uart16550(mConsole);
-        mUart.reset(uart);
-
-        mMemoryLayout = MemoryLayout::OBC;
-    } else {
-        // create a MC6850 uart
-        MC6850 *uart = new MC6850(mConsole);
-        mUart.reset(uart);
-
-        mMemoryLayout = MemoryLayout::STANDARD;
-    }
-
-    // preload some stuff into memory
-    iHex hex;
-
-    // use the ihex library to parse the rom file
-    hex.SetCallback(
-    [this](const uint8_t *ptr, size_t offset, size_t len) {
-        this->iHexParseCallback(ptr, offset, len);
-    }
-    );
-
-    hex.Open(mRomString);
-    hex.Parse();
+    // create a MC6850 uart
+    mUart.reset(new MC6850(mConsole));
 
     return 0;
 }
 
-int System09::Run() {
+int Altair680::Run() {
     cout << "starting main run loop" << endl;
 
     return mCpu->Run();
 }
 
-uint8_t System09::MemRead8(size_t address) {
+uint8_t Altair680::MemRead8(size_t address) {
     uint8_t val = 0;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
     if (mem)
         val = mem->ReadByte(address);
 
-    //cout << "MemRead8 @0x" << hex << address << " val " << (unsigned int)val << endl;
+    //cout << "\tMemRead8 at 0x" << hex << address << " val " << (unsigned int)val << endl;
     return val;
 }
 
-void System09::MemWrite8(size_t address, uint8_t val) {
+void Altair680::MemWrite8(size_t address, uint8_t val) {
     address &= 0xffff;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
     if (mem)
         mem->WriteByte(address, val);
 
-    //cout << "MemWrite8 @0x" << hex << address << " val " << (unsigned int)val << endl;
+    //cout << "\tMemWrite8 at 0x" << hex << address << " val " << (unsigned int)val << endl;
 }
 
-MemoryDevice *System09::GetDeviceAtAddr(size_t &address) {
+MemoryDevice *Altair680::GetDeviceAtAddr(size_t &address) {
     address &= 0xffff;
 
     // figure out which memory device this address belongs to
@@ -144,6 +137,7 @@ MemoryDevice *System09::GetDeviceAtAddr(size_t &address) {
         case 0x0000 ... 0x7fff:
             return mMem.get();
 
+#if 0
         // device space
         // 8 slots of 0x800 bytes
 
@@ -161,11 +155,20 @@ MemoryDevice *System09::GetDeviceAtAddr(size_t &address) {
                 return mUart.get();
             }
             return NULL;
+#endif
+        // hardware
+        case 0xf000 ... 0xf001:
+            address -= 0xf000;
+            return mUart.get();
 
-        // rom
-        case 0xc000 ... 0xffff:
-            address -= 0xc000;
-            return mRom.get();
+        // roms
+        case 0xfc00 ... 0xfeff:
+            address -= 0xfc00;
+            return mRom_vtl.get();
+
+        case 0xff00 ... 0xffff:
+            address -= 0xff00;
+            return mRom_monitor.get();
 
         default:
             return NULL;

@@ -23,10 +23,11 @@
  */
 #pragma once
 
+#include <atomic>
 #include <cstdint>
-#include <sys/types.h>
-#include <string>
 #include <memory>
+#include <string>
+#include <sys/types.h>
 #include <thread>
 
 class Console;
@@ -50,10 +51,22 @@ public:
     void SetRom(const std::string &rom) { mRomString = rom; }
     void SetCpu(const std::string &cpu) { mCpuString = cpu; }
 
+    enum class Endian {
+        LITTLE,
+        BIG
+    };
+
+    // base read/write one byte at a time
     virtual uint8_t  MemRead8(size_t address) = 0;
     virtual void     MemWrite8(size_t address, uint8_t val) = 0;
-    virtual uint16_t MemRead16(size_t address) = 0;
-    virtual void     MemWrite16(size_t address, uint16_t val) = 0;
+
+    // 16 and 32 bit read/writes, endian specified
+    // default implementation calls through to MemRead/Write8
+    virtual uint16_t MemRead16(size_t address, Endian e);
+    virtual void     MemWrite16(size_t address, uint16_t val, Endian e);
+
+    //virtual uint16_t MemRead32(size_t address, Endian e);
+    //virtual void     MemWrite32(size_t address, uint16_t val, Endian e);
 
     // for cpus with io space
     virtual uint8_t  IORead8(size_t) { return 0; }
@@ -69,6 +82,6 @@ protected:
     std::unique_ptr<std::thread> mThread;
     std::string mRomString;
     std::string mCpuString;
-    volatile bool mShutdown = false;
+    std::atomic<bool> mShutdown { false };
 };
 

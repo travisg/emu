@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013-2014 Travis Geiselbrecht
+ * Copyright (c) 2013-2014,2022 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -24,48 +24,46 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
-#include <memory>
-#include "system.h"
 
-class Console;
-class CpuZ80;
-class MemoryDevice;
-class Memory;
+#include "cpu.h"
 
-// a Z80 based Kaypro
-class SystemKaypro final : public System {
+
+class Cpu6800 final : public Cpu {
 public:
-    SystemKaypro(const std::string &subsystem, Console &con);
-    virtual ~SystemKaypro() override;
+    explicit Cpu6800(System &sys);
+    virtual ~Cpu6800() override;
 
-    virtual int Init() override;
-
+    virtual void Reset() override;
     virtual int Run() override;
 
-    virtual uint8_t  MemRead8(size_t address) override;
-    virtual void     MemWrite8(size_t address, uint8_t val) override;
+    virtual void Dump() override;
 
-    virtual uint8_t  IORead8(size_t address) override;
-    virtual void     IOWrite8(size_t address, uint8_t val) override;
+    // registers
+    enum class regnum {
+        REG_A,
+        REG_B,
+        REG_IX,
+        REG_PC,
+        REG_SP,
+        REG_CC,
+    };
 
 private:
-    void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
+    uint16_t GetReg(regnum r);
+    uint16_t PutReg(regnum r, uint16_t val); // returns old value
 
-    MemoryDevice *GetDeviceAtAddr(size_t &address);
+    bool TestBranchCond(unsigned int cond);
 
-    std::unique_ptr<CpuZ80> mCpu;
-    std::unique_ptr<Memory> mMem;
-    std::unique_ptr<Memory> mVideoMem;
-    std::unique_ptr<Memory> mRom;
-    std::unique_ptr<Memory> mVideoRom;
+    // register file
+    uint8_t mA;
+    uint8_t mB;
+    uint16_t mIX;
+    uint16_t mPC;
+    uint16_t mSP;
+    uint8_t  mCC;
 
-    std::string mVideoRomString;
-
-    enum {
-        BANK0,
-        BANK1
-    } mBankSwitch = BANK1;
+    // any exceptions pending?
+    unsigned int mException;
 };
 
 

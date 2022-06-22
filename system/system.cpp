@@ -24,9 +24,14 @@
 #include "system.h"
 #include "system09.h"
 #include "system_kaypro.h"
+#include "altair680.h"
 
 #include <cstdio>
 #include <cassert>
+
+#define TRACE 0
+
+#define TRACEF(str, x...) do { if (TRACE) printf(str, ## x); } while (0)
 
 using namespace std;
 
@@ -50,6 +55,8 @@ std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
 
     if (mainsystem == "6809") {
         return std::unique_ptr<System>(new System09(subsystem, con));
+    } else if (mainsystem == "altair680") {
+        return std::unique_ptr<System>(new Altair680(subsystem, con));
     } else if (mainsystem == "kaypro") {
         return std::unique_ptr<System>(new SystemKaypro(subsystem, con));
     } else {
@@ -80,3 +87,32 @@ void System::ShutdownThreaded() {
 
     mThread.release();
 }
+
+uint16_t System::MemRead16(size_t address, Endian e) {
+    uint16_t val;
+    switch (e) {
+        case Endian::LITTLE:
+            val = MemRead8(address) | MemRead8(address + 1) << 8;
+            break;
+        case Endian::BIG:
+            val = MemRead8(address) << 8 | MemRead8(address + 1);
+            break;
+    }
+    TRACEF("%s: address %#zx, endian %d, val %#x\n", __func__, address, e, val);
+    return val;
+}
+
+void System::MemWrite16(size_t address, uint16_t val, Endian e) {
+    TRACEF("%s: address %#zx, val %#x, endian %d\n", __func__, address, val, e);
+    switch (e) {
+        case Endian::LITTLE:
+            MemWrite8(address, val);
+            MemWrite8(address + 1, val >> 8);
+            break;
+        case Endian::BIG:
+            MemWrite8(address, val >> 8);
+            MemWrite8(address + 1, val);
+            break;
+    }
+}
+

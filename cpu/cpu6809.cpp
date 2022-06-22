@@ -36,6 +36,8 @@
 
 using namespace std;
 
+using Endian = System::Endian;
+
 /* exceptions */
 #define EXC_RESET 0x1
 #define EXC_NMI   0x2
@@ -574,7 +576,7 @@ int Cpu6809::Run() {
         if (mException) {
             if (mException & EXC_RESET) {
                 // reset, branch to the reset vector
-                mPC = mSys.MemRead16(0xfffe);
+                mPC = mSys.MemRead16(0xfffe, Endian::BIG);
                 mException = 0; // clear the rest of the pending irqs
             }
             assert(!mException);
@@ -623,7 +625,7 @@ int Cpu6809::Run() {
                 if (op->width == 1)
                     arg = mSys.MemRead8(mPC++);
                 else {
-                    arg = mSys.MemRead16(mPC);
+                    arg = mSys.MemRead16(mPC, Endian::BIG);
                     mPC += 2;
                 }
                 break;
@@ -637,12 +639,12 @@ int Cpu6809::Run() {
                     if (op->width == 1)
                         arg = mSys.MemRead8(temp16);
                     else
-                        arg = mSys.MemRead16(temp16); // XXX doesn't handle wraparound
+                        arg = mSys.MemRead16(temp16, Endian::BIG); // XXX doesn't handle wraparound
                 }
                 break;
             case EXTENDED:
                 TRACEF(" EXT");
-                temp16 = mSys.MemRead16(mPC);
+                temp16 = mSys.MemRead16(mPC, Endian::BIG);
                 mPC += 2;
                 if (op->calcaddr) {
                     arg = temp16;
@@ -650,7 +652,7 @@ int Cpu6809::Run() {
                     if (op->width == 1)
                         arg = mSys.MemRead8(temp16);
                     else
-                        arg = mSys.MemRead16(temp16);
+                        arg = mSys.MemRead16(temp16, Endian::BIG);
                 }
                 break;
             case BRANCH:
@@ -658,7 +660,7 @@ int Cpu6809::Run() {
                 if (op->width == 1)
                     arg = SignExtend(mSys.MemRead8(mPC++));
                 else {
-                    arg = SignExtend(mSys.MemRead16(mPC));
+                    arg = SignExtend(mSys.MemRead16(mPC, Endian::BIG));
                     mPC += 2;
                 }
                 break;
@@ -722,7 +724,7 @@ int Cpu6809::Run() {
                             off = SignExtend(temp8);
                             break;
                         case 0x9: // n,R (16 bit offset)
-                            temp16 = mSys.MemRead16(mPC);
+                            temp16 = mSys.MemRead16(mPC, Endian::BIG);
                             mPC += 2;
                             off = SignExtend(temp16);
                             break;
@@ -735,13 +737,13 @@ int Cpu6809::Run() {
                             reg = &mPC;
                             break;
                         case 0xd: // n,PC (16 bit offset)
-                            temp16 = mSys.MemRead16(mPC);
+                            temp16 = mSys.MemRead16(mPC, Endian::BIG);
                             mPC += 2;
                             off = SignExtend(temp16);
                             reg = &mPC;
                             break;
                         case 0xf: // [n] (16 bit absolute indirect)
-                            temp16 = mSys.MemRead16(mPC);
+                            temp16 = mSys.MemRead16(mPC, Endian::BIG);
                             mPC += 2;
                             off = SignExtend(temp16);
                             reg = &zero;
@@ -773,7 +775,7 @@ int Cpu6809::Run() {
 
                 // if we're indirecting, load the address from addr
                 if (indirect) {
-                    addr = mSys.MemRead16(addr);
+                    addr = mSys.MemRead16(addr, Endian::BIG);
                     TRACEF(" [addr] %#04x", addr);
                 }
 
@@ -781,7 +783,7 @@ int Cpu6809::Run() {
                     if (op->width == 1) {
                         arg = mSys.MemRead8(addr);
                     } else {
-                        arg = mSys.MemRead16(addr);
+                        arg = mSys.MemRead16(addr, Endian::BIG);
                     }
                 } else {
                     arg = addr;
@@ -1055,7 +1057,7 @@ shared_memwrite:
                     if (op->width == 1)
                         mSys.MemWrite8(arg, temp8);
                     else
-                        mSys.MemWrite16(arg, temp8);
+                        mSys.MemWrite16(arg, temp8, Endian::BIG);
                 }
 
                 SET_NZ1(temp8);
@@ -1355,7 +1357,7 @@ shared_memwrite:
                     SET_NZ1(temp8);
                 } else {
                     temp16 = GetReg(op->targetreg);
-                    mSys.MemWrite16(arg, temp16);
+                    mSys.MemWrite16(arg, temp16, Endian::BIG);
                     SET_NZ2(temp16);
                 }
                 mCC = CLR_CC_BIT(CC_V);

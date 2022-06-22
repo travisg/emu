@@ -33,6 +33,9 @@
 
 #define LOCAL_TRACE 0
 
+// TODO: double check that z80 is little endian in all uses of MemReadWrite16
+using Endian = System::Endian;
+
 #define FLAG_C  (0)
 #define FLAG_N  (1)
 #define FLAG_PV (2)
@@ -375,7 +378,7 @@ int CpuZ80::Run() {
                     LPRINTF("LD (nn), dd\n");
 
                     temp16 = read_dd_reg(BITS_SHIFT(op, 5, 4));
-                    mSys.MemWrite16(read_nn(), temp16);
+                    mSys.MemWrite16(read_nn(), temp16, Endian::LITTLE);
                     break;
                 case 0b01001011:
                 case 0b01011011:
@@ -383,7 +386,7 @@ int CpuZ80::Run() {
                 case 0b01111011: // LD dd, (nn)
                     LPRINTF("LD dd, (nn)\n");
 
-                    temp16 = mSys.MemRead16(read_nn());
+                    temp16 = mSys.MemRead16(read_nn(), Endian::LITTLE);
                     write_dd_reg(BITS_SHIFT(op, 5, 4), temp16);
                     break;
                 default:

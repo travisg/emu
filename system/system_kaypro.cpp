@@ -133,15 +133,6 @@ void SystemKaypro::MemWrite8(size_t address, uint8_t val) {
         mem->WriteByte(address, val);
 }
 
-uint16_t SystemKaypro::MemRead16(size_t address) {
-    return MemRead8(address) << 8 | MemRead8(address + 1);
-}
-
-void SystemKaypro::MemWrite16(size_t address, uint16_t val) {
-    MemWrite8(address, val >> 8);
-    MemWrite8(address + 1, val);
-}
-
 uint8_t SystemKaypro::IORead8(size_t address) {
     uint8_t val = 0;
 

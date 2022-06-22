@@ -29,15 +29,14 @@
 #include "system.h"
 
 class Console;
-class CpuZ80;
+class Cpu6800;
 class MemoryDevice;
-class Memory;
 
-// a Z80 based Kaypro
-class SystemKaypro final : public System {
+// Altair680
+class Altair680 final : public System {
 public:
-    SystemKaypro(const std::string &subsystem, Console &con);
-    virtual ~SystemKaypro() override;
+    Altair680(const std::string &subsystem, Console &con);
+    virtual ~Altair680() override;
 
     virtual int Init() override;
 
@@ -46,26 +45,16 @@ public:
     virtual uint8_t  MemRead8(size_t address) override;
     virtual void     MemWrite8(size_t address, uint8_t val) override;
 
-    virtual uint8_t  IORead8(size_t address) override;
-    virtual void     IOWrite8(size_t address, uint8_t val) override;
-
 private:
     void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
 
     MemoryDevice *GetDeviceAtAddr(size_t &address);
 
-    std::unique_ptr<CpuZ80> mCpu;
-    std::unique_ptr<Memory> mMem;
-    std::unique_ptr<Memory> mVideoMem;
-    std::unique_ptr<Memory> mRom;
-    std::unique_ptr<Memory> mVideoRom;
-
-    std::string mVideoRomString;
-
-    enum {
-        BANK0,
-        BANK1
-    } mBankSwitch = BANK1;
+    std::unique_ptr<Cpu6800> mCpu;
+    std::unique_ptr<MemoryDevice> mMem; // 32KB at 0
+    std::unique_ptr<MemoryDevice> mRom_monitor; // 256 bytes at FF00
+    std::unique_ptr<MemoryDevice> mRom_vtl; // 768 bytes at FC00
+    std::unique_ptr<MemoryDevice> mUart;
 };
 
 

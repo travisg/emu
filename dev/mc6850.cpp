@@ -29,6 +29,10 @@
 #include "memory.h"
 #include "mc6850.h"
 
+#define TRACE 0
+
+#define TRACEF(str, x...) do { if (TRACE) printf(str, ## x); } while (0)
+
 #define STAT_RDRF (1<<0)
 #define STAT_TDRE (1<<1)
 #define STAT_DCD  (1<<2)
@@ -51,7 +55,7 @@ MC6850::~MC6850() {
 uint8_t MC6850::ReadByte(size_t address) {
     uint8_t val;
 
-//  printf("MC6850: readbyte address 0x%zx\n", address);
+    TRACEF("MC6850: readbyte address 0x%zx\n", address);
 
     if (mPendingRx < 0) {
         mPendingRx = mConsole.GetNextChar();
@@ -73,7 +77,7 @@ uint8_t MC6850::ReadByte(size_t address) {
         if (mPendingRx >= 0) {
             val = mPendingRx;
             mPendingRx = -1;
-            //printf("cpu read data %d\n", val);
+            TRACEF("cpu read data %d\n", val);
         }
     } else {
         // unknown
@@ -82,15 +86,17 @@ uint8_t MC6850::ReadByte(size_t address) {
 }
 
 void MC6850::WriteByte(size_t address, uint8_t val) {
-//  printf("MC6850: writebyte address 0x%zx, val 0x%hhx\n", address, val);
+    TRACEF("MC6850: writebyte address 0x%zx, val 0x%hhx\n", address, val);
 
     if (address == 0) {
         // control register
         // XXX ignore for now
         mControl = val;
+        //printf("MC6850: control reg %#x\n", val);
     } else if (address == 1) {
         // data register
-        mConsole.Putchar(val);
+        //printf("MC6850: data reg %#x\n", val);
+        mConsole.Putchar(val & 0x7f);
     } else {
         // unknown
     }
