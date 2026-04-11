@@ -11,3 +11,5 @@ doit
 *.rel
 *.rst
 *.bin
+compile_commands.json
+.vscode

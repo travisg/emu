@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"makefile.launchConfigurations": [
+			{
+				"cwd": "/mnt/nas2/src/svn/emu",
+				"binaryPath": "/mnt/nas2/src/svn/emu/build-emu/emu",
+				"binaryArgs": ["-s", "altair680"]
+			}
+		],
+		"chat.tools.terminal.autoApprove": {
+			"make": true
+		}
+	}
+}
