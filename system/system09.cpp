@@ -37,6 +37,10 @@
 
 using namespace std;
 
+System::SystemInfo System09::GetSystemInfo() {
+    return { "6809", "6809", DEFAULT_ROM };
+}
+
 // a simple 6809 based system
 System09::System09(const std::string &subsystem, Console &con)
     :   System(subsystem, con) {

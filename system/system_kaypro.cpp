@@ -39,6 +39,10 @@
 
 using namespace std;
 
+System::SystemInfo SystemKaypro::GetSystemInfo() {
+    return { "kaypro", "z80", DEFAULT_ROM };
+}
+
 // a simple 6809 based system
 SystemKaypro::SystemKaypro(const std::string &subsystem, Console &con)
     :   System(subsystem, con) {

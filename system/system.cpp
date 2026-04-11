@@ -64,6 +64,14 @@ std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
     }
 }
 
+std::vector<System::SystemInfo> System::GetSupportedSystems() {
+    return {
+        System09::GetSystemInfo(),
+        Altair680::GetSystemInfo(),
+        SystemKaypro::GetSystemInfo(),
+    };
+}
+
 int System::RunThreaded() {
     assert(!mThread);
 

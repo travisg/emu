@@ -36,6 +36,8 @@ class Memory;
 // a Z80 based Kaypro
 class SystemKaypro final : public System {
 public:
+    static SystemInfo GetSystemInfo();
+
     SystemKaypro(const std::string &subsystem, Console &con);
     virtual ~SystemKaypro() override;
 

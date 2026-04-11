@@ -36,6 +36,15 @@ using namespace std;
 
 static void usage(char **argv) {
     fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile]\n", argv[0]);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "valid systems:\n");
+    auto systems = System::GetSupportedSystems();
+    for (const auto &info : systems) {
+        fprintf(stderr, "  %-10s cpu: %-4s default rom: %s\n", info.name, info.cpu, info.defaultRom);
+    }
+    fprintf(stderr, "\n");
+    fprintf(stderr, "note: system may include a subsystem suffix like '6809-obc'.\n");
+    fprintf(stderr, "note: cpu is currently selected by system; --cpu is accepted but ignored.\n");
 
     exit(1);
 }

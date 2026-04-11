@@ -35,6 +35,8 @@ class MemoryDevice;
 // Altair680
 class Altair680 final : public System {
 public:
+    static SystemInfo GetSystemInfo();
+
     Altair680(const std::string &subsystem, Console &con);
     virtual ~Altair680() override;
 

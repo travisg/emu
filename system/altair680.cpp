@@ -36,6 +36,10 @@
 
 using namespace std;
 
+System::SystemInfo Altair680::GetSystemInfo() {
+    return { "altair680", "6800", DEFAULT_ROM };
+}
+
 Altair680::Altair680(const std::string &subsystem, Console &con)
     :   System(subsystem, con) {
     mRomString = DEFAULT_ROM;

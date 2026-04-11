@@ -29,12 +29,19 @@
 #include <string>
 #include <sys/types.h>
 #include <thread>
+#include <vector>
 
 class Console;
 
 // top level object, representing the entire emulated system
 class System {
 public:
+    struct SystemInfo {
+        const char *name;
+        const char *cpu;
+        const char *defaultRom;
+    };
+
     System(const std::string &subSystem, Console &con);
     virtual ~System();
 
@@ -73,6 +80,7 @@ public:
     virtual void     IOWrite8(size_t, uint8_t) {}
 
     static std::unique_ptr<System> Factory(const std::string &system, Console &con);
+    static std::vector<SystemInfo> GetSupportedSystems();
 
     bool isShutdown() const { return mShutdown; }
 
