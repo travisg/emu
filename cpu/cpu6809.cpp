@@ -25,7 +25,6 @@
 
 #include <cstdio>
 #include <cassert>
-#include <iostream>
 
 #include "system/system.h"
 #include "bits.h"
@@ -464,7 +463,7 @@ void Cpu6809::Reset() {
     mException = EXC_RESET;
 }
 
-static inline int RegWidth(regnum r) {
+constexpr inline int RegWidth(regnum r) {
     switch (r) {
         default:
         case REG_A:

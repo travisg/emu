@@ -25,7 +25,6 @@
 
 #include <cstdio>
 #include <cassert>
-#include <iostream>
 
 #include "system/system.h"
 #include "bits.h"

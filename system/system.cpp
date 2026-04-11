@@ -98,12 +98,12 @@ uint16_t System::MemRead16(size_t address, Endian e) {
             val = MemRead8(address) << 8 | MemRead8(address + 1);
             break;
     }
-    TRACEF("%s: address %#zx, endian %d, val %#x\n", __func__, address, e, val);
+    TRACEF("%s: address %#zx, endian %d, val %#x\n", __func__, address, (int)e, val);
     return val;
 }
 
 void System::MemWrite16(size_t address, uint16_t val, Endian e) {
-    TRACEF("%s: address %#zx, val %#x, endian %d\n", __func__, address, val, e);
+    TRACEF("%s: address %#zx, val %#x, endian %d\n", __func__, address, val, (int)e);
     switch (e) {
         case Endian::LITTLE:
             MemWrite8(address, val);

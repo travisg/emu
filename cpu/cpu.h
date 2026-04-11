@@ -28,7 +28,7 @@ class System;
 class Cpu {
 public:
     explicit Cpu(System &sys) : mSys(sys) {}
-    virtual ~Cpu() {}
+    virtual ~Cpu() = default;
 
     virtual void Reset() = 0;
     virtual int Run() = 0;
