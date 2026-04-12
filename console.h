@@ -42,7 +42,7 @@ public:
     virtual void Putchar(char c);
     virtual int GetNextChar();
 
-private:
+protected:
     std::queue<char> mOutBuffer;
     std::queue<char> mInBuffer;
     std::mutex mLock;

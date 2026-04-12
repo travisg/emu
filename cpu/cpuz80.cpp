@@ -30,7 +30,7 @@
 #include "system/system.h"
 #include "trace.h"
 
-#define LOCAL_TRACE 0
+#define LOCAL_TRACE 1
 
 // TODO: double check that z80 is little endian in all uses of MemReadWrite16
 using Endian = System::Endian;
@@ -555,7 +555,7 @@ int CpuZ80::Run() {
 
             LPRINTF("PC 0x%04hx: op cb%02hhx - ", (uint16_t)(mRegs.pc - 2), op);
             switch (op) {
-                case 0x40 ... 0x7f: { // BIT
+                case 0b01000000 ... 0b01111111: { // BIT
                     uint8_t bit = BITS_SHIFT(op, 6, 3);
                     LPRINTF("BIT %u, r\n", bit);
 
@@ -565,7 +565,7 @@ int CpuZ80::Run() {
                     set_flag(FLAG_N, 0);
                     break;
                 }
-                case 0x80 ... 0xbf: { // RES
+                case 0b10000000 ... 0b10111111: { // RES
                     uint8_t bit = BITS_SHIFT(op, 6, 3);
                     LPRINTF("RES %u, r\n", bit);
 
@@ -939,7 +939,7 @@ int CpuZ80::Run() {
 
                 case 0b11100110: // AND n
                     LPRINTF("AND n\n");
-                    mRegs.a &= mSys.MemRead8(read_n());
+                    mRegs.a &= read_n();
                     set_flags(mRegs.a);
                     set_flag(FLAG_H, 1);
                     break;
@@ -971,7 +971,7 @@ int CpuZ80::Run() {
 
                 case 0b11111110: { // CP n
                     LPRINTF("CP n\n");
-                    uint8_t val = mSys.MemRead8(read_n());
+                    uint8_t val = read_n();
                     temp8 = mRegs.a - val;
                     set_flag(FLAG_S, temp8 & 0x80);
                     set_flag(FLAG_Z, temp8 == 0);

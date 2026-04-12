@@ -76,6 +76,7 @@ int SystemKaypro::Init() {
     {
         FILE *fp = fopen(mRomString.c_str(), "rb");
         if (!fp) {
+            printf("SystemKaypro: ERROR: could not open main ROM %s\n", mRomString.c_str());
             return -1;
         }
 
@@ -83,9 +84,12 @@ int SystemKaypro::Init() {
         fclose(fp);
 
         if (err != mRom->GetSize()) {
-            cout << "error reading rom " << mRomString << std::endl;
+            printf("SystemKaypro: ERROR: reading main ROM %s, read %zu bytes\n", mRomString.c_str(), err);
             return -1;
         }
+        printf("SystemKaypro: Successfully loaded %zu bytes from main ROM %s\n", err, mRomString.c_str());
+        uint8_t *ptr = (uint8_t *)mRom->GetPtr();
+        printf("SystemKaypro: ROM SANITY [0-3]: %02x %02x %02x %02x\n", ptr[0], ptr[1], ptr[2], ptr[3]);
     }
 
     // create a bank of video rom
@@ -94,8 +98,13 @@ int SystemKaypro::Init() {
 
     // read it in
     {
-        FILE *fp = fopen(VIDEO_ROM, "rb");
+        string video_binary = mVideoRomString;
+        if (video_binary.empty()) {
+            video_binary = VIDEO_ROM;
+        }
+        FILE *fp = fopen(video_binary.c_str(), "rb");
         if (!fp) {
+            printf("SystemKaypro: ERROR: could not open video ROM %s\n", video_binary.c_str());
             return -1;
         }
 
@@ -103,9 +112,47 @@ int SystemKaypro::Init() {
         fclose(fp);
 
         if (err != mVideoRom->GetSize()) {
-            cout << "error reading rom " << VIDEO_ROM << std::endl;
+            printf("SystemKaypro: ERROR: reading video ROM %s, read %zu bytes\n", video_binary.c_str(), err);
             return -1;
         }
+        printf("SystemKaypro: Successfully loaded %zu bytes from video ROM %s\n", err, video_binary.c_str());
+    }
+
+    // Setup the draw callback
+    mConsole.SetDrawCallback([this](SDL_Renderer *renderer) {
+        this->RenderDisplay(renderer);
+    });
+
+    // Create the font texture from video ROM
+    SDL_Renderer *renderer = mConsole.GetRenderer();
+    if (renderer) {
+        mFontTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STATIC, 128, 128);
+        if (!mFontTexture) {
+            printf("SystemKaypro: ERROR: Failed to create font texture: %s\n", SDL_GetError());
+        } else {
+            printf("SystemKaypro: Font texture created successfully\n");
+        }
+        uint32_t pixels[128 * 128];
+        memset(pixels, 0, sizeof(pixels));
+
+        const uint8_t *font_ptr = (const uint8_t *)mVideoRom->GetPtr();
+        for (int c = 0; c < 256; c++) {
+            int cx = (c % 16) * 8;
+            int cy = (c / 16) * 8;
+            // The Kaypro II u43 ROM has the standard ASCII set shifted by 128
+            int font_c = (c + 128) % 256;
+            for (int y = 0; y < 8; y++) {
+                // Try to detect if we need to invert or not
+                uint8_t row = ~font_ptr[font_c * 8 + y];
+                for (int x = 0; x < 8; x++) {
+                    if (row & (0x80 >> x)) {
+                        pixels[(cy + y) * 128 + (cx + x)] = 0xFFFFFFFF; // Pure White
+                    }
+                }
+            }
+        }
+        SDL_UpdateTexture(mFontTexture, NULL, pixels, 128 * 4);
+        SDL_SetTextureBlendMode(mFontTexture, SDL_BLENDMODE_BLEND);
     }
 
     return 0;
@@ -120,9 +167,13 @@ int SystemKaypro::Run() {
 uint8_t SystemKaypro::MemRead8(size_t address) {
     uint8_t val = 0;
 
-    MemoryDevice *mem = GetDeviceAtAddr(address);
+    size_t relative_addr = address;
+    MemoryDevice *mem = GetDeviceAtAddr(relative_addr);
     if (mem) {
-        val = mem->ReadByte(address);
+        val = mem->ReadByte(relative_addr);
+        if (mem == mVideoMem.get()) {
+            printf("SystemKaypro: VIDEO READ 0x%02x at 0x%zx ('%c')\n", val, relative_addr, (val >= 32 && val < 127) ? val : '.');
+        }
     }
 
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
@@ -134,10 +185,59 @@ void SystemKaypro::MemWrite8(size_t address, uint8_t val) {
 
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
 
-    MemoryDevice *mem = GetDeviceAtAddr(address);
+    size_t relative_addr = address;
+    MemoryDevice *mem = GetDeviceAtAddr(relative_addr);
     if (mem) {
-        mem->WriteByte(address, val);
+        mem->WriteByte(relative_addr, val);
+        if (mem == mVideoMem.get()) {
+            printf("SystemKaypro: VIDEO WRITE 0x%02x at 0x%zx ('%c')\n", val, relative_addr, (val >= 32 && val < 127) ? val : '.');
+            mConsole.ForceRefresh();
+        }
     }
+}
+
+void SystemKaypro::RenderDisplay(SDL_Renderer *renderer) {
+    if (!mFontTexture) {
+        return;
+    }
+
+    for (int y = 0; y < 24; y++) {
+        for (int x = 0; x < 80; x++) {
+            // Reverting to 128-byte stride based on address logs
+            uint8_t c = mVideoMem->ReadByte(y * 128 + x);
+            DrawChar(renderer, x, y, c, 1);
+        }
+    }
+}
+
+void SystemKaypro::DrawChar(SDL_Renderer *renderer, int x, int y, uint8_t c, int scale) {
+    if (c == 0x20 || c == 0x00 || c == 0xFF) {
+        return;
+    }
+
+    // Native Kaypro is 8x8 font, but CRT scans made it tall.
+    // We stretch 8x8 font to 8x16 on screen.
+    int char_w = 8 * scale;
+    int char_h = 16 * scale;
+    SDL_Rect dst = {x * char_w, y * char_h, char_w, char_h};
+
+    bool inverse = (c & 0x80);
+    uint8_t char_idx = c & 0x7f;
+    SDL_Rect src = {(char_idx % 16) * 8, (char_idx / 16) * 8, 8, 8};
+
+    if (inverse) {
+        // Background for inverse: Green
+        SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
+        SDL_RenderFillRect(renderer, &dst);
+
+        // Character for inverse: Black
+        SDL_SetTextureColorMod(mFontTexture, 0, 0, 0);
+    } else {
+        // Character for normal: Green
+        SDL_SetTextureColorMod(mFontTexture, 0, 255, 0);
+    }
+
+    SDL_RenderCopy(renderer, mFontTexture, &src, &dst);
 }
 
 uint8_t SystemKaypro::IORead8(size_t address) {
@@ -174,13 +274,13 @@ uint8_t SystemKaypro::IORead8(size_t address) {
             break;
     }
 
-    LTRACEF("addr 0x%zx val 0x%hhx\n", address, val);
+    TRACEF("addr 0x%zx val 0x%hhx\n", address, val);
 
     return val;
 }
 
 void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
+    TRACEF("addr 0x%zx val 0x%x\n", address, val);
 
     if (LOCAL_TRACE > 1) {
         for (uint i = 0; i <= 7; i++) {
@@ -223,10 +323,12 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
         case 0x15:
         case 0x16:
         case 0x17: // bank register and floppy PIO
-            mBankSwitch = (val & 0x1) ? BANK1 : BANK0;
             break;
 
         case 0x1c: // PIO 2 channel A, data
+            printf("SystemKaypro: SYSTEM CONTROL Port 0x1C write: 0x%02x\n", val);
+            mBankSwitch = (val & 0x80) ? BANK1 : BANK0;
+            break;
         case 0x1d: // PIO 2 channel A, control
         case 0x1e: // PIO 2 channel B, data
         case 0x1f: // PIO 2 channel B, control
@@ -241,12 +343,12 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
 MemoryDevice *SystemKaypro::GetDeviceAtAddr(size_t &address) {
     address &= 0xffff;
 
-    if (mBankSwitch == 0 || address >= 0x4000) {
+    if (mBankSwitch == BANK0 || address >= 0x4000) {
         return mMem.get();
-    } else if (address >= 0x3000) {
+    } else if (address >= 0x3000) { // BANK1 and within video memory
         address -= 0x3000;
         return mVideoMem.get();
-    } else {
+    } else { // BANK1 and within rom memory
         return mRom.get();
     }
 }

@@ -24,11 +24,12 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <sys/types.h>
 
 class MemoryDevice {
-public:
+  public:
     MemoryDevice() {}
     virtual ~MemoryDevice() {}
 
@@ -41,14 +42,16 @@ public:
 };
 
 class Memory : public MemoryDevice {
-public:
+  public:
     Memory();
     virtual ~Memory() override;
 
     int Alloc(size_t len);
 
     // simple accessors, assumes bounds checking somewhere else
-    virtual uint8_t ReadByte(size_t address) override { return mMem[address]; }
+    virtual uint8_t ReadByte(size_t address) override {
+        return mMem[address];
+    }
     virtual void WriteByte(size_t address, uint8_t val) override { mMem[address] = val; }
 
     size_t GetSize() const { return mSize; }
@@ -56,7 +59,7 @@ public:
     // grab a raw pointer to it, don't abuse!
     void *GetPtr() { return mMem.get(); }
 
-private:
+  private:
     std::unique_ptr<uint8_t[]> mMem;
     size_t mSize = 0;
 };

@@ -7,7 +7,7 @@ COMPILEFLAGS := -g -O2 -Wall -W -Ilibihex -I.
 CFLAGS :=
 CXXFLAGS := -std=c++17 -Wno-c99-designator
 ASMFLAGS :=
-LDFLAGS :=
+LDFLAGS := $(shell sdl2-config --libs)
 LDLIBS := libihex/libihex.a
 
 UNAME := $(shell uname -s)
@@ -33,13 +33,14 @@ LDLIBS += -lpthread
 endif
 NOECHO ?= @
 
-CFLAGS += $(COMPILEFLAGS)
-CXXFLAGS += $(COMPILEFLAGS)
+CFLAGS += $(COMPILEFLAGS) $(shell sdl2-config --cflags)
+CXXFLAGS += $(COMPILEFLAGS) $(shell sdl2-config --cflags)
 ASMFLAGS += $(COMPILEFLAGS)
 
 OBJS := \
 	main.o \
 	console.o \
+	console_sdl.o \
 \
 	cpu/cpu.o \
 	dev/memory.o \

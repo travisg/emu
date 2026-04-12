@@ -23,14 +23,13 @@
  */
 #pragma once
 
-#include <cstdint>
-#include <cstdint>
-#include <string>
-#include <memory>
-#include "system.h"
-#include "console.h"
+#include "console_sdl.h"
 #include "dev/wd1793.h"
 #include "dev/z80sio.h"
+#include "system.h"
+#include <cstdint>
+#include <memory>
+#include <string>
 
 class Console;
 class CpuZ80;
@@ -39,7 +38,7 @@ class Memory;
 
 // a Z80 based Kaypro
 class SystemKaypro final : public System {
-public:
+  public:
     static SystemInfo GetSystemInfo();
 
     SystemKaypro(const std::string &subsystem);
@@ -51,14 +50,16 @@ public:
 
     virtual Console *GetConsole() override { return &mConsole; }
 
-    virtual uint8_t  MemRead8(size_t address) override;
-    virtual void     MemWrite8(size_t address, uint8_t val) override;
+    virtual uint8_t MemRead8(size_t address) override;
+    virtual void MemWrite8(size_t address, uint8_t val) override;
 
-    virtual uint8_t  IORead8(size_t address) override;
-    virtual void     IOWrite8(size_t address, uint8_t val) override;
+    virtual uint8_t IORead8(size_t address) override;
+    virtual void IOWrite8(size_t address, uint8_t val) override;
 
-private:
+  private:
     void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
+    void RenderDisplay(SDL_Renderer *renderer);
+    void DrawChar(SDL_Renderer *renderer, int x, int y, uint8_t c, int scale);
 
     MemoryDevice *GetDeviceAtAddr(size_t &address);
 
@@ -68,17 +69,16 @@ private:
     std::unique_ptr<Memory> mRom;
     std::unique_ptr<Memory> mVideoRom;
 
-    Console mConsole;
+    ConsoleSDL mConsole;
 
     std::string mVideoRomString;
 
     WD1793 mFdc;
     Z80Sio mSio;
+    SDL_Texture *mFontTexture = nullptr;
 
     enum {
         BANK0,
         BANK1
     } mBankSwitch = BANK1;
 };
-
-
