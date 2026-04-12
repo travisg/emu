@@ -98,10 +98,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    // create a console object to pass to the system
-    Console console;
-
-    auto sys = System::Factory(systemOption, console);
+    auto sys = System::Factory(systemOption);
     if (!sys) {
         fprintf(stderr, "error creating system, aborting\n");
         return 1;
@@ -123,7 +120,7 @@ int main(int argc, char **argv) {
     sys->RunThreaded();
 
     // enter the main console run loop
-    console.Run();
+    sys->GetConsole()->Run();
 
     printf("exiting run\n");
 

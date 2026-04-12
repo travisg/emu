@@ -27,6 +27,7 @@
 #include <string>
 #include <memory>
 #include "system.h"
+#include "console.h"
 
 class Console;
 class Cpu6809;
@@ -38,12 +39,14 @@ class System09 final : public System {
 public:
     static SystemInfo GetSystemInfo();
 
-    System09(const std::string &subsystem, Console &con);
+    System09(const std::string &subsystem);
     virtual ~System09() override;
 
     virtual int Init() override;
 
     virtual int Run() override;
+
+    virtual Console *GetConsole() override { return &mConsole; }
 
     virtual uint8_t  MemRead8(size_t address) override;
     virtual void     MemWrite8(size_t address, uint8_t val) override;
@@ -57,6 +60,8 @@ private:
     std::unique_ptr<MemoryDevice> mMem;
     std::unique_ptr<MemoryDevice> mRom;
     std::unique_ptr<MemoryDevice> mUart;
+
+    Console mConsole;
 
     enum class MemoryLayout {
         STANDARD,

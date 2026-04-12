@@ -40,8 +40,8 @@ System::SystemInfo Altair680::GetSystemInfo() {
     return { "altair680", "6800", DEFAULT_ROM };
 }
 
-Altair680::Altair680(const std::string &subsystem, Console &con)
-    :   System(subsystem, con) {
+Altair680::Altair680(const std::string &subsystem)
+    :   System(subsystem) {
     mRomString = DEFAULT_ROM;
 }
 

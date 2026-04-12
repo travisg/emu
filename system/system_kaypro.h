@@ -28,6 +28,7 @@
 #include <string>
 #include <memory>
 #include "system.h"
+#include "console.h"
 #include "dev/wd1793.h"
 #include "dev/z80sio.h"
 
@@ -41,12 +42,14 @@ class SystemKaypro final : public System {
 public:
     static SystemInfo GetSystemInfo();
 
-    SystemKaypro(const std::string &subsystem, Console &con);
+    SystemKaypro(const std::string &subsystem);
     virtual ~SystemKaypro() override;
 
     virtual int Init() override;
 
     virtual int Run() override;
+
+    virtual Console *GetConsole() override { return &mConsole; }
 
     virtual uint8_t  MemRead8(size_t address) override;
     virtual void     MemWrite8(size_t address, uint8_t val) override;
@@ -64,6 +67,8 @@ private:
     std::unique_ptr<Memory> mVideoMem;
     std::unique_ptr<Memory> mRom;
     std::unique_ptr<Memory> mVideoRom;
+
+    Console mConsole;
 
     std::string mVideoRomString;
 

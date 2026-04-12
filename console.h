@@ -37,10 +37,10 @@ public:
     Console(const Console &) = delete;
     Console &operator=(const Console &) = delete;
 
-    int Run();
+    virtual int Run();
 
-    void Putchar(char c);
-    int GetNextChar();
+    virtual void Putchar(char c);
+    virtual int GetNextChar();
 
 private:
     std::queue<char> mOutBuffer;

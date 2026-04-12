@@ -27,6 +27,7 @@
 #include <string>
 #include <memory>
 #include "system.h"
+#include "console.h"
 
 class Console;
 class Cpu6800;
@@ -37,12 +38,14 @@ class Altair680 final : public System {
 public:
     static SystemInfo GetSystemInfo();
 
-    Altair680(const std::string &subsystem, Console &con);
+    Altair680(const std::string &subsystem);
     virtual ~Altair680() override;
 
     virtual int Init() override;
 
     virtual int Run() override;
+
+    virtual Console *GetConsole() override { return &mConsole; }
 
     virtual uint8_t  MemRead8(size_t address) override;
     virtual void     MemWrite8(size_t address, uint8_t val) override;
@@ -57,6 +60,8 @@ private:
     std::unique_ptr<MemoryDevice> mRom_monitor; // 256 bytes at FF00
     std::unique_ptr<MemoryDevice> mRom_vtl; // 768 bytes at FC00
     std::unique_ptr<MemoryDevice> mUart;
+
+    Console mConsole;
 };
 
 

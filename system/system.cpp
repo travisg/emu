@@ -38,16 +38,15 @@
 
 using namespace std;
 
-System::System(const string &subsystem, Console &con)
-    : mSubSystemString(subsystem),
-      mConsole(con) {
+System::System(const string &subsystem)
+    : mSubSystemString(subsystem) {
 }
 
 System::~System() {
     ShutdownThreaded();
 }
 
-std::unique_ptr<System> System::Factory(const std::string &system, Console &con) {
+std::unique_ptr<System> System::Factory(const std::string &system) {
     // split the system string into a few pieces
     size_t pos = system.find('-');
     string mainsystem = system.substr(0, pos);
@@ -58,11 +57,11 @@ std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
     }
 
     if (mainsystem == "6809") {
-        return std::unique_ptr<System>(new System09(subsystem, con));
+        return std::unique_ptr<System>(new System09(subsystem));
     } else if (mainsystem == "altair680") {
-        return std::unique_ptr<System>(new Altair680(subsystem, con));
+        return std::unique_ptr<System>(new Altair680(subsystem));
     } else if (mainsystem == "kaypro") {
-        return std::unique_ptr<System>(new SystemKaypro(subsystem, con));
+        return std::unique_ptr<System>(new SystemKaypro(subsystem));
     } else {
         return NULL;
     }

@@ -44,8 +44,8 @@ System::SystemInfo SystemKaypro::GetSystemInfo() {
 }
 
 // a simple 6809 based system
-SystemKaypro::SystemKaypro(const std::string &subsystem, Console &con)
-    : System(subsystem, con) {
+SystemKaypro::SystemKaypro(const std::string &subsystem)
+    : System(subsystem) {
     mRomString = DEFAULT_ROM;
 }
 

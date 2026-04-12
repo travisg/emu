@@ -42,8 +42,8 @@ System::SystemInfo System09::GetSystemInfo() {
 }
 
 // a simple 6809 based system
-System09::System09(const std::string &subsystem, Console &con)
-    :   System(subsystem, con) {
+System09::System09(const std::string &subsystem)
+    :   System(subsystem) {
     mRomString = DEFAULT_ROM;
 }
 
@@ -83,13 +83,11 @@ int System09::Init() {
 
     // add some peripherals
     if (mSubSystemString == "obc") {
-        // create a 16550 uart
         uart16550 *uart = new uart16550(mConsole);
         mUart.reset(uart);
 
         mMemoryLayout = MemoryLayout::OBC;
     } else {
-        // create a MC6850 uart
         MC6850 *uart = new MC6850(mConsole);
         mUart.reset(uart);
 

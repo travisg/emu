@@ -42,7 +42,7 @@ public:
         const char *defaultRom;
     };
 
-    System(const std::string &subSystem, Console &con);
+    System(const std::string &subSystem);
     virtual ~System();
 
     // non copyable
@@ -79,14 +79,15 @@ public:
     virtual uint8_t  IORead8(size_t) { return 0; }
     virtual void     IOWrite8(size_t, uint8_t) {}
 
-    static std::unique_ptr<System> Factory(const std::string &system, Console &con);
+    static std::unique_ptr<System> Factory(const std::string &system);
     static std::vector<SystemInfo> GetSupportedSystems();
 
     bool isShutdown() const { return mShutdown; }
 
+    virtual Console *GetConsole() = 0;
+
 protected:
     std::string mSubSystemString;
-    Console &mConsole;
     std::unique_ptr<std::thread> mThread;
     std::string mRomString;
     std::string mCpuString;
