@@ -171,9 +171,6 @@ uint8_t SystemKaypro::MemRead8(size_t address) {
     MemoryDevice *mem = GetDeviceAtAddr(relative_addr);
     if (mem) {
         val = mem->ReadByte(relative_addr);
-        if (mem == mVideoMem.get()) {
-            printf("SystemKaypro: VIDEO READ 0x%02x at 0x%zx ('%c')\n", val, relative_addr, (val >= 32 && val < 127) ? val : '.');
-        }
     }
 
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
@@ -190,7 +187,7 @@ void SystemKaypro::MemWrite8(size_t address, uint8_t val) {
     if (mem) {
         mem->WriteByte(relative_addr, val);
         if (mem == mVideoMem.get()) {
-            printf("SystemKaypro: VIDEO WRITE 0x%02x at 0x%zx ('%c')\n", val, relative_addr, (val >= 32 && val < 127) ? val : '.');
+            // printf("SystemKaypro: VIDEO WRITE 0x%02x at 0x%zx ('%c')\n", val, relative_addr, (val >= 32 && val < 127) ? val : '.');
             mConsole.ForceRefresh();
         }
     }

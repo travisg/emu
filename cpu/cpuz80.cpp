@@ -30,7 +30,7 @@
 #include "system/system.h"
 #include "trace.h"
 
-#define LOCAL_TRACE 1
+#define LOCAL_TRACE 0
 
 // TODO: double check that z80 is little endian in all uses of MemReadWrite16
 using Endian = System::Endian;
@@ -930,6 +930,34 @@ int CpuZ80::Run() {
                     break;
                 }
 
+                case 0b10000000 ... 0b10000111: { // ADD A, r or ADD A, (HL)
+                    LPRINTF("ADD A, r\n");
+                    uint8_t val = read_r_reg_or_hl(BITS(op, 2, 0));
+                    temp8 = mRegs.a + val;
+                    set_flag(FLAG_S, temp8 & 0x80);
+                    set_flag(FLAG_Z, temp8 == 0);
+                    set_flag(FLAG_H, (mRegs.a & 0xf) + (val & 0xf) > 0xf);
+                    set_flag(FLAG_PV, ((mRegs.a ^ temp8) & (val ^ temp8) & 0x80) != 0);
+                    set_flag(FLAG_N, 0);
+                    set_flag(FLAG_C, (uint16_t)mRegs.a + val > 0xff);
+                    mRegs.a = temp8;
+                    break;
+                }
+
+                case 0b10010000 ... 0b10010111: { // SUB r, SUB (HL)
+                    LPRINTF("SUB r\n");
+                    uint8_t val = read_r_reg_or_hl(BITS(op, 2, 0));
+                    temp8 = mRegs.a - val;
+                    set_flag(FLAG_S, temp8 & 0x80);
+                    set_flag(FLAG_Z, temp8 == 0);
+                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(FLAG_N, 1);
+                    set_flag(FLAG_C, mRegs.a < val);
+                    mRegs.a = temp8;
+                    break;
+                }
+
                 case 0b10100000 ... 0b10100111: // AND r, AND (HL)
                     LPRINTF("AND r\n");
                     mRegs.a &= read_r_reg_or_hl(BITS(op, 2, 0));
@@ -950,9 +978,20 @@ int CpuZ80::Run() {
                     set_flags(mRegs.a);
                     break;
 
+                case 0b11110110: // OR n
+                    LPRINTF("OR n\n");
+                    mRegs.a |= read_n();
+                    set_flags(mRegs.a);
+                    break;
+
                 case 0b10101000 ... 0b10101111: // XOR r, XOR (HL)
                     LPRINTF("XOR r\n");
                     mRegs.a ^= read_r_reg_or_hl(BITS(op, 2, 0));
+                    set_flags(mRegs.a);
+                    break;
+                case 0b11101110: // XOR n
+                    LPRINTF("XOR n\n");
+                    mRegs.a ^= read_n();
                     set_flags(mRegs.a);
                     break;
 
@@ -966,6 +1005,34 @@ int CpuZ80::Run() {
                     set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
                     set_flag(FLAG_N, 1);
                     set_flag(FLAG_C, mRegs.a < val);
+                    break;
+                }
+
+                case 0b11000110: { // ADD A, n
+                    LPRINTF("ADD A, n\n");
+                    uint8_t val = read_n();
+                    temp8 = mRegs.a + val;
+                    set_flag(FLAG_S, temp8 & 0x80);
+                    set_flag(FLAG_Z, temp8 == 0);
+                    set_flag(FLAG_H, (mRegs.a & 0xf) + (val & 0xf) > 0xf);
+                    set_flag(FLAG_PV, ((mRegs.a ^ temp8) & (val ^ temp8) & 0x80) != 0);
+                    set_flag(FLAG_N, 0);
+                    set_flag(FLAG_C, (uint16_t)mRegs.a + val > 0xff);
+                    mRegs.a = temp8;
+                    break;
+                }
+
+                case 0b11010110: { // SUB n
+                    LPRINTF("SUB n\n");
+                    uint8_t val = read_n();
+                    temp8 = mRegs.a - val;
+                    set_flag(FLAG_S, temp8 & 0x80);
+                    set_flag(FLAG_Z, temp8 == 0);
+                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(FLAG_N, 1);
+                    set_flag(FLAG_C, mRegs.a < val);
+                    mRegs.a = temp8;
                     break;
                 }
 
