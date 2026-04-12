@@ -449,8 +449,8 @@ bool Cpu6800::TestBranchCond(unsigned int cond) {
 #define SET_N2(result) do { mCC = BIT(result, 15) ? SET_CC_BIT(CC_N) : CLR_CC_BIT(CC_N); } while (0)
 #define SET_C1(result) do { mCC = BIT(result, 8) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C); } while (0)
 #define SET_C2(result) do { mCC = BIT(result, 16) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C); } while (0)
-#define SET_V1(a, b, result) do { mCC = BIT((a)^(b)^(result)^((result)>>1), 7) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); } while (0)
-#define SET_V2(a, b, result) do { mCC = BIT((a)^(b)^(result)^((result)>>1), 15) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); } while (0)
+#define SET_V1(a, b, result) do { mCC = BIT((a)^(b)^(result)^(((a)^(b)^(result))>>1), 7) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); } while (0)
+#define SET_V2(a, b, result) do { mCC = BIT((a)^(b)^(result)^(((a)^(b)^(result))>>1), 15) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); } while (0)
 #define SET_H(a, b, result) do { mCC = BIT((a)^(b)^(result), 4) ? SET_CC_BIT(CC_H) : CLR_CC_BIT(CC_H); } while (0)
 
 #define SET_NZ1(result) do { SET_N1(result); SET_Z1(result); } while (0)
@@ -488,7 +488,18 @@ bool Cpu6800::TestBranchCond(unsigned int cond) {
 int Cpu6800::Run() {
 
     bool done = false;
+    extern int64_t g_cycle_limit;
     while (!done) {
+        if (mSys.isShutdown()) {
+            return 0;
+        }
+        if (g_cycle_limit > 0) {
+            g_cycle_limit--;
+            if (g_cycle_limit == 0) {
+                printf("cycle limit reached, exiting\n");
+                return 1;
+            }
+        }
         uint8_t opcode;
 
         if (mException) {
@@ -1110,10 +1121,11 @@ uint16_t Cpu6800::GetReg(regnum r) {
         case regnum::REG_CC:
             return mCC;
     }
+    return 0;
 }
 
 uint16_t Cpu6800::PutReg(regnum r, uint16_t val) {
-    uint16_t old = GetReg(r);;
+    uint16_t old = GetReg(r);
     switch (r) {
         case regnum::REG_A:
             mA = val;

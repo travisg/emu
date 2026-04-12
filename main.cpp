@@ -34,8 +34,10 @@
 
 using namespace std;
 
+int64_t g_cycle_limit = -1;
+
 static void usage(char **argv) {
-    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile]\n", argv[0]);
+    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit]\n", argv[0]);
     fprintf(stderr, "\n");
     fprintf(stderr, "valid systems:\n");
     auto systems = System::GetSupportedSystems();
@@ -64,10 +66,11 @@ int main(int argc, char **argv) {
             {"cpu", 1, 0, 'c'},
             {"rom", 1, 0, 'r'},
             {"system", 1, 0, 's'},
+            {"limit", 1, 0, 'l'},
             {0, 0, 0, 0},
         };
 
-        c = getopt_long(argc, argv, "c:hr:s:", long_options, &option_index);
+        c = getopt_long(argc, argv, "c:hr:s:l:", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -83,6 +86,10 @@ int main(int argc, char **argv) {
             case 's':
                 printf("system option: '%s'\n", optarg);
                 systemOption = optarg;
+                break;
+            case 'l':
+                g_cycle_limit = atoll(optarg);
+                printf("cycle limit set to: %lld\n", (long long)g_cycle_limit);
                 break;
             case 'h':
             default:

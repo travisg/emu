@@ -569,7 +569,18 @@ bool Cpu6809::TestBranchCond(unsigned int cond) {
 int Cpu6809::Run() {
 
     bool done = false;
+    extern int64_t g_cycle_limit;
     while (!done) {
+        if (mSys.isShutdown()) {
+            return 0;
+        }
+        if (g_cycle_limit > 0) {
+            g_cycle_limit--;
+            if (g_cycle_limit == 0) {
+                printf("cycle limit reached, exiting\n");
+                return 1;
+            }
+        }
         uint8_t opcode;
 
         if (mException) {
@@ -1201,7 +1212,7 @@ shared_memwrite:
             case SEX: { // sex (sign extend B into A)
                 temp8 = BIT(GetReg(REG_B), 7) ? 0xff : 0x0;
                 PutReg(REG_A, temp8);
-                SET_NZ1(temp8);
+                SET_NZ2(GetReg(REG_D));
                 break;
             }
             case PUSH: { // pshs,pshu
@@ -1261,7 +1272,7 @@ shared_memwrite:
                 }
                 if (BIT(arg, 3)) {
                     TRACEF(" DP");
-                    PUSH8(op->targetreg, mDP);
+                    PULL8(op->targetreg, mDP);
                 }
                 if (BIT(arg, 4)) {
                     TRACEF(" X");

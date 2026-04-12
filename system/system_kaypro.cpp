@@ -32,25 +32,24 @@
 #include "ihex.h"
 #include "trace.h"
 
-#define DEFAULT_ROM "rom/kaypro/kayproii_u47.bin"
-#define VIDEO_ROM "rom/kaypro/kayproii_u43.bin"
+#define DEFAULT_ROM "kayproii_u47.bin"
+#define VIDEO_ROM   "kayproii_u43.bin"
 
 #define LOCAL_TRACE 0
 
 using namespace std;
 
 System::SystemInfo SystemKaypro::GetSystemInfo() {
-    return { "kaypro", "z80", DEFAULT_ROM };
+    return {"kaypro", "z80", DEFAULT_ROM};
 }
 
 // a simple 6809 based system
 SystemKaypro::SystemKaypro(const std::string &subsystem, Console &con)
-    :   System(subsystem, con) {
+    : System(subsystem, con) {
     mRomString = DEFAULT_ROM;
 }
 
-SystemKaypro::~SystemKaypro() {
-}
+SystemKaypro::~SystemKaypro() {}
 
 int SystemKaypro::Init() {
     cout << "initializing a Z80 based system. ";
@@ -63,21 +62,22 @@ int SystemKaypro::Init() {
 
     // create a bank of memory
     mMem.reset(new Memory());
-    mMem->Alloc(64*1024);
+    mMem->Alloc(64 * 1024);
 
     // create a bank of video memory
     mVideoMem.reset(new Memory());
-    mVideoMem->Alloc(4*1024);
+    mVideoMem->Alloc(4 * 1024);
 
     // create a bank of rom
     mRom.reset(new Memory());
-    mRom->Alloc(4*1024);
+    mRom->Alloc(4 * 1024);
 
     // read it in
     {
         FILE *fp = fopen(mRomString.c_str(), "rb");
-        if (!fp)
+        if (!fp) {
             return -1;
+        }
 
         size_t err = fread(mRom->GetPtr(), 1, mRom->GetSize(), fp);
         fclose(fp);
@@ -90,13 +90,14 @@ int SystemKaypro::Init() {
 
     // create a bank of video rom
     mVideoRom.reset(new Memory());
-    mVideoRom->Alloc(2*1024);
+    mVideoRom->Alloc(2 * 1024);
 
     // read it in
     {
         FILE *fp = fopen(VIDEO_ROM, "rb");
-        if (!fp)
+        if (!fp) {
             return -1;
+        }
 
         size_t err = fread(mVideoRom->GetPtr(), 1, mVideoRom->GetSize(), fp);
         fclose(fp);
@@ -120,8 +121,9 @@ uint8_t SystemKaypro::MemRead8(size_t address) {
     uint8_t val = 0;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
-    if (mem)
+    if (mem) {
         val = mem->ReadByte(address);
+    }
 
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
     return val;
@@ -133,14 +135,46 @@ void SystemKaypro::MemWrite8(size_t address, uint8_t val) {
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
-    if (mem)
+    if (mem) {
         mem->WriteByte(address, val);
+    }
 }
 
 uint8_t SystemKaypro::IORead8(size_t address) {
     uint8_t val = 0;
 
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
+    switch (address) {
+        case 0x04: // serial port A, data
+            val = mSio.ReadDataA();
+            break;
+        case 0x06: // serial port A, control
+            val = mSio.ReadControlA();
+            break;
+        case 0x05: // serial port B, data
+            val = mSio.ReadDataB();
+            break;
+        case 0x07: // serial port B, control
+            val = mSio.ReadControlB();
+            break;
+        case 0x10: // floppy status
+        case 0x11: // floppy track
+        case 0x12: // floppy sector
+        case 0x13: // floppy data
+            val = mFdc.Read(address - 0x10);
+            break;
+        case 0x1c: // PIO 2 channel A, data (System Data port)
+            // Bit 6 is floppy INTRQ
+            // Bit 7 is floppy DRQ
+            if (mFdc.InterruptPending()) {
+                val |= 0x40; // Set INTRQ bit (bit 6)
+            }
+            if (mFdc.DataReady()) {
+                val |= 0x80; // Set DRQ bit (bit 7)
+            }
+            break;
+    }
+
+    LTRACEF("addr 0x%zx val 0x%hhx\n", address, val);
 
     return val;
 }
@@ -148,9 +182,10 @@ uint8_t SystemKaypro::IORead8(size_t address) {
 void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
     LTRACEF("addr 0x%zx val 0x%x\n", address, val);
 
-    if (LOCAL_TRACE) {
-        for (uint i = 0; i <= 7; i++)
+    if (LOCAL_TRACE > 1) {
+        for (uint i = 0; i <= 7; i++) {
             LTRACEF("A%u %zu\n", i, (address >> i) & 0x1);
+        }
     }
 
     switch (address) {
@@ -158,18 +193,22 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
             // dont care
             break;
         case 0x04: // serial port A, data
+            mSio.WriteDataA(val);
+            break;
         case 0x06: // serial port A, control
-            //sio_out(1, addr - 4, val);
+            mSio.WriteControlA(val);
             break;
         case 0x05: // serial port B, data
+            mSio.WriteDataB(val);
+            break;
         case 0x07: // serial port B, control
-            //sio_out(2, addr - 5, val);
+            mSio.WriteControlB(val);
             break;
         case 0x08: // PIO 1 channel A, data
         case 0x09: // PIO 1 channel A, control
         case 0x0a: // PIO 1 channel B, data
         case 0x0b: // PIO 1 channel B, control
-            //pio_out(1, addr - 0x8, val);
+            // pio_out(1, addr - 0x8, val);
             break;
         case 0x0c: // baud rate generator B
             // dont care
@@ -178,7 +217,7 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
         case 0x11: // floppy track
         case 0x12: // floppy sector
         case 0x13: // floppy data
-            //floppy_out(addr - 0x10, val);
+            mFdc.Write(address - 0x10, val);
             break;
         case 0x14:
         case 0x15:
@@ -191,7 +230,7 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
         case 0x1d: // PIO 2 channel A, control
         case 0x1e: // PIO 2 channel B, data
         case 0x1f: // PIO 2 channel B, control
-            //pio_out(2, addr - 0x1c, val);
+            // pio_out(2, addr - 0x1c, val);
             break;
         default:
             fprintf(stderr, "out to unknown port 0x%zx\n", address);
@@ -211,5 +250,3 @@ MemoryDevice *SystemKaypro::GetDeviceAtAddr(size_t &address) {
         return mRom.get();
     }
 }
-
-

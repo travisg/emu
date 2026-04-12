@@ -22,22 +22,25 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "system.h"
+#include "altair680.h"
 #include "system09.h"
 #include "system_kaypro.h"
-#include "altair680.h"
 
-#include <cstdio>
 #include <cassert>
+#include <cstdio>
 
 #define TRACE 0
 
-#define TRACEF(str, x...) do { if (TRACE) printf(str, ## x); } while (0)
+#define TRACEF(str, x...)            \
+    do {                             \
+        if (TRACE) printf(str, ##x); \
+    } while (0)
 
 using namespace std;
 
 System::System(const string &subsystem, Console &con)
-    :   mSubSystemString(subsystem),
-        mConsole(con) {
+    : mSubSystemString(subsystem),
+      mConsole(con) {
 }
 
 System::~System() {
@@ -50,8 +53,9 @@ std::unique_ptr<System> System::Factory(const std::string &system, Console &con)
     string mainsystem = system.substr(0, pos);
 
     string subsystem;
-    if (pos != string::npos)
+    if (pos != string::npos) {
         subsystem = system.substr(pos + 1, string::npos);
+    }
 
     if (mainsystem == "6809") {
         return std::unique_ptr<System>(new System09(subsystem, con));
@@ -86,8 +90,9 @@ int System::RunThreaded() {
 }
 
 void System::ShutdownThreaded() {
-    if (!mThread)
+    if (!mThread) {
         return;
+    }
 
     // tell the run loop to shut down
     mShutdown = true;
@@ -123,4 +128,3 @@ void System::MemWrite16(size_t address, uint16_t val, Endian e) {
             break;
     }
 }
-

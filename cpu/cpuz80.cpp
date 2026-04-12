@@ -23,11 +23,11 @@
  */
 #include "cpuz80.h"
 
-#include <cstdio>
 #include <cassert>
+#include <cstdio>
 
-#include "system/system.h"
 #include "bits.h"
+#include "system/system.h"
 #include "trace.h"
 
 #define LOCAL_TRACE 0
@@ -55,16 +55,51 @@ using Endian = System::Endian;
 #define READ_DE_ALT() ((mRegs.d_alt << 8) | mRegs.e_alt)
 #define READ_HL_ALT() ((mRegs.h_alt << 8) | mRegs.l_alt)
 
-#define WRITE_AF(val) do { mRegs.a = ((val) >> 8) & 0xff; mRegs.f = (val) & 0xff; } while (0)
-#define WRITE_BC(val) do { mRegs.b = ((val) >> 8) & 0xff; mRegs.c = (val) & 0xff; } while (0)
-#define WRITE_DE(val) do { mRegs.d = ((val) >> 8) & 0xff; mRegs.e = (val) & 0xff; } while (0)
-#define WRITE_HL(val) do { mRegs.h = ((val) >> 8) & 0xff; mRegs.l = (val) & 0xff; } while (0)
-#define WRITE_SP(val) do { mRegs.sp = (val); } while (0)
+#define WRITE_AF(val)                  \
+    do {                               \
+        mRegs.a = ((val) >> 8) & 0xff; \
+        mRegs.f = (val) & 0xff;        \
+    } while (0)
+#define WRITE_BC(val)                  \
+    do {                               \
+        mRegs.b = ((val) >> 8) & 0xff; \
+        mRegs.c = (val) & 0xff;        \
+    } while (0)
+#define WRITE_DE(val)                  \
+    do {                               \
+        mRegs.d = ((val) >> 8) & 0xff; \
+        mRegs.e = (val) & 0xff;        \
+    } while (0)
+#define WRITE_HL(val)                  \
+    do {                               \
+        mRegs.h = ((val) >> 8) & 0xff; \
+        mRegs.l = (val) & 0xff;        \
+    } while (0)
+#define WRITE_SP(val)     \
+    do {                  \
+        mRegs.sp = (val); \
+    } while (0)
 
-#define WRITE_AF_ALT(val) do { mRegs.a_alt = ((val) >> 8) & 0xff; mRegs.f_alt = (val) & 0xff; } while (0)
-#define WRITE_BC_ALT(val) do { mRegs.b_alt = ((val) >> 8) & 0xff; mRegs.c_alt = (val) & 0xff; } while (0)
-#define WRITE_DE_ALT(val) do { mRegs.d_alt = ((val) >> 8) & 0xff; mRegs.e_alt = (val) & 0xff; } while (0)
-#define WRITE_HL_ALT(val) do { mRegs.h_alt = ((val) >> 8) & 0xff; mRegs.l_alt = (val) & 0xff; } while (0)
+#define WRITE_AF_ALT(val)                  \
+    do {                                   \
+        mRegs.a_alt = ((val) >> 8) & 0xff; \
+        mRegs.f_alt = (val) & 0xff;        \
+    } while (0)
+#define WRITE_BC_ALT(val)                  \
+    do {                                   \
+        mRegs.b_alt = ((val) >> 8) & 0xff; \
+        mRegs.c_alt = (val) & 0xff;        \
+    } while (0)
+#define WRITE_DE_ALT(val)                  \
+    do {                                   \
+        mRegs.d_alt = ((val) >> 8) & 0xff; \
+        mRegs.e_alt = (val) & 0xff;        \
+    } while (0)
+#define WRITE_HL_ALT(val)                  \
+    do {                                   \
+        mRegs.h_alt = ((val) >> 8) & 0xff; \
+        mRegs.l_alt = (val) & 0xff;        \
+    } while (0)
 
 uint16_t CpuZ80::read_qq_reg(int dd) {
     switch (dd) {
@@ -251,42 +286,58 @@ uint8_t CpuZ80::in(uint8_t addr) {
 }
 
 void CpuZ80::set_flag(int flag, int val) {
-    if (val)
+    if (val) {
         mRegs.f |= (1 << flag);
-    else
+    } else {
         mRegs.f &= ~(1 << flag);
+    }
 }
 
 bool CpuZ80::get_flag(int flag) {
-    return !!(mRegs.f & (1<<flag));
+    return !!(mRegs.f & (1 << flag));
 }
-
 
 bool CpuZ80::test_cond(int cond) {
     switch (cond) {
         case 0:
-            if (!get_flag(FLAG_Z)) return true;
+            if (!get_flag(FLAG_Z)) {
+                return true;
+            }
             break; // NZ
         case 1:
-            if (get_flag(FLAG_Z))  return true;
+            if (get_flag(FLAG_Z)) {
+                return true;
+            }
             break; // Z
         case 2:
-            if (!get_flag(FLAG_C)) return true;
+            if (!get_flag(FLAG_C)) {
+                return true;
+            }
             break; // NC
         case 3:
-            if (get_flag(FLAG_C))  return true;
+            if (get_flag(FLAG_C)) {
+                return true;
+            }
             break; // C
         case 4:
-            if (!get_flag(FLAG_PV)) return true;
+            if (!get_flag(FLAG_PV)) {
+                return true;
+            }
             break; // PO
         case 5:
-            if (get_flag(FLAG_PV)) return true;
+            if (get_flag(FLAG_PV)) {
+                return true;
+            }
             break; // PE
         case 6:
-            if (!get_flag(FLAG_S)) return true;
+            if (!get_flag(FLAG_S)) {
+                return true;
+            }
             break; // P
         case 7:
-            if (get_flag(FLAG_S))  return true;
+            if (get_flag(FLAG_S)) {
+                return true;
+            }
             break; // M
     }
     return false;
@@ -298,20 +349,22 @@ static int calc_parity(uint8_t val) {
 
     count = 0;
     while (val != 0) {
-        if (val & 1)
+        if (val & 1) {
             count++;
+        }
         val >>= 1;
     }
 
-    if ((count & 1) == 0)
+    if ((count & 1) == 0) {
         return 1;
-    else
+    } else {
         return 0;
+    }
 }
 
 void CpuZ80::set_flags(uint8_t val) {
     set_flag(FLAG_S, BIT(val, 7)); // sign flag
-    set_flag(FLAG_Z, val == 0); // zero flag
+    set_flag(FLAG_Z, val == 0);    // zero flag
     set_flag(FLAG_PV, calc_parity(val));
     set_flag(FLAG_H, 0);
     set_flag(FLAG_N, 0);
@@ -322,8 +375,22 @@ int CpuZ80::Run() {
     LTRACEF("Run\n");
 
     int dd;
+    extern int64_t g_cycle_limit;
 
     for (;;) {
+        if (mSys.isShutdown()) {
+            LPRINTF("Z80 Run Loop: system shutdown requested, exiting\n");
+            return 0;
+        }
+
+        if (g_cycle_limit > 0) {
+            g_cycle_limit--;
+            if (g_cycle_limit == 0) {
+                printf("cycle limit reached, exiting\n");
+                return 1;
+            }
+        }
+
         uint8_t temp8;
         uint16_t temp16;
 
@@ -342,7 +409,7 @@ int CpuZ80::Run() {
                 case 0b01011001:
                 case 0b01100001:
                 case 0b01101001:
-//              case 0b01110001: /* doesn't officially exist */
+                    //              case 0b01110001: /* doesn't officially exist */
                 case 0b01111001: // OUT (C), r
                     LPRINTF("OUT (C), r\n");
                     if (BITS_SHIFT(op, 5, 3) == 0b110) { // OUT (c), 0
@@ -352,19 +419,109 @@ int CpuZ80::Run() {
                     }
                     out(mRegs.c, temp8);
                     break;
+                case 0b10100010: // INI
+                    LPRINTF("INI\n");
+                    temp8 = in(mRegs.c);
+                    mSys.MemWrite8(READ_HL(), temp8);
+                    WRITE_HL(READ_HL() + 1);
+                    mRegs.b--;
+                    set_flag(FLAG_Z, mRegs.b == 0);
+                    set_flag(FLAG_N, 1);
+                    break;
+                case 0b10110010: // INIR
+                    LPRINTF("INIR\n");
+                    temp8 = in(mRegs.c);
+                    mSys.MemWrite8(READ_HL(), temp8);
+                    WRITE_HL(READ_HL() + 1);
+                    mRegs.b--;
+                    set_flag(FLAG_Z, 1);
+                    set_flag(FLAG_N, 1);
+                    if (mRegs.b != 0) {
+                        mRegs.pc -= 2;
+                        set_flag(FLAG_Z, 0);
+                    }
+                    break;
+                case 0b10101010: // IND
+                    LPRINTF("IND\n");
+                    temp8 = in(mRegs.c);
+                    mSys.MemWrite8(READ_HL(), temp8);
+                    WRITE_HL(READ_HL() - 1);
+                    mRegs.b--;
+                    set_flag(FLAG_Z, mRegs.b == 0);
+                    set_flag(FLAG_N, 1);
+                    break;
+                case 0b10111010: // INDR
+                    LPRINTF("INDR\n");
+                    temp8 = in(mRegs.c);
+                    mSys.MemWrite8(READ_HL(), temp8);
+                    WRITE_HL(READ_HL() - 1);
+                    mRegs.b--;
+                    set_flag(FLAG_Z, 1);
+                    set_flag(FLAG_N, 1);
+                    if (mRegs.b != 0) {
+                        mRegs.pc -= 2;
+                        set_flag(FLAG_Z, 0);
+                    }
+                    break;
+                case 0b10100011: // OUTI
+                    LPRINTF("OUTI\n");
+                    mRegs.b--;
+                    temp8 = mSys.MemRead8(READ_HL());
+                    out(mRegs.c, temp8);
+                    WRITE_HL(READ_HL() + 1);
+                    set_flag(FLAG_Z, mRegs.b == 0);
+                    set_flag(FLAG_N, 1);
+                    break;
+                case 0b10110011: // OTIR
+                    LPRINTF("OTIR\n");
+                    mRegs.b--;
+                    temp8 = mSys.MemRead8(READ_HL());
+                    out(mRegs.c, temp8);
+                    WRITE_HL(READ_HL() + 1);
+                    set_flag(FLAG_Z, 1);
+                    set_flag(FLAG_N, 1);
+                    if (mRegs.b != 0) {
+                        mRegs.pc -= 2;
+                        set_flag(FLAG_Z, 0);
+                    }
+                    break;
+                case 0b10101011: // OUTD
+                    LPRINTF("OUTD\n");
+                    mRegs.b--;
+                    temp8 = mSys.MemRead8(READ_HL());
+                    out(mRegs.c, temp8);
+                    WRITE_HL(READ_HL() - 1);
+                    set_flag(FLAG_Z, mRegs.b == 0);
+                    set_flag(FLAG_N, 1);
+                    break;
+                case 0b10111011: // OTDR
+                    LPRINTF("OTDR\n");
+                    mRegs.b--;
+                    temp8 = mSys.MemRead8(READ_HL());
+                    out(mRegs.c, temp8);
+                    WRITE_HL(READ_HL() - 1);
+                    set_flag(FLAG_Z, 1);
+                    set_flag(FLAG_N, 1);
+                    if (mRegs.b != 0) {
+                        mRegs.pc -= 2;
+                        set_flag(FLAG_Z, 0);
+                    }
+                    break;
                 case 0b10110000: // LDIR
                     LPRINTF("LDIR\n");
 
                     temp8 = mSys.MemRead8(READ_HL());
                     mSys.MemWrite8(READ_DE(), temp8);
 
-                    LPRINTF("copying from 0x%x to 0x%x value 0x%hhx\n", READ_HL(), READ_DE(), temp8);
+                    LPRINTF("copying from 0x%x to 0x%x value 0x%hhx\n", READ_HL(),
+                            READ_DE(), temp8);
 
                     WRITE_HL(READ_HL() + 1);
                     WRITE_DE(READ_DE() + 1);
                     WRITE_BC(READ_BC() - 1);
-                    if (READ_BC() != 0)
+                    if (READ_BC() != 0) {
                         mRegs.pc -= 2; // repeat the instruction
+                    }
 
                     set_flag(FLAG_H, 0);
                     set_flag(FLAG_PV, 0);
@@ -400,24 +557,28 @@ int CpuZ80::Run() {
             switch (op) {
                 case 0x40 ... 0x7f: { // BIT
                     uint8_t bit = BITS_SHIFT(op, 6, 3);
-                    LPRINTF("RES %u, r\n", bit);
+                    LPRINTF("BIT %u, r\n", bit);
 
-                    temp8 = read_r_reg_or_hl(BITS(op, 2, 0)) & (1<<bit);
-                    set_flag(FLAG_Z, temp8);
+                    temp8 = read_r_reg_or_hl(BITS(op, 2, 0)) & (1 << bit);
+                    set_flag(FLAG_Z, temp8 == 0);
+                    set_flag(FLAG_H, 1);
+                    set_flag(FLAG_N, 0);
                     break;
                 }
                 case 0x80 ... 0xbf: { // RES
                     uint8_t bit = BITS_SHIFT(op, 6, 3);
                     LPRINTF("RES %u, r\n", bit);
 
-                    write_r_reg_or_hl(BITS(op, 2, 0), read_r_reg_or_hl(BITS(op, 2, 0)) & ~(1<<bit));
+                    write_r_reg_or_hl(BITS(op, 2, 0),
+                                      read_r_reg_or_hl(BITS(op, 2, 0)) & ~(1 << bit));
                     break;
                 }
                 case 0xc0 ... 0xff: { // SET
                     uint8_t bit = BITS_SHIFT(op, 6, 3);
                     LPRINTF("SET %u, r\n", bit);
 
-                    write_r_reg_or_hl(BITS(op, 2, 0), read_r_reg_or_hl(BITS(op, 2, 0)) | (1<<bit));
+                    write_r_reg_or_hl(BITS(op, 2, 0),
+                                      read_r_reg_or_hl(BITS(op, 2, 0)) | (1 << bit));
                     break;
                 }
                 default:
@@ -446,8 +607,9 @@ int CpuZ80::Run() {
                     int cond = BITS_SHIFT(op, 5, 3);
                     temp16 = read_nn();
 
-                    if (test_cond(cond))
+                    if (test_cond(cond)) {
                         mRegs.pc = temp16;
+                    }
                     break;
                 }
                 case 0b11001101: // CALL nn
@@ -515,29 +677,33 @@ int CpuZ80::Run() {
                 case 0b00111000: { // JR C, e
                     LPRINTF("JR C, e\n");
                     int8_t rel = read_n();
-                    if (get_flag(FLAG_C))
+                    if (get_flag(FLAG_C)) {
                         mRegs.pc += rel;
+                    }
                     break;
                 }
                 case 0b00110000: { // JR NC, e
                     LPRINTF("JR NC, e\n");
                     int8_t rel = read_n();
-                    if (!get_flag(FLAG_C))
+                    if (!get_flag(FLAG_C)) {
                         mRegs.pc += rel;
+                    }
                     break;
                 }
                 case 0b00101000: { // JR Z, e
                     LPRINTF("JR Z, e\n");
                     int8_t rel = read_n();
-                    if (get_flag(FLAG_Z))
+                    if (get_flag(FLAG_Z)) {
                         mRegs.pc += rel;
+                    }
                     break;
                 }
                 case 0b00100000: { // JR NZ, e
                     LPRINTF("JR NZ, e\n");
                     int8_t rel = read_n();
-                    if (!get_flag(FLAG_Z))
+                    if (!get_flag(FLAG_Z)) {
                         mRegs.pc += rel;
+                    }
                     break;
                 }
                 case 0b11110011: // DI
@@ -566,8 +732,8 @@ int CpuZ80::Run() {
                     int r2 = BITS_SHIFT(op, 2, 0);
 
                     if (r == r2 && r == 0b110) { // HALT
-                        printf("unhandled halt opcode\n");
-                        return -1;
+                        LPRINTF("HALT (treating as NOP)\n");
+                        break;
                     }
 
                     write_r_reg_or_hl(r, read_r_reg_or_hl(r2));
@@ -681,8 +847,9 @@ int CpuZ80::Run() {
                     WRITE_HL(hl + temp16);
 
                     // compute the flags
-                    set_flag(FLAG_C, (uint32_t)hl + temp16 > 0xff); // carry out of bit 15
-                    set_flag(FLAG_H, (hl & 0xfff) + (temp16 & 0xfff) > 0xfff); // carry out of bit 11
+                    set_flag(FLAG_C, (uint32_t)hl + temp16 > 0xffff); // carry out of bit 15
+                    set_flag(FLAG_H, (hl & 0xfff) + (temp16 & 0xfff) >
+                                         0xfff); // carry out of bit 11
                     set_flag(FLAG_N, 0);
                     break;
                 }
@@ -789,18 +956,31 @@ int CpuZ80::Run() {
                     set_flags(mRegs.a);
                     break;
 
-                case 0b10111000 ... 0b10111111: // CP r, CP (HL)
+                case 0b10111000 ... 0b10111111: { // CP r, CP (HL)
                     LPRINTF("CP r\n");
-                    temp8 = mRegs.a - read_r_reg_or_hl(BITS(op, 2, 0));
-                    set_flags(temp8);
+                    uint8_t val = read_r_reg_or_hl(BITS(op, 2, 0));
+                    temp8 = mRegs.a - val;
+                    set_flag(FLAG_S, temp8 & 0x80);
+                    set_flag(FLAG_Z, temp8 == 0);
+                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(FLAG_N, 1);
+                    set_flag(FLAG_C, mRegs.a < val);
                     break;
+                }
 
-                case 0b11111110: // CP n
+                case 0b11111110: { // CP n
                     LPRINTF("CP n\n");
-                    temp8 = mSys.MemRead8(read_n());
-                    temp8 = mRegs.a - temp8;
-                    set_flags(temp8);
+                    uint8_t val = mSys.MemRead8(read_n());
+                    temp8 = mRegs.a - val;
+                    set_flag(FLAG_S, temp8 & 0x80);
+                    set_flag(FLAG_Z, temp8 == 0);
+                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(FLAG_N, 1);
+                    set_flag(FLAG_C, mRegs.a < val);
                     break;
+                }
 
                 case 0b00000111: // RLCA
                     LPRINTF("RLCA\n");
@@ -844,31 +1024,62 @@ int CpuZ80::Run() {
                     set_flag(FLAG_N, 0);
                     break;
 
+                case 0b11011001: // EXX
+                    LPRINTF("EXX\n");
+                    {
+                        uint8_t tb = mRegs.b, tc = mRegs.c;
+                        uint8_t td = mRegs.d, te = mRegs.e;
+                        uint8_t th = mRegs.h, tl = mRegs.l;
+                        mRegs.b = mRegs.b_alt;
+                        mRegs.c = mRegs.c_alt;
+                        mRegs.d = mRegs.d_alt;
+                        mRegs.e = mRegs.e_alt;
+                        mRegs.h = mRegs.h_alt;
+                        mRegs.l = mRegs.l_alt;
+                        mRegs.b_alt = tb;
+                        mRegs.c_alt = tc;
+                        mRegs.d_alt = td;
+                        mRegs.e_alt = te;
+                        mRegs.h_alt = th;
+                        mRegs.l_alt = tl;
+                    }
+                    break;
+
+                case 0b11101011: // EX DE, HL
+                    LPRINTF("EX DE, HL\n");
+                    {
+                        uint8_t th = mRegs.h, tl = mRegs.l;
+                        mRegs.h = mRegs.d;
+                        mRegs.l = mRegs.e;
+                        mRegs.d = th;
+                        mRegs.e = tl;
+                    }
+                    break;
+
                 default:
                     fprintf(stderr, "unhandled opcode 0x%hhx\n", op);
                     return -1;
             }
         }
 
-        if (LOCAL_TRACE)
+        if (LOCAL_TRACE) {
             Dump();
+        }
     }
 
     return 0;
 }
 
 void CpuZ80::Dump() {
-    printf("a 0x%02hhx f 0x%02hhx b 0x%02hhx c 0x%02hhx d 0x%02hhx e 0x%02hhx h 0x%02hhx l 0x%02hhx ",
-           mRegs.a, mRegs.f, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h, mRegs.l);
-    printf("sp 0x%04hx ix 0x%04hx iy 0x%04hx, pc 0x%04hx\n",
-           mRegs.sp, mRegs.ix, mRegs.iy, mRegs.pc);
+    printf("a 0x%02hhx f 0x%02hhx b 0x%02hhx c 0x%02hhx d 0x%02hhx e 0x%02hhx h "
+           "0x%02hhx l 0x%02hhx ",
+           mRegs.a, mRegs.f, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h,
+           mRegs.l);
+    printf("sp 0x%04hx ix 0x%04hx iy 0x%04hx, pc 0x%04hx\n", mRegs.sp, mRegs.ix,
+           mRegs.iy, mRegs.pc);
 }
 
 void CpuZ80::Reset() {
     LTRACEF("Reset\n");
     mRegs = {};
-
 }
-
-
-

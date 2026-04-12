@@ -24,9 +24,12 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdint>
 #include <string>
 #include <memory>
 #include "system.h"
+#include "dev/wd1793.h"
+#include "dev/z80sio.h"
 
 class Console;
 class CpuZ80;
@@ -63,6 +66,9 @@ private:
     std::unique_ptr<Memory> mVideoRom;
 
     std::string mVideoRomString;
+
+    WD1793 mFdc;
+    Z80Sio mSio;
 
     enum {
         BANK0,

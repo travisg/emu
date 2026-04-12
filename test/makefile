@@ -7,7 +7,7 @@ LINKFLAGS := -ni
 
 IHEXTOBIN := ../libihex/ihextobin
 
-.PHONY: all clean
+.PHONY: all clean basic6809-test
 
 all: t6809.ihx test.ihx rom.h
 
@@ -41,3 +41,6 @@ clean:
 	rm -f t6809.rel t6809.lst t6809.rst t6809.ihx
 	rm -f test.rel test.lst test.rst test.ihx
 	rm -f rom.rel rom.lst rom.rst rom.ihx rom.bin rom.h
+
+basic6809-test:
+	./run_basic6809_lang_test.sh

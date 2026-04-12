@@ -51,6 +51,8 @@ OBJS += \
 	cpu/cpuz80.o \
 	dev/mc6850.o \
 	dev/uart16550.o \
+	dev/wd1793.o \
+	dev/z80sio.o \
 	system/altair680.o \
 	system/system09.o \
 	system/system_kaypro.o
