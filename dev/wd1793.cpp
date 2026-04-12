@@ -4,7 +4,7 @@
 
 #define LOCAL_TRACE 1
 
-WD1793::WD1793() : mStatus(0), mTrack(0), mSector(0), mData(0), mCommand(0), mIntrq(false), mDrq(false), mSectorIndex(0) {
+WD1793::WD1793() : mStatus(0), mTrack(0), mSector(0), mData(0), mCommand(0), mIntrq(false), mDrq(false), mSectorIndex(0), mBufferCount(0) {
 }
 
 uint8_t WD1793::Read(int reg) {
@@ -20,18 +20,18 @@ uint8_t WD1793::Read(int reg) {
         case 2: // Sector Register
             val = mSector;
             break;
-        case 3: // Data Register
-            if (mDrq && mSectorIndex < sizeof(mSectorBytes)) {
-                val = mSectorBytes[mSectorIndex++];
-                if (mSectorIndex >= sizeof(mSectorBytes)) {
-                    mDrq = false;   // No more data
-                    mIntrq = true;  // Operation complete
-                    mStatus = 0x00; // clear busy
-                }
-            } else {
-                val = mData;
+    case 3: // Data Register
+        if (mDrq && mSectorIndex < mBufferCount) {
+            val = mSectorBytes[mSectorIndex++];
+            if (mSectorIndex >= mBufferCount) {
+                mDrq = false;   // No more data
+                mIntrq = true;  // Operation complete
+                mStatus = 0x00; // clear busy
             }
-            break;
+        } else {
+            val = mData;
+        }
+        break;
     }
     LTRACEF("WD1793: read reg %d = 0x%02x\n", reg, val);
     return val;
@@ -83,9 +83,24 @@ void WD1793::ProcessCommand() {
         mStatus = 0x01; // Status Busy
         mIntrq = false;
         mSectorIndex = 0;
+        mBufferCount = 512;
         for (int i = 0; i < 512; i++) {
             mSectorBytes[i] = 0xe5;
         }
+        mDrq = true;
+    } else if ((mCommand & 0xf0) == 0xc0) {
+        // Type III: Read Address (0xc0-0xcf)
+        LPRINTF("WD1793: Read Address command\n");
+        mStatus = 0x01; // Status Busy
+        mIntrq = false;
+        mSectorIndex = 0;
+        mBufferCount = 6;
+        mSectorBytes[0] = mTrack;
+        mSectorBytes[1] = 0; // side 0
+        mSectorBytes[2] = mSector; // sector
+        mSectorBytes[3] = 2; // 512 byte sectors
+        mSectorBytes[4] = 0; // crc
+        mSectorBytes[5] = 0; // crc
         mDrq = true;
     } else if ((mCommand & 0xf0) == 0xd0) {
         // Type IV: Force Interrupt (0xd0-0xdf)
@@ -99,6 +114,7 @@ void WD1793::ProcessCommand() {
         }
     } else {
         LPRINTF("WD1793: Unhandled command 0x%02x\n", mCommand);
+        mStatus = 0x00;
         mIntrq = true; // complete it
     }
 }

@@ -324,7 +324,7 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
 
         case 0x1c: // PIO 2 channel A, data
             printf("SystemKaypro: SYSTEM CONTROL Port 0x1C write: 0x%02x\n", val);
-            mBankSwitch = (val & 0x80) ? BANK1 : BANK0;
+            mControlLatch = val;
             break;
         case 0x1d: // PIO 2 channel A, control
         case 0x1e: // PIO 2 channel B, data
@@ -340,7 +340,7 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
 MemoryDevice *SystemKaypro::GetDeviceAtAddr(size_t &address) {
     address &= 0xffff;
 
-    if (mBankSwitch == BANK0 || address >= 0x4000) {
+    if (CurrentBank() == Bank::BANK0 || address >= 0x4000) {
         return mMem.get();
     } else if (address >= 0x3000) { // BANK1 and within video memory
         address -= 0x3000;

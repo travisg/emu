@@ -77,8 +77,11 @@ class SystemKaypro final : public System {
     Z80Sio mSio;
     SDL_Texture *mFontTexture = nullptr;
 
-    enum {
+    // port 0x1c control register
+    uint8_t mControlLatch = 0x80;
+    enum class Bank {
         BANK0,
         BANK1
-    } mBankSwitch = BANK1;
+    };
+    Bank CurrentBank() const { return mControlLatch & 0x80 ? Bank::BANK1 : Bank::BANK0; }
 };

@@ -827,6 +827,20 @@ int CpuZ80::Run() {
                     push16(READ_HL());
                     WRITE_HL(temp16);
                     break;
+                case 0b11000111:
+                case 0b11001111:
+                case 0b11010111:
+                case 0b11011111:
+                case 0b11100111:
+                case 0b11101111:
+                case 0b11110111:
+                case 0b11111111: { // RST p
+                    int p = BITS_SHIFT(op, 5, 3);
+                    LPRINTF("RST %02xh\n", p * 8);
+                    push_pc();
+                    mRegs.pc = (uint16_t)p * 8;
+                    break;
+                }
 
                 case 0b00001000: // EX AF, AF'
                     LPRINTF("EX AF, AF'\n");

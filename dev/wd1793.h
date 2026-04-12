@@ -28,6 +28,7 @@ private:
     bool mDrq;
 
     uint16_t mSectorIndex;
+    uint16_t mBufferCount;
     uint8_t mSectorBytes[512];
 
     void ProcessCommand();
