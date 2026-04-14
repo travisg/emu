@@ -35,93 +35,17 @@
 // TODO: double check that z80 is little endian in all uses of MemReadWrite16
 using Endian = System::Endian;
 
-#define FLAG_C  (0)
-#define FLAG_N  (1)
-#define FLAG_PV (2)
-#define FLAG_F3 (3)
-#define FLAG_H  (4)
-#define FLAG_F5 (5)
-#define FLAG_Z  (6)
-#define FLAG_S  (7)
-
-#define READ_AF() ((mRegs.a << 8) | mRegs.f)
-#define READ_BC() ((mRegs.b << 8) | mRegs.c)
-#define READ_DE() ((mRegs.d << 8) | mRegs.e)
-#define READ_HL() ((mRegs.h << 8) | mRegs.l)
-#define READ_IX() (mRegs.ix)
-#define READ_IY() (mRegs.iy)
-#define READ_SP() (mRegs.sp)
-
-#define READ_AF_ALT() ((mRegs.a_alt << 8) | mRegs.f_alt)
-#define READ_BC_ALT() ((mRegs.b_alt << 8) | mRegs.c_alt)
-#define READ_DE_ALT() ((mRegs.d_alt << 8) | mRegs.e_alt)
-#define READ_HL_ALT() ((mRegs.h_alt << 8) | mRegs.l_alt)
-
-#define WRITE_AF(val)                  \
-    do {                               \
-        mRegs.a = ((val) >> 8) & 0xff; \
-        mRegs.f = (val) & 0xff;        \
-    } while (0)
-#define WRITE_BC(val)                  \
-    do {                               \
-        mRegs.b = ((val) >> 8) & 0xff; \
-        mRegs.c = (val) & 0xff;        \
-    } while (0)
-#define WRITE_DE(val)                  \
-    do {                               \
-        mRegs.d = ((val) >> 8) & 0xff; \
-        mRegs.e = (val) & 0xff;        \
-    } while (0)
-#define WRITE_HL(val)                  \
-    do {                               \
-        mRegs.h = ((val) >> 8) & 0xff; \
-        mRegs.l = (val) & 0xff;        \
-    } while (0)
-#define WRITE_IX(val)     \
-    do {                  \
-        mRegs.ix = (val); \
-    } while (0)
-#define WRITE_IY(val)     \
-    do {                  \
-        mRegs.iy = (val); \
-    } while (0)
-#define WRITE_SP(val)     \
-    do {                  \
-        mRegs.sp = (val); \
-    } while (0)
-
-#define WRITE_AF_ALT(val)                  \
-    do {                                   \
-        mRegs.a_alt = ((val) >> 8) & 0xff; \
-        mRegs.f_alt = (val) & 0xff;        \
-    } while (0)
-#define WRITE_BC_ALT(val)                  \
-    do {                                   \
-        mRegs.b_alt = ((val) >> 8) & 0xff; \
-        mRegs.c_alt = (val) & 0xff;        \
-    } while (0)
-#define WRITE_DE_ALT(val)                  \
-    do {                                   \
-        mRegs.d_alt = ((val) >> 8) & 0xff; \
-        mRegs.e_alt = (val) & 0xff;        \
-    } while (0)
-#define WRITE_HL_ALT(val)                  \
-    do {                                   \
-        mRegs.h_alt = ((val) >> 8) & 0xff; \
-        mRegs.l_alt = (val) & 0xff;        \
-    } while (0)
-
 uint16_t CpuZ80::read_qq_reg(int dd) {
     switch (dd) {
         default:
         case 0b00:
-            return READ_BC();
+            return read_bc();
         case 0b01:
-            return READ_DE();
+            return read_de();
         case 0b10:
-            return READ_HL();
+            return read_hl();
         case 0b11:
-            return READ_AF();
+            return read_af();
     }
 }
 
@@ -129,16 +53,16 @@ void CpuZ80::write_qq_reg(int dd, uint16_t val) {
     switch (dd) {
         default:
         case 0b00:
-            WRITE_BC(val);
+            write_bc(val);
             break;
         case 0b01:
-            WRITE_DE(val);
+            write_de(val);
             break;
         case 0b10:
-            WRITE_HL(val);
+            write_hl(val);
             break;
         case 0b11:
-            WRITE_AF(val);
+            write_af(val);
             break;
     }
 }
@@ -147,13 +71,13 @@ uint16_t CpuZ80::read_dd_reg(int dd) {
     switch (dd) {
         default:
         case 0b00:
-            return READ_BC();
+            return read_bc();
         case 0b01:
-            return READ_DE();
+            return read_de();
         case 0b10:
-            return READ_HL();
+            return read_hl();
         case 0b11:
-            return READ_SP();
+            return read_sp();
     }
 }
 
@@ -161,16 +85,16 @@ void CpuZ80::write_dd_reg(int dd, uint16_t val) {
     switch (dd) {
         default:
         case 0b00:
-            WRITE_BC(val);
+            write_bc(val);
             break;
         case 0b01:
-            WRITE_DE(val);
+            write_de(val);
             break;
         case 0b10:
-            WRITE_HL(val);
+            write_hl(val);
             break;
         case 0b11:
-            WRITE_SP(val);
+            write_sp(val);
             break;
     }
 }
@@ -200,7 +124,7 @@ uint8_t CpuZ80::read_r_reg(int r) {
 // for opcodes where the missing register encoding hole is for (HL)
 uint8_t CpuZ80::read_r_reg_or_hl(int r) {
     if (r == 0b110) {
-        return mSys.MemRead8(READ_HL());
+        return mSys.MemRead8(read_hl());
     } else {
         return read_r_reg(r);
     }
@@ -238,7 +162,7 @@ void CpuZ80::write_r_reg(int r, uint8_t val) {
 // for opcodes where the missing register encoding hole is for (HL)
 void CpuZ80::write_r_reg_or_hl(int r, uint8_t val) {
     if (r == 0b110) {
-        mSys.MemWrite8(READ_HL(), val);
+        mSys.MemWrite8(read_hl(), val);
     } else {
         write_r_reg(r, val);
     }
@@ -295,57 +219,57 @@ uint8_t CpuZ80::in(uint8_t addr) {
     return mSys.IORead8(addr);
 }
 
-void CpuZ80::set_flag(int flag, int val) {
+void CpuZ80::set_flag(Flag flag, bool val) {
     if (val) {
-        mRegs.f |= (1 << flag);
+        mRegs.f |= (1 << (int)flag);
     } else {
-        mRegs.f &= ~(1 << flag);
+        mRegs.f &= ~(1 << (int)flag);
     }
 }
 
-bool CpuZ80::get_flag(int flag) {
-    return !!(mRegs.f & (1 << flag));
+bool CpuZ80::get_flag(Flag flag) const {
+    return !!(mRegs.f & (1 << (int)flag));
 }
 
 bool CpuZ80::test_cond(int cond) {
     switch (cond) {
         case 0:
-            if (!get_flag(FLAG_Z)) {
+            if (!get_flag(Flag::Z)) {
                 return true;
             }
             break; // NZ
         case 1:
-            if (get_flag(FLAG_Z)) {
+            if (get_flag(Flag::Z)) {
                 return true;
             }
             break; // Z
         case 2:
-            if (!get_flag(FLAG_C)) {
+            if (!get_flag(Flag::C)) {
                 return true;
             }
             break; // NC
         case 3:
-            if (get_flag(FLAG_C)) {
+            if (get_flag(Flag::C)) {
                 return true;
             }
             break; // C
         case 4:
-            if (!get_flag(FLAG_PV)) {
+            if (!get_flag(Flag::PV)) {
                 return true;
             }
             break; // PO
         case 5:
-            if (get_flag(FLAG_PV)) {
+            if (get_flag(Flag::PV)) {
                 return true;
             }
             break; // PE
         case 6:
-            if (!get_flag(FLAG_S)) {
+            if (!get_flag(Flag::S)) {
                 return true;
             }
             break; // P
         case 7:
-            if (get_flag(FLAG_S)) {
+            if (get_flag(Flag::S)) {
                 return true;
             }
             break; // M
@@ -373,20 +297,20 @@ static int calc_parity(uint8_t val) {
 }
 
 void CpuZ80::set_z_flag(uint8_t val) {
-    set_flag(FLAG_Z, val == 0); // zero flag
+    set_flag(Flag::Z, val == 0); // zero flag
 }
 
 void CpuZ80::set_s_flag(uint8_t val) {
-    set_flag(FLAG_S, BIT(val, 7)); // sign flag
+    set_flag(Flag::S, BIT(val, 7) != 0); // sign flag
 }
 
 void CpuZ80::set_flags(uint8_t val) {
     set_s_flag(val);
     set_z_flag(val);
-    set_flag(FLAG_PV, calc_parity(val));
-    set_flag(FLAG_H, 0);
-    set_flag(FLAG_N, 0);
-    set_flag(FLAG_C, 0);
+    set_flag(Flag::PV, calc_parity(val) != 0);
+    set_flag(Flag::H, false);
+    set_flag(Flag::N, false);
+    set_flag(Flag::C, false);
 }
 
 int CpuZ80::Run() {
@@ -470,110 +394,110 @@ decode:
                 case 0b10100010: // INI
                     LPRINTF("INI\n");
                     temp8 = in(mRegs.c);
-                    mSys.MemWrite8(READ_HL(), temp8);
-                    WRITE_HL(READ_HL() + 1);
+                    mSys.MemWrite8(read_hl(), temp8);
+                    write_hl(read_hl() + 1);
                     mRegs.b--;
-                    set_flag(FLAG_Z, mRegs.b == 0);
-                    set_flag(FLAG_N, 1);
+                    set_flag(Flag::Z, mRegs.b == 0);
+                    set_flag(Flag::N, 1);
                     break;
                 case 0b10110010: // INIR
                     LPRINTF("INIR\n");
                     temp8 = in(mRegs.c);
-                    mSys.MemWrite8(READ_HL(), temp8);
-                    WRITE_HL(READ_HL() + 1);
+                    mSys.MemWrite8(read_hl(), temp8);
+                    write_hl(read_hl() + 1);
                     mRegs.b--;
-                    set_flag(FLAG_Z, 1);
-                    set_flag(FLAG_N, 1);
+                    set_flag(Flag::Z, 1);
+                    set_flag(Flag::N, 1);
                     if (mRegs.b != 0) {
                         mRegs.pc -= 2;
-                        set_flag(FLAG_Z, 0);
+                        set_flag(Flag::Z, 0);
                     }
                     break;
                 case 0b10101010: // IND
                     LPRINTF("IND\n");
                     temp8 = in(mRegs.c);
-                    mSys.MemWrite8(READ_HL(), temp8);
-                    WRITE_HL(READ_HL() - 1);
+                    mSys.MemWrite8(read_hl(), temp8);
+                    write_hl(read_hl() - 1);
                     mRegs.b--;
-                    set_flag(FLAG_Z, mRegs.b == 0);
-                    set_flag(FLAG_N, 1);
+                    set_flag(Flag::Z, mRegs.b == 0);
+                    set_flag(Flag::N, 1);
                     break;
                 case 0b10111010: // INDR
                     LPRINTF("INDR\n");
                     temp8 = in(mRegs.c);
-                    mSys.MemWrite8(READ_HL(), temp8);
-                    WRITE_HL(READ_HL() - 1);
+                    mSys.MemWrite8(read_hl(), temp8);
+                    write_hl(read_hl() - 1);
                     mRegs.b--;
-                    set_flag(FLAG_Z, 1);
-                    set_flag(FLAG_N, 1);
+                    set_flag(Flag::Z, 1);
+                    set_flag(Flag::N, 1);
                     if (mRegs.b != 0) {
                         mRegs.pc -= 2;
-                        set_flag(FLAG_Z, 0);
+                        set_flag(Flag::Z, 0);
                     }
                     break;
                 case 0b10100011: // OUTI
                     LPRINTF("OUTI\n");
                     mRegs.b--;
-                    temp8 = mSys.MemRead8(READ_HL());
+                    temp8 = mSys.MemRead8(read_hl());
                     out(mRegs.c, temp8);
-                    WRITE_HL(READ_HL() + 1);
-                    set_flag(FLAG_Z, mRegs.b == 0);
-                    set_flag(FLAG_N, 1);
+                    write_hl(read_hl() + 1);
+                    set_flag(Flag::Z, mRegs.b == 0);
+                    set_flag(Flag::N, 1);
                     break;
                 case 0b10110011: // OTIR
                     LPRINTF("OTIR\n");
                     mRegs.b--;
-                    temp8 = mSys.MemRead8(READ_HL());
+                    temp8 = mSys.MemRead8(read_hl());
                     out(mRegs.c, temp8);
-                    WRITE_HL(READ_HL() + 1);
-                    set_flag(FLAG_Z, 1);
-                    set_flag(FLAG_N, 1);
+                    write_hl(read_hl() + 1);
+                    set_flag(Flag::Z, 1);
+                    set_flag(Flag::N, 1);
                     if (mRegs.b != 0) {
                         mRegs.pc -= 2;
-                        set_flag(FLAG_Z, 0);
+                        set_flag(Flag::Z, 0);
                     }
                     break;
                 case 0b10101011: // OUTD
                     LPRINTF("OUTD\n");
                     mRegs.b--;
-                    temp8 = mSys.MemRead8(READ_HL());
+                    temp8 = mSys.MemRead8(read_hl());
                     out(mRegs.c, temp8);
-                    WRITE_HL(READ_HL() - 1);
-                    set_flag(FLAG_Z, mRegs.b == 0);
-                    set_flag(FLAG_N, 1);
+                    write_hl(read_hl() - 1);
+                    set_flag(Flag::Z, mRegs.b == 0);
+                    set_flag(Flag::N, 1);
                     break;
                 case 0b10111011: // OTDR
                     LPRINTF("OTDR\n");
                     mRegs.b--;
-                    temp8 = mSys.MemRead8(READ_HL());
+                    temp8 = mSys.MemRead8(read_hl());
                     out(mRegs.c, temp8);
-                    WRITE_HL(READ_HL() - 1);
-                    set_flag(FLAG_Z, 1);
-                    set_flag(FLAG_N, 1);
+                    write_hl(read_hl() - 1);
+                    set_flag(Flag::Z, 1);
+                    set_flag(Flag::N, 1);
                     if (mRegs.b != 0) {
                         mRegs.pc -= 2;
-                        set_flag(FLAG_Z, 0);
+                        set_flag(Flag::Z, 0);
                     }
                     break;
                 case 0b10110000: // LDIR
                     LPRINTF("LDIR\n");
 
-                    temp8 = mSys.MemRead8(READ_HL());
-                    mSys.MemWrite8(READ_DE(), temp8);
+                    temp8 = mSys.MemRead8(read_hl());
+                    mSys.MemWrite8(read_de(), temp8);
 
-                    LPRINTF("copying from 0x%x to 0x%x value 0x%hhx\n", READ_HL(),
-                            READ_DE(), temp8);
+                    LPRINTF("copying from 0x%x to 0x%x value 0x%hhx\n", read_hl(),
+                            read_de(), temp8);
 
-                    WRITE_HL(READ_HL() + 1);
-                    WRITE_DE(READ_DE() + 1);
-                    WRITE_BC(READ_BC() - 1);
-                    if (READ_BC() != 0) {
+                    write_hl(read_hl() + 1);
+                    write_de(read_de() + 1);
+                    write_bc(read_bc() - 1);
+                    if (read_bc() != 0) {
                         mRegs.pc -= 2; // repeat the instruction
                     }
 
-                    set_flag(FLAG_H, 0);
-                    set_flag(FLAG_PV, 0);
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::H, 0);
+                    set_flag(Flag::PV, 0);
+                    set_flag(Flag::N, 0);
                     break;
                 case 0b01000011:
                 case 0b01010011:
@@ -626,9 +550,9 @@ decode:
                     LPRINTF("BIT %u, r\n", bit);
 
                     temp8 = read_r_reg_or_hl(BITS(op, 2, 0)) & (1 << bit);
-                    set_flag(FLAG_Z, temp8 == 0);
-                    set_flag(FLAG_H, 1);
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::Z, temp8 == 0);
+                    set_flag(Flag::H, 1);
+                    set_flag(Flag::N, 0);
                     break;
                 }
                 case 0b10000000 ... 0b10111111: { // RES
@@ -744,7 +668,7 @@ decode:
                 case 0b00111000: { // JR C, e
                     LPRINTF("JR C, e\n");
                     int8_t rel = read_n();
-                    if (get_flag(FLAG_C)) {
+                    if (get_flag(Flag::C)) {
                         mRegs.pc += rel;
                     }
                     break;
@@ -752,7 +676,7 @@ decode:
                 case 0b00110000: { // JR NC, e
                     LPRINTF("JR NC, e\n");
                     int8_t rel = read_n();
-                    if (!get_flag(FLAG_C)) {
+                    if (!get_flag(Flag::C)) {
                         mRegs.pc += rel;
                     }
                     break;
@@ -760,7 +684,7 @@ decode:
                 case 0b00101000: { // JR Z, e
                     LPRINTF("JR Z, e\n");
                     int8_t rel = read_n();
-                    if (get_flag(FLAG_Z)) {
+                    if (get_flag(Flag::Z)) {
                         mRegs.pc += rel;
                     }
                     break;
@@ -768,7 +692,7 @@ decode:
                 case 0b00100000: { // JR NZ, e
                     LPRINTF("JR NZ, e\n");
                     int8_t rel = read_n();
-                    if (!get_flag(FLAG_Z)) {
+                    if (!get_flag(Flag::Z)) {
                         mRegs.pc += rel;
                     }
                     break;
@@ -802,7 +726,7 @@ decode:
                         break;
                     } else if (prefix_dd && r2 == 0b110) {
                         LPRINTF("LD r, (IX+d)\n");
-                        temp16 = READ_IX() + read_n();
+                        temp16 = read_ix() + read_n();
                         temp8 = mSys.MemRead8(temp16);
                         if (r != 0b110) { // no (HL) form
                             write_r_reg(r, temp8);
@@ -810,7 +734,7 @@ decode:
                         consume_prefix_dd = true;
                     } else if (prefix_fd && r2 == 0b110) {
                         LPRINTF("LD r, (IY+d)\n");
-                        temp16 = READ_IY() + read_n();
+                        temp16 = read_iy() + read_n();
                         temp8 = mSys.MemRead8(temp16);
                         if (r != 0b110) { // no (HL) form
                             write_r_reg(r, temp8);
@@ -830,11 +754,11 @@ decode:
                     break;
                 case 0b00000010: // LD (BC), A
                     LPRINTF("LD (BC), A)\n");
-                    mSys.MemWrite8(READ_BC(), mRegs.a);
+                    mSys.MemWrite8(read_bc(), mRegs.a);
                     break;
                 case 0b00010010: // LD (DE), A
                     LPRINTF("LD (DE), A)\n");
-                    mSys.MemWrite8(READ_DE(), mRegs.a);
+                    mSys.MemWrite8(read_de(), mRegs.a);
                     break;
 
                 case 0b00000110:
@@ -849,7 +773,7 @@ decode:
                     break;
                 case 0b00110110: // LD (HL), n
                     LPRINTF("LD (HL), n\n");
-                    mSys.MemWrite8(READ_HL(), read_n());
+                    mSys.MemWrite8(read_hl(), read_n());
                     break;
                 case 0b00000001:
                 case 0b00010001:
@@ -857,10 +781,10 @@ decode:
                 case 0b00110001: // LD dd, nn
                     LPRINTF("LD dd, nn\n");
                     if (prefix_dd && op == 0x21) {
-                        WRITE_IX(read_nn());
+                        write_ix(read_nn());
                         consume_prefix_dd = true;
                     } else if (prefix_fd && op == 0x21) {
-                        WRITE_IY(read_nn());
+                        write_iy(read_nn());
                         consume_prefix_fd = true;
                     } else {
                         dd = BITS_SHIFT(op, 5, 4);
@@ -870,7 +794,7 @@ decode:
 
                 case 0b11111001: // LD SP, HL
                     LPRINTF("LD SP, HL\n");
-                    WRITE_SP(READ_HL());
+                    write_sp(read_hl());
                     break;
 
                 case 0b00100010: // LD (nn), HL
@@ -895,11 +819,11 @@ decode:
                     break;
                 case 0b00001010: // LD A, (BC)
                     LPRINTF("LD A, (BC)\n");
-                    mRegs.a = mSys.MemRead8(READ_BC());
+                    mRegs.a = mSys.MemRead8(read_bc());
                     break;
                 case 0b00011010: // LD A, (DE)
                     LPRINTF("LD A, (DE)\n");
-                    mRegs.a = mSys.MemRead8(READ_DE());
+                    mRegs.a = mSys.MemRead8(read_de());
                     break;
                 case 0b11000101:
                 case 0b11010101:
@@ -921,8 +845,8 @@ decode:
                 case 0b11100011: // EX (SP), HL
                     LPRINTF("EX (SP), HL\n");
                     temp16 = pop16();
-                    push16(READ_HL());
-                    WRITE_HL(temp16);
+                    push16(read_hl());
+                    write_hl(temp16);
                     break;
                 case 0b11000111:
                 case 0b11001111:
@@ -942,17 +866,17 @@ decode:
                 case 0b11101011: // EX DE, HL
                     LPRINTF("EX DE, HL\n");
 
-                    temp16 = READ_DE();
-                    WRITE_DE(READ_HL());
-                    WRITE_HL(temp16);
+                    temp16 = read_de();
+                    write_de(read_hl());
+                    write_hl(temp16);
                     break;
 
                 case 0b00001000: // EX AF, AF'
                     LPRINTF("EX AF, AF'\n");
 
-                    temp16 = READ_AF();
-                    WRITE_AF(READ_AF_ALT());
-                    WRITE_AF_ALT(temp16);
+                    temp16 = read_af();
+                    write_af(read_af_alt());
+                    write_af_alt(temp16);
                     break;
 
                 case 0b00001001:
@@ -962,14 +886,14 @@ decode:
                     LPRINTF("ADD HL, ss\n");
                     dd = BITS_SHIFT(op, 5, 4);
                     temp16 = read_dd_reg(dd);
-                    uint16_t hl = READ_HL();
-                    WRITE_HL(hl + temp16);
+                    uint16_t hl = read_hl();
+                    write_hl(hl + temp16);
 
                     // compute the flags
-                    set_flag(FLAG_C, (uint32_t)hl + temp16 > 0xffff); // carry out of bit 15
-                    set_flag(FLAG_H, (hl & 0xfff) + (temp16 & 0xfff) >
+                    set_flag(Flag::C, (uint32_t)hl + temp16 > 0xffff); // carry out of bit 15
+                    set_flag(Flag::H, (hl & 0xfff) + (temp16 & 0xfff) >
                                          0xfff); // carry out of bit 11
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::N, 0);
                     break;
                 }
                 case 0b00001011:
@@ -1006,16 +930,16 @@ decode:
                     temp8 = old + 1;
                     write_r_reg_or_hl(r, temp8);
 
-                    set_flag(FLAG_PV, old == 0x7f);
+                    set_flag(Flag::PV, old == 0x7f);
                     set_s_flag(temp8);
                     set_z_flag(temp8);
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::N, 0);
 
                     // half carry
                     if (BIT(old, 3) && !BIT(temp8, 3)) {
-                        set_flag(FLAG_H, 1);
+                        set_flag(Flag::H, 1);
                     } else {
-                        set_flag(FLAG_H, 0);
+                        set_flag(Flag::H, 0);
                     }
 
                     break;
@@ -1036,16 +960,16 @@ decode:
                     temp8 = old - 1;
                     write_r_reg_or_hl(r, temp8);
 
-                    set_flag(FLAG_PV, old == 0x80);
+                    set_flag(Flag::PV, old == 0x80);
                     set_s_flag(temp8);
                     set_z_flag(temp8);
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::N, 0);
 
                     // half carry
                     if ((old & 0x0f) == 0) {
-                        set_flag(FLAG_H, 1);
+                        set_flag(Flag::H, 1);
                     } else {
-                        set_flag(FLAG_H, 0);
+                        set_flag(Flag::H, 0);
                     }
 
                     break;
@@ -1055,12 +979,12 @@ decode:
                     LPRINTF("ADD A, r\n");
                     uint8_t val = read_r_reg_or_hl(BITS(op, 2, 0));
                     temp8 = mRegs.a + val;
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
-                    set_flag(FLAG_H, (mRegs.a & 0xf) + (val & 0xf) > 0xf);
-                    set_flag(FLAG_PV, ((mRegs.a ^ temp8) & (val ^ temp8) & 0x80) != 0);
-                    set_flag(FLAG_N, 0);
-                    set_flag(FLAG_C, (uint16_t)mRegs.a + val > 0xff);
+                    set_flag(Flag::S, temp8 & 0x80);
+                    set_flag(Flag::Z, temp8 == 0);
+                    set_flag(Flag::H, (mRegs.a & 0xf) + (val & 0xf) > 0xf);
+                    set_flag(Flag::PV, ((mRegs.a ^ temp8) & (val ^ temp8) & 0x80) != 0);
+                    set_flag(Flag::N, 0);
+                    set_flag(Flag::C, (uint16_t)mRegs.a + val > 0xff);
                     mRegs.a = temp8;
                     break;
                 }
@@ -1068,14 +992,14 @@ decode:
                 case 0b10001000 ... 0b10001111: { // ADC A, r / ADC A, (HL)
                     LPRINTF("ADC A, r/(HL)\n");
                     uint8_t b = read_r_reg_or_hl(BITS(op, 2, 0));
-                    uint8_t c = get_flag(FLAG_C) ? 1 : 0;
+                    uint8_t c = get_flag(Flag::C) ? 1 : 0;
 
                     uint8_t res = mRegs.a + b + c;
 
-                    set_flag(FLAG_C, (uint16_t)mRegs.a + b + c > 0xff);
-                    set_flag(FLAG_N, 0);
-                    set_flag(FLAG_PV, ((mRegs.a ^ res) & (b ^ res) & 0x80) != 0);
-                    set_flag(FLAG_H, (mRegs.a ^ res ^ b) & (1 << 4));
+                    set_flag(Flag::C, (uint16_t)mRegs.a + b + c > 0xff);
+                    set_flag(Flag::N, 0);
+                    set_flag(Flag::PV, ((mRegs.a ^ res) & (b ^ res) & 0x80) != 0);
+                    set_flag(Flag::H, (mRegs.a ^ res ^ b) & (1 << 4));
                     set_s_flag(res);
                     set_z_flag(res);
 
@@ -1087,12 +1011,12 @@ decode:
                     LPRINTF("SUB r\n");
                     uint8_t val = read_r_reg_or_hl(BITS(op, 2, 0));
                     temp8 = mRegs.a - val;
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
-                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
-                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
-                    set_flag(FLAG_N, 1);
-                    set_flag(FLAG_C, mRegs.a < val);
+                    set_flag(Flag::S, temp8 & 0x80);
+                    set_flag(Flag::Z, temp8 == 0);
+                    set_flag(Flag::H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(Flag::PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(Flag::N, 1);
+                    set_flag(Flag::C, mRegs.a < val);
                     mRegs.a = temp8;
                     break;
                 }
@@ -1100,14 +1024,14 @@ decode:
                 case 0b10011000 ... 0b10011111: { // SBC A, r / SBC A, (HL)
                     LPRINTF("SBC A, r/(HL)\n");
                     uint8_t b = read_r_reg_or_hl(BITS(op, 2, 0));
-                    uint8_t c = get_flag(FLAG_C) ? 1 : 0;
+                    uint8_t c = get_flag(Flag::C) ? 1 : 0;
 
                     uint8_t res = mRegs.a - b - c;
 
-                    set_flag(FLAG_C, (int)mRegs.a < (int)b + (int)c);
-                    set_flag(FLAG_N, 1);
-                    set_flag(FLAG_PV, ((mRegs.a ^ b) & (mRegs.a ^ res) & 0x80) != 0);
-                    set_flag(FLAG_H, (mRegs.a ^ res ^ b) & (1 << 4));
+                    set_flag(Flag::C, (int)mRegs.a < (int)b + (int)c);
+                    set_flag(Flag::N, 1);
+                    set_flag(Flag::PV, ((mRegs.a ^ b) & (mRegs.a ^ res) & 0x80) != 0);
+                    set_flag(Flag::H, (mRegs.a ^ res ^ b) & (1 << 4));
                     set_s_flag(res);
                     set_z_flag(res);
 
@@ -1119,14 +1043,14 @@ decode:
                     LPRINTF("AND r/(HL)\n");
                     mRegs.a &= read_r_reg_or_hl(BITS(op, 2, 0));
                     set_flags(mRegs.a);
-                    set_flag(FLAG_H, 1);
+                    set_flag(Flag::H, 1);
                     break;
 
                 case 0b11100110: // AND n
                     LPRINTF("AND n\n");
                     mRegs.a &= read_n();
                     set_flags(mRegs.a);
-                    set_flag(FLAG_H, 1);
+                    set_flag(Flag::H, 1);
                     // TODO: check on overflow
                     break;
 
@@ -1158,12 +1082,12 @@ decode:
                     LPRINTF("CP r\n");
                     uint8_t val = read_r_reg_or_hl(BITS(op, 2, 0));
                     temp8 = mRegs.a - val;
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
-                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
-                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
-                    set_flag(FLAG_N, 1);
-                    set_flag(FLAG_C, mRegs.a < val);
+                    set_flag(Flag::S, temp8 & 0x80);
+                    set_flag(Flag::Z, temp8 == 0);
+                    set_flag(Flag::H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(Flag::PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(Flag::N, 1);
+                    set_flag(Flag::C, mRegs.a < val);
                     break;
                 }
 
@@ -1171,12 +1095,12 @@ decode:
                     LPRINTF("ADD A, n\n");
                     uint8_t val = read_n();
                     temp8 = mRegs.a + val;
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
-                    set_flag(FLAG_H, (mRegs.a & 0xf) + (val & 0xf) > 0xf);
-                    set_flag(FLAG_PV, ((mRegs.a ^ temp8) & (val ^ temp8) & 0x80) != 0);
-                    set_flag(FLAG_N, 0);
-                    set_flag(FLAG_C, (uint16_t)mRegs.a + val > 0xff);
+                    set_flag(Flag::S, temp8 & 0x80);
+                    set_flag(Flag::Z, temp8 == 0);
+                    set_flag(Flag::H, (mRegs.a & 0xf) + (val & 0xf) > 0xf);
+                    set_flag(Flag::PV, ((mRegs.a ^ temp8) & (val ^ temp8) & 0x80) != 0);
+                    set_flag(Flag::N, 0);
+                    set_flag(Flag::C, (uint16_t)mRegs.a + val > 0xff);
                     mRegs.a = temp8;
                     break;
                 }
@@ -1185,12 +1109,12 @@ decode:
                     LPRINTF("SUB n\n");
                     uint8_t val = read_n();
                     temp8 = mRegs.a - val;
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
-                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
-                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
-                    set_flag(FLAG_N, 1);
-                    set_flag(FLAG_C, mRegs.a < val);
+                    set_flag(Flag::S, temp8 & 0x80);
+                    set_flag(Flag::Z, temp8 == 0);
+                    set_flag(Flag::H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(Flag::PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(Flag::N, 1);
+                    set_flag(Flag::C, mRegs.a < val);
                     mRegs.a = temp8;
                     break;
                 }
@@ -1199,55 +1123,55 @@ decode:
                     LPRINTF("CP n\n");
                     uint8_t val = read_n();
                     temp8 = mRegs.a - val;
-                    set_flag(FLAG_S, temp8 & 0x80);
-                    set_flag(FLAG_Z, temp8 == 0);
-                    set_flag(FLAG_H, (mRegs.a & 0xf) < (val & 0xf));
-                    set_flag(FLAG_PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
-                    set_flag(FLAG_N, 1);
-                    set_flag(FLAG_C, mRegs.a < val);
+                    set_flag(Flag::S, temp8 & 0x80);
+                    set_flag(Flag::Z, temp8 == 0);
+                    set_flag(Flag::H, (mRegs.a & 0xf) < (val & 0xf));
+                    set_flag(Flag::PV, ((mRegs.a ^ val) & (mRegs.a ^ temp8) & 0x80) != 0);
+                    set_flag(Flag::N, 1);
+                    set_flag(Flag::C, mRegs.a < val);
                     break;
                 }
 
                 case 0b00000111: // RLCA
                     LPRINTF("RLCA\n");
                     temp8 = (mRegs.a << 1) | ((mRegs.a >> 7) & 0x1);
-                    set_flag(FLAG_C, mRegs.a & 0x80);
-                    set_flag(FLAG_H, 0);
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::C, mRegs.a & 0x80);
+                    set_flag(Flag::H, 0);
+                    set_flag(Flag::N, 0);
                     mRegs.a = temp8;
                     break;
 
                 case 0b00001111: // RRCA
                     LPRINTF("RRCA\n");
                     temp8 = (mRegs.a >> 1) | ((mRegs.a << 7) & 0x80);
-                    set_flag(FLAG_C, mRegs.a & 0x1);
-                    set_flag(FLAG_H, 0);
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::C, mRegs.a & 0x1);
+                    set_flag(Flag::H, 0);
+                    set_flag(Flag::N, 0);
                     mRegs.a = temp8;
                     break;
 
                 case 0b00011111: // RRA
                     LPRINTF("RRA\n");
                     temp8 = (mRegs.a >> 1);
-                    temp8 |= get_flag(FLAG_C) ? (1 << 7) : 0;
-                    set_flag(FLAG_C, mRegs.a & 0x1);
-                    set_flag(FLAG_H, 0);
-                    set_flag(FLAG_N, 0);
+                    temp8 |= get_flag(Flag::C) ? (1 << 7) : 0;
+                    set_flag(Flag::C, mRegs.a & 0x1);
+                    set_flag(Flag::H, 0);
+                    set_flag(Flag::N, 0);
                     mRegs.a = temp8;
                     break;
 
                 case 0b00111111: // CCF
                     LPRINTF("CCF\n");
-                    set_flag(FLAG_H, get_flag(FLAG_C));
-                    set_flag(FLAG_C, !get_flag(FLAG_C));
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::H, get_flag(Flag::C));
+                    set_flag(Flag::C, !get_flag(Flag::C));
+                    set_flag(Flag::N, 0);
                     break;
 
                 case 0b00110111: // SCF
                     LPRINTF("SCF\n");
-                    set_flag(FLAG_C, 1);
-                    set_flag(FLAG_H, 0);
-                    set_flag(FLAG_N, 0);
+                    set_flag(Flag::C, 1);
+                    set_flag(Flag::H, 0);
+                    set_flag(Flag::N, 0);
                     break;
 
                 case 0b11011001: // EXX
@@ -1324,11 +1248,11 @@ void CpuZ80::LowerNMI() {
 
 void CpuZ80::Dump() {
     printf("f 0x%02hhx (%c%c%c%c%c%c) a 0x%02hhx b 0x%02hhx c 0x%02hhx d 0x%02hhx e 0x%02hhx h 0x%02hhx l 0x%02hhx ",
-           mRegs.f, get_flag(FLAG_C) ? 'c' : ' ', get_flag(FLAG_N) ? 'n' : ' ', get_flag(FLAG_PV) ? 'p' : ' ',
-           get_flag(FLAG_H) ? 'h' : ' ', get_flag(FLAG_Z) ? 'z' : ' ', get_flag(FLAG_S) ? 's' : ' ',
+           mRegs.f, get_flag(Flag::C) ? 'c' : ' ', get_flag(Flag::N) ? 'n' : ' ', get_flag(Flag::PV) ? 'p' : ' ',
+           get_flag(Flag::H) ? 'h' : ' ', get_flag(Flag::Z) ? 'z' : ' ', get_flag(Flag::S) ? 's' : ' ',
            mRegs.a, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h, mRegs.l);
     printf("sp 0x%04hx ix 0x%04hx iy 0x%04hx pc 0x%04hx\n",
-           mRegs.sp, mRegs.ix, mRegs.iy, mRegs.pc);
+           read_sp(), read_ix(), read_iy(), mRegs.pc);
 }
 
 void CpuZ80::Reset() {

@@ -63,15 +63,77 @@ class CpuZ80 final : public Cpu {
     void push_pc();
     uint8_t pop8();
     uint16_t pop16();
-    void set_flag(int flag, int val);
+    enum class Flag : uint8_t {
+        C = 0,
+        N = 1,
+        PV = 2,
+        F3 = 3,
+        H = 4,
+        F5 = 5,
+        Z = 6,
+        S = 7
+    };
+
+    void set_flag(Flag flag, bool val);
     void set_flags(uint8_t val);
     void set_s_flag(uint8_t val);
     void set_z_flag(uint8_t val);
-    bool get_flag(int flag);
+    bool get_flag(Flag flag) const;
     bool test_cond(int cond);
 
     void out(uint8_t addr, uint8_t val);
     uint8_t in(uint8_t addr);
+
+    // register accessors
+    uint16_t read_af() const { return (mRegs.a << 8) | mRegs.f; }
+    uint16_t read_bc() const { return (mRegs.b << 8) | mRegs.c; }
+    uint16_t read_de() const { return (mRegs.d << 8) | mRegs.e; }
+    uint16_t read_hl() const { return (mRegs.h << 8) | mRegs.l; }
+    uint16_t read_ix() const { return mRegs.ix; }
+    uint16_t read_iy() const { return mRegs.iy; }
+    uint16_t read_sp() const { return mRegs.sp; }
+
+    uint16_t read_af_alt() const { return (mRegs.a_alt << 8) | mRegs.f_alt; }
+    uint16_t read_bc_alt() const { return (mRegs.b_alt << 8) | mRegs.c_alt; }
+    uint16_t read_de_alt() const { return (mRegs.d_alt << 8) | mRegs.e_alt; }
+    uint16_t read_hl_alt() const { return (mRegs.h_alt << 8) | mRegs.l_alt; }
+
+    void write_af(uint16_t val) {
+        mRegs.a = (val >> 8) & 0xff;
+        mRegs.f = val & 0xff;
+    }
+    void write_bc(uint16_t val) {
+        mRegs.b = (val >> 8) & 0xff;
+        mRegs.c = val & 0xff;
+    }
+    void write_de(uint16_t val) {
+        mRegs.d = (val >> 8) & 0xff;
+        mRegs.e = val & 0xff;
+    }
+    void write_hl(uint16_t val) {
+        mRegs.h = (val >> 8) & 0xff;
+        mRegs.l = val & 0xff;
+    }
+    void write_ix(uint16_t val) { mRegs.ix = val; }
+    void write_iy(uint16_t val) { mRegs.iy = val; }
+    void write_sp(uint16_t val) { mRegs.sp = val; }
+
+    void write_af_alt(uint16_t val) {
+        mRegs.a_alt = (val >> 8) & 0xff;
+        mRegs.f_alt = val & 0xff;
+    }
+    void write_bc_alt(uint16_t val) {
+        mRegs.b_alt = (val >> 8) & 0xff;
+        mRegs.c_alt = val & 0xff;
+    }
+    void write_de_alt(uint16_t val) {
+        mRegs.d_alt = (val >> 8) & 0xff;
+        mRegs.e_alt = val & 0xff;
+    }
+    void write_hl_alt(uint16_t val) {
+        mRegs.h_alt = (val >> 8) & 0xff;
+        mRegs.l_alt = val & 0xff;
+    }
 
     // register file
     struct {
