@@ -635,16 +635,16 @@ decode:
                     uint8_t bit = BITS_SHIFT(op, 6, 3);
                     LPRINTF("RES %u, r\n", bit);
 
-                    write_r_reg_or_hl(BITS(op, 2, 0),
-                                      read_r_reg_or_hl(BITS(op, 2, 0)) & ~(1 << bit));
+                    uint8_t reg = BITS(op, 2, 0);
+                    write_r_reg_or_hl(reg, read_r_reg_or_hl(reg) & ~(1 << bit));
                     break;
                 }
                 case 0xc0 ... 0xff: { // SET
                     uint8_t bit = BITS_SHIFT(op, 6, 3);
                     LPRINTF("SET %u, r\n", bit);
 
-                    write_r_reg_or_hl(BITS(op, 2, 0),
-                                      read_r_reg_or_hl(BITS(op, 2, 0)) | (1 << bit));
+                    uint8_t reg = BITS(op, 2, 0);
+                    write_r_reg_or_hl(reg, read_r_reg_or_hl(reg) | (1 << bit));
                     break;
                 }
                 default:
@@ -1042,7 +1042,7 @@ decode:
                     set_flag(FLAG_N, 0);
 
                     // half carry
-                    if (BIT(old, 4) && !BIT(temp8, 4)) {
+                    if ((old & 0x0f) == 0) {
                         set_flag(FLAG_H, 1);
                     } else {
                         set_flag(FLAG_H, 0);
@@ -1071,11 +1071,10 @@ decode:
                     uint8_t c = get_flag(FLAG_C) ? 1 : 0;
 
                     uint8_t res = mRegs.a + b + c;
-                    int res_i = (int)mRegs.a + (int)b + (int)c;
 
                     set_flag(FLAG_C, (uint16_t)mRegs.a + b + c > 0xff);
                     set_flag(FLAG_N, 0);
-                    set_flag(FLAG_PV, (res_i > 127) || (res_i < -128));
+                    set_flag(FLAG_PV, ((mRegs.a ^ res) & (b ^ res) & 0x80) != 0);
                     set_flag(FLAG_H, (mRegs.a ^ res ^ b) & (1 << 4));
                     set_s_flag(res);
                     set_z_flag(res);
@@ -1104,11 +1103,10 @@ decode:
                     uint8_t c = get_flag(FLAG_C) ? 1 : 0;
 
                     uint8_t res = mRegs.a - b - c;
-                    int res_i = (int)mRegs.a - (int)b - (int)c;
 
-                    set_flag(FLAG_C, mRegs.a < (b + c));
+                    set_flag(FLAG_C, (int)mRegs.a < (int)b + (int)c);
                     set_flag(FLAG_N, 1);
-                    set_flag(FLAG_PV, (res_i < -128) || (res_i > 127));
+                    set_flag(FLAG_PV, ((mRegs.a ^ b) & (mRegs.a ^ res) & 0x80) != 0);
                     set_flag(FLAG_H, (mRegs.a ^ res ^ b) & (1 << 4));
                     set_s_flag(res);
                     set_z_flag(res);
@@ -1241,7 +1239,7 @@ decode:
                 case 0b00111111: // CCF
                     LPRINTF("CCF\n");
                     set_flag(FLAG_H, get_flag(FLAG_C));
-                    set_flag(FLAG_C, !(mRegs.f & FLAG_C));
+                    set_flag(FLAG_C, !get_flag(FLAG_C));
                     set_flag(FLAG_N, 0);
                     break;
 
