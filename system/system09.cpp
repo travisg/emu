@@ -28,22 +28,22 @@
 #include <iostream>
 
 #include "cpu/cpu6809.h"
-#include "dev/memory.h"
 #include "dev/mc6850.h"
+#include "dev/memory.h"
 #include "dev/uart16550.h"
 #include "ihex.h"
 
-#define DEFAULT_ROM "test/BASIC.HEX"
+#define DEFAULT_ROM "roms/6809/BASIC.HEX"
 
 using namespace std;
 
 System::SystemInfo System09::GetSystemInfo() {
-    return { "6809", "6809", DEFAULT_ROM };
+    return {"6809", "6809", DEFAULT_ROM};
 }
 
 // a simple 6809 based system
 System09::System09(const std::string &subsystem)
-    :   System(subsystem) {
+    : System(subsystem) {
     mRomString = DEFAULT_ROM;
 }
 
@@ -51,7 +51,7 @@ System09::~System09() {
 }
 
 void System09::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len) {
-    //printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
+    // printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
 
     for (size_t i = 0; i < len; i++) {
         size_t addr = address;
@@ -69,12 +69,12 @@ int System09::Init() {
 
     // create a bank of memory
     Memory *mem = new Memory();
-    mem->Alloc(32*1024);
+    mem->Alloc(32 * 1024);
     mMem.reset(mem);
 
     // create a bank of rom
     mem = new Memory();
-    mem->Alloc(16*1024);
+    mem->Alloc(16 * 1024);
     mRom.reset(mem);
 
     // create a 6809 based cpu
@@ -99,10 +99,9 @@ int System09::Init() {
 
     // use the ihex library to parse the rom file
     hex.SetCallback(
-    [this](const uint8_t *ptr, size_t offset, size_t len) {
-        this->iHexParseCallback(ptr, offset, len);
-    }
-    );
+        [this](const uint8_t *ptr, size_t offset, size_t len) {
+            this->iHexParseCallback(ptr, offset, len);
+        });
 
     hex.Open(mRomString);
     hex.Parse();
@@ -120,10 +119,11 @@ uint8_t System09::MemRead8(size_t address) {
     uint8_t val = 0;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
-    if (mem)
+    if (mem) {
         val = mem->ReadByte(address);
+    }
 
-    //cout << "MemRead8 @0x" << hex << address << " val " << (unsigned int)val << endl;
+    // cout << "MemRead8 @0x" << hex << address << " val " << (unsigned int)val << endl;
     return val;
 }
 
@@ -131,10 +131,11 @@ void System09::MemWrite8(size_t address, uint8_t val) {
     address &= 0xffff;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
-    if (mem)
+    if (mem) {
         mem->WriteByte(address, val);
+    }
 
-    //cout << "MemWrite8 @0x" << hex << address << " val " << (unsigned int)val << endl;
+    // cout << "MemWrite8 @0x" << hex << address << " val " << (unsigned int)val << endl;
 }
 
 MemoryDevice *System09::GetDeviceAtAddr(size_t &address) {
@@ -146,8 +147,8 @@ MemoryDevice *System09::GetDeviceAtAddr(size_t &address) {
         case 0x0000 ... 0x7fff:
             return mMem.get();
 
-        // device space
-        // 8 slots of 0x800 bytes
+            // device space
+            // 8 slots of 0x800 bytes
 
         case 0x8000 ... 0x87ff:
             if (mMemoryLayout == MemoryLayout::OBC) {
@@ -173,5 +174,3 @@ MemoryDevice *System09::GetDeviceAtAddr(size_t &address) {
             return NULL;
     }
 }
-
-

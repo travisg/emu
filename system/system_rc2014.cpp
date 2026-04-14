@@ -41,7 +41,7 @@
 // small computer monitor for pagable rom, 64k ram, at offset 0x4000 - 0x8000 (double banked)
 // CP/M monitor for pageable rom for SIO/2 at offset 0x8000
 // small computer monitor for everything at offset 0xe000
-#define DEFAULT_ROM "rom/rc2014/24886009.BIN"
+#define DEFAULT_ROM "roms/rc2014/24886009.BIN"
 
 #define LOCAL_TRACE 0
 #define TRACE_MEM   0

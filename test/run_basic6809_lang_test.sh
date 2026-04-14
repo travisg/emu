@@ -5,7 +5,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 EMU_BIN="$ROOT_DIR/build-emu/emu"
-ROM_FILE="$ROOT_DIR/test/BASIC.HEX"
+ROM_FILE="$ROOT_DIR/roms/6809/BASIC.HEX"
 PROGRAM_FILE="$SCRIPT_DIR/basic6809_lang_test.bas"
 LOG_FILE="${1:-$SCRIPT_DIR/basic6809_lang_test.log}"
 

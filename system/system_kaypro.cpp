@@ -32,8 +32,8 @@
 #include "ihex.h"
 #include "trace.h"
 
-#define DEFAULT_ROM "kayproii_u47.bin"
-#define VIDEO_ROM   "kayproii_u43.bin"
+#define DEFAULT_ROM "roms/kaypro/kayproii_u47.bin"
+#define VIDEO_ROM   "roms/kaypro/kayproii_u43.bin"
 
 #define LOCAL_TRACE 0
 

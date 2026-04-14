@@ -28,20 +28,20 @@
 #include <iostream>
 
 #include "cpu/cpu6800.h"
-#include "dev/memory.h"
 #include "dev/mc6850.h"
+#include "dev/memory.h"
 #include "ihex.h"
 
-#define DEFAULT_ROM "mits680b.bin"
+#define DEFAULT_ROM "roms/mits680b/mits680b.bin"
 
 using namespace std;
 
 System::SystemInfo Altair680::GetSystemInfo() {
-    return { "altair680", "6800", DEFAULT_ROM };
+    return {"altair680", "6800", DEFAULT_ROM};
 }
 
 Altair680::Altair680(const std::string &subsystem)
-    :   System(subsystem) {
+    : System(subsystem) {
     mRomString = DEFAULT_ROM;
 }
 
@@ -49,7 +49,7 @@ Altair680::~Altair680() {
 }
 
 void Altair680::iHexParseCallback(const uint8_t *ptr, size_t address, size_t len) {
-    //printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
+    // printf("parsecallback %p address %#zx length %#zx\n", ptr, address, len);
 
     for (size_t i = 0; i < len; i++) {
         size_t addr = address;
@@ -66,7 +66,7 @@ int Altair680::Init() {
 
     // create a bank of memory
     Memory *mem = new Memory();
-    mem->Alloc(32*1024);
+    mem->Alloc(32 * 1024);
     mMem.reset(mem);
 
     // create a bank of rom for the monitor
@@ -115,10 +115,11 @@ uint8_t Altair680::MemRead8(size_t address) {
     uint8_t val = 0;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
-    if (mem)
+    if (mem) {
         val = mem->ReadByte(address);
+    }
 
-    //cout << "\tMemRead8 at 0x" << hex << address << " val " << (unsigned int)val << endl;
+    // cout << "\tMemRead8 at 0x" << hex << address << " val " << (unsigned int)val << endl;
     return val;
 }
 
@@ -126,10 +127,11 @@ void Altair680::MemWrite8(size_t address, uint8_t val) {
     address &= 0xffff;
 
     MemoryDevice *mem = GetDeviceAtAddr(address);
-    if (mem)
+    if (mem) {
         mem->WriteByte(address, val);
+    }
 
-    //cout << "\tMemWrite8 at 0x" << hex << address << " val " << (unsigned int)val << endl;
+    // cout << "\tMemWrite8 at 0x" << hex << address << " val " << (unsigned int)val << endl;
 }
 
 MemoryDevice *Altair680::GetDeviceAtAddr(size_t &address) {
@@ -178,5 +180,3 @@ MemoryDevice *Altair680::GetDeviceAtAddr(size_t &address) {
             return NULL;
     }
 }
-
-
