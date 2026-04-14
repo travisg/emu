@@ -22,15 +22,17 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <cstdio>
 #include <cassert>
+#include <cstdio>
 #include <iostream>
 
 #include "memory.h"
 #include "uart16550.h"
 
-//#define TRACEF(str, x...) do { printf("uart16550: " str, ## x); } while (0)
-#define TRACEF(str, x...) do { } while (0)
+// #define TRACEF(str, x...) do { printf("uart16550: " str, ## x); } while (0)
+#define TRACEF(str, x...) \
+    do {                  \
+    } while (0)
 
 using namespace std;
 
@@ -49,11 +51,10 @@ using namespace std;
 #define DLM 9
 
 // control bits
-#define LCR_DLAB (1<<7)
-
+#define LCR_DLAB (1 << 7)
 
 uart16550::uart16550(Console &con)
-    :   mConsole(con) {
+    : mConsole(con) {
 }
 
 uart16550::~uart16550() {
@@ -108,10 +109,10 @@ uint8_t uart16550::ReadByte(size_t address) {
             break;
         case LSR:
             // line status + the transmitter hold register and transmitter empty always set
-            val = (1<<5) | (1<<6);
+            val = (1 << 5) | (1 << 6);
 
             // if we have any pending receive data, set the Data Ready bit
-            val |= (mPendingRx >= 0) ? (1<<0) : 0;
+            val |= (mPendingRx >= 0) ? (1 << 0) : 0;
             break;
         case MSR:
             break;
@@ -166,5 +167,3 @@ void uart16550::WriteByte(size_t address, uint8_t val) {
             break;
     }
 }
-
-

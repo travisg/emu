@@ -21,16 +21,16 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <memory>
 #include <cstdio>
-#include <iostream>
-#include <unistd.h>
-#include <getopt.h>
 #include <fcntl.h>
+#include <getopt.h>
+#include <iostream>
+#include <memory>
 #include <termios.h>
+#include <unistd.h>
 
-#include "system/system.h"
 #include "console.h"
+#include "system/system.h"
 
 using namespace std;
 
@@ -71,8 +71,9 @@ int main(int argc, char **argv) {
         };
 
         c = getopt_long(argc, argv, "c:hr:s:l:", long_options, &option_index);
-        if (c == -1)
+        if (c == -1) {
             break;
+        }
 
         switch (c) {
             case 'c':
@@ -130,4 +131,3 @@ int main(int argc, char **argv) {
 
     return 0;
 }
-

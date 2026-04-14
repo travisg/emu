@@ -27,7 +27,6 @@
 
 #include "cpu.h"
 
-
 /* registers */
 enum regnum {
     REG_X,
@@ -43,7 +42,7 @@ enum regnum {
 };
 
 class Cpu6809 final : public Cpu {
-public:
+  public:
     explicit Cpu6809(System &sys);
     virtual ~Cpu6809() override;
 
@@ -52,7 +51,7 @@ public:
 
     virtual void Dump() override;
 
-private:
+  private:
     uint16_t GetReg(regnum r);
     uint16_t PutReg(regnum r, uint16_t val); // returns old value
 
@@ -71,11 +70,9 @@ private:
     uint16_t mU;
     uint16_t mS;
     uint16_t mPC;
-    uint8_t  mDP;
-    uint8_t  mCC;
+    uint8_t mDP;
+    uint8_t mCC;
 
     // any exceptions pending?
     unsigned int mException;
 };
-
-

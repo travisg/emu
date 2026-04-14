@@ -26,20 +26,19 @@
 #include <cstdint>
 #include <sys/types.h>
 
-#include "memory.h"
 #include "console.h"
+#include "memory.h"
 
 class uart16550 : public MemoryDevice {
-public:
+  public:
     uart16550(Console &con);
     virtual ~uart16550() override;
 
     virtual uint8_t ReadByte(size_t address) override;
     virtual void WriteByte(size_t address, uint8_t val) override;
 
-private:
+  private:
     uint8_t mRegisters[8 + 2] = {};
     int mPendingRx = -1;
     Console &mConsole;
 };
-

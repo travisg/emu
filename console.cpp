@@ -24,11 +24,11 @@
 #include "console.h"
 
 #include <cstdio>
+#include <fcntl.h>
 #include <iostream>
 #include <mutex>
-#include <unistd.h>
-#include <fcntl.h>
 #include <termios.h>
+#include <unistd.h>
 
 static struct termios oldstdin;
 static struct termios oldstdout;
@@ -51,13 +51,13 @@ static void setconsole() {
     t.c_lflag &= ~(ICANON | ECHO | ISIG); // no input processing
     // Don't interpret various control characters, pass them through instead
     t.c_cc[VINTR] = t.c_cc[VQUIT] = t.c_cc[VSUSP] = '\0';
-    t.c_cc[VMIN]  = 1;
+    t.c_cc[VMIN] = 1;
     t.c_cc[VTIME] = 0;
     tcsetattr(0, TCSANOW, &t);
 
-    //tcgetattr(1, &t);
-    //t.c_lflag &= ~(ICANON | ECHO); // no input processing
-    //tcsetattr(1, TCSANOW, &t);
+    // tcgetattr(1, &t);
+    // t.c_lflag &= ~(ICANON | ECHO); // no input processing
+    // tcsetattr(1, TCSANOW, &t);
 }
 
 Console::Console() {
@@ -117,4 +117,3 @@ int Console::GetNextChar() {
 
     return nc;
 }
-

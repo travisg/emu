@@ -23,11 +23,11 @@
  */
 #pragma once
 
-#include <cstdint>
-#include <string>
-#include <memory>
-#include "system.h"
 #include "console.h"
+#include "system.h"
+#include <cstdint>
+#include <memory>
+#include <string>
 
 class Console;
 class CpuZ80;
@@ -36,7 +36,7 @@ class Memory;
 
 // a Z80 based RC2014
 class SystemRC2014 final : public System {
-public:
+  public:
     static SystemInfo GetSystemInfo();
 
     SystemRC2014(const std::string &subsystem);
@@ -48,13 +48,13 @@ public:
 
     virtual Console *GetConsole() override { return &mConsole; }
 
-    virtual uint8_t  MemRead8(size_t address) override;
-    virtual void     MemWrite8(size_t address, uint8_t val) override;
+    virtual uint8_t MemRead8(size_t address) override;
+    virtual void MemWrite8(size_t address, uint8_t val) override;
 
-    virtual uint8_t  IORead8(size_t address) override;
-    virtual void     IOWrite8(size_t address, uint8_t val) override;
+    virtual uint8_t IORead8(size_t address) override;
+    virtual void IOWrite8(size_t address, uint8_t val) override;
 
-private:
+  private:
     void iHexParseCallback(const uint8_t *ptr, size_t offset, size_t len);
 
     void OnConsoleInBufferAdd(size_t count);

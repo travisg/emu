@@ -23,13 +23,13 @@
  */
 #pragma once
 
-#include <cstdint>
 #include <atomic>
+#include <cstdint>
 
 #include "cpu.h"
 
 class CpuZ80 final : public Cpu {
-public:
+  public:
     explicit CpuZ80(System &sys) : Cpu(sys) {};
 
     virtual void Reset() override;
@@ -44,7 +44,7 @@ public:
 
     uint16_t GetPC() { return mRegs.pc; }
 
-private:
+  private:
     // internal routines
     uint16_t read_qq_reg(int dd);
     void write_qq_reg(int dd, uint16_t val);
@@ -105,6 +105,3 @@ private:
     std::atomic<bool> mIRQLevel = {};
     std::atomic<bool> mNMILevel = {};
 };
-
-
-

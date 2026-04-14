@@ -23,14 +23,14 @@
  */
 #pragma once
 
-#include <queue>
-#include <mutex>
 #include <functional>
+#include <mutex>
+#include <queue>
 
 /* encapsulates the console the emulator is started on */
 
 class Console {
-public:
+  public:
     Console();
     virtual ~Console();
 
@@ -47,12 +47,11 @@ public:
     using InBufferCountAdd = void(size_t count);
     void RegisterInBufferCountAdd(const std::function<InBufferCountAdd> &func);
 
-protected:
+  protected:
     std::queue<char> mOutBuffer;
     std::queue<char> mInBuffer;
     std::recursive_mutex mLock;
 
-private:
+  private:
     std::function<InBufferCountAdd> mInBufferCountAddHook;
 };
-

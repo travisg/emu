@@ -20,18 +20,18 @@ uint8_t WD1793::Read(int reg) {
         case 2: // Sector Register
             val = mSector;
             break;
-    case 3: // Data Register
-        if (mDrq && mSectorIndex < mBufferCount) {
-            val = mSectorBytes[mSectorIndex++];
-            if (mSectorIndex >= mBufferCount) {
-                mDrq = false;   // No more data
-                mIntrq = true;  // Operation complete
-                mStatus = 0x00; // clear busy
+        case 3: // Data Register
+            if (mDrq && mSectorIndex < mBufferCount) {
+                val = mSectorBytes[mSectorIndex++];
+                if (mSectorIndex >= mBufferCount) {
+                    mDrq = false;   // No more data
+                    mIntrq = true;  // Operation complete
+                    mStatus = 0x00; // clear busy
+                }
+            } else {
+                val = mData;
             }
-        } else {
-            val = mData;
-        }
-        break;
+            break;
     }
     LTRACEF("WD1793: read reg %d = 0x%02x\n", reg, val);
     return val;
@@ -96,11 +96,11 @@ void WD1793::ProcessCommand() {
         mSectorIndex = 0;
         mBufferCount = 6;
         mSectorBytes[0] = mTrack;
-        mSectorBytes[1] = 0; // side 0
+        mSectorBytes[1] = 0;       // side 0
         mSectorBytes[2] = mSector; // sector
-        mSectorBytes[3] = 2; // 512 byte sectors
-        mSectorBytes[4] = 0; // crc
-        mSectorBytes[5] = 0; // crc
+        mSectorBytes[3] = 2;       // 512 byte sectors
+        mSectorBytes[4] = 0;       // crc
+        mSectorBytes[5] = 0;       // crc
         mDrq = true;
     } else if ((mCommand & 0xf0) == 0xd0) {
         // Type IV: Force Interrupt (0xd0-0xdf)

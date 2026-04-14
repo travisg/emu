@@ -23,15 +23,18 @@
  */
 #include "cpu6800.h"
 
-#include <cstdio>
 #include <cassert>
+#include <cstdio>
 
-#include "system/system.h"
 #include "bits.h"
+#include "system/system.h"
 
 #define TRACE 0
 
-#define TRACEF(str, x...) do { if (TRACE) printf(str, ## x); } while (0)
+#define TRACEF(str, x...)            \
+    do {                             \
+        if (TRACE) printf(str, ##x); \
+    } while (0)
 
 using namespace std;
 
@@ -61,12 +64,12 @@ using regnum = Cpu6800::regnum;
 #define COND_GT 0xe
 #define COND_LE 0xf
 
-#define CC_C  (0x01)
-#define CC_V  (0x02)
-#define CC_Z  (0x04)
-#define CC_N  (0x08)
-#define CC_I  (0x10)
-#define CC_H  (0x20)
+#define CC_C (0x01)
+#define CC_V (0x02)
+#define CC_Z (0x04)
+#define CC_N (0x08)
+#define CC_I (0x10)
+#define CC_H (0x20)
 
 /* decode table */
 enum addrMode {
@@ -135,250 +138,250 @@ struct opdecode {
 
 // opcode table, one per byte
 static constexpr opdecode ops[256] = {
-// alu ops
-    [0x8b] = { "adda", IMMEDIATE, 1, ADD, regnum::REG_A, { 0 } },
-    [0xcb] = { "addb", IMMEDIATE, 1, ADD, regnum::REG_B, { 0 } },
-    [0x9b] = { "adda", DIRECT, 1, ADD, regnum::REG_A, { 0 } },
-    [0xdb] = { "addb", DIRECT, 1, ADD, regnum::REG_B, { 0 } },
-    [0xab] = { "adda", INDEXED, 1, ADD, regnum::REG_A, { 0 } },
-    [0xeb] = { "addb", INDEXED, 1, ADD, regnum::REG_B, { 0 } },
-    [0xbb] = { "adda", EXTENDED, 1, ADD, regnum::REG_A, { 0 } },
-    [0xfb] = { "addb", EXTENDED, 1, ADD, regnum::REG_B, { 0 } },
+    // alu ops
+    [0x8b] = {"adda", IMMEDIATE, 1, ADD, regnum::REG_A, {0}},
+    [0xcb] = {"addb", IMMEDIATE, 1, ADD, regnum::REG_B, {0}},
+    [0x9b] = {"adda", DIRECT, 1, ADD, regnum::REG_A, {0}},
+    [0xdb] = {"addb", DIRECT, 1, ADD, regnum::REG_B, {0}},
+    [0xab] = {"adda", INDEXED, 1, ADD, regnum::REG_A, {0}},
+    [0xeb] = {"addb", INDEXED, 1, ADD, regnum::REG_B, {0}},
+    [0xbb] = {"adda", EXTENDED, 1, ADD, regnum::REG_A, {0}},
+    [0xfb] = {"addb", EXTENDED, 1, ADD, regnum::REG_B, {0}},
 
-    [0x1b] = { "aba",  IMPLIED, 1, ADD_ACCUM, regnum::REG_A, { 0 } },
+    [0x1b] = {"aba", IMPLIED, 1, ADD_ACCUM, regnum::REG_A, {0}},
 
-    [0x89] = { "adca", IMMEDIATE, 1, ADC, regnum::REG_A, { 0 } },
-    [0xc9] = { "adcb", IMMEDIATE, 1, ADC, regnum::REG_B, { 0 } },
-    [0x99] = { "adca", DIRECT, 1, ADC, regnum::REG_A, { 0 } },
-    [0xd9] = { "adcb", DIRECT, 1, ADC, regnum::REG_B, { 0 } },
-    [0xa9] = { "adca", INDEXED, 1, ADC, regnum::REG_A, { 0 } },
-    [0xe9] = { "adcb", INDEXED, 1, ADC, regnum::REG_B, { 0 } },
-    [0xb9] = { "adca", EXTENDED, 1, ADC, regnum::REG_A, { 0 } },
-    [0xf9] = { "adcb", EXTENDED, 1, ADC, regnum::REG_B, { 0 } },
+    [0x89] = {"adca", IMMEDIATE, 1, ADC, regnum::REG_A, {0}},
+    [0xc9] = {"adcb", IMMEDIATE, 1, ADC, regnum::REG_B, {0}},
+    [0x99] = {"adca", DIRECT, 1, ADC, regnum::REG_A, {0}},
+    [0xd9] = {"adcb", DIRECT, 1, ADC, regnum::REG_B, {0}},
+    [0xa9] = {"adca", INDEXED, 1, ADC, regnum::REG_A, {0}},
+    [0xe9] = {"adcb", INDEXED, 1, ADC, regnum::REG_B, {0}},
+    [0xb9] = {"adca", EXTENDED, 1, ADC, regnum::REG_A, {0}},
+    [0xf9] = {"adcb", EXTENDED, 1, ADC, regnum::REG_B, {0}},
 
-    [0x80] = { "suba", IMMEDIATE, 1, SUB, regnum::REG_A, { 0 } },
-    [0xc0] = { "subb", IMMEDIATE, 1, SUB, regnum::REG_B, { 0 } },
-    [0x90] = { "suba", DIRECT, 1, SUB, regnum::REG_A, { 0 } },
-    [0xd0] = { "subb", DIRECT, 1, SUB, regnum::REG_B, { 0 } },
-    [0xa0] = { "suba", INDEXED, 1, SUB, regnum::REG_A, { 0 } },
-    [0xe0] = { "subb", INDEXED, 1, SUB, regnum::REG_B, { 0 } },
-    [0xb0] = { "suba", EXTENDED, 1, SUB, regnum::REG_A, { 0 } },
-    [0xf0] = { "subb", EXTENDED, 1, SUB, regnum::REG_B, { 0 } },
+    [0x80] = {"suba", IMMEDIATE, 1, SUB, regnum::REG_A, {0}},
+    [0xc0] = {"subb", IMMEDIATE, 1, SUB, regnum::REG_B, {0}},
+    [0x90] = {"suba", DIRECT, 1, SUB, regnum::REG_A, {0}},
+    [0xd0] = {"subb", DIRECT, 1, SUB, regnum::REG_B, {0}},
+    [0xa0] = {"suba", INDEXED, 1, SUB, regnum::REG_A, {0}},
+    [0xe0] = {"subb", INDEXED, 1, SUB, regnum::REG_B, {0}},
+    [0xb0] = {"suba", EXTENDED, 1, SUB, regnum::REG_A, {0}},
+    [0xf0] = {"subb", EXTENDED, 1, SUB, regnum::REG_B, {0}},
 
-    [0x10] = { "sba",  IMPLIED, 1, SUB_ACCUM, regnum::REG_A, { 0 } },
+    [0x10] = {"sba", IMPLIED, 1, SUB_ACCUM, regnum::REG_A, {0}},
 
-    [0x82] = { "sbca", IMMEDIATE, 1, SBC, regnum::REG_A, { 0 } },
-    [0xc2] = { "sbcb", IMMEDIATE, 1, SBC, regnum::REG_B, { 0 } },
-    [0x92] = { "sbca", DIRECT, 1, SBC, regnum::REG_A, { 0 } },
-    [0xd2] = { "sbcb", DIRECT, 1, SBC, regnum::REG_B, { 0 } },
-    [0xa2] = { "sbca", INDEXED, 1, SBC, regnum::REG_A, { 0 } },
-    [0xe2] = { "sbcb", INDEXED, 1, SBC, regnum::REG_B, { 0 } },
-    [0xb2] = { "sbca", EXTENDED, 1, SBC, regnum::REG_A, { 0 } },
-    [0xf2] = { "sbcb", EXTENDED, 1, SBC, regnum::REG_B, { 0 } },
+    [0x82] = {"sbca", IMMEDIATE, 1, SBC, regnum::REG_A, {0}},
+    [0xc2] = {"sbcb", IMMEDIATE, 1, SBC, regnum::REG_B, {0}},
+    [0x92] = {"sbca", DIRECT, 1, SBC, regnum::REG_A, {0}},
+    [0xd2] = {"sbcb", DIRECT, 1, SBC, regnum::REG_B, {0}},
+    [0xa2] = {"sbca", INDEXED, 1, SBC, regnum::REG_A, {0}},
+    [0xe2] = {"sbcb", INDEXED, 1, SBC, regnum::REG_B, {0}},
+    [0xb2] = {"sbca", EXTENDED, 1, SBC, regnum::REG_A, {0}},
+    [0xf2] = {"sbcb", EXTENDED, 1, SBC, regnum::REG_B, {0}},
 
-    [0x81] = { "cmpa", IMMEDIATE, 1, CMP, regnum::REG_A, { 0 } },
-    [0xc1] = { "cmpb", IMMEDIATE, 1, CMP, regnum::REG_B, { 0 } },
-    [0x8c] = { "cpx", IMMEDIATE, 2, CMP, regnum::REG_IX, { 0 } },
-    [0x91] = { "cmpa", DIRECT, 1, CMP, regnum::REG_A, { 0 } },
-    [0xd1] = { "cmpb", DIRECT, 1, CMP, regnum::REG_B, { 0 } },
-    [0x9c] = { "cpx", DIRECT, 2, CMP, regnum::REG_IX, { 0 } },
-    [0xa1] = { "cmpa", INDEXED, 1, CMP, regnum::REG_A, { 0 } },
-    [0xe1] = { "cmpb", INDEXED, 1, CMP, regnum::REG_B, { 0 } },
-    [0xac] = { "cpx", INDEXED, 2, CMP, regnum::REG_IX, { 0 } },
-    [0xb1] = { "cmpa", EXTENDED, 1, CMP, regnum::REG_A, { 0 } },
-    [0xf1] = { "cmpb", EXTENDED, 1, CMP, regnum::REG_B, { 0 } },
-    [0xbc] = { "cpx", EXTENDED, 2, CMP, regnum::REG_IX, { 0 } },
+    [0x81] = {"cmpa", IMMEDIATE, 1, CMP, regnum::REG_A, {0}},
+    [0xc1] = {"cmpb", IMMEDIATE, 1, CMP, regnum::REG_B, {0}},
+    [0x8c] = {"cpx", IMMEDIATE, 2, CMP, regnum::REG_IX, {0}},
+    [0x91] = {"cmpa", DIRECT, 1, CMP, regnum::REG_A, {0}},
+    [0xd1] = {"cmpb", DIRECT, 1, CMP, regnum::REG_B, {0}},
+    [0x9c] = {"cpx", DIRECT, 2, CMP, regnum::REG_IX, {0}},
+    [0xa1] = {"cmpa", INDEXED, 1, CMP, regnum::REG_A, {0}},
+    [0xe1] = {"cmpb", INDEXED, 1, CMP, regnum::REG_B, {0}},
+    [0xac] = {"cpx", INDEXED, 2, CMP, regnum::REG_IX, {0}},
+    [0xb1] = {"cmpa", EXTENDED, 1, CMP, regnum::REG_A, {0}},
+    [0xf1] = {"cmpb", EXTENDED, 1, CMP, regnum::REG_B, {0}},
+    [0xbc] = {"cpx", EXTENDED, 2, CMP, regnum::REG_IX, {0}},
 
-    [0x11] = { "cba", IMPLIED, 1, CMP_ACCUM, regnum::REG_A, { 0 } },
+    [0x11] = {"cba", IMPLIED, 1, CMP_ACCUM, regnum::REG_A, {0}},
 
-    [0x84] = { "anda", IMMEDIATE, 1, AND, regnum::REG_A, { 0 } },
-    [0xc4] = { "andb", IMMEDIATE, 1, AND, regnum::REG_B, { 0 } },
-    [0x94] = { "anda", DIRECT, 1, AND, regnum::REG_A, { 0 } },
-    [0xd4] = { "andb", DIRECT, 1, AND, regnum::REG_B, { 0 } },
-    [0xa4] = { "anda", INDEXED, 1, AND, regnum::REG_A, { 0 } },
-    [0xe4] = { "andb", INDEXED, 1, AND, regnum::REG_B, { 0 } },
-    [0xb4] = { "anda", EXTENDED, 1, AND, regnum::REG_A, { 0 } },
-    [0xf4] = { "andb", EXTENDED, 1, AND, regnum::REG_B, { 0 } },
+    [0x84] = {"anda", IMMEDIATE, 1, AND, regnum::REG_A, {0}},
+    [0xc4] = {"andb", IMMEDIATE, 1, AND, regnum::REG_B, {0}},
+    [0x94] = {"anda", DIRECT, 1, AND, regnum::REG_A, {0}},
+    [0xd4] = {"andb", DIRECT, 1, AND, regnum::REG_B, {0}},
+    [0xa4] = {"anda", INDEXED, 1, AND, regnum::REG_A, {0}},
+    [0xe4] = {"andb", INDEXED, 1, AND, regnum::REG_B, {0}},
+    [0xb4] = {"anda", EXTENDED, 1, AND, regnum::REG_A, {0}},
+    [0xf4] = {"andb", EXTENDED, 1, AND, regnum::REG_B, {0}},
 
-    [0x85] = { "bita", IMMEDIATE, 1, BIT, regnum::REG_A, { 0 } },
-    [0xc5] = { "bitb", IMMEDIATE, 1, BIT, regnum::REG_B, { 0 } },
-    [0x95] = { "bita", DIRECT, 1, BIT, regnum::REG_A, { 0 } },
-    [0xd5] = { "bitb", DIRECT, 1, BIT, regnum::REG_B, { 0 } },
-    [0xa5] = { "bita", INDEXED, 1, BIT, regnum::REG_A, { 0 } },
-    [0xe5] = { "bitb", INDEXED, 1, BIT, regnum::REG_B, { 0 } },
-    [0xb5] = { "bita", EXTENDED, 1, BIT, regnum::REG_A, { 0 } },
-    [0xf5] = { "bitb", EXTENDED, 1, BIT, regnum::REG_B, { 0 } },
+    [0x85] = {"bita", IMMEDIATE, 1, BIT, regnum::REG_A, {0}},
+    [0xc5] = {"bitb", IMMEDIATE, 1, BIT, regnum::REG_B, {0}},
+    [0x95] = {"bita", DIRECT, 1, BIT, regnum::REG_A, {0}},
+    [0xd5] = {"bitb", DIRECT, 1, BIT, regnum::REG_B, {0}},
+    [0xa5] = {"bita", INDEXED, 1, BIT, regnum::REG_A, {0}},
+    [0xe5] = {"bitb", INDEXED, 1, BIT, regnum::REG_B, {0}},
+    [0xb5] = {"bita", EXTENDED, 1, BIT, regnum::REG_A, {0}},
+    [0xf5] = {"bitb", EXTENDED, 1, BIT, regnum::REG_B, {0}},
 
-    [0x88] = { "eora", IMMEDIATE, 1, EOR, regnum::REG_A, { 0 } },
-    [0xc8] = { "eorb", IMMEDIATE, 1, EOR, regnum::REG_B, { 0 } },
-    [0x98] = { "eora", DIRECT, 1, EOR, regnum::REG_A, { 0 } },
-    [0xd8] = { "eorb", DIRECT, 1, EOR, regnum::REG_B, { 0 } },
-    [0xa8] = { "eora", INDEXED, 1, EOR, regnum::REG_A, { 0 } },
-    [0xe8] = { "eorb", INDEXED, 1, EOR, regnum::REG_B, { 0 } },
-    [0xb8] = { "eora", EXTENDED, 1, EOR, regnum::REG_A, { 0 } },
-    [0xf8] = { "eorb", EXTENDED, 1, EOR, regnum::REG_B, { 0 } },
+    [0x88] = {"eora", IMMEDIATE, 1, EOR, regnum::REG_A, {0}},
+    [0xc8] = {"eorb", IMMEDIATE, 1, EOR, regnum::REG_B, {0}},
+    [0x98] = {"eora", DIRECT, 1, EOR, regnum::REG_A, {0}},
+    [0xd8] = {"eorb", DIRECT, 1, EOR, regnum::REG_B, {0}},
+    [0xa8] = {"eora", INDEXED, 1, EOR, regnum::REG_A, {0}},
+    [0xe8] = {"eorb", INDEXED, 1, EOR, regnum::REG_B, {0}},
+    [0xb8] = {"eora", EXTENDED, 1, EOR, regnum::REG_A, {0}},
+    [0xf8] = {"eorb", EXTENDED, 1, EOR, regnum::REG_B, {0}},
 
-    [0x8a] = { "ora", IMMEDIATE, 1, OR, regnum::REG_A, { 0 } },
-    [0xca] = { "orb", IMMEDIATE, 1, OR, regnum::REG_B, { 0 } },
-    [0x9a] = { "ora", DIRECT, 1, OR, regnum::REG_A, { 0 } },
-    [0xda] = { "orb", DIRECT, 1, OR, regnum::REG_B, { 0 } },
-    [0xaa] = { "ora", INDEXED, 1, OR, regnum::REG_A, { 0 } },
-    [0xea] = { "orb", INDEXED, 1, OR, regnum::REG_B, { 0 } },
-    [0xba] = { "ora", EXTENDED, 1, OR, regnum::REG_A, { 0 } },
-    [0xfa] = { "orb", EXTENDED, 1, OR, regnum::REG_B, { 0 } },
+    [0x8a] = {"ora", IMMEDIATE, 1, OR, regnum::REG_A, {0}},
+    [0xca] = {"orb", IMMEDIATE, 1, OR, regnum::REG_B, {0}},
+    [0x9a] = {"ora", DIRECT, 1, OR, regnum::REG_A, {0}},
+    [0xda] = {"orb", DIRECT, 1, OR, regnum::REG_B, {0}},
+    [0xaa] = {"ora", INDEXED, 1, OR, regnum::REG_A, {0}},
+    [0xea] = {"orb", INDEXED, 1, OR, regnum::REG_B, {0}},
+    [0xba] = {"ora", EXTENDED, 1, OR, regnum::REG_A, {0}},
+    [0xfa] = {"orb", EXTENDED, 1, OR, regnum::REG_B, {0}},
 
-// misc
-    [0x01] = { "nop",  IMPLIED, 1, NOP, regnum::REG_A, { 0 } },
+    // misc
+    [0x01] = {"nop", IMPLIED, 1, NOP, regnum::REG_A, {0}},
 
-    [0x16] = { "tab",  IMPLIED, 1, TFR, regnum::REG_B, { 0 } },
-    [0x17] = { "tba",  IMPLIED, 1, TFR, regnum::REG_A, { 0 } },
+    [0x16] = {"tab", IMPLIED, 1, TFR, regnum::REG_B, {0}},
+    [0x17] = {"tba", IMPLIED, 1, TFR, regnum::REG_A, {0}},
 
-    [0x35] = { "txs",  IMPLIED, 2, TFR, regnum::REG_SP, { 0 } },
-    [0x30] = { "tsx",  IMPLIED, 2, TFR, regnum::REG_IX, { 0 } },
+    [0x35] = {"txs", IMPLIED, 2, TFR, regnum::REG_SP, {0}},
+    [0x30] = {"tsx", IMPLIED, 2, TFR, regnum::REG_IX, {0}},
 
-    [0x07] = { "tpa",  IMPLIED, 1, TFR_CC, regnum::REG_A, { 0 } },
-    [0x06] = { "tap",  IMPLIED, 1, TFR_CC, regnum::REG_CC, { 0 } },
+    [0x07] = {"tpa", IMPLIED, 1, TFR_CC, regnum::REG_A, {0}},
+    [0x06] = {"tap", IMPLIED, 1, TFR_CC, regnum::REG_CC, {0}},
 
-    [0x0b] = { "sev",  IMPLIED, 1, SEcc, regnum::REG_PC, { .cc_flag = CC_V } },
-    [0x0d] = { "sec",  IMPLIED, 1, SEcc, regnum::REG_PC, { .cc_flag = CC_C } },
-    [0x0f] = { "sei",  IMPLIED, 1, SEcc, regnum::REG_PC, { .cc_flag = CC_I } },
+    [0x0b] = {"sev", IMPLIED, 1, SEcc, regnum::REG_PC, {.cc_flag = CC_V}},
+    [0x0d] = {"sec", IMPLIED, 1, SEcc, regnum::REG_PC, {.cc_flag = CC_C}},
+    [0x0f] = {"sei", IMPLIED, 1, SEcc, regnum::REG_PC, {.cc_flag = CC_I}},
 
-    [0x0a] = { "clv",  IMPLIED, 1, CLcc, regnum::REG_PC, { .cc_flag = CC_V } },
-    [0x0c] = { "clc",  IMPLIED, 1, CLcc, regnum::REG_PC, { .cc_flag = CC_C } },
-    [0x0e] = { "cli",  IMPLIED, 1, CLcc, regnum::REG_PC, { .cc_flag = CC_I } },
+    [0x0a] = {"clv", IMPLIED, 1, CLcc, regnum::REG_PC, {.cc_flag = CC_V}},
+    [0x0c] = {"clc", IMPLIED, 1, CLcc, regnum::REG_PC, {.cc_flag = CC_C}},
+    [0x0e] = {"cli", IMPLIED, 1, CLcc, regnum::REG_PC, {.cc_flag = CC_I}},
 
-    [0x4f] = { "clra", IMPLIED,  1, CLR, regnum::REG_A, { 0 } },
-    [0x5f] = { "clrb", IMPLIED,  1, CLR, regnum::REG_B, { 0 } },
-    [0x6f] = { "clr",  INDEXED,  1, CLR, regnum::REG_A, { .calcaddr = true } },
-    [0x7f] = { "clr",  EXTENDED, 1, CLR, regnum::REG_A, { .calcaddr = true } },
+    [0x4f] = {"clra", IMPLIED, 1, CLR, regnum::REG_A, {0}},
+    [0x5f] = {"clrb", IMPLIED, 1, CLR, regnum::REG_B, {0}},
+    [0x6f] = {"clr", INDEXED, 1, CLR, regnum::REG_A, {.calcaddr = true}},
+    [0x7f] = {"clr", EXTENDED, 1, CLR, regnum::REG_A, {.calcaddr = true}},
 
-    [0x43] = { "coma", IMPLIED,  1, COM, regnum::REG_A, { 0 } },
-    [0x53] = { "comb", IMPLIED,  1, COM, regnum::REG_B, { 0 } },
-    [0x63] = { "com",  INDEXED,  1, COM, regnum::REG_A, { .calcaddr = true } },
-    [0x73] = { "com",  EXTENDED, 1, COM, regnum::REG_A, { .calcaddr = true } },
+    [0x43] = {"coma", IMPLIED, 1, COM, regnum::REG_A, {0}},
+    [0x53] = {"comb", IMPLIED, 1, COM, regnum::REG_B, {0}},
+    [0x63] = {"com", INDEXED, 1, COM, regnum::REG_A, {.calcaddr = true}},
+    [0x73] = {"com", EXTENDED, 1, COM, regnum::REG_A, {.calcaddr = true}},
 
-    [0x40] = { "nega", IMPLIED,  1, NEG, regnum::REG_A, { 0 } },
-    [0x50] = { "negb", IMPLIED,  1, NEG, regnum::REG_B, { 0 } },
-    [0x60] = { "neg",  INDEXED,  1, NEG, regnum::REG_A, { .calcaddr = true } },
-    [0x70] = { "neg",  EXTENDED, 1, NEG, regnum::REG_A, { .calcaddr = true } },
+    [0x40] = {"nega", IMPLIED, 1, NEG, regnum::REG_A, {0}},
+    [0x50] = {"negb", IMPLIED, 1, NEG, regnum::REG_B, {0}},
+    [0x60] = {"neg", INDEXED, 1, NEG, regnum::REG_A, {.calcaddr = true}},
+    [0x70] = {"neg", EXTENDED, 1, NEG, regnum::REG_A, {.calcaddr = true}},
 
-    [0x4a] = { "deca", IMPLIED,  1, DEC, regnum::REG_A, { 0 } },
-    [0x5a] = { "decb", IMPLIED,  1, DEC, regnum::REG_B, { 0 } },
-    [0x6a] = { "dec",  INDEXED,  1, DEC, regnum::REG_A, { .calcaddr = true } },
-    [0x7a] = { "dec",  EXTENDED, 1, DEC, regnum::REG_A, { .calcaddr = true } },
-    [0x34] = { "des",  IMPLIED, 2, DEC, regnum::REG_SP, { 0 } },
-    [0x09] = { "dex",  IMPLIED, 2, DEC, regnum::REG_IX, { 0 } },
+    [0x4a] = {"deca", IMPLIED, 1, DEC, regnum::REG_A, {0}},
+    [0x5a] = {"decb", IMPLIED, 1, DEC, regnum::REG_B, {0}},
+    [0x6a] = {"dec", INDEXED, 1, DEC, regnum::REG_A, {.calcaddr = true}},
+    [0x7a] = {"dec", EXTENDED, 1, DEC, regnum::REG_A, {.calcaddr = true}},
+    [0x34] = {"des", IMPLIED, 2, DEC, regnum::REG_SP, {0}},
+    [0x09] = {"dex", IMPLIED, 2, DEC, regnum::REG_IX, {0}},
 
-    [0x4c] = { "inca", IMPLIED,  1, INC, regnum::REG_A, { 0 } },
-    [0x5c] = { "incb", IMPLIED,  1, INC, regnum::REG_B, { 0 } },
-    [0x6c] = { "inc",  INDEXED,  1, INC, regnum::REG_A, { .calcaddr = true } },
-    [0x7c] = { "inc",  EXTENDED, 1, INC, regnum::REG_A, { .calcaddr = true } },
-    [0x31] = { "ins",  IMPLIED, 2, INC, regnum::REG_SP, { 0 } },
-    [0x08] = { "inx",  IMPLIED, 2, INC, regnum::REG_IX, { 0 } },
+    [0x4c] = {"inca", IMPLIED, 1, INC, regnum::REG_A, {0}},
+    [0x5c] = {"incb", IMPLIED, 1, INC, regnum::REG_B, {0}},
+    [0x6c] = {"inc", INDEXED, 1, INC, regnum::REG_A, {.calcaddr = true}},
+    [0x7c] = {"inc", EXTENDED, 1, INC, regnum::REG_A, {.calcaddr = true}},
+    [0x31] = {"ins", IMPLIED, 2, INC, regnum::REG_SP, {0}},
+    [0x08] = {"inx", IMPLIED, 2, INC, regnum::REG_IX, {0}},
 
-    [0x48] = { "asla", IMPLIED,  1, ASL, regnum::REG_A, { 0 } },
-    [0x58] = { "aslb", IMPLIED,  1, ASL, regnum::REG_B, { 0 } },
-    [0x68] = { "asl",  INDEXED,  1, ASL, regnum::REG_A, { .calcaddr = true } },
-    [0x78] = { "asl",  EXTENDED, 1, ASL, regnum::REG_A, { .calcaddr = true } },
+    [0x48] = {"asla", IMPLIED, 1, ASL, regnum::REG_A, {0}},
+    [0x58] = {"aslb", IMPLIED, 1, ASL, regnum::REG_B, {0}},
+    [0x68] = {"asl", INDEXED, 1, ASL, regnum::REG_A, {.calcaddr = true}},
+    [0x78] = {"asl", EXTENDED, 1, ASL, regnum::REG_A, {.calcaddr = true}},
 
-    [0x47] = { "asra", IMPLIED,  1, ASR, regnum::REG_A, { 0 } },
-    [0x57] = { "asrb", IMPLIED,  1, ASR, regnum::REG_B, { 0 } },
-    [0x67] = { "asr",  INDEXED,  1, ASR, regnum::REG_A, { .calcaddr = true } },
-    [0x77] = { "asr",  EXTENDED, 1, ASR, regnum::REG_A, { .calcaddr = true } },
+    [0x47] = {"asra", IMPLIED, 1, ASR, regnum::REG_A, {0}},
+    [0x57] = {"asrb", IMPLIED, 1, ASR, regnum::REG_B, {0}},
+    [0x67] = {"asr", INDEXED, 1, ASR, regnum::REG_A, {.calcaddr = true}},
+    [0x77] = {"asr", EXTENDED, 1, ASR, regnum::REG_A, {.calcaddr = true}},
 
-    [0x44] = { "lsra", IMPLIED,  1, LSR, regnum::REG_A, { 0 } },
-    [0x54] = { "lsrb", IMPLIED,  1, LSR, regnum::REG_B, { 0 } },
-    [0x64] = { "lsr",  INDEXED,  1, LSR, regnum::REG_A, { .calcaddr = true } },
-    [0x74] = { "lsr",  EXTENDED, 1, LSR, regnum::REG_A, { .calcaddr = true } },
+    [0x44] = {"lsra", IMPLIED, 1, LSR, regnum::REG_A, {0}},
+    [0x54] = {"lsrb", IMPLIED, 1, LSR, regnum::REG_B, {0}},
+    [0x64] = {"lsr", INDEXED, 1, LSR, regnum::REG_A, {.calcaddr = true}},
+    [0x74] = {"lsr", EXTENDED, 1, LSR, regnum::REG_A, {.calcaddr = true}},
 
-    [0x49] = { "rola", IMPLIED,  1, ROL, regnum::REG_A, { 0 } },
-    [0x59] = { "rolb", IMPLIED,  1, ROL, regnum::REG_B, { 0 } },
-    [0x69] = { "rol",  INDEXED,  1, ROL, regnum::REG_A, { .calcaddr = true } },
-    [0x79] = { "rol",  EXTENDED, 1, ROL, regnum::REG_A, { .calcaddr = true } },
+    [0x49] = {"rola", IMPLIED, 1, ROL, regnum::REG_A, {0}},
+    [0x59] = {"rolb", IMPLIED, 1, ROL, regnum::REG_B, {0}},
+    [0x69] = {"rol", INDEXED, 1, ROL, regnum::REG_A, {.calcaddr = true}},
+    [0x79] = {"rol", EXTENDED, 1, ROL, regnum::REG_A, {.calcaddr = true}},
 
-    [0x46] = { "rora", IMPLIED,  1, ROR, regnum::REG_A, { 0 } },
-    [0x56] = { "rorb", IMPLIED,  1, ROR, regnum::REG_B, { 0 } },
-    [0x66] = { "ror",  INDEXED,  1, ROR, regnum::REG_A, { .calcaddr = true } },
-    [0x76] = { "ror",  EXTENDED, 1, ROR, regnum::REG_A, { .calcaddr = true } },
+    [0x46] = {"rora", IMPLIED, 1, ROR, regnum::REG_A, {0}},
+    [0x56] = {"rorb", IMPLIED, 1, ROR, regnum::REG_B, {0}},
+    [0x66] = {"ror", INDEXED, 1, ROR, regnum::REG_A, {.calcaddr = true}},
+    [0x76] = {"ror", EXTENDED, 1, ROR, regnum::REG_A, {.calcaddr = true}},
 
-    [0x4d] = { "tsta", IMPLIED,  1, TST, regnum::REG_A, { 0 } },
-    [0x5d] = { "tstb", IMPLIED,  1, TST, regnum::REG_B, { 0 } },
-    [0x6d] = { "tst",  INDEXED,  1, TST, regnum::REG_A, { .calcaddr = true } },
-    [0x7d] = { "tst",  EXTENDED, 1, TST, regnum::REG_A, { .calcaddr = true } },
+    [0x4d] = {"tsta", IMPLIED, 1, TST, regnum::REG_A, {0}},
+    [0x5d] = {"tstb", IMPLIED, 1, TST, regnum::REG_B, {0}},
+    [0x6d] = {"tst", INDEXED, 1, TST, regnum::REG_A, {.calcaddr = true}},
+    [0x7d] = {"tst", EXTENDED, 1, TST, regnum::REG_A, {.calcaddr = true}},
 
-// push/pull
-    [0x36] = { "psha", IMPLIED, 1, PUSH, regnum::REG_A, { 0 } },
-    [0x37] = { "pshb", IMPLIED, 1, PUSH, regnum::REG_B, { 0 } },
+    // push/pull
+    [0x36] = {"psha", IMPLIED, 1, PUSH, regnum::REG_A, {0}},
+    [0x37] = {"pshb", IMPLIED, 1, PUSH, regnum::REG_B, {0}},
 
-    [0x32] = { "pula", IMPLIED, 1, PULL, regnum::REG_A, { 0 } },
-    [0x33] = { "pulb", IMPLIED, 1, PULL, regnum::REG_B, { 0 } },
+    [0x32] = {"pula", IMPLIED, 1, PULL, regnum::REG_A, {0}},
+    [0x33] = {"pulb", IMPLIED, 1, PULL, regnum::REG_B, {0}},
 
-// loads
-    [0x86] = { "lda",  IMMEDIATE, 1, LD, regnum::REG_A, { 0 } },
-    [0xc6] = { "ldb",  IMMEDIATE, 1, LD, regnum::REG_B, { 0 } },
-    [0x8e] = { "lds",  IMMEDIATE, 2, LD, regnum::REG_SP, { 0 } },
-    [0xce] = { "ldx",  IMMEDIATE, 2, LD, regnum::REG_IX, { 0 } },
+    // loads
+    [0x86] = {"lda", IMMEDIATE, 1, LD, regnum::REG_A, {0}},
+    [0xc6] = {"ldb", IMMEDIATE, 1, LD, regnum::REG_B, {0}},
+    [0x8e] = {"lds", IMMEDIATE, 2, LD, regnum::REG_SP, {0}},
+    [0xce] = {"ldx", IMMEDIATE, 2, LD, regnum::REG_IX, {0}},
 
-    [0x96] = { "lda",  DIRECT, 1, LD, regnum::REG_A, { 0 } },
-    [0xd6] = { "ldb",  DIRECT, 1, LD, regnum::REG_B, { 0 } },
-    [0x9e] = { "lds",  DIRECT, 2, LD, regnum::REG_SP, { 0 } },
-    [0xde] = { "ldx",  DIRECT, 2, LD, regnum::REG_IX, { 0 } },
+    [0x96] = {"lda", DIRECT, 1, LD, regnum::REG_A, {0}},
+    [0xd6] = {"ldb", DIRECT, 1, LD, regnum::REG_B, {0}},
+    [0x9e] = {"lds", DIRECT, 2, LD, regnum::REG_SP, {0}},
+    [0xde] = {"ldx", DIRECT, 2, LD, regnum::REG_IX, {0}},
 
-    [0xb6] = { "lda",  EXTENDED, 1, LD, regnum::REG_A, { 0 } },
-    [0xf6] = { "ldb",  EXTENDED, 1, LD, regnum::REG_B, { 0 } },
-    [0xbe] = { "lds",  EXTENDED, 2, LD, regnum::REG_SP, { 0 } },
-    [0xfe] = { "ldx",  EXTENDED, 2, LD, regnum::REG_IX, { 0 } },
+    [0xb6] = {"lda", EXTENDED, 1, LD, regnum::REG_A, {0}},
+    [0xf6] = {"ldb", EXTENDED, 1, LD, regnum::REG_B, {0}},
+    [0xbe] = {"lds", EXTENDED, 2, LD, regnum::REG_SP, {0}},
+    [0xfe] = {"ldx", EXTENDED, 2, LD, regnum::REG_IX, {0}},
 
-    [0xa6] = { "lda",  INDEXED, 1, LD, regnum::REG_A, { 0 } },
-    [0xe6] = { "ldb",  INDEXED, 1, LD, regnum::REG_B, { 0 } },
-    [0xae] = { "lds",  INDEXED, 2, LD, regnum::REG_SP, { 0 } },
-    [0xee] = { "ldx",  INDEXED, 2, LD, regnum::REG_IX, { 0 } },
+    [0xa6] = {"lda", INDEXED, 1, LD, regnum::REG_A, {0}},
+    [0xe6] = {"ldb", INDEXED, 1, LD, regnum::REG_B, {0}},
+    [0xae] = {"lds", INDEXED, 2, LD, regnum::REG_SP, {0}},
+    [0xee] = {"ldx", INDEXED, 2, LD, regnum::REG_IX, {0}},
 
-// stores
-    [0x97] = { "sta",  DIRECT, 1, ST, regnum::REG_A, { .calcaddr = true } },
-    [0xd7] = { "stb",  DIRECT, 1, ST, regnum::REG_B, { .calcaddr = true } },
-    [0x9f] = { "sts",  DIRECT, 2, ST, regnum::REG_SP, { .calcaddr = true } },
-    [0xdf] = { "stx",  DIRECT, 2, ST, regnum::REG_IX, { .calcaddr = true } },
+    // stores
+    [0x97] = {"sta", DIRECT, 1, ST, regnum::REG_A, {.calcaddr = true}},
+    [0xd7] = {"stb", DIRECT, 1, ST, regnum::REG_B, {.calcaddr = true}},
+    [0x9f] = {"sts", DIRECT, 2, ST, regnum::REG_SP, {.calcaddr = true}},
+    [0xdf] = {"stx", DIRECT, 2, ST, regnum::REG_IX, {.calcaddr = true}},
 
-    [0xb7] = { "sta",  EXTENDED, 1, ST, regnum::REG_A, { .calcaddr = true } },
-    [0xf7] = { "stb",  EXTENDED, 1, ST, regnum::REG_B, { .calcaddr = true } },
-    [0xbf] = { "sts",  EXTENDED, 2, ST, regnum::REG_SP, { .calcaddr = true } },
-    [0xff] = { "stx",  EXTENDED, 2, ST, regnum::REG_IX, { .calcaddr = true } },
+    [0xb7] = {"sta", EXTENDED, 1, ST, regnum::REG_A, {.calcaddr = true}},
+    [0xf7] = {"stb", EXTENDED, 1, ST, regnum::REG_B, {.calcaddr = true}},
+    [0xbf] = {"sts", EXTENDED, 2, ST, regnum::REG_SP, {.calcaddr = true}},
+    [0xff] = {"stx", EXTENDED, 2, ST, regnum::REG_IX, {.calcaddr = true}},
 
-    [0xa7] = { "sta",  INDEXED, 1, ST, regnum::REG_A, { .calcaddr = true } },
-    [0xe7] = { "stb",  INDEXED, 1, ST, regnum::REG_B, { .calcaddr = true } },
-    [0xaf] = { "sts",  INDEXED, 2, ST, regnum::REG_SP, { .calcaddr = true } },
-    [0xef] = { "stx",  INDEXED, 2, ST, regnum::REG_IX, { .calcaddr = true } },
+    [0xa7] = {"sta", INDEXED, 1, ST, regnum::REG_A, {.calcaddr = true}},
+    [0xe7] = {"stb", INDEXED, 1, ST, regnum::REG_B, {.calcaddr = true}},
+    [0xaf] = {"sts", INDEXED, 2, ST, regnum::REG_SP, {.calcaddr = true}},
+    [0xef] = {"stx", INDEXED, 2, ST, regnum::REG_IX, {.calcaddr = true}},
 
-// branches
-    [0x20] = { "bra",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_A } },
-    [0x22] = { "bhi",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_HI } },
-    [0x23] = { "bls",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_LS } },
-    [0x24] = { "bcc",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_CC } },
-    [0x25] = { "bcs",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_CS } },
-    [0x26] = { "bne",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_NE } },
-    [0x27] = { "beq",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_EQ } },
-    [0x28] = { "bvc",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_VC } },
-    [0x29] = { "bvs",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_VS } },
-    [0x2a] = { "bpl",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_PL } },
-    [0x2b] = { "bmi",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_MI } },
-    [0x2c] = { "bge",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_GE } },
-    [0x2d] = { "blt",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_LT } },
-    [0x2e] = { "bgt",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_GT } },
-    [0x2f] = { "ble",  BRANCH, 1, BRA, regnum::REG_PC, { .cond = COND_LE } },
-    [0x8d] = { "bsr",  BRANCH, 1, BSR, regnum::REG_PC, { 0 } },
+    // branches
+    [0x20] = {"bra", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_A}},
+    [0x22] = {"bhi", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_HI}},
+    [0x23] = {"bls", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_LS}},
+    [0x24] = {"bcc", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_CC}},
+    [0x25] = {"bcs", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_CS}},
+    [0x26] = {"bne", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_NE}},
+    [0x27] = {"beq", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_EQ}},
+    [0x28] = {"bvc", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_VC}},
+    [0x29] = {"bvs", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_VS}},
+    [0x2a] = {"bpl", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_PL}},
+    [0x2b] = {"bmi", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_MI}},
+    [0x2c] = {"bge", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_GE}},
+    [0x2d] = {"blt", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_LT}},
+    [0x2e] = {"bgt", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_GT}},
+    [0x2f] = {"ble", BRANCH, 1, BRA, regnum::REG_PC, {.cond = COND_LE}},
+    [0x8d] = {"bsr", BRANCH, 1, BSR, regnum::REG_PC, {0}},
 
-    [0x6e] = { "jmp",  INDEXED,  1, JMP, regnum::REG_PC, { .calcaddr = true } },
-    [0x7e] = { "jmp",  EXTENDED, 1, JMP, regnum::REG_PC, { .calcaddr = true } },
+    [0x6e] = {"jmp", INDEXED, 1, JMP, regnum::REG_PC, {.calcaddr = true}},
+    [0x7e] = {"jmp", EXTENDED, 1, JMP, regnum::REG_PC, {.calcaddr = true}},
 
-    [0xad] = { "jsr",  INDEXED,  1, JSR, regnum::REG_PC, { .calcaddr = true } },
-    [0xbd] = { "jsr",  EXTENDED, 1, JSR, regnum::REG_PC, { .calcaddr = true } },
+    [0xad] = {"jsr", INDEXED, 1, JSR, regnum::REG_PC, {.calcaddr = true}},
+    [0xbd] = {"jsr", EXTENDED, 1, JSR, regnum::REG_PC, {.calcaddr = true}},
 
-    [0x39] = { "rts",  IMPLIED,  1, RTS, regnum::REG_PC, { 0 } },
+    [0x39] = {"rts", IMPLIED, 1, RTS, regnum::REG_PC, {0}},
 };
 
 Cpu6800::Cpu6800(System &mSys)
-    :   Cpu(mSys) {
+    : Cpu(mSys) {
     Reset();
 }
 
@@ -443,47 +446,105 @@ bool Cpu6800::TestBranchCond(unsigned int cond) {
 #define SET_CC_BIT(bit) (mCC | (bit))
 #define CLR_CC_BIT(bit) (mCC & ~(bit))
 
-#define SET_Z1(result) do { mCC = ((result & 0xff) == 0) ? SET_CC_BIT(CC_Z) : CLR_CC_BIT(CC_Z); } while (0)
-#define SET_Z2(result) do { mCC = ((result & 0xffff) == 0) ? SET_CC_BIT(CC_Z) : CLR_CC_BIT(CC_Z); } while (0)
-#define SET_N1(result) do { mCC = BIT(result, 7) ? SET_CC_BIT(CC_N) : CLR_CC_BIT(CC_N); } while (0)
-#define SET_N2(result) do { mCC = BIT(result, 15) ? SET_CC_BIT(CC_N) : CLR_CC_BIT(CC_N); } while (0)
-#define SET_C1(result) do { mCC = BIT(result, 8) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C); } while (0)
-#define SET_C2(result) do { mCC = BIT(result, 16) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C); } while (0)
-#define SET_V1(a, b, result) do { mCC = BIT((a)^(b)^(result)^(((a)^(b)^(result))>>1), 7) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); } while (0)
-#define SET_V2(a, b, result) do { mCC = BIT((a)^(b)^(result)^(((a)^(b)^(result))>>1), 15) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); } while (0)
-#define SET_H(a, b, result) do { mCC = BIT((a)^(b)^(result), 4) ? SET_CC_BIT(CC_H) : CLR_CC_BIT(CC_H); } while (0)
+#define SET_Z1(result)                                                      \
+    do {                                                                    \
+        mCC = ((result & 0xff) == 0) ? SET_CC_BIT(CC_Z) : CLR_CC_BIT(CC_Z); \
+    } while (0)
+#define SET_Z2(result)                                                        \
+    do {                                                                      \
+        mCC = ((result & 0xffff) == 0) ? SET_CC_BIT(CC_Z) : CLR_CC_BIT(CC_Z); \
+    } while (0)
+#define SET_N1(result)                                              \
+    do {                                                            \
+        mCC = BIT(result, 7) ? SET_CC_BIT(CC_N) : CLR_CC_BIT(CC_N); \
+    } while (0)
+#define SET_N2(result)                                               \
+    do {                                                             \
+        mCC = BIT(result, 15) ? SET_CC_BIT(CC_N) : CLR_CC_BIT(CC_N); \
+    } while (0)
+#define SET_C1(result)                                              \
+    do {                                                            \
+        mCC = BIT(result, 8) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C); \
+    } while (0)
+#define SET_C2(result)                                               \
+    do {                                                             \
+        mCC = BIT(result, 16) ? SET_CC_BIT(CC_C) : CLR_CC_BIT(CC_C); \
+    } while (0)
+#define SET_V1(a, b, result)                                                                                      \
+    do {                                                                                                          \
+        mCC = BIT((a) ^ (b) ^ (result) ^ (((a) ^ (b) ^ (result)) >> 1), 7) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); \
+    } while (0)
+#define SET_V2(a, b, result)                                                                                       \
+    do {                                                                                                           \
+        mCC = BIT((a) ^ (b) ^ (result) ^ (((a) ^ (b) ^ (result)) >> 1), 15) ? SET_CC_BIT(CC_V) : CLR_CC_BIT(CC_V); \
+    } while (0)
+#define SET_H(a, b, result)                                                       \
+    do {                                                                          \
+        mCC = BIT((a) ^ (b) ^ (result), 4) ? SET_CC_BIT(CC_H) : CLR_CC_BIT(CC_H); \
+    } while (0)
 
-#define SET_NZ1(result) do { SET_N1(result); SET_Z1(result); } while (0)
-#define SET_NZ2(result) do { SET_N2(result); SET_Z2(result); } while (0)
+#define SET_NZ1(result) \
+    do {                \
+        SET_N1(result); \
+        SET_Z1(result); \
+    } while (0)
+#define SET_NZ2(result) \
+    do {                \
+        SET_N2(result); \
+        SET_Z2(result); \
+    } while (0)
 
-#define SET_NZVC1(a, b, result) do { SET_N1(result); SET_Z1(result); SET_V1(a, b, result); SET_C1(result); } while (0)
-#define SET_HNZVC1(a, b, result) do { SET_NZVC1(a, b, result); SET_H(a, b, result); } while (0)
-#define SET_NZV2(a, b, result) do { SET_N2(result); SET_Z2(result); SET_V2(a, b, result); } while (0)
-#define SET_NZVC2(a, b, result) do { SET_NZV2(a, b, result); SET_C2(result); } while (0)
+#define SET_NZVC1(a, b, result) \
+    do {                        \
+        SET_N1(result);         \
+        SET_Z1(result);         \
+        SET_V1(a, b, result);   \
+        SET_C1(result);         \
+    } while (0)
+#define SET_HNZVC1(a, b, result) \
+    do {                         \
+        SET_NZVC1(a, b, result); \
+        SET_H(a, b, result);     \
+    } while (0)
+#define SET_NZV2(a, b, result) \
+    do {                       \
+        SET_N2(result);        \
+        SET_Z2(result);        \
+        SET_V2(a, b, result);  \
+    } while (0)
+#define SET_NZVC2(a, b, result) \
+    do {                        \
+        SET_NZV2(a, b, result); \
+        SET_C2(result);         \
+    } while (0)
 
-#define PUSH16(val) do { \
-    uint16_t __sp = GetReg(regnum::REG_SP); \
-    mSys.MemWrite8(__sp--, (val) & 0xff); \
-    mSys.MemWrite8(__sp--, ((val) >> 8) & 0xff); \
-    PutReg(regnum::REG_SP, __sp); \
-} while (0)
-#define PUSH8(val) do { \
-    uint16_t __sp = GetReg(regnum::REG_SP); \
-    mSys.MemWrite8(__sp--, val); \
-    PutReg(regnum::REG_SP, __sp); \
-} while (0)
-#define PULL16(val) do { \
-    uint16_t __sp = GetReg(regnum::REG_SP); \
-    uint16_t __temp = mSys.MemRead8(++__sp) << 8;\
-    __temp |= mSys.MemRead8(++__sp); \
-    PutReg(regnum::REG_SP, __sp); \
-    val = __temp; \
-} while (0)
-#define PULL8(val) do { \
-    uint16_t __sp = GetReg(regnum::REG_SP); \
-    val = mSys.MemRead8(++__sp);\
-    PutReg(regnum::REG_SP, __sp); \
-} while (0)
+#define PUSH16(val)                                  \
+    do {                                             \
+        uint16_t __sp = GetReg(regnum::REG_SP);      \
+        mSys.MemWrite8(__sp--, (val) & 0xff);        \
+        mSys.MemWrite8(__sp--, ((val) >> 8) & 0xff); \
+        PutReg(regnum::REG_SP, __sp);                \
+    } while (0)
+#define PUSH8(val)                              \
+    do {                                        \
+        uint16_t __sp = GetReg(regnum::REG_SP); \
+        mSys.MemWrite8(__sp--, val);            \
+        PutReg(regnum::REG_SP, __sp);           \
+    } while (0)
+#define PULL16(val)                                   \
+    do {                                              \
+        uint16_t __sp = GetReg(regnum::REG_SP);       \
+        uint16_t __temp = mSys.MemRead8(++__sp) << 8; \
+        __temp |= mSys.MemRead8(++__sp);              \
+        PutReg(regnum::REG_SP, __sp);                 \
+        val = __temp;                                 \
+    } while (0)
+#define PULL8(val)                              \
+    do {                                        \
+        uint16_t __sp = GetReg(regnum::REG_SP); \
+        val = mSys.MemRead8(++__sp);            \
+        PutReg(regnum::REG_SP, __sp);           \
+    } while (0)
 
 int Cpu6800::Run() {
 
@@ -533,9 +594,9 @@ int Cpu6800::Run() {
                 break;
             case IMMEDIATE:
                 TRACEF(" IMM");
-                if (op->width == 1)
+                if (op->width == 1) {
                     arg = mSys.MemRead8(mPC++);
-                else {
+                } else {
                     arg = mSys.MemRead16(mPC, Endian::BIG);
                     mPC += 2;
                 }
@@ -547,10 +608,11 @@ int Cpu6800::Run() {
                 if (op->calcaddr) {
                     arg = temp16;
                 } else {
-                    if (op->width == 1)
+                    if (op->width == 1) {
                         arg = mSys.MemRead8(temp16);
-                    else
+                    } else {
                         arg = mSys.MemRead16(temp16, Endian::BIG); // XXX doesn't handle wraparound
+                    }
                 }
                 break;
             case EXTENDED:
@@ -560,17 +622,18 @@ int Cpu6800::Run() {
                 if (op->calcaddr) {
                     arg = temp16;
                 } else {
-                    if (op->width == 1)
+                    if (op->width == 1) {
                         arg = mSys.MemRead8(temp16);
-                    else
+                    } else {
                         arg = mSys.MemRead16(temp16, Endian::BIG);
+                    }
                 }
                 break;
             case BRANCH:
                 TRACEF(" BRA");
-                if (op->width == 1)
+                if (op->width == 1) {
                     arg = SignExtend(mSys.MemRead8(mPC++));
-                else {
+                } else {
                     arg = SignExtend(mSys.MemRead16(mPC, Endian::BIG));
                     mPC += 2;
                 }
@@ -584,10 +647,11 @@ int Cpu6800::Run() {
                 if (op->calcaddr) {
                     arg = temp16;
                 } else {
-                    if (op->width == 1)
+                    if (op->width == 1) {
                         arg = mSys.MemRead8(temp16);
-                    else
+                    } else {
                         arg = mSys.MemRead16(temp16, Endian::BIG);
+                    }
                 }
                 break;
             }
@@ -788,7 +852,7 @@ int Cpu6800::Run() {
 
                 goto shared_memwrite;
 
-            case DEC: // dec[absx]
+            case DEC:                 // dec[absx]
                 if (op->width == 1) { // dec[ab]
                     if (op->mode == IMPLIED) {
                         temp8 = GetReg(op->targetreg);
@@ -812,7 +876,7 @@ int Cpu6800::Run() {
                 }
                 break;
 
-            case INC: // inc[absx]
+            case INC:                 // inc[absx]
                 if (op->width == 1) { // inc[ab]
                     if (op->mode == IMPLIED) {
                         temp8 = GetReg(op->targetreg);
@@ -957,7 +1021,7 @@ shared_memwrite:
                     if (op->targetreg == regnum::REG_SP) {
                         temp16 = GetReg(regnum::REG_IX);
                         temp16--; // loads SP with IX - 1
-                    } else { // regnum::REG_IX
+                    } else {      // regnum::REG_IX
                         temp16 = GetReg(regnum::REG_SP);
                         temp16++; // loads IX with SP + 1
                     }
@@ -1097,13 +1161,13 @@ badop:
 
 void Cpu6800::Dump() {
     printf("A 0x%02x B 0x%02x X 0x%04x S 0x%04x CC 0x%02x (%c%c%c%c%c) PC 0x%04x\n",
-             mA, mB, mIX, mSP, mCC,
-             (mCC & CC_H) ? 'h' : ' ',
-             (mCC & CC_N) ? 'n' : ' ',
-             (mCC & CC_Z) ? 'z' : ' ',
-             (mCC & CC_V) ? 'v' : ' ',
-             (mCC & CC_C) ? 'c' : ' ',
-             mPC);
+           mA, mB, mIX, mSP, mCC,
+           (mCC & CC_H) ? 'h' : ' ',
+           (mCC & CC_N) ? 'n' : ' ',
+           (mCC & CC_Z) ? 'z' : ' ',
+           (mCC & CC_V) ? 'v' : ' ',
+           (mCC & CC_C) ? 'c' : ' ',
+           mPC);
 }
 
 uint16_t Cpu6800::GetReg(regnum r) {
@@ -1148,5 +1212,3 @@ uint16_t Cpu6800::PutReg(regnum r, uint16_t val) {
     }
     return old;
 }
-
-

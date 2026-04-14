@@ -57,14 +57,38 @@ using Endian = System::Endian;
 #define READ_DE_ALT() ((mRegs.d_alt << 8) | mRegs.e_alt)
 #define READ_HL_ALT() ((mRegs.h_alt << 8) | mRegs.l_alt)
 
-#define WRITE_AF(val) do { mRegs.a = ((val) >> 8) & 0xff; mRegs.f = (val) & 0xff; } while (0)
-#define WRITE_BC(val) do { mRegs.b = ((val) >> 8) & 0xff; mRegs.c = (val) & 0xff; } while (0)
-#define WRITE_DE(val) do { mRegs.d = ((val) >> 8) & 0xff; mRegs.e = (val) & 0xff; } while (0)
-#define WRITE_HL(val) do { mRegs.h = ((val) >> 8) & 0xff; mRegs.l = (val) & 0xff; } while (0)
-#define WRITE_IX(val) do { mRegs.ix = (val); } while (0)
-#define WRITE_IY(val) do { mRegs.iy = (val); } while (0)
-#define WRITE_SP(val) do { mRegs.sp = (val); } while (0)
-
+#define WRITE_AF(val)                  \
+    do {                               \
+        mRegs.a = ((val) >> 8) & 0xff; \
+        mRegs.f = (val) & 0xff;        \
+    } while (0)
+#define WRITE_BC(val)                  \
+    do {                               \
+        mRegs.b = ((val) >> 8) & 0xff; \
+        mRegs.c = (val) & 0xff;        \
+    } while (0)
+#define WRITE_DE(val)                  \
+    do {                               \
+        mRegs.d = ((val) >> 8) & 0xff; \
+        mRegs.e = (val) & 0xff;        \
+    } while (0)
+#define WRITE_HL(val)                  \
+    do {                               \
+        mRegs.h = ((val) >> 8) & 0xff; \
+        mRegs.l = (val) & 0xff;        \
+    } while (0)
+#define WRITE_IX(val)     \
+    do {                  \
+        mRegs.ix = (val); \
+    } while (0)
+#define WRITE_IY(val)     \
+    do {                  \
+        mRegs.iy = (val); \
+    } while (0)
+#define WRITE_SP(val)     \
+    do {                  \
+        mRegs.sp = (val); \
+    } while (0)
 
 #define WRITE_AF_ALT(val)                  \
     do {                                   \
@@ -680,8 +704,6 @@ decode:
                     break;
                 }
 
-
-
                 case 0b11001001: // RET
                     LPRINTF("RET\n");
                     mRegs.pc = pop16();
@@ -797,7 +819,6 @@ decode:
                     } else {
                         LPRINTF("LD r, r\n");
                         write_r_reg_or_hl(r, read_r_reg_or_hl(r2));
-
                     }
 
                     break;
@@ -968,7 +989,7 @@ decode:
                     write_dd_reg(dd, read_dd_reg(dd) + 1);
                     break;
 
-                // 8 bit alu
+                    // 8 bit alu
 
                 case 0b00000100:
                 case 0b00001100:
@@ -1252,21 +1273,20 @@ decode:
                     }
                     break;
 
-
                 default:
                     fflush(stdout);
                     fprintf(stderr, "unhandled opcode 0x%hhx\n", op);
                     return -1;
             }
-
-
         }
 
         // instruction is completed, make sure we 'consumed' the dd or fd prefix
-        if (consume_prefix_dd)
+        if (consume_prefix_dd) {
             prefix_dd = false;
-        if (consume_prefix_fd)
+        }
+        if (consume_prefix_fd) {
             prefix_fd = false;
+        }
 
         if (prefix_dd) {
             fflush(stdout);
@@ -1283,7 +1303,6 @@ decode:
         if (LOCAL_TRACE) {
             Dump();
         }
-
     }
 
     return 0;

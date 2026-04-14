@@ -26,7 +26,7 @@
 class System;
 
 class Cpu {
-public:
+  public:
     explicit Cpu(System &sys) : mSys(sys) {}
     virtual ~Cpu() = default;
 
@@ -36,6 +36,6 @@ public:
     // debugging
     virtual void Dump() = 0;
 
-protected:
+  protected:
     System &mSys;
 };

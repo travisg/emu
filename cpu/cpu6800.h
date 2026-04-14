@@ -27,9 +27,8 @@
 
 #include "cpu.h"
 
-
 class Cpu6800 final : public Cpu {
-public:
+  public:
     explicit Cpu6800(System &sys);
     virtual ~Cpu6800() override;
 
@@ -48,7 +47,7 @@ public:
         REG_CC,
     };
 
-private:
+  private:
     uint16_t GetReg(regnum r);
     uint16_t PutReg(regnum r, uint16_t val); // returns old value
 
@@ -60,10 +59,8 @@ private:
     uint16_t mIX;
     uint16_t mPC;
     uint16_t mSP;
-    uint8_t  mCC;
+    uint8_t mCC;
 
     // any exceptions pending?
     unsigned int mException;
 };
-
-

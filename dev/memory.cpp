@@ -36,8 +36,9 @@ int Memory::Alloc(size_t len) {
     mSize = 0;
 
     mMem.reset(new uint8_t[len]);
-    if (!mMem)
+    if (!mMem) {
         return -1;
+    }
 
     mSize = len;
 
@@ -45,4 +46,3 @@ int Memory::Alloc(size_t len) {
 
     return 0;
 }
-

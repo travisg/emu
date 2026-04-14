@@ -1,6 +1,6 @@
 #include "z80sio.h"
-#include <cstdio>
 #include "trace.h"
+#include <cstdio>
 
 #define LOCAL_TRACE 1
 
@@ -18,12 +18,12 @@ void Z80Sio::WriteControl(Channel &chan, uint8_t val) {
     if (chan.pointer == 0) {
         // Lower 3 bits select the next register if it's a register select command
         chan.pointer = val & 0x07;
-        
+
         // Command decoding (upper bits of WR0)
         uint8_t cmd = (val >> 3) & 0x07;
         if (cmd == 0b011) { // Channel reset
             LTRACEF("Z80SIO: Channel Reset\n");
-            chan = Channel(); // Reset channel state
+            chan = Channel();      // Reset channel state
         } else if (cmd == 0b010) { // Reset Rx CRC checker
             // Not implemented
         } else if (cmd == 0b001) { // Send abort (SDLC)
@@ -32,9 +32,9 @@ void Z80Sio::WriteControl(Channel &chan, uint8_t val) {
             // Not implemented
         } else if (cmd == 0b101) { // Reset Tx int pending
             // Not implemented
-        } else if (cmd == 0b110) { // Error reset
+        } else if (cmd == 0b110) {       // Error reset
             chan.status_regs[1] &= 0x8f; // Clear error bits
-        } else if (cmd == 0b111) { // Return from int (Ch. A only)
+        } else if (cmd == 0b111) {       // Return from int (Ch. A only)
             // Not implemented
         }
     } else {
@@ -69,12 +69,28 @@ void Z80Sio::InjectKeyboardByte(uint8_t val) {
 }
 
 // Wrapper pass-through methods
-uint8_t Z80Sio::ReadDataA() { return ReadData(mChanA); }
-uint8_t Z80Sio::ReadControlA() { return ReadControl(mChanA); }
-void Z80Sio::WriteDataA(uint8_t val) { WriteData(mChanA, val); }
-void Z80Sio::WriteControlA(uint8_t val) { WriteControl(mChanA, val); }
+uint8_t Z80Sio::ReadDataA() {
+    return ReadData(mChanA);
+}
+uint8_t Z80Sio::ReadControlA() {
+    return ReadControl(mChanA);
+}
+void Z80Sio::WriteDataA(uint8_t val) {
+    WriteData(mChanA, val);
+}
+void Z80Sio::WriteControlA(uint8_t val) {
+    WriteControl(mChanA, val);
+}
 
-uint8_t Z80Sio::ReadDataB() { return ReadData(mChanB); }
-uint8_t Z80Sio::ReadControlB() { return ReadControl(mChanB); }
-void Z80Sio::WriteDataB(uint8_t val) { WriteData(mChanB, val); }
-void Z80Sio::WriteControlB(uint8_t val) { WriteControl(mChanB, val); }
+uint8_t Z80Sio::ReadDataB() {
+    return ReadData(mChanB);
+}
+uint8_t Z80Sio::ReadControlB() {
+    return ReadControl(mChanB);
+}
+void Z80Sio::WriteDataB(uint8_t val) {
+    WriteData(mChanB, val);
+}
+void Z80Sio::WriteControlB(uint8_t val) {
+    WriteControl(mChanB, val);
+}

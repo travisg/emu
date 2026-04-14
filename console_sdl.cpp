@@ -7,10 +7,10 @@ ConsoleSDL::ConsoleSDL() : Console() {
         return;
     }
 
-    mWindow = SDL_CreateWindow("Kaypro II Emulator", 
-        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 
-        640, 384, SDL_WINDOW_SHOWN);
-        
+    mWindow = SDL_CreateWindow("Kaypro II Emulator",
+                               SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                               640, 384, SDL_WINDOW_SHOWN);
+
     if (!mWindow) {
         std::cerr << "Window could not be created! SDL_Error: " << SDL_GetError() << std::endl;
         return;
@@ -26,8 +26,12 @@ ConsoleSDL::ConsoleSDL() : Console() {
 
 ConsoleSDL::~ConsoleSDL() {
     SDL_StopTextInput();
-    if (mRenderer) SDL_DestroyRenderer(mRenderer);
-    if (mWindow) SDL_DestroyWindow(mWindow);
+    if (mRenderer) {
+        SDL_DestroyRenderer(mRenderer);
+    }
+    if (mWindow) {
+        SDL_DestroyWindow(mWindow);
+    }
     SDL_Quit();
 }
 
@@ -50,21 +54,27 @@ int ConsoleSDL::Run() {
                 printf("ConsoleSDL: KeyDown: sym=%d mod=%d\n", e.key.keysym.sym, e.key.keysym.mod);
                 std::lock_guard<std::recursive_mutex> lck(mLock);
                 // Handle non-printable keys manually
-                switch(e.key.keysym.sym) {
-                    case SDLK_BACKSPACE: mInBuffer.push(0x08); break;
-                    case SDLK_RETURN: mInBuffer.push(0x0d); break;
-                    case SDLK_ESCAPE: mInBuffer.push(0x1b); break;
+                switch (e.key.keysym.sym) {
+                    case SDLK_BACKSPACE:
+                        mInBuffer.push(0x08);
+                        break;
+                    case SDLK_RETURN:
+                        mInBuffer.push(0x0d);
+                        break;
+                    case SDLK_ESCAPE:
+                        mInBuffer.push(0x1b);
+                        break;
                     // Provide a way to manually exit on Ctrl-D (EOT / 0x4)
                     case SDLK_d:
                         if (e.key.keysym.mod & KMOD_CTRL) {
                             std::cout << "ctrl-d hit on SDL console, exiting" << std::endl;
-                            mQuit = true; 
+                            mQuit = true;
                         }
                         break;
                 }
             }
         }
-        
+
         if (mNeedsRefresh) {
             uint32_t now = SDL_GetTicks();
             if (now - last_log > 1000) {
@@ -79,9 +89,9 @@ int ConsoleSDL::Run() {
             SDL_RenderPresent(mRenderer);
             mNeedsRefresh = false;
         }
-        
+
         SDL_Delay(16); // Cap looping to roughly 60Hz
     }
-    
+
     return -1; // Same standard EOF loop escape
 }

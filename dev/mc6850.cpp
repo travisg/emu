@@ -22,30 +22,33 @@
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <cstdio>
 #include <cassert>
+#include <cstdio>
 #include <iostream>
 
-#include "memory.h"
 #include "mc6850.h"
+#include "memory.h"
 
 #define TRACE 0
 
-#define TRACEF(str, x...) do { if (TRACE) printf(str, ## x); } while (0)
+#define TRACEF(str, x...)            \
+    do {                             \
+        if (TRACE) printf(str, ##x); \
+    } while (0)
 
-#define STAT_RDRF (1<<0)
-#define STAT_TDRE (1<<1)
-#define STAT_DCD  (1<<2)
-#define STAT_CTS  (1<<3)
-#define STAT_FE   (1<<4)
-#define STAT_OVRN (1<<5)
-#define STAT_PE   (1<<6)
-#define STAT_IRQ  (1<<7)
+#define STAT_RDRF (1 << 0)
+#define STAT_TDRE (1 << 1)
+#define STAT_DCD  (1 << 2)
+#define STAT_CTS  (1 << 3)
+#define STAT_FE   (1 << 4)
+#define STAT_OVRN (1 << 5)
+#define STAT_PE   (1 << 6)
+#define STAT_IRQ  (1 << 7)
 
 using namespace std;
 
 MC6850::MC6850(Console &con)
-    :   mConsole(con) {
+    : mConsole(con) {
     mStatus = STAT_TDRE;
 }
 
@@ -70,8 +73,9 @@ uint8_t MC6850::ReadByte(size_t address) {
     if (address == 0) {
         // status register
         val = mStatus;
-        if (mPendingRx >= 0)
+        if (mPendingRx >= 0) {
             val |= STAT_RDRF;
+        }
     } else if (address == 1) {
         // data register
         if (mPendingRx >= 0) {
@@ -92,14 +96,12 @@ void MC6850::WriteByte(size_t address, uint8_t val) {
         // control register
         // XXX ignore for now
         mControl = val;
-        //printf("MC6850: control reg %#x\n", val);
+        // printf("MC6850: control reg %#x\n", val);
     } else if (address == 1) {
         // data register
-        //printf("MC6850: data reg %#x\n", val);
+        // printf("MC6850: data reg %#x\n", val);
         mConsole.Putchar(val & 0x7f);
     } else {
         // unknown
     }
 }
-
-

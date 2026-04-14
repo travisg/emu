@@ -3,7 +3,7 @@
 #include <cstdint>
 
 class WD1793 {
-public:
+  public:
     WD1793();
     ~WD1793() = default;
 
@@ -13,11 +13,11 @@ public:
     // Provide a way to poll if an interrupt is pending
     bool InterruptPending() const { return mIntrq; }
     void ClearInterrupt() { mIntrq = false; }
-    
+
     // Provide a way to poll if data is ready (DRQ)
     bool DataReady() const { return mDrq; }
 
-private:
+  private:
     uint8_t mStatus;
     uint8_t mTrack;
     uint8_t mSector;

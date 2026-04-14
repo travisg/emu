@@ -26,21 +26,20 @@
 #include <cstdint>
 #include <sys/types.h>
 
-#include "memory.h"
 #include "console.h"
+#include "memory.h"
 
 class MC6850 : public MemoryDevice {
-public:
+  public:
     explicit MC6850(Console &con);
     virtual ~MC6850() override;
 
     virtual uint8_t ReadByte(size_t address) override;
     virtual void WriteByte(size_t address, uint8_t val) override;
 
-private:
+  private:
     uint8_t mControl = 0;
     uint8_t mStatus = 0;
     int mPendingRx = -1;
     Console &mConsole;
 };
-

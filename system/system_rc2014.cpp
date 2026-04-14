@@ -28,9 +28,9 @@
 #include <cstdio>
 #include <iostream>
 
+#include "console.h"
 #include "cpu/cpuz80.h"
 #include "dev/memory.h"
-#include "console.h"
 #include "ihex.h"
 #include "trace.h"
 
@@ -44,21 +44,29 @@
 #define DEFAULT_ROM "rom/rc2014/24886009.BIN"
 
 #define LOCAL_TRACE 0
-#define TRACE_MEM 0
-#define TRACE_IO 0
+#define TRACE_MEM   0
+#define TRACE_IO    0
 
-#define MTRACEF(x...) { if (TRACE_MEM) printf("MEM: " x); } while (0)
-#define ITRACEF(x...) { if (TRACE_IO) printf("IO: " x); } while (0)
+#define MTRACEF(x...)                     \
+    {                                     \
+        if (TRACE_MEM) printf("MEM: " x); \
+    }                                     \
+    while (0)
+#define ITRACEF(x...)                   \
+    {                                   \
+        if (TRACE_IO) printf("IO: " x); \
+    }                                   \
+    while (0)
 
 using namespace std;
 
 // a simple z80 based system
 System::SystemInfo SystemRC2014::GetSystemInfo() {
-    return { "rc2014", "z80", DEFAULT_ROM };
+    return {"rc2014", "z80", DEFAULT_ROM};
 }
 
 SystemRC2014::SystemRC2014(const std::string &subsystem)
-    :   System(subsystem) {
+    : System(subsystem) {
     mRomString = DEFAULT_ROM;
 }
 
@@ -76,18 +84,19 @@ int SystemRC2014::Init() {
 
     // create a full 64k bank of ram
     mMem.reset(new Memory());
-    mMem->Alloc(64*1024);
+    mMem->Alloc(64 * 1024);
 
     // create a full 64k bank of rom
     // only part of it is visible at a time
     mRom.reset(new Memory());
-    mRom->Alloc(64*1024);
+    mRom->Alloc(64 * 1024);
 
     // read it in
     {
         FILE *fp = fopen(mRomString.c_str(), "rb");
-        if (!fp)
+        if (!fp) {
             return -1;
+        }
 
         size_t err = fread(mRom->GetPtr(), 1, mRom->GetSize(), fp);
         fclose(fp);
@@ -117,7 +126,6 @@ void SystemRC2014::OnConsoleInBufferAdd(size_t count) {
         mSIORecvByte_valid = true;
 
         // TODO: interrupt - mCpu->RaiseIRQ() once IRQ API is added to CpuZ80
-
     }
 }
 
@@ -131,8 +139,9 @@ uint8_t SystemRC2014::MemRead8(size_t address) {
     uint8_t val = 0;
 
     auto memdesc = GetDeviceAtAddr(address);
-    if (memdesc.mem)
+    if (memdesc.mem) {
         val = memdesc.mem->ReadByte(address + memdesc.offset);
+    }
 
     MTRACEF("R %#zx val %#x\n", address, val);
     return val;
@@ -144,12 +153,10 @@ void SystemRC2014::MemWrite8(size_t address, uint8_t val) {
     MTRACEF("W %#zx val %#x\n", address, val);
 
     auto memdesc = GetDeviceAtAddr(address);
-    if (memdesc.mem)
+    if (memdesc.mem) {
         memdesc.mem->WriteByte(address + memdesc.offset, val);
+    }
 }
-
-
-
 
 uint8_t SystemRC2014::IORead8(size_t address) {
     uint8_t val = 0;
@@ -191,17 +198,17 @@ void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
             break;
         case 0x04: // serial port A, data
         case 0x06: // serial port A, control
-            //sio_out(1, addr - 4, val);
+            // sio_out(1, addr - 4, val);
             break;
         case 0x05: // serial port B, data
         case 0x07: // serial port B, control
-            //sio_out(2, addr - 5, val);
+            // sio_out(2, addr - 5, val);
             break;
         case 0x08: // PIO 1 channel A, data
         case 0x09: // PIO 1 channel A, control
         case 0x0a: // PIO 1 channel B, data
         case 0x0b: // PIO 1 channel B, control
-            //pio_out(1, addr - 0x8, val);
+            // pio_out(1, addr - 0x8, val);
             break;
         case 0x0c: // baud rate generator B
             // dont care
@@ -210,7 +217,7 @@ void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
         case 0x11: // floppy track
         case 0x12: // floppy sector
         case 0x13: // floppy data
-            //floppy_out(addr - 0x10, val);
+            // floppy_out(addr - 0x10, val);
             break;
         case 0x14:
         case 0x15:
@@ -223,7 +230,7 @@ void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
         case 0x1d: // PIO 2 channel A, control
         case 0x1e: // PIO 2 channel B, data
         case 0x1f: // PIO 2 channel B, control
-            //pio_out(2, addr - 0x1c, val);
+            // pio_out(2, addr - 0x1c, val);
             break;
         case 0x80: // SIO/A control port
             break;
@@ -249,12 +256,10 @@ SystemRC2014::MemDeviceDesc SystemRC2014::GetDeviceAtAddr(size_t address) {
     // [0x8000 ... 0xffff]: ram, offset by 0x8000
 
     if (address < 0x2000) {
-        return { mRom.get(), mRomBankSel * 0x2000};
+        return {mRom.get(), mRomBankSel * 0x2000};
     } else if (address >= 0x8000) {
-        return { mMem.get(), 0};
+        return {mMem.get(), 0};
     } else {
-        return { nullptr, 0 };
+        return {nullptr, 0};
     }
 }
-
-
