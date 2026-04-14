@@ -375,13 +375,35 @@ decode:
 
             LPRINTF("PC 0x%04hx: op ed%02hhx - ", (uint16_t)(mRegs.pc - 2), op);
             switch (op) {
+                case 0b01000000:
+                case 0b01001000:
+                case 0b01010000:
+                case 0b01011000:
+                case 0b01100000:
+                case 0b01101000:
+                case 0b01110000:
+                case 0b01111000: // IN r, (C)
+                    LPRINTF("IN r, (C)\n");
+                    temp8 = in(mRegs.c);
+                    {
+                        int r = BITS_SHIFT(op, 5, 3);
+                        if (r != 0b110) {
+                            write_r_reg(r, temp8);
+                        }
+                        set_s_flag(temp8);
+                        set_z_flag(temp8);
+                        set_flag(Flag::PV, calc_parity(temp8) != 0);
+                        set_flag(Flag::H, false);
+                        set_flag(Flag::N, false);
+                    }
+                    break;
                 case 0b01000001:
                 case 0b01001001:
                 case 0b01010001:
                 case 0b01011001:
                 case 0b01100001:
                 case 0b01101001:
-                    //              case 0b01110001: /* doesn't officially exist */
+                case 0b01110001: // OUT (C), 0 (undocumented)
                 case 0b01111001: // OUT (C), r
                     LPRINTF("OUT (C), r\n");
                     if (BITS_SHIFT(op, 5, 3) == 0b110) { // OUT (c), 0
@@ -507,6 +529,20 @@ decode:
 
                     temp16 = read_dd_reg(BITS_SHIFT(op, 5, 4));
                     mSys.MemWrite16(read_nn(), temp16, Endian::LITTLE);
+                    break;
+                case 0x44: // NEG
+                    LPRINTF("NEG\n");
+                    {
+                        uint8_t old = mRegs.a;
+                        uint8_t res = 0 - old;
+                        set_flag(Flag::S, res & 0x80);
+                        set_flag(Flag::Z, res == 0);
+                        set_flag(Flag::H, (old & 0xf) != 0);
+                        set_flag(Flag::PV, old == 0x80);
+                        set_flag(Flag::N, 1);
+                        set_flag(Flag::C, old != 0);
+                        mRegs.a = res;
+                    }
                     break;
                 case 0b01001011:
                 case 0b01011011:
@@ -1158,6 +1194,13 @@ decode:
                     set_flag(Flag::H, 0);
                     set_flag(Flag::N, 0);
                     mRegs.a = temp8;
+                    break;
+
+                case 0b00101111: // CPL
+                    LPRINTF("CPL\n");
+                    mRegs.a = ~mRegs.a;
+                    set_flag(Flag::H, 1);
+                    set_flag(Flag::N, 1);
                     break;
 
                 case 0b00111111: // CCF

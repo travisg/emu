@@ -45,7 +45,7 @@
 
 #define LOCAL_TRACE 0
 #define TRACE_MEM   0
-#define TRACE_IO    0
+#define TRACE_IO    1
 
 #define MTRACEF(x...)                     \
     {                                     \
@@ -159,16 +159,18 @@ void SystemRC2014::MemWrite8(size_t address, uint8_t val) {
 }
 
 uint8_t SystemRC2014::IORead8(size_t address) {
-    uint8_t val = 0;
+    uint8_t val = 0xff;
 
     switch (address) {
         case 0x80: // SIO/A control port
+            val = 0;
             if (mSIORecvByte_valid) {
                 val |= 0b1;  // receive character available
                 val |= 0b10; // interrupt condition
             }
             break;
         case 0x81: // SIO/A data port
+            val = 0;
             if (mSIORecvByte_valid) {
                 val = mSIORecvByte;
                 mSIORecvByte_valid = false;
@@ -176,62 +178,38 @@ uint8_t SystemRC2014::IORead8(size_t address) {
             }
             break;
         case 0x82: // SIO/B control port
+            val = 0;
             break;
         case 0x83: // SIO/B data port
+            val = 0;
+            break;
+
+        case 0x90:
+        case 0x91: // second serial port for SC129 or SC110 boards,
+                   // possibly a CF controller,
+                   // or a CTC (SC114 or SC706)
             break;
         default:
             fprintf(stderr, "in from unknown port 0x%zx\n", address);
             break;
     }
 
-    ITRACEF("R %#zx val 0x%02x\n", address, val);
+    if (address != 0x80) {
+        ITRACEF("R %#zx val 0x%02x\n", address, val);
+    }
 
     return val;
 }
 
 void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
-    ITRACEF("W %#zx val 0x%02x\n", address, val);
+    if (address != 0x80) {
+        ITRACEF("W %#zx val 0x%02x\n", address, val);
+    }
 
     switch (address) {
-        case 0x00: // baud rate generator A
-            // dont care
-            break;
-        case 0x04: // serial port A, data
-        case 0x06: // serial port A, control
-            // sio_out(1, addr - 4, val);
-            break;
-        case 0x05: // serial port B, data
-        case 0x07: // serial port B, control
-            // sio_out(2, addr - 5, val);
-            break;
-        case 0x08: // PIO 1 channel A, data
-        case 0x09: // PIO 1 channel A, control
-        case 0x0a: // PIO 1 channel B, data
-        case 0x0b: // PIO 1 channel B, control
-            // pio_out(1, addr - 0x8, val);
-            break;
-        case 0x0c: // baud rate generator B
-            // dont care
-            break;
-        case 0x10: // floppy status/command
-        case 0x11: // floppy track
-        case 0x12: // floppy sector
-        case 0x13: // floppy data
-            // floppy_out(addr - 0x10, val);
-            break;
-        case 0x14:
-        case 0x15:
-        case 0x16:
-        case 0x17: // bank register and floppy PIO
-            // TODO: bank switch support
+        case 0x10 ... 0x17: // compact flash controller
             break;
 
-        case 0x1c: // PIO 2 channel A, data
-        case 0x1d: // PIO 2 channel A, control
-        case 0x1e: // PIO 2 channel B, data
-        case 0x1f: // PIO 2 channel B, control
-            // pio_out(2, addr - 0x1c, val);
-            break;
         case 0x80: // SIO/A control port
             break;
         case 0x81: // SIO/A data port
@@ -241,6 +219,13 @@ void SystemRC2014::IOWrite8(size_t address, uint8_t val) {
             break;
         case 0x83: // SIO/B data port
             break;
+
+        case 0x90:
+        case 0x91: // second serial port for SC129 or SC110 boards,
+                   // possibly a CF controller,
+                   // or a CTC (SC114 or SC706)
+            break;
+
         default:
             fprintf(stderr, "out to unknown port 0x%zx\n", address);
             break;
@@ -258,7 +243,7 @@ SystemRC2014::MemDeviceDesc SystemRC2014::GetDeviceAtAddr(size_t address) {
     if (address < 0x2000) {
         return {mRom.get(), mRomBankSel * 0x2000};
     } else if (address >= 0x8000) {
-        return {mMem.get(), 0};
+        return {mMem.get(), 0x8000};
     } else {
         return {nullptr, 0};
     }
