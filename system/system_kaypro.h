@@ -61,7 +61,6 @@ class SystemKaypro final : public System {
     void RenderDisplay(SDL_Renderer *renderer);
     void DrawChar(SDL_Renderer *renderer, int x, int y, uint8_t c, int scale);
 
-    MemoryDevice *GetDeviceAtAddr(size_t &address);
 
     std::unique_ptr<CpuZ80> mCpu;
     std::unique_ptr<Memory> mMem;
@@ -84,4 +83,6 @@ class SystemKaypro final : public System {
         BANK1
     };
     Bank CurrentBank() const { return mControlLatch & 0x80 ? Bank::BANK1 : Bank::BANK0; }
+    bool DriveASelected() const { return (mControlLatch & 0x01) == 0; }
+    bool DriveBSelected() const { return (mControlLatch & 0x02) == 0; }
 };

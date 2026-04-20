@@ -2,27 +2,27 @@
 #include "trace.h"
 #include <cstdio>
 
-#define LOCAL_TRACE 1
+#define LOCAL_TRACE 0
 
 Z80Sio::Z80Sio() {
 }
 
 uint8_t Z80Sio::ReadControl(Channel &chan) {
+    std::scoped_lock lck(mLock);
     uint8_t val = chan.status_regs[chan.pointer];
-    LTRACEF("Z80SIO: Read Control RR%d = 0x%02x\n", chan.pointer, val);
     chan.pointer = 0; // After reading, pointer resets to 0
     return val;
 }
 
 void Z80Sio::WriteControl(Channel &chan, uint8_t val) {
+    std::scoped_lock lck(mLock);
     if (chan.pointer == 0) {
         // Lower 3 bits select the next register if it's a register select command
         chan.pointer = val & 0x07;
 
         // Command decoding (upper bits of WR0)
         uint8_t cmd = (val >> 3) & 0x07;
-        if (cmd == 0b011) { // Channel reset
-            LTRACEF("Z80SIO: Channel Reset\n");
+        if (cmd == 0b011) {        // Channel reset
             chan = Channel();      // Reset channel state
         } else if (cmd == 0b010) { // Reset Rx CRC checker
             // Not implemented
@@ -45,6 +45,7 @@ void Z80Sio::WriteControl(Channel &chan, uint8_t val) {
 }
 
 uint8_t Z80Sio::ReadData(Channel &chan) {
+    std::scoped_lock lck(mLock);
     uint8_t val = 0;
     if (!chan.rx_fifo.empty()) {
         val = chan.rx_fifo.front();
@@ -53,17 +54,24 @@ uint8_t Z80Sio::ReadData(Channel &chan) {
             chan.status_regs[0] &= ~0x01; // Clear Rx Character Available bit
         }
     }
-    LTRACEF("Z80SIO: Read Data = 0x%02x\n", val);
     return val;
 }
 
 void Z80Sio::WriteData(Channel &chan, uint8_t val) {
+    std::scoped_lock lck(mLock);
     LTRACEF("Z80SIO: Write Data = 0x%02x\n", val);
     // Typically consumed instantly into ether for now
     chan.status_regs[0] |= 0x04; // Set Tx buffer empty bit (instant transmit)
 }
 
-void Z80Sio::InjectKeyboardByte(uint8_t val) {
+void Z80Sio::InjectCharA(uint8_t val) {
+    std::scoped_lock lck(mLock);
+    mChanA.rx_fifo.push(val);
+    mChanA.status_regs[0] |= 0x01; // Set Rx Character Available bit
+}
+
+void Z80Sio::InjectCharB(uint8_t val) {
+    std::scoped_lock lck(mLock);
     mChanB.rx_fifo.push(val);
     mChanB.status_regs[0] |= 0x01; // Set Rx Character Available bit
 }

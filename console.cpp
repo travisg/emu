@@ -69,7 +69,7 @@ Console::~Console() {
 }
 
 void Console::RegisterInBufferCountAdd(const std::function<InBufferCountAdd> &func) {
-    std::lock_guard<std::recursive_mutex> lck(mLock);
+    std::scoped_lock lck(mLock);
     mInBufferCountAddHook = std::move(func);
 }
 
@@ -84,16 +84,17 @@ int Console::Run() {
             printf("EOF on console, exiting\n");
             return -1;
         } else {
-            std::lock_guard<std::recursive_mutex> lck(mLock);
+            std::scoped_lock lck(mLock);
 
             mInBuffer.push(c);
 
             // a byte is pushed, notify any waiters for it
-            if (mInBufferCountAddHook) {
-                mInBufferCountAddHook(mInBuffer.size());
-            }
+            NotifyInBufferCountAdd(mInBuffer.size());
         }
     }
+}
+
+void Console::Stop() {
 }
 
 void Console::Putchar(char c) {
@@ -101,13 +102,13 @@ void Console::Putchar(char c) {
     putchar(c);
     fflush(stdout);
 #else
-    std::lock_guard<std::mutex> lck(mLock);
+    std::scoped_lock lck(mLock);
     mOutBuffer.push(c);
 #endif
 }
 
 int Console::GetNextChar() {
-    std::lock_guard<std::recursive_mutex> lck(mLock);
+    std::scoped_lock lck(mLock);
 
     int nc = -1;
     if (!mInBuffer.empty()) {

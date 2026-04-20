@@ -155,6 +155,18 @@ int SystemKaypro::Init() {
         SDL_SetTextureBlendMode(mFontTexture, SDL_BLENDMODE_BLEND);
     }
 
+    mConsole.RegisterInBufferCountAdd([this](size_t count) {
+        while (count > 0) {
+            int c = mConsole.GetNextChar();
+            if (c < 0)
+                break;
+            mSio.InjectCharB(c);
+            count--;
+        }
+    });
+
+    mFdc.LoadImage("mbasic-games.img");
+
     return 0;
 }
 
@@ -165,32 +177,39 @@ int SystemKaypro::Run() {
 }
 
 uint8_t SystemKaypro::MemRead8(size_t address) {
+    address &= 0xffff;
     uint8_t val = 0;
 
-    size_t relative_addr = address;
-    MemoryDevice *mem = GetDeviceAtAddr(relative_addr);
-    if (mem) {
-        val = mem->ReadByte(relative_addr);
+    if (CurrentBank() == Bank::BANK1 && address < 0x1000) {
+        val = mRom->ReadByte(address);
+    } else if (CurrentBank() == Bank::BANK1 && address >= 0x3000 && address < 0x4000) {
+        val = mVideoMem->ReadByte(address - 0x3000);
+    } else {
+        val = mMem->ReadByte(address);
     }
 
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
+    // LTRACEF("addr 0x%zx val 0x%x\n", address, val);
     return val;
 }
 
 void SystemKaypro::MemWrite8(size_t address, uint8_t val) {
     address &= 0xffff;
 
-    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
-
-    size_t relative_addr = address;
-    MemoryDevice *mem = GetDeviceAtAddr(relative_addr);
-    if (mem) {
-        mem->WriteByte(relative_addr, val);
-        if (mem == mVideoMem.get()) {
-            // printf("SystemKaypro: VIDEO WRITE 0x%02x at 0x%zx ('%c')\n", val, relative_addr, (val >= 32 && val < 127) ? val : '.');
+    // Handle banking rules for Bank 1
+    if (CurrentBank() == Bank::BANK1) {
+        if (address < 0x1000) {
+            // Writes to the ROM area are ignored on real hardware
+            return;
+        } else if (address >= 0x3000 && address < 0x4000) {
+            // Writes go specifically to video RAM, not main RAM
+            mVideoMem->WriteByte(address - 0x3000, val);
             mConsole.ForceRefresh();
+            return;
         }
     }
+
+    // Default: write to main RAM (all of Bank 0, or unmapped areas of Bank 1)
+    mMem->WriteByte(address, val);
 }
 
 void SystemKaypro::RenderDisplay(SDL_Renderer *renderer) {
@@ -253,31 +272,34 @@ uint8_t SystemKaypro::IORead8(size_t address) {
         case 0x07: // serial port B, control
             val = mSio.ReadControlB();
             break;
-        case 0x10: // floppy status
-        case 0x11: // floppy track
-        case 0x12: // floppy sector
-        case 0x13: // floppy data
+        case 0x10:                                                  // floppy status
+        case 0x11:                                                  // floppy track
+        case 0x12:                                                  // floppy sector
+        case 0x13:                                                  // floppy data
+            mFdc.SetSelected(DriveASelected() || DriveBSelected()); // For now, if either is selected
             val = mFdc.Read(address - 0x10);
             break;
         case 0x1c: // PIO 2 channel A, data (System Data port)
-            // Bit 6 is floppy INTRQ
-            // Bit 7 is floppy DRQ
-            if (mFdc.InterruptPending()) {
-                val |= 0x40; // Set INTRQ bit (bit 6)
+            // The Kaypro 2 system port is a PIO. Reading it returns the current
+            // state of the pins. Some pins are outputs (bank select, drive select)
+            // and some are inputs (floppy INTRQ, DRQ).
+            val = mControlLatch & 0x3f; // Keep bits 0-5 from the last write
+            if (!mFdc.InterruptPending()) {
+                val |= 0x40; // Active low INTRQ (bit 6)
             }
-            if (mFdc.DataReady()) {
-                val |= 0x80; // Set DRQ bit (bit 7)
+            if (!mFdc.DataReady()) {
+                val |= 0x80; // Active low DRQ (bit 7)
             }
             break;
     }
 
-    TRACEF("addr 0x%zx val 0x%hhx\n", address, val);
+    LTRACEF("addr 0x%zx val 0x%hhx\n", address, val);
 
     return val;
 }
 
 void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
-    TRACEF("addr 0x%zx val 0x%x\n", address, val);
+    LTRACEF("addr 0x%zx val 0x%x\n", address, val);
 
     if (LOCAL_TRACE > 1) {
         for (uint i = 0; i <= 7; i++) {
@@ -314,6 +336,7 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
         case 0x11: // floppy track
         case 0x12: // floppy sector
         case 0x13: // floppy data
+            mFdc.SetSelected(DriveASelected() || DriveBSelected());
             mFdc.Write(address - 0x10, val);
             break;
         case 0x14:
@@ -323,7 +346,6 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
             break;
 
         case 0x1c: // PIO 2 channel A, data
-            printf("SystemKaypro: SYSTEM CONTROL Port 0x1C write: 0x%02x\n", val);
             mControlLatch = val;
             break;
         case 0x1d: // PIO 2 channel A, control
@@ -337,15 +359,3 @@ void SystemKaypro::IOWrite8(size_t address, uint8_t val) {
     }
 }
 
-MemoryDevice *SystemKaypro::GetDeviceAtAddr(size_t &address) {
-    address &= 0xffff;
-
-    if (CurrentBank() == Bank::BANK0 || address >= 0x4000) {
-        return mMem.get();
-    } else if (address >= 0x3000) { // BANK1 and within video memory
-        address -= 0x3000;
-        return mVideoMem.get();
-    } else { // BANK1 and within rom memory
-        return mRom.get();
-    }
-}

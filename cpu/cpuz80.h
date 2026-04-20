@@ -160,8 +160,15 @@ class CpuZ80 final : public Cpu {
         uint16_t ix;
         uint16_t iy;
 
-        int iff;
+        int im = 1;
+        int iff1 = 0;
+        int iff2 = 0;
+        uint8_t i = 0;
+        uint8_t r = 0;
     } mRegs = {};
+
+    bool mPrefixDD = false;
+    bool mPrefixFD = false;
 
     // interrupts asserted
     std::atomic<bool> mIRQLevel = {};

@@ -87,6 +87,7 @@ int System::RunThreaded() {
         auto ret = this->Run();
         printf("system thread stopping with err %d\n", ret);
         fflush(stdout);
+        this->GetConsole()->Stop();
     };
 
     mThread.reset(new std::thread(start));

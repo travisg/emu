@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cstdint>
+#include <mutex>
 #include <queue>
 
 // Z80 SIO (Serial Input/Output) Controller
@@ -19,8 +19,9 @@ class Z80Sio {
     void WriteDataB(uint8_t val);
     void WriteControlB(uint8_t val);
 
-    // Provide keyboard data
-    void InjectKeyboardByte(uint8_t val);
+    // Provide keyboard/serial data
+    void InjectCharA(uint8_t val);
+    void InjectCharB(uint8_t val);
 
   private:
     struct Channel {
@@ -37,12 +38,14 @@ class Z80Sio {
             for (auto &r : status_regs) {
                 r = 0;
             }
-            status_regs[0] = 0x04; // Tx buffer empty
+            status_regs[0] = 0x2c; // Tx buffer empty (0x04) | DCD (0x08) | CTS (0x20)
         }
     };
 
-    Channel mChanA; // Usually RS-232 port
+    Channel mChanA; // Usually RS-232 port (Port 0x04/0x06 on Kaypro II)
     Channel mChanB; // Usually Keyboard in Kaypro
+
+    std::recursive_mutex mLock;
 
     uint8_t ReadControl(Channel &chan);
     void WriteControl(Channel &chan, uint8_t val);

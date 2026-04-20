@@ -45,14 +45,15 @@ int ConsoleSDL::Run() {
                 printf("ConsoleSDL: Quit event received\n");
                 mQuit = true;
             } else if (e.type == SDL_TEXTINPUT) {
-                printf("ConsoleSDL: TextInput: %s\n", e.text.text);
-                std::lock_guard<std::recursive_mutex> lck(mLock);
+                // printf("ConsoleSDL: TextInput: %s\n", e.text.text);
+                std::scoped_lock lck(mLock);
                 for (int i = 0; e.text.text[i] != '\0'; i++) {
                     mInBuffer.push(e.text.text[i]);
                 }
+                NotifyInBufferCountAdd(mInBuffer.size());
             } else if (e.type == SDL_KEYDOWN) {
-                printf("ConsoleSDL: KeyDown: sym=%d mod=%d\n", e.key.keysym.sym, e.key.keysym.mod);
-                std::lock_guard<std::recursive_mutex> lck(mLock);
+                // printf("ConsoleSDL: KeyDown: sym=%d mod=%d\n", e.key.keysym.sym, e.key.keysym.mod);
+                std::scoped_lock lck(mLock);
                 // Handle non-printable keys manually
                 switch (e.key.keysym.sym) {
                     case SDLK_BACKSPACE:
@@ -72,6 +73,7 @@ int ConsoleSDL::Run() {
                         }
                         break;
                 }
+                NotifyInBufferCountAdd(mInBuffer.size());
             }
         }
 
@@ -94,4 +96,11 @@ int ConsoleSDL::Run() {
     }
 
     return -1; // Same standard EOF loop escape
+}
+
+void ConsoleSDL::Stop() {
+    mQuit = true;
+    SDL_Event event = {};
+    event.type = SDL_QUIT;
+    SDL_PushEvent(&event);
 }

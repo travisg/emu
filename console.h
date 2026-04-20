@@ -39,6 +39,7 @@ class Console {
     Console &operator=(const Console &) = delete;
 
     virtual int Run();
+    virtual void Stop();
 
     virtual void Putchar(char c);
     virtual int GetNextChar();
@@ -51,6 +52,11 @@ class Console {
     std::queue<char> mOutBuffer;
     std::queue<char> mInBuffer;
     std::recursive_mutex mLock;
+    void NotifyInBufferCountAdd(size_t count) {
+        if (mInBufferCountAddHook) {
+            mInBufferCountAddHook(count);
+        }
+    }
 
   private:
     std::function<InBufferCountAdd> mInBufferCountAddHook;

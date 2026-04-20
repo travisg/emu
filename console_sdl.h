@@ -10,6 +10,7 @@ class ConsoleSDL : public Console {
     virtual ~ConsoleSDL() override;
 
     virtual int Run() override;
+    virtual void Stop() override;
 
     // Allow derived subclasses explicitly hook into drawing
     SDL_Renderer *GetRenderer() const { return mRenderer; }
