@@ -29,6 +29,7 @@
 #include "system.h"
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 class Console;
@@ -67,6 +68,10 @@ class SystemKaypro final : public System {
     std::unique_ptr<Memory> mVideoMem;
     std::unique_ptr<Memory> mRom;
     std::unique_ptr<Memory> mVideoRom;
+
+    // guards mVideoMem, which the CPU thread writes and the SDL render
+    // thread (RenderDisplay) reads with no other synchronization
+    std::mutex mVideoLock;
 
     ConsoleSDL mConsole;
 

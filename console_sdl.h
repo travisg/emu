@@ -1,6 +1,7 @@
 #pragma once
 #include "console.h"
 #include <SDL2/SDL.h>
+#include <atomic>
 #include <functional>
 
 // Extended console that runs an SDL event loop
@@ -21,6 +22,6 @@ class ConsoleSDL : public Console {
     std::function<void(SDL_Renderer *)> mDrawCallback;
     SDL_Window *mWindow = nullptr;
     SDL_Renderer *mRenderer = nullptr;
-    bool mNeedsRefresh = false;
-    bool mQuit = false;
+    std::atomic<bool> mNeedsRefresh{false};
+    std::atomic<bool> mQuit{false};
 };

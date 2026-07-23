@@ -183,6 +183,7 @@ uint8_t SystemKaypro::MemRead8(size_t address) {
     if (CurrentBank() == Bank::BANK1 && address < 0x1000) {
         val = mRom->ReadByte(address);
     } else if (CurrentBank() == Bank::BANK1 && address >= 0x3000 && address < 0x4000) {
+        std::scoped_lock lck(mVideoLock);
         val = mVideoMem->ReadByte(address - 0x3000);
     } else {
         val = mMem->ReadByte(address);
@@ -202,7 +203,10 @@ void SystemKaypro::MemWrite8(size_t address, uint8_t val) {
             return;
         } else if (address >= 0x3000 && address < 0x4000) {
             // Writes go specifically to video RAM, not main RAM
-            mVideoMem->WriteByte(address - 0x3000, val);
+            {
+                std::scoped_lock lck(mVideoLock);
+                mVideoMem->WriteByte(address - 0x3000, val);
+            }
             mConsole.ForceRefresh();
             return;
         }
@@ -217,6 +221,7 @@ void SystemKaypro::RenderDisplay(SDL_Renderer *renderer) {
         return;
     }
 
+    std::scoped_lock lck(mVideoLock);
     for (int y = 0; y < 24; y++) {
         for (int x = 0; x < 80; x++) {
             // Reverting to 128-byte stride based on address logs
