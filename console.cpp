@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <iostream>
 #include <mutex>
+#include <poll.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -75,6 +76,19 @@ void Console::RegisterInBufferCountAdd(const std::function<InBufferCountAdd> &fu
 
 int Console::Run() {
     for (;;) {
+        if (mShutdown.load()) {
+            printf("console stop requested, exiting\n");
+            return -1;
+        }
+
+        // wait for stdin to be readable, waking periodically to notice a
+        // shutdown request instead of blocking in getchar() forever
+        struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+        int ret = poll(&pfd, 1, 100);
+        if (ret <= 0) {
+            continue;
+        }
+
         int c = getchar();
 
         if (c == 0x4) {
@@ -95,6 +109,7 @@ int Console::Run() {
 }
 
 void Console::Stop() {
+    mShutdown.store(true);
 }
 
 void Console::Putchar(char c) {

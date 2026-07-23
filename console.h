@@ -23,6 +23,7 @@
  */
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -60,4 +61,5 @@ class Console {
 
   private:
     std::function<InBufferCountAdd> mInBufferCountAddHook;
+    std::atomic<bool> mShutdown{false};
 };
