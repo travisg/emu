@@ -1,104 +1,82 @@
 # AGENTS.md
 
-## Purpose
-This repository is a terminal-driven emulator for several vintage systems (6809, Altair 680, Kaypro/Z80), with a small interactive console loop.
+Guidance for AI coding agents working in this repository. `CLAUDE.md` imports this file, so Claude Code and other tools read the same instructions.
 
-## High-Level Layout
-- `main.cpp`: CLI parsing, system selection, startup/shutdown flow.
-- `console.cpp` / `console.h`: raw terminal mode + input queue; console loop exits on Ctrl-D.
-- `system/`: concrete system implementations and system factory.
-- `cpu/`: CPU cores (`6800`, `6809`, `z80`).
-- `dev/`: emulated devices (memory, UARTs).
-- `libihex/`: Git submodule that implements Intel HEX read/parse support used by ROM loading.
-- `test/`: ROM/assembly artifacts, CPU test code, and helper scripts used for manual testing.
+## Purpose
+
+Terminal-driven emulator for several vintage computer systems: Motorola 6809 (System09), MITS Altair 680 (6800), Kaypro II (Z80, CP/M, SDL2 video window), and RC2014 (Z80).
 
 ## Build
-Prerequisites (as currently used by the makefile):
-- `clang` / `clang++`
-- `make`
-- `objdump` (Linux) or `otool` (Darwin)
+
+Prerequisites:
+- `clang` / `clang++` (hard-set in the makefile) and GNU `make`
+- SDL2 development package — the makefile invokes `sdl2-config` unconditionally
+- `objdump` (Linux) or `otool` (macOS) for the listing file
+- The `libihex` git submodule: run `git submodule update --init` on a fresh clone
 
 Build from repo root:
+
 ```bash
 make
 ```
 
-Outputs:
-- `build-emu/emu` (emulator binary)
-- `build-emu/emu.lst` (disassembly listing)
+Outputs: `build-emu/emu` (the emulator, C++17) and `build-emu/emu.lst` (disassembly of the emulator itself).
 
-Clean:
-```bash
-make clean
-make spotless
-```
+`make clean` removes objects but not the binary; `make spotless` removes `build-*` entirely.
 
 ## Run
-Show CLI help:
+
+Run from the repo root — default ROM paths are relative (`roms/...`), and `roms` is a symlink to storage outside the repo (ROM images are not tracked in git).
+
 ```bash
-./build-emu/emu -h
+./build-emu/emu -h                  # help: lists systems, cpus, default ROMs
+./build-emu/emu                     # default system (6809)
+./build-emu/emu -s kaypro           # Kaypro II, opens an SDL window
+./build-emu/emu -s 6809 -r roms/6809/BASIC.HEX   # override the ROM
+./build-emu/emu -s 6809 -l 10000000              # stop after N cycles
 ```
 
-Run default system (currently `6809`):
+- Systems: `6809`, `altair680`, `kaypro`, `rc2014`. An optional subsystem suffix selects a variant (e.g. `6809-obc`).
+- `-c/--cpu` is accepted but ignored — the CPU is chosen by the system.
+- `-l/--limit` bounds the run by cycle count; use it for non-interactive/automated runs.
+- The console puts the terminal in raw mode and passes Ctrl-C through to the guest. **Ctrl-D exits cleanly** (or close the SDL window for kaypro).
+- The kaypro system additionally loads the floppy image `mbasic-games.img` from the current directory (`system/system_kaypro.cpp`).
+
+## Test
+
+End-to-end regression: boots 6809 BASIC, feeds it `test/basic6809_lang_test.bas`, and checks the captured log for `BASIC LANGUAGE TEST PASS`:
+
 ```bash
-./build-emu/emu
+make                                # build first
+./test/run_basic6809_lang_test.sh   # also reachable as: make -C test basic6809-test
 ```
 
-Run a specific system and ROM:
-```bash
-./build-emu/emu -s 6809 -r test/BASIC.HEX
-./build-emu/emu -s altair680 -r mits680b.bin
-./build-emu/emu -s kaypro -r rom/kaypro/kayproii_u47.bin
-```
+Requires the `roms` symlink to resolve, plus `script(1)` and `perl`.
 
-Important console behavior:
-- Press `Ctrl-D` to exit the interactive console loop cleanly.
+`make -C test` rebuilds the 6809 test ROM sources — needs the ASxxxx toolchain (`as6809`, `aslink`); not required for normal development.
 
-## Test Strategy (Current State)
-There is no modern automated unit/integration test harness wired into `make`.
-Use manual verification:
-1. Build with `make`.
-2. Check help output (`./build-emu/emu -h`) for valid systems and default ROMs.
-3. Boot at least one target system and verify expected console behavior.
-4. Use `Ctrl-D` to ensure clean shutdown path (`console.Run()` exits, system thread stops).
+Beyond that, verification is manual: build, check `-h` output, boot a system, confirm Ctrl-D shuts down cleanly.
 
-If you add tests, keep them scriptable and runnable from repo root.
+## Architecture
 
-## Code Style and Formatting (Observed)
-Follow existing file conventions unless explicitly requested otherwise:
-- Top-of-file modeline commonly present: `// vim: ts=4:sw=4:expandtab:`
-- Indentation: 4 spaces, no tabs in C/C++ sources.
-- Braces: K&R style (`if (...) {` on same line).
-- Includes: standard headers first, then project headers.
-- Naming:
-  - Types/classes: `PascalCase`
-  - methods/functions: `PascalCase` for class methods in this codebase
-  - members: `mCamelCase`
-- Prefer minimal, localized changes; avoid broad reformatting.
+Threading/lifecycle (`main.cpp`): parse args → `System::Factory(name)` → `Init()` → `RunThreaded()` spawns a `std::thread` running the CPU loop while the main thread blocks in `Console::Run()`. Ctrl-D exits the console loop, then `ShutdownThreaded()` sets an atomic flag the CPU loop polls each instruction. If the CPU loop exits first (e.g. cycle limit), it stops the console instead.
 
-## System Metadata Pattern
-System metadata is exposed via static members and aggregated by the factory layer:
-- Each concrete system provides `GetSystemInfo()`.
-- `System::GetSupportedSystems()` aggregates those records.
-- CLI/help should consume this metadata instead of hardcoding values in `main.cpp`.
+- **`System`** (`system/system.h`) — abstract machine, one `final` subclass per system in `system/`. The System *is* the bus: subclasses implement `MemRead8`/`MemWrite8` (plus `IORead8`/`IOWrite8` for Z80 port I/O) and do all address decoding, own the `Memory` banks and devices, and load their own ROMs in `Init()` (Intel HEX via the `libihex` submodule, or flat-binary `fread`). Default ROM paths are per-system `#define DEFAULT_ROM` in each `system/*.cpp`.
+- **`Cpu`** (`cpu/cpu.h`) — abstract core holding a `System &`; all bus access goes through the System. Cores (`cpu6800`, `cpu6809`, `cpuz80`) are switch-based interpreters that check the shutdown flag and the global `g_cycle_limit` every instruction.
+- **`dev/`** — `MemoryDevice` interface; `Memory` (flat RAM/ROM, no bounds checking); UARTs (`mc6850`, `uart16550`, `z80sio`) and the `wd1793` floppy controller (Kaypro, backed by a raw disk-image file).
+- **Console** — base `Console` (`console.cpp`) handles raw-termios stdin and queues input; each system wires the input callback into its UART device. `ConsoleSDL` (Kaypro) opens an SDL2 window and renders the 80×24 video RAM through a font extracted from the video ROM.
 
-## Commit Message Convention (Observed)
-Recent history strongly suggests bracketed scopes:
-- Format: `[scope] short description`
-- Multi-scope format appears as: `[scope1][scope2] short description`
+System metadata: each system exposes a static `GetSystemInfo()`, aggregated by `System::GetSupportedSystems()`, which drives the `-h` output. Never hardcode system/ROM info in `main.cpp` — extend the metadata.
 
-Examples from history:
-- `[help] Generate help system list from system metadata`
-- `[cpu][mc6800] Add support for Motorola 6800`
-- `[build] squelch a warning about C99 designators`
+Debug tracing: `trace.h` provides `LTRACEF`-style macros gated by a per-file `#define LOCAL_TRACE 0/1` — the standard debug knob throughout the codebase.
 
-Suggested practice:
-- Keep subject line concise and imperative.
-- Use one or more bracketed scopes that match touched areas (`help`, `cpu`, `z80`, `6809`, `build`, `console`, `misc`, etc.).
+## Style
 
-## Guidance for Future AI Agents
-- Read this file first, then inspect touched subsystem files before editing.
-- Preserve existing style and architecture.
-- Prefer extending existing system/cpu abstractions over adding ad-hoc logic in `main.cpp`.
-- Validate with `make` and at least one manual run.
-- Mention manual verification steps in your final summary.
+- `.clang-format` is authoritative: LLVM base, 4-space indent, attached (K&R) braces, `ColumnLimit: 0`, right-aligned pointers, braces required on all control statements.
+- Files start with the modeline `// vim: ts=4:sw=4:expandtab:` and an MIT license header.
+- Naming: `PascalCase` types and methods, `mCamelCase` members, `g_` globals.
+- Prefer minimal, localized diffs; avoid broad reformatting.
+
+## Commits
+
+Subject line convention is a lowercase `scope: description`, e.g. `z80: clean up the flag handling`, `kaypro: massive pile of changes`. (Older history used `[scope] Description`; prefer the colon style.)
