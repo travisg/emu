@@ -238,12 +238,12 @@ SystemRC2014::MemDeviceDesc SystemRC2014::GetDeviceAtAddr(size_t address) {
     // at the moment decode
     // [0x0000 ... 0x1fff]: bank in rom selected by mRomBankSel
     // [0x2000 ... 0x7fff]: null
-    // [0x8000 ... 0xffff]: ram, offset by 0x8000
+    // [0x8000 ... 0xffff]: ram, occupying the top half of the 64KB mMem buffer
 
     if (address < 0x2000) {
         return {mRom.get(), mRomBankSel * 0x2000};
     } else if (address >= 0x8000) {
-        return {mMem.get(), 0x8000};
+        return {mMem.get(), 0};
     } else {
         return {nullptr, 0};
     }
