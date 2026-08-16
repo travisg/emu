@@ -1,0 +1,15 @@
+[package]
+name = "emu"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal-driven emulator for several vintage computer systems"
+license = "MIT"
+
+[dependencies]
+# Intel HEX parsing, needed from phase 2 (system09). Pure rust, zero transitive
+# deps; replaces the libihex submodule.
+ihex = "3"
+
+[profile.release]
+# the interpreter cores are one giant match each; keep them fast
+opt-level = 3
