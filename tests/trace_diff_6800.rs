@@ -115,7 +115,11 @@ fn rust_trace(rom: &[u8], instructions: usize) -> String {
     let mut out: Vec<u8> = Vec::new();
     for _ in 0..instructions {
         cpu.trace_line(&mut out).unwrap();
-        cpu.step(&mut bus);
+        // stop where the C++ run loop would: a bad opcode or a detected
+        // infinite loop ends it, after the line has already been emitted
+        if cpu.step(&mut bus) != emu::cpu::StepResult::Ok {
+            break;
+        }
     }
     String::from_utf8(out).unwrap()
 }
@@ -179,7 +183,16 @@ fn cpp_trace(bin: &Path, rom: &[u8], instructions: usize, name: &str) -> String 
 }
 
 /// Run a snippet through both cores and require identical traces.
-fn assert_traces_match(name: &str, code: &[u8], instructions: usize) {
+///
+/// `expect_lines` guards against the failure mode where both sides truncate:
+/// comparing two empty traces would otherwise pass. Pass `None` when the
+/// snippet may legitimately stop early (a bad opcode, a runaway jump).
+fn assert_traces_match_upto(
+    name: &str,
+    code: &[u8],
+    instructions: usize,
+    expect_lines: Option<usize>,
+) {
     let Some(bin) = emu_binary() else {
         eprintln!("skipping {name}: build-emu/emu not built");
         return;
@@ -188,6 +201,9 @@ fn assert_traces_match(name: &str, code: &[u8], instructions: usize) {
     let rom = rom_image(code);
     let rust = rust_trace(&rom, instructions);
     let cpp = cpp_trace(&bin, &rom, instructions, name);
+
+    assert!(!cpp.is_empty(), "{name}: c++ produced an empty trace");
+    assert!(!rust.is_empty(), "{name}: rust produced an empty trace");
 
     if rust != cpp {
         let mut msg = format!("trace mismatch in {name}\n");
@@ -202,7 +218,14 @@ fn assert_traces_match(name: &str, code: &[u8], instructions: usize) {
         }
         panic!("{msg}");
     }
-    assert_eq!(rust.lines().count(), instructions, "unexpected trace length");
+    if let Some(n) = expect_lines {
+        assert_eq!(rust.lines().count(), n, "{name}: unexpected trace length");
+    }
+}
+
+/// Straight-line snippet: both sides must run exactly `instructions` of it.
+fn assert_traces_match(name: &str, code: &[u8], instructions: usize) {
+    assert_traces_match_upto(name, code, instructions, Some(instructions));
 }
 
 // Handy opcode aliases, so the snippets read like assembly.
@@ -473,6 +496,47 @@ fn implied_opcode_sweep() {
     assert_traces_match("implied_opcode_sweep", &code, n);
 }
 
+/// Execute *every* opcode value, one per synthetic rom, and require both
+/// implementations to agree.
+///
+/// The targeted tests above exercise the A-register and implied forms but
+/// leave most of the B-register, indexed and direct families untouched -- and
+/// a 180-entry decode table transcribed by hand is exactly where a transposed
+/// mode, width or target register hides. Unimplemented opcodes are covered
+/// too: one side stopping early shows up as a length difference.
+#[test]
+fn every_opcode_agrees() {
+    if emu_binary().is_none() {
+        eprintln!("skipping: build-emu/emu not built");
+        return;
+    }
+
+    // Give the opcode under test something non-trivial to work with: a stack,
+    // known accumulators, and an index register pointing into ram.
+    #[rustfmt::skip]
+    const SETUP: [u8; 10] = [
+        LDS_IMM, 0x0f, 0xff,
+        LDA_IMM, 0x96,
+        LDB_IMM, 0x5a,
+        LDX_IMM, 0x00, 0x40,
+    ];
+    const SETUP_INSNS: usize = 4;
+
+    for opcode in 0u16..=0xff {
+        let mut code = SETUP.to_vec();
+        code.push(opcode as u8);
+        // operand bytes for multi-byte forms; 0x40 keeps addresses in ram
+        code.extend_from_slice(&[0x00, 0x40, 0x00, 0x40]);
+
+        assert_traces_match_upto(
+            &format!("opcode_{opcode:02x}"),
+            &code,
+            SETUP_INSNS + 4,
+            None,
+        );
+    }
+}
+
 /// Gate (b): boot the real MITS monitor rom through both implementations and
 /// require identical traces.
 ///
@@ -523,10 +587,58 @@ fn real_monitor_rom_boot_matches() {
     let rom = std::fs::read(rom_path).unwrap();
     let cpp = cpp_trace(&bin, &rom, N, "real_boot");
 
+    // Both lengths are asserted before any comparison: zip() stops at the
+    // shorter side, so a truncated c++ trace would otherwise make this pass
+    // without comparing anything.
     assert_eq!(rust.lines().count(), N, "rust trace length");
+    assert_eq!(cpp.lines().count(), N, "c++ trace length");
     for (i, (r, c)) in rust.lines().zip(cpp.lines()).enumerate() {
         assert_eq!(r, c, "divergence at instruction {i}");
     }
+}
+
+/// Pin the *bus-level* consequence of the ASR fallthrough.
+///
+/// `read_modify_write_on_memory` runs against ram, where a doubled read is
+/// indistinguishable from a single one -- it checks the result and flags, not
+/// the access pattern. This counts reads per address, which is what makes the
+/// quirk observable on a device register.
+#[test]
+fn asr_reads_its_operand_twice_but_lsr_reads_it_once() {
+    struct CountingBus {
+        ram: Vec<u8>,
+        reads: std::collections::HashMap<u16, usize>,
+    }
+    impl Bus for CountingBus {
+        fn read8(&mut self, addr: u32) -> u8 {
+            let a = (addr & 0xffff) as u16;
+            *self.reads.entry(a).or_insert(0) += 1;
+            self.ram[a as usize]
+        }
+        fn write8(&mut self, addr: u32, val: u8) {
+            self.ram[(addr & 0xffff) as usize] = val;
+        }
+    }
+
+    // asr $0040 / lsr $0040, each starting from a fresh bus
+    let counts = [0x77u8, 0x74].map(|opcode| {
+        let mut bus = CountingBus { ram: vec![0; 0x10000], reads: Default::default() };
+        bus.ram[0x0040] = 0x81;
+        // reset vector -> 0x0100, where we place the instruction
+        bus.ram[0xfffe] = 0x01;
+        bus.ram[0xffff] = 0x00;
+        bus.ram[0x0100] = opcode;
+        bus.ram[0x0101] = 0x00;
+        bus.ram[0x0102] = 0x40;
+
+        let mut cpu = Cpu6800::new();
+        cpu.reset(&mut bus);
+        cpu.step(&mut bus);
+        bus.reads.get(&0x0040).copied().unwrap_or(0)
+    });
+
+    assert_eq!(counts[0], 2, "asr must read its operand twice (the LSR fallthrough)");
+    assert_eq!(counts[1], 1, "lsr must read its operand once");
 }
 
 /// An unimplemented opcode must stop the core the same way on both sides. The
