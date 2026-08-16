@@ -30,7 +30,7 @@
 use crate::bus::Bus;
 use crate::console::ConsoleEndpoint;
 use crate::cpu::Cpu;
-use crate::system::altair680;
+use crate::system::{altair680, sys09};
 use std::io;
 use std::path::Path;
 
@@ -40,7 +40,8 @@ pub struct Machine {
     pub bus: Box<dyn Bus + Send>,
 }
 
-type FactoryFn = fn(&Path, ConsoleEndpoint) -> io::Result<Machine>;
+/// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
+type FactoryFn = fn(&Path, ConsoleEndpoint, &str) -> io::Result<Machine>;
 
 pub struct SystemDescriptor {
     pub name: &'static str,
@@ -49,24 +50,47 @@ pub struct SystemDescriptor {
     pub factory: FactoryFn,
 }
 
-fn build_altair680(rom: &Path, console: ConsoleEndpoint) -> io::Result<Machine> {
+fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6800::Cpu6800::new()),
         bus: Box::new(altair680::Altair680::new(rom, console)?),
     })
 }
 
-pub static SYSTEMS: &[SystemDescriptor] = &[SystemDescriptor {
-    name: "altair680",
-    cpu: "6800",
-    default_rom: altair680::DEFAULT_ROM,
-    factory: build_altair680,
-}];
+fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Machine> {
+    Ok(Machine {
+        cpu: Box::new(crate::cpu::m6809::Cpu6809::new()),
+        bus: Box::new(sys09::System09::new(rom, console, sub)?),
+    })
+}
 
-/// Look a machine up by name. A subsystem suffix (`6809-obc`) selects a
-/// variant; only the part before the dash names the system.
+pub static SYSTEMS: &[SystemDescriptor] = &[
+    SystemDescriptor {
+        name: "6809",
+        cpu: "6809",
+        default_rom: sys09::DEFAULT_ROM,
+        factory: build_sys09,
+    },
+    SystemDescriptor {
+        name: "altair680",
+        cpu: "6800",
+        default_rom: altair680::DEFAULT_ROM,
+        factory: build_altair680,
+    },
+];
+
+/// Split a system option into its system and subsystem halves, as the C++
+/// `System::Factory` does: `6809-obc` is the `6809` system, subsystem `obc`.
+pub fn split_name(name: &str) -> (&str, &str) {
+    match name.split_once('-') {
+        Some((base, sub)) => (base, sub),
+        None => (name, ""),
+    }
+}
+
+/// Look a machine up by name, ignoring any subsystem suffix.
 pub fn find(name: &str) -> Option<&'static SystemDescriptor> {
-    let base = name.split('-').next().unwrap_or(name);
+    let (base, _) = split_name(name);
     SYSTEMS.iter().find(|s| s.name == base)
 }
 
@@ -77,11 +101,14 @@ mod tests {
     #[test]
     fn finds_a_known_system() {
         assert_eq!(find("altair680").map(|s| s.cpu), Some("6800"));
+        assert_eq!(find("6809").map(|s| s.cpu), Some("6809"));
     }
 
     #[test]
     fn a_subsystem_suffix_selects_the_base_system() {
         assert!(find("altair680-obc").is_some());
+        assert_eq!(split_name("6809-obc"), ("6809", "obc"));
+        assert_eq!(split_name("6809"), ("6809", ""));
     }
 
     #[test]

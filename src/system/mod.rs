@@ -25,3 +25,4 @@
 
 pub mod altair680;
 pub mod registry;
+pub mod sys09;

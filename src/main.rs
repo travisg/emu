@@ -61,8 +61,8 @@ fn parse_args() -> Result<Args, ()> {
     let argv: Vec<String> = std::env::args().collect();
     let argv0 = argv.first().cloned().unwrap_or_else(|| "emu".to_string());
 
-    let mut args =
-        Args { system: "altair680".to_string(), rom: None, limit: None, trace: None };
+    // same default as main.cpp
+    let mut args = Args { system: "6809".to_string(), rom: None, limit: None, trace: None };
 
     let mut i = 1;
     while i < argv.len() {
@@ -133,7 +133,8 @@ fn main() -> ExitCode {
     let (tx, rx) = mpsc::channel();
     let endpoint = ConsoleEndpoint::new(rx, Box::new(std::io::stdout()));
 
-    let machine = match (desc.factory)(&rom, endpoint) {
+    let (_, subsystem) = registry::split_name(&args.system);
+    let machine = match (desc.factory)(&rom, endpoint, subsystem) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error initializing system: {e}");

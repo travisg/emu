@@ -4,14 +4,17 @@ set -euo pipefail
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
-EMU_BIN="$ROOT_DIR/build-emu/emu"
+# Which emulator to exercise. Defaults to the C++ build; set EMU_BIN to point
+# at the rust one (target/debug/emu or target/release/emu) to run the same
+# test against the port.
+EMU_BIN="${EMU_BIN:-$ROOT_DIR/build-emu/emu}"
 ROM_FILE="$ROOT_DIR/roms/6809/BASIC.HEX"
 PROGRAM_FILE="$SCRIPT_DIR/basic6809_lang_test.bas"
 LOG_FILE="${1:-$SCRIPT_DIR/basic6809_lang_test.log}"
 
 if [[ ! -x "$EMU_BIN" ]]; then
     echo "error: emulator binary not found at $EMU_BIN" >&2
-    echo "build first with: make" >&2
+    echo "build first with: make (or cargo build for the rust port)" >&2
     exit 1
 fi
 
@@ -48,7 +51,7 @@ script -qfec "$EMU_BIN -s 6809 -r $ROM_FILE" "$LOG_FILE" < "$TMP_CRLF"
 if grep -q "BASIC LANGUAGE TEST PASS" "$LOG_FILE" \
     && ! grep -Eq '^[[:space:]]*FAIL[[:space:]]' "$LOG_FILE" \
     && ! grep -Eq '^\?.*ERROR' "$LOG_FILE"; then
-    echo "PASS: 6809 BASIC language test"
+    echo "PASS: 6809 BASIC language test ($EMU_BIN)"
     exit 0
 fi
 

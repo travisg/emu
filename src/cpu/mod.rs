@@ -27,6 +27,7 @@ use crate::bus::Bus;
 use std::io::Write;
 
 pub mod m6800;
+pub mod m6809;
 
 /// Why a `step()` stopped, mapping onto the C++ cores' `Run()` return codes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
