@@ -27,6 +27,7 @@
 #include "system.h"
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 class Console;
@@ -76,6 +77,10 @@ class SystemRC2014 final : public System {
     unsigned int mRomBankSel = 0;
 
     // simple one byte fifo for serial port (move into serial class)
+    // guards mSIORecvByte/mSIORecvByte_valid, which the console thread writes
+    // (OnConsoleInBufferAdd) and the CPU thread reads/writes (IORead8) with no
+    // other synchronization
+    std::mutex mSIOLock;
     bool mSIORecvByte_valid = false;
     char mSIORecvByte = 0;
 };

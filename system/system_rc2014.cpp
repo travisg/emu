@@ -115,6 +115,8 @@ int SystemRC2014::Init() {
 
 // callback from the console when a character is put in the input buffer
 void SystemRC2014::OnConsoleInBufferAdd(size_t count) {
+    std::scoped_lock lck(mSIOLock);
+
     if (count > 0 && !mSIORecvByte_valid) {
         int c = mConsole.GetNextChar();
         if (c < 0) {
@@ -162,14 +164,17 @@ uint8_t SystemRC2014::IORead8(size_t address) {
     uint8_t val = 0xff;
 
     switch (address) {
-        case 0x80: // SIO/A control port
+        case 0x80: { // SIO/A control port
+            std::scoped_lock lck(mSIOLock);
             val = 0;
             if (mSIORecvByte_valid) {
                 val |= 0b1;  // receive character available
                 val |= 0b10; // interrupt condition
             }
             break;
-        case 0x81: // SIO/A data port
+        }
+        case 0x81: { // SIO/A data port
+            std::scoped_lock lck(mSIOLock);
             val = 0;
             if (mSIORecvByte_valid) {
                 val = mSIORecvByte;
@@ -177,6 +182,7 @@ uint8_t SystemRC2014::IORead8(size_t address) {
                 // TODO: lower IRQ once IRQ API added to CpuZ80
             }
             break;
+        }
         case 0x82: // SIO/B control port
             val = 0;
             break;
