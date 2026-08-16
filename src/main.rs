@@ -1,0 +1,175 @@
+// vim: ts=4:sw=4:expandtab:
+/*
+ * Copyright (c) 2026 Travis Geiselbrecht
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files
+ * (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge,
+ * publish, distribute, sublicense, and/or sell copies of the Software,
+ * and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+//! Entry point: parse args, build the machine, run the CPU on its own thread
+//! while the console frontend owns the main thread.
+
+use emu::console::terminal::TerminalFrontend;
+use emu::console::{ConsoleEndpoint, ConsoleFrontend};
+use emu::emulator::Emulator;
+use emu::system::registry;
+use std::io::BufWriter;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::sync::Arc;
+
+struct Args {
+    system: String,
+    rom: Option<PathBuf>,
+    limit: Option<i64>,
+    trace: Option<PathBuf>,
+}
+
+fn usage(argv0: &str) {
+    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile]");
+    eprintln!();
+    eprintln!("valid systems:");
+    for s in registry::SYSTEMS {
+        eprintln!("  {:-10} cpu: {:-4} default rom: {}", s.name, s.cpu, s.default_rom);
+    }
+    eprintln!();
+    eprintln!("note: system may include a subsystem suffix like '6809-obc'.");
+    eprintln!("note: cpu is currently selected by system; --cpu is accepted but ignored.");
+    eprintln!("note: --trace writes one line of cpu state per instruction to tracefile.");
+}
+
+/// Mirrors the C++ `getopt_long` handling, including `--cpu` being accepted
+/// and ignored (the cpu is chosen by the system).
+fn parse_args() -> Result<Args, ()> {
+    let argv: Vec<String> = std::env::args().collect();
+    let argv0 = argv.first().cloned().unwrap_or_else(|| "emu".to_string());
+
+    let mut args =
+        Args { system: "altair680".to_string(), rom: None, limit: None, trace: None };
+
+    let mut i = 1;
+    while i < argv.len() {
+        let arg = argv[i].as_str();
+
+        // returns the value for an option that takes one
+        let value = |i: &mut usize| -> Option<String> {
+            *i += 1;
+            argv.get(*i).cloned()
+        };
+
+        match arg {
+            "-h" | "--help" => {
+                usage(&argv0);
+                return Err(());
+            }
+            "-c" | "--cpu" => {
+                let v = value(&mut i).ok_or(())?;
+                println!("cpu option: '{v}'");
+            }
+            "-r" | "--rom" => {
+                let v = value(&mut i).ok_or(())?;
+                println!("rom option: '{v}'");
+                args.rom = Some(PathBuf::from(v));
+            }
+            "-s" | "--system" => {
+                let v = value(&mut i).ok_or(())?;
+                println!("system option: '{v}'");
+                args.system = v;
+            }
+            "-l" | "--limit" => {
+                let v = value(&mut i).ok_or(())?;
+                let n: i64 = v.parse().map_err(|_| ())?;
+                println!("cycle limit set to: {n}");
+                args.limit = Some(n);
+            }
+            "-t" | "--trace" => {
+                let v = value(&mut i).ok_or(())?;
+                println!("tracing instructions to: '{v}'");
+                args.trace = Some(PathBuf::from(v));
+            }
+            _ => {
+                eprintln!("unknown option '{arg}'");
+                usage(&argv0);
+                return Err(());
+            }
+        }
+        i += 1;
+    }
+
+    Ok(args)
+}
+
+fn main() -> ExitCode {
+    let Ok(args) = parse_args() else {
+        return ExitCode::FAILURE;
+    };
+
+    let Some(desc) = registry::find(&args.system) else {
+        eprintln!("unknown system '{}', aborting", args.system);
+        return ExitCode::FAILURE;
+    };
+
+    let rom = args.rom.unwrap_or_else(|| PathBuf::from(desc.default_rom));
+    println!("rom is {}", rom.display());
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = mpsc::channel();
+    let endpoint = ConsoleEndpoint::new(rx, Box::new(std::io::stdout()));
+
+    let machine = match (desc.factory)(&rom, endpoint) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error initializing system: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut emu = Emulator::new(machine.cpu, machine.bus, Arc::clone(&shutdown));
+    emu.set_cycle_limit(args.limit);
+    if let Some(path) = args.trace {
+        match std::fs::File::create(&path) {
+            Ok(f) => emu.set_trace(Some(Box::new(BufWriter::new(f)))),
+            Err(e) => {
+                eprintln!("error opening trace file '{}': {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    emu.reset();
+
+    // The whole emulator moves onto the cpu thread; only the shutdown flag and
+    // the keystroke channel cross the boundary.
+    println!("Starting system thread");
+    let cpu_thread = std::thread::spawn(move || {
+        let reason = emu.run();
+        println!("system thread stopping, {reason:?}");
+        reason
+    });
+
+    let mut frontend = TerminalFrontend::new(tx);
+    frontend.run(Arc::clone(&shutdown));
+
+    println!("exiting run");
+    shutdown.store(true, Ordering::SeqCst);
+    let _ = cpu_thread.join();
+    println!("main system thread stopped");
+
+    ExitCode::SUCCESS
+}

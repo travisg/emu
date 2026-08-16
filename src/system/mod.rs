@@ -21,15 +21,7 @@
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-//! Terminal-driven emulator for several vintage computer systems.
-//!
-//! In-progress Rust port of the C++ tree in the same repo. The C++ `--trace`
-//! output is the reference oracle: see `rust-conversion-plan.md`.
+//! Machines, and the registry that describes them.
 
-pub mod bus;
-pub mod console;
-pub mod cpu;
-pub mod dev;
-pub mod emulator;
-pub mod rom;
-pub mod system;
+pub mod altair680;
+pub mod registry;

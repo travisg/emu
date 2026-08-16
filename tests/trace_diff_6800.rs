@@ -473,6 +473,62 @@ fn implied_opcode_sweep() {
     assert_traces_match("implied_opcode_sweep", &code, n);
 }
 
+/// Gate (b): boot the real MITS monitor rom through both implementations and
+/// require identical traces.
+///
+/// Broad but shallow -- the boot reaches only ~36 distinct PCs before settling
+/// into an ACIA poll loop, so this catches gross divergence (a wrong reset
+/// vector, a broken decode, a mis-sized rom bank) rather than opcode
+/// semantics. The snippet tests above are what cover behaviour.
+#[test]
+fn real_monitor_rom_boot_matches() {
+    let Some(bin) = emu_binary() else {
+        eprintln!("skipping: build-emu/emu not built");
+        return;
+    };
+    let rom_path = Path::new(emu::system::altair680::DEFAULT_ROM);
+    if !rom_path.exists() {
+        eprintln!("skipping: {} not present", rom_path.display());
+        return;
+    }
+
+    const N: usize = 20_000;
+
+    // rust side: the real machine, driven through the registry
+    let (_tx, rx) = std::sync::mpsc::channel();
+    let endpoint = emu::console::ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+    let desc = emu::system::registry::find("altair680").unwrap();
+    let machine = (desc.factory)(rom_path, endpoint).expect("failed to build altair680");
+
+    let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut emu = emu::emulator::Emulator::new(machine.cpu, machine.bus, shutdown);
+    emu.set_cycle_limit(Some(N as i64 + 1));
+    let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Shared {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    emu.set_trace(Some(Box::new(Shared(std::sync::Arc::clone(&sink)))));
+    emu.reset();
+    emu.run();
+    let rust = String::from_utf8(sink.lock().unwrap().clone()).unwrap();
+
+    // c++ side: same rom, same instruction count
+    let rom = std::fs::read(rom_path).unwrap();
+    let cpp = cpp_trace(&bin, &rom, N, "real_boot");
+
+    assert_eq!(rust.lines().count(), N, "rust trace length");
+    for (i, (r, c)) in rust.lines().zip(cpp.lines()).enumerate() {
+        assert_eq!(r, c, "divergence at instruction {i}");
+    }
+}
+
 /// An unimplemented opcode must stop the core the same way on both sides. The
 /// C++ prints to stderr and ends its run loop; the trace simply stops.
 #[test]

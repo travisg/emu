@@ -9,6 +9,8 @@ license = "MIT"
 # Intel HEX parsing, needed from phase 2 (system09). Pure rust, zero transitive
 # deps; replaces the libihex submodule.
 ihex = "3"
+# termios raw mode and poll(2) for the terminal frontend, as console.cpp does
+libc = "0.2.189"
 
 [profile.release]
 # the interpreter cores are one giant match each; keep them fast

@@ -23,4 +23,5 @@
  */
 //! Devices.
 
+pub mod mc6850;
 pub mod memory;
