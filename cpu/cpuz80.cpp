@@ -29,6 +29,7 @@
 #include "bits.h"
 #include "system/system.h"
 #include "trace.h"
+#include "trace_oracle.h"
 
 #define LOCAL_TRACE 0
 
@@ -367,6 +368,12 @@ int CpuZ80::Run() {
                 printf("cycle limit reached, exiting\n");
                 return 1;
             }
+        }
+
+        // emitted here, ahead of the restart: label, so a prefixed instruction
+        // (DD/FD loop back to restart) still traces exactly once
+        if (g_trace_file) {
+            TraceInstruction();
         }
 
         uint8_t temp8;
@@ -1968,6 +1975,12 @@ void CpuZ80::LowerIRQ() {
 
 void CpuZ80::LowerNMI() {
     mNMILevel = false;
+}
+
+void CpuZ80::TraceInstruction() {
+    fprintf(g_trace_file, "PC=%04x AF=%02x%02x BC=%02x%02x DE=%02x%02x HL=%02x%02x IX=%04x IY=%04x SP=%04x\n",
+            mRegs.pc, mRegs.a, mRegs.f, mRegs.b, mRegs.c, mRegs.d, mRegs.e, mRegs.h, mRegs.l,
+            read_ix(), read_iy(), read_sp());
 }
 
 void CpuZ80::Dump() {

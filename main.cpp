@@ -31,13 +31,15 @@
 
 #include "console.h"
 #include "system/system.h"
+#include "trace_oracle.h"
 
 using namespace std;
 
 int64_t g_cycle_limit = -1;
+FILE *g_trace_file = nullptr;
 
 static void usage(char **argv) {
-    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit]\n", argv[0]);
+    fprintf(stderr, "usage: %s [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile]\n", argv[0]);
     fprintf(stderr, "\n");
     fprintf(stderr, "valid systems:\n");
     auto systems = System::GetSupportedSystems();
@@ -47,6 +49,7 @@ static void usage(char **argv) {
     fprintf(stderr, "\n");
     fprintf(stderr, "note: system may include a subsystem suffix like '6809-obc'.\n");
     fprintf(stderr, "note: cpu is currently selected by system; --cpu is accepted but ignored.\n");
+    fprintf(stderr, "note: --trace writes one line of cpu state per instruction to tracefile.\n");
 
     exit(1);
 }
@@ -67,10 +70,11 @@ int main(int argc, char **argv) {
             {"rom", 1, 0, 'r'},
             {"system", 1, 0, 's'},
             {"limit", 1, 0, 'l'},
+            {"trace", 1, 0, 't'},
             {0, 0, 0, 0},
         };
 
-        c = getopt_long(argc, argv, "c:hr:s:l:", long_options, &option_index);
+        c = getopt_long(argc, argv, "c:hr:s:l:t:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -91,6 +95,14 @@ int main(int argc, char **argv) {
             case 'l':
                 g_cycle_limit = atoll(optarg);
                 printf("cycle limit set to: %lld\n", (long long)g_cycle_limit);
+                break;
+            case 't':
+                g_trace_file = fopen(optarg, "w");
+                if (!g_trace_file) {
+                    fprintf(stderr, "error opening trace file '%s'\n", optarg);
+                    return 1;
+                }
+                printf("tracing instructions to: '%s'\n", optarg);
                 break;
             case 'h':
             default:
@@ -128,6 +140,12 @@ int main(int argc, char **argv) {
     sys->ShutdownThreaded();
 
     printf("main system thread stopped\n");
+
+    // close after the cpu thread is joined, so the trace is complete and flushed
+    if (g_trace_file) {
+        fclose(g_trace_file);
+        g_trace_file = nullptr;
+    }
 
     return 0;
 }

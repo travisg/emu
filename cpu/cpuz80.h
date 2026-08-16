@@ -45,6 +45,9 @@ class CpuZ80 final : public Cpu {
     uint16_t GetPC() { return mRegs.pc; }
 
   private:
+    // emit one golden-trace line for the instruction about to execute
+    void TraceInstruction();
+
     // internal routines
     uint16_t read_qq_reg(int dd);
     void write_qq_reg(int dd, uint16_t val);

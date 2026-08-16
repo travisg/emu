@@ -1,6 +1,6 @@
 // vim: ts=4:sw=4:expandtab:
 /*
- * Copyright (c) 2013-2014 Travis Geiselbrecht
+ * Copyright (c) 2026 Travis Geiselbrecht
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files
@@ -23,59 +23,20 @@
  */
 #pragma once
 
-#include <cstdint>
+#include <cstdio>
 
-#include "cpu.h"
-
-/* registers */
-enum regnum {
-    REG_X,
-    REG_Y,
-    REG_U,
-    REG_S,
-    REG_A,
-    REG_B,
-    REG_D,
-    REG_PC,
-    REG_DP,
-    REG_CC,
-};
-
-class Cpu6809 final : public Cpu {
-  public:
-    explicit Cpu6809(System &sys);
-    virtual ~Cpu6809() override;
-
-    virtual void Reset() override;
-    virtual int Run() override;
-
-    virtual void Dump() override;
-
-  private:
-    uint16_t GetReg(regnum r);
-    uint16_t PutReg(regnum r, uint16_t val); // returns old value
-
-    bool TestBranchCond(unsigned int cond);
-
-    // emit one golden-trace line for the instruction about to execute
-    void TraceInstruction();
-
-    // register file
-    union {
-        struct {
-            uint8_t mB;
-            uint8_t mA;
-        };
-        uint16_t mD; // D is a union of A & B (XXX is endian specific)
-    };
-    uint16_t mX;
-    uint16_t mY;
-    uint16_t mU;
-    uint16_t mS;
-    uint16_t mPC;
-    uint8_t mDP;
-    uint8_t mCC;
-
-    // any exceptions pending?
-    unsigned int mException;
-};
+// Golden instruction-trace oracle, enabled by --trace <path>. Null when
+// tracing is off.
+//
+// This is deliberately separate from trace.h: TRACEF prefixes every line with
+// __PRETTY_FUNCTION__:__LINE__, which would make the golden trace churn
+// whenever unrelated lines move, and LOCAL_TRACE is compile-time while this is
+// runtime.
+//
+// Each core writes exactly one line per instruction, from the cpu thread only,
+// at the same boundary g_cycle_limit decrements at -- that boundary is this
+// codebase's definition of "one instruction", and is what the Rust port's
+// step() must preserve. The trace performs no bus accesses of its own (in
+// particular it must never peek the opcode: a read of a UART data register has
+// side effects, so a traced run would diverge from an untraced one).
+extern FILE *g_trace_file;

@@ -28,6 +28,7 @@
 
 #include "bits.h"
 #include "system/system.h"
+#include "trace_oracle.h"
 
 #define TRACE 0
 
@@ -570,6 +571,10 @@ int Cpu6800::Run() {
                 mException = 0; // clear the rest of the pending irqs
             }
             assert(!mException);
+        }
+
+        if (g_trace_file) {
+            TraceInstruction();
         }
 
         // fetch the first byte of the opcode
@@ -1157,6 +1162,11 @@ badop:
     printf("cpu: exiting\n");
 
     return 0;
+}
+
+void Cpu6800::TraceInstruction() {
+    fprintf(g_trace_file, "PC=%04x A=%02x B=%02x X=%04x S=%04x CC=%02x\n",
+            mPC, mA, mB, mIX, mSP, mCC);
 }
 
 void Cpu6800::Dump() {

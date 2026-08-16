@@ -53,6 +53,9 @@ class Cpu6800 final : public Cpu {
 
     bool TestBranchCond(unsigned int cond);
 
+    // emit one golden-trace line for the instruction about to execute
+    void TraceInstruction();
+
     // register file
     uint8_t mA;
     uint8_t mB;
