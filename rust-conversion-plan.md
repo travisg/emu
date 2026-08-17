@@ -1,5 +1,36 @@
 # Plan: Port the vintage-computer emulator from C++ to Rust
 
+## Status (updated after Phase 3)
+
+Three of the four machines are ported and validated against the C++ oracle. ~7,200 lines of Rust,
+87 tests, clippy clean.
+
+| Phase | Scope | State |
+|---|---|---|
+| 0 | C++ `--trace` oracle, crate scaffold, run loop, terminal frontend, registry, `rom.rs` | ✅ `5839ef9`, `38d6735` |
+| 1 | 6800 + Altair680 + MC6850 | ✅ `38d6735`, `fbf7ee4` |
+| 2 | 6809 + System09 + Intel HEX | ✅ `bb4cd4e`, `89b1024` |
+| 3 | Z80 + RC2014 | ✅ `7143966`, `2e88ed8`, `934cb9f` |
+| 4 | Kaypro + SDL2 + WD1793 + Z80Sio + video | ⬜ not started — **the next session** |
+| 5 | Delete the C++ tree and `libihex`; docs and CI for Cargo | ⬜ blocked on Phase 4 |
+
+Validation standing today, all against the C++ `--trace` oracle:
+
+| Core | Real-ROM boot | Opcode coverage | Extra |
+|---|---|---|---|
+| 6800 | 99,999 instructions, identical | every value, 256 cases | 17 snippet/boot diffs |
+| 6809 | 49,999 instructions, identical | every value of all 3 pages | passes the e2e BASIC regression |
+| Z80 | 5,000,000 instructions, identical | every value of 9 pages, 2,304 cases | 2 mutations confirmed caught |
+
+Still open, in priority order:
+
+1. **Phase 4 (Kaypro)** — the only unported machine, and the only one needing SDL2.
+2. **`6809-obc`** needs `uart16550`; the subsystem is currently rejected with an explicit error.
+3. **RC2014 can't transmit** — a pre-existing C++ defect the port reproduces rather than fixes. See
+   "Known defects reproduced, not fixed" below.
+4. **CLI parity gap:** `parse_args` accepts only the separated forms (`-l 100`), not `getopt_long`'s
+   `--limit=100` / `-l100` / unambiguous prefixes. Nothing in the repo uses those forms.
+
 ## Context
 
 This repo is a ~9,000-line C++17 terminal emulator for four vintage machines (Altair 680/6800,
@@ -196,19 +227,24 @@ dirty (text-mode writes are rare, lock cost negligible).
 
 ## Crate layout (single crate)
 
+As built through Phase 3; bracketed entries are what Phase 4 still adds.
+
 ```
 Cargo.toml
 src/
   main.rs      # arg parse (mirror getopt_long in main.cpp:64), thread spawn, join
+  lib.rs       # so the integration tests can drive the machines directly
   emulator.rs  # Emulator, run loop, StepResult, cycle-limit
   bus.rs       # Bus trait, Endian, IntStatus, MemoryDevice trait
-  cpu/  mod.rs (Cpu trait) m6800.rs  [m6809.rs z80.rs later]
-  dev/  memory.rs mc6850.rs  [uart16550.rs z80sio.rs wd1793.rs later]
-  system/ mod.rs registry.rs altair680.rs  [sys09.rs kaypro.rs rc2014.rs later]
+  cpu/  mod.rs (Cpu trait) m6800.rs m6809.rs z80.rs
+  dev/  mod.rs memory.rs mc6850.rs  [uart16550.rs z80sio.rs wd1793.rs later]
+  system/ mod.rs registry.rs altair680.rs sys09.rs rc2014.rs  [kaypro.rs later]
   console/ mod.rs terminal.rs  [sdl.rs later]
   rom.rs       # Intel HEX (ihex crate) + flat-binary loaders
-tests/         # trace-diff harness + opcode unit tests
+tests/         # trace_diff_6800.rs, trace_diff_6809.rs, trace_diff_z80.rs
 ```
+
+`uart16550.rs` is needed by `6809-obc` as well as by Phase 4, so it may land earlier.
 
 ## First PR: Phase 0 + Phase 1
 
@@ -261,14 +297,14 @@ flowchart TD
 
    Optionally make the makefile's `sdl2-config` usage conditional so the oracle builds without SDL —
    portability hygiene for CI, not needed here.
-2. Stand up the Rust crate: `Bus`, `Cpu`, `Endian`, `IntStatus`, `Memory` (`Box<[u8]>`),
+2. ✅ **Done (`38d6735`).** Stand up the Rust crate: `Bus`, `Cpu`, `Endian`, `IntStatus`, `Memory` (`Box<[u8]>`),
    `MemoryDevice`, `Emulator` run loop (cycle-limit decrement **once per `step()`**),
    `TerminalFrontend` (raw termios per `console.cpp:41-61`; read stdin via `poll()`/`select()` with a
    short timeout, checking the shutdown `AtomicBool` each iteration — **matching the fix already made
    to the C++ console, `774f5da`**), registry, arg parsing (mirror `getopt_long`; `-c/--cpu`
    accepted-but-ignored; `-l/--limit` per-instruction), and a Rust `--trace` flag matching the C++
    format byte-for-byte.
-3. `rom.rs`: the **`ihex`** crate for Intel HEX (removes the `libihex` submodule later) + a
+3. ✅ **Done (`38d6735`).** `rom.rs`: the **`ihex`** crate for Intel HEX (removes the `libihex` submodule later) + a
    flat-binary loader (`std::fs::read`, matches `altair680.cpp:83-89`). `ihex` API: `Reader::new(&str)`
    (feed it `std::fs::read_to_string`) yields `Result<Record, _>`; for each `Record::Data { offset,
    value }` write `value` bytes starting at `base + offset`, where `base` is accumulated from
@@ -301,6 +337,8 @@ clippy clean. What the original plan text below got right or wrong:
   should flip in Phase 2 rather than stay a silent difference; (b) `parse_args` accepts only the
   separated forms (`-l 100`), not `getopt_long`'s `--limit=100` / `-l100` / unambiguous prefixes.
   Nothing in the repo or the test scripts uses those forms today.
+  **Update:** (a) was closed in Phase 2 — both binaries now default to `6809`, verified by running
+  each with no `-s`. (b) is still open and still unused by anything in the repo.
 - **Learned while doing it:** the trace-diff harness must hold the child's stdin **open** for the
   child's whole life. Rust's `Child::wait()` *and* `wait_with_output()` both close stdin first, which
   EOFs the console, shuts the CPU thread down early, and yields a truncated trace that still looks
@@ -365,7 +403,8 @@ clippy clean. What the original plan text below got right or wrong:
     it instruction for instruction. Fixing it means changing both trees together, or the trace oracle
     stops agreeing.
   Original plan text follows.
-- **Phase 3 (original):** IO ports, interrupt *scaffolding*. Restructure the `goto restart/decode`
+- **Phase 3 (original draft, superseded by the entry above — kept for the record):** IO ports,
+  interrupt *scaffolding*. Restructure the `goto restart/decode`
   prefix machine (`cpuz80.cpp:397-414`; only two labels, three gotos) into a labeled inner loop that
   resolves `DD/FD/ED/CB` prefixes within one `step()` — the trickiest mechanical task; lean on
   trace-diff. RC2014 RAM decode uses offset `0`, matching the C++ fix already landed in `1e7005d`, and
@@ -374,15 +413,34 @@ clippy clean. What the original plan text below got right or wrong:
   single-byte (non-queued) SIO/2 inline (the fields fixed in `753dd4b`); `Z80Sio` stays Kaypro-only
   despite the generic name, so RC2014's Rust port shouldn't depend on a ported `Z80Sio`. Gate: RC2014
   boot trace-diff + real-boot confirmation.
-- **Phase 4 — Kaypro + SDL2 + WD1793 + Z80Sio + video:** `SdlFrontend`, font extraction from the video
-  ROM, 80×24 render (note the **128-byte row stride**, `system_kaypro.cpp:227-228`), WD1793 (read-only
-  image via `std::fs::File` — the C++ command decoder has no Write Sector handling at all, not just an
-  opened-read-only file), Z80Sio (`VecDeque` FIFOs, input via channel), latch port `0x1c`. Port `0x1c`
-  is multi-function, not just bank switching: it's simultaneously a ROM/RAM bank switch, a floppy
-  drive-select latch (bits 0-1, active low), and — on read — a status readback register (WD1793
-  `INTRQ`/`DRQ` in bits 6-7). The Rust port's `0x1c` handler needs to cover all three roles.
+- **Phase 4 — Kaypro + SDL2 + WD1793 + Z80Sio + video:** ⬜ **Not started — the next session.**
+  `SdlFrontend`, font extraction from the video ROM, 80×24 render (note the **128-byte row stride**,
+  `system_kaypro.cpp:227-228`), WD1793 (read-only image via `std::fs::File` — the C++ command decoder
+  has no Write Sector handling at all, not just an opened-read-only file), Z80Sio (`VecDeque` FIFOs,
+  input via channel), latch port `0x1c`. Port `0x1c` is multi-function, not just bank switching: it's
+  simultaneously a ROM/RAM bank switch, a floppy drive-select latch (bits 0-1, active low), and — on
+  read — a status readback register (WD1793 `INTRQ`/`DRQ` in bits 6-7). The Rust port's `0x1c` handler
+  needs to cover all three roles.
   Gate: boots to CP/M with a visible window; keyboard + floppy reads work; Ctrl-D and window-close
   and cycle-limit all shut down cleanly.
+
+  **What Phase 3 leaves ready, and what makes Phase 4 unlike the phases before it:**
+  - **The CPU is done.** `cpu/z80.rs` is machine-independent — it only touches `Bus` — so Kaypro
+    needs no core work at all. This is the first phase whose hard part is *not* an interpreter.
+  - **`dev/z80sio.rs` is genuinely unwritten.** RC2014 hand-rolls its own single-byte SIO inline and
+    does not use `dev/z80sio.*`; that device is Kaypro-only despite the generic name. Nothing from
+    Phase 3 can be reused for it.
+  - **Trace-diff still works and should still be the primary gate**, but the Kaypro boot reads a
+    floppy image, so both sides must be pointed at the *same* `mbasic-games.img` and the C++ must be
+    run from a directory where it resolves (`system/system_kaypro.cpp` loads it from the cwd, not
+    from a path option). Expect that to be the first thing that bites.
+  - **The video and floppy paths are not trace-visible.** The oracle only emits CPU registers, so a
+    wrong row stride or a mis-decoded WD1793 status can produce an identical trace and a garbage
+    screen. Unlike Phases 1-3, passing trace-diff is *not* sufficient here — the visual/manual gate
+    is load-bearing rather than a formality.
+  - **Two harness gotchas carry over unchanged** (both cost real time to rediscover once already):
+    hold the child's stdin open for its whole life, and assert both trace *lengths* before comparing
+    content.
 - **Phase 5 — cleanup:** remove the C++ tree + `libihex` submodule; update `AGENTS.md`/`README.md` for
   Cargo; wire `cargo build`/`test`/`clippy` (optionally CI, replacing `.github/workflows/makefile.yml`).
 
@@ -415,6 +473,28 @@ are needed anywhere in this plan.
 Trace-diff should match the C++ oracle byte-for-byte with no exceptions, including at these four
 previously-divergent paths; CPU-visible opcode behavior stays identical everywhere.
 
+## Known defects reproduced, not fixed
+
+Found *during* conversion rather than ahead of it, and deliberately left alone: fixing one now means
+changing the C++ and the Rust together in the same commit, or the trace oracle stops agreeing and the
+gate for every later phase is gone. These are decisions to take after Phase 5, when the oracle is
+being retired anyway.
+
+1. **RC2014 can never transmit** (found in Phase 3). Port `$80`'s status byte reports only
+   receive-available (bit 0) and the interrupt condition (bit 1) — never bit 2, "transmit buffer
+   empty". The factory ROM's output routine at `$0116` polls exactly that bit (`sub a` / `out ($80),a`
+   / `in a,($80)` / `rrca` / `bit 1,a` / `jr z,-10`), so the monitor initialises the SIO, writes its
+   channel-B setup, and then spins there forever. Neither binary ever writes the console data port
+   `$81`. Confirmed by running both to 40M instructions with a keystroke fed in: identical, and
+   silent. The machine "boots" in the sense that the trace-diff is meaningful, but it has never
+   printed anything. A fix is small — report TX-empty unconditionally, as `dev/mc6850` already does
+   with `TDRE` — but it must land in both trees at once.
+2. **Interrupts remain dead code in all three cores** (pre-existing, documented in Context above). The
+   Rust side builds the shape — `Bus::poll_interrupts`, `IntStatus`, the Z80's IM dispatch — but no
+   machine ever asserts a line, so none of it is trace-validated. `Rc2014` deliberately does *not*
+   override `poll_interrupts`: wiring the SIO's "interrupt condition" bit to it would diverge from the
+   C++ immediately, since `RaiseIRQ` is never called there (`system_rc2014.cpp:128` is a TODO).
+
 ## Dependencies
 
 - **`ihex`** (v3, MIT/Apache-2.0, **zero transitive deps**, 12.2M downloads) — pure-Rust Intel HEX
@@ -422,36 +502,58 @@ previously-divergent paths; CPU-visible opcode behavior stays identical everywhe
   flat binaries with `std::fs::read`), `micro_ihex` (`no_std`, niche), and `intelhex*`/`xinto`
   (low adoption). API: `Reader::new(&str)` → iterator of `Record::{Data{offset,value},
   ExtendedLinearAddress(u16), ExtendedSegmentAddress(u16), EndOfFile, ..}`. Needed from Phase 2;
-  wired in Phase 0's `rom.rs`. Validate byte-for-byte against the C++ libihex load of
-  `roms/6809/BASIC.HEX` (run locally).
-- `sdl2` (dynamic link against system SDL2) — Phase 4 only.
-- Arg parsing: hand-rolled to mirror `getopt_long`, or `clap`.
+  wired in Phase 0's `rom.rs`. ✅ In use and validated — System09 boots BASIC.HEX to a byte-identical
+  trace, which exercises the loader end to end.
+- `sdl2` (dynamic link against system SDL2) — Phase 4 only, **not yet a dependency**. Adding it is the
+  first thing Phase 4 does, and the only point in the whole port where the build stops being pure Rust
+  with zero transitive deps.
+- Arg parsing: ✅ hand-rolled to mirror `getopt_long` (no `clap`), keeping the dependency count at two.
 - No `pthread` crate — `std::thread` + `std::sync`.
 
 ## Verification
 
 **Runs without ROMs/SDL:**
-- `cargo build` / `cargo clippy` clean.
-- `cargo test`: 6800 opcode/flag/addressing unit tests, incl. hand-assembled snippet trace-diffs;
-  16-bit endian compose/split; MC6850 register behavior.
+- `cargo build` / `cargo clippy --all-targets` clean.
+- `cargo test`: 27 unit tests — endian compose/split, MC6850 register behaviour, ihex parsing,
+  registry consistency, cycle-limit arithmetic. The trace-diff suites *skip themselves* (rather than
+  failing) when `build-emu/emu` is absent, so this still works on a tree without the C++ oracle built.
 
-**Run where ROMs + SDL2 are available, documented as PR steps:**
-- Per-phase trace-diff: Rust `--trace` vs C++ `--trace` on the phase's ROM (`diff` must match over N
-  instructions) — the load-bearing check for the interpreter cores.
-- e2e regression: `./test/run_basic6809_lang_test.sh` against the Rust binary (adapt the script's
-  `EMU_BIN` to the Cargo output; expects `BASIC LANGUAGE TEST PASS`).
+**Run where ROMs + SDL2 are available:**
+- Per-phase trace-diff: Rust `--trace` vs C++ `--trace` — the load-bearing check for the interpreter
+  cores, and now the bulk of the suite (60 tests across `tests/trace_diff_{6800,6809,z80}.rs`, ~2.2
+  minutes wall clock, dominated by spawning the C++ binary once per case).
+  Two things make these tests actually load-bearing rather than decorative, both learned the hard way:
+  - **Assert trace *lengths* before comparing content.** `zip` stops at the shorter side, so a short
+    or empty C++ trace makes a naive comparison pass vacuously. For the Z80 this is doubly true: an
+    unconsumed DD/FD prefix ends the run, so length *is* the signal for most prefix cases.
+  - **Mutation-test each sweep once.** Flip one case in the core and confirm the sweep fails. Both
+    Z80 mutations were caught, but the first attempt *wasn't* — the sweep used a zero displacement,
+    which makes the `LD r,(IX+d)` sign bug unobservable. A sweep that passes proves nothing until it
+    has been shown to fail.
+- e2e regression: `./test/run_basic6809_lang_test.sh`, and again with `EMU_BIN=./target/debug/emu`.
+  Both pass. Run them **separately** — they share one log path (`test/basic6809_lang_test.log`), so
+  back-to-back invocations can trip over each other and report a spurious FAIL.
 - ihex loader: assert `ihex`-parsed `BASIC.HEX` bytes equal the C++ libihex load.
 - Manual boots (per AGENTS.md): each system boots; Ctrl-D shuts down cleanly on terminal systems; the
   Kaypro SDL window renders and closes cleanly; `-l/--limit` exits cleanly on all systems (including
-  terminal — the fixed hang).
+  terminal — the fixed hang). Note RC2014 "boots" to a silent spin on both sides — see "Known defects
+  reproduced, not fixed".
 
 ## Per-file mapping (representative)
 
-| C++ | Rust |
-|---|---|
-| `system/system.{h,cpp}` (bus + factory + threading) | `bus.rs` + `emulator.rs` + `system/registry.rs` |
-| `cpu/cpu.h`, `cpu6800/6809/z80.cpp` | `cpu/mod.rs`, `cpu/m6800.rs`, `m6809.rs`, `z80.rs` |
-| `dev/memory.*`, `mc6850.*`, `uart16550.*`, `z80sio.*`, `wd1793.*` | `dev/*.rs` |
-| `console.*` / `console_sdl.*` | `console/terminal.rs` / `console/sdl.rs` |
-| `main.cpp` (+ `g_cycle_limit`) | `main.rs` (+ `Emulator.cycle_limit`) |
-| `libihex` submodule | `ihex` crate (removed in Phase 5) |
+✅ marks what exists today.
+
+| C++ | Rust | |
+|---|---|---|
+| `system/system.{h,cpp}` (bus + factory + threading) | `bus.rs` + `emulator.rs` + `system/registry.rs` | ✅ |
+| `cpu/cpu.h` | `cpu/mod.rs` | ✅ |
+| `cpu/cpu6800.cpp` / `cpu6809.cpp` / `cpuz80.cpp` | `cpu/m6800.rs` / `m6809.rs` / `z80.rs` | ✅ |
+| `system/altair680.cpp` / `system09.cpp` / `system_rc2014.cpp` | `system/altair680.rs` / `sys09.rs` / `rc2014.rs` | ✅ |
+| `system/system_kaypro.cpp` | `system/kaypro.rs` | Phase 4 |
+| `dev/memory.*`, `mc6850.*` | `dev/memory.rs`, `dev/mc6850.rs` | ✅ |
+| `dev/uart16550.*` | `dev/uart16550.rs` | needed by `6809-obc` |
+| `dev/z80sio.*`, `wd1793.*` | `dev/z80sio.rs`, `wd1793.rs` | Phase 4 |
+| `console.*` | `console/mod.rs` + `console/terminal.rs` | ✅ |
+| `console_sdl.*` | `console/sdl.rs` | Phase 4 |
+| `main.cpp` (+ `g_cycle_limit`) | `main.rs` (+ `Emulator.cycle_limit`) | ✅ |
+| `libihex` submodule | `ihex` crate (submodule removed in Phase 5) | ✅ |
