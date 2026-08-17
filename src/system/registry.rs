@@ -30,7 +30,7 @@
 use crate::bus::Bus;
 use crate::console::ConsoleEndpoint;
 use crate::cpu::Cpu;
-use crate::system::{altair680, sys09};
+use crate::system::{altair680, rc2014, sys09};
 use std::io;
 use std::path::Path;
 
@@ -57,6 +57,13 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Resu
     })
 }
 
+fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
+    Ok(Machine {
+        cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
+        bus: Box::new(rc2014::Rc2014::new(rom, console)?),
+    })
+}
+
 fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Machine> {
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6809::Cpu6809::new()),
@@ -76,6 +83,12 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         cpu: "6800",
         default_rom: altair680::DEFAULT_ROM,
         factory: build_altair680,
+    },
+    SystemDescriptor {
+        name: "rc2014",
+        cpu: "z80",
+        default_rom: rc2014::DEFAULT_ROM,
+        factory: build_rc2014,
     },
 ];
 
