@@ -11,6 +11,9 @@ license = "MIT"
 ihex = "3"
 # termios raw mode and poll(2) for the terminal frontend, as console.cpp does
 libc = "0.2.189"
+# window, events and rendering for the kaypro frontend (phase 4). Links the
+# system SDL2 dynamically, as the C++ makefile does via sdl2-config
+sdl2 = "0.38"
 
 [profile.release]
 # the interpreter cores are one giant match each; keep them fast

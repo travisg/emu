@@ -24,6 +24,7 @@
 //! Entry point: parse args, build the machine, run the CPU on its own thread
 //! while the console frontend owns the main thread.
 
+use emu::console::sdl::SdlFrontend;
 use emu::console::terminal::TerminalFrontend;
 use emu::console::{ConsoleEndpoint, ConsoleFrontend};
 use emu::emulator::Emulator;
@@ -142,6 +143,20 @@ fn main() -> ExitCode {
         }
     };
 
+    // The frontend is chosen by whether the machine has a screen, not by its
+    // name. Build it before the cpu thread starts so an SDL failure is a
+    // clean exit rather than a spawned thread with nowhere to go.
+    let mut frontend: Box<dyn ConsoleFrontend> = match machine.display {
+        Some(display) => match SdlFrontend::new(tx, display) {
+            Ok(f) => Box::new(f),
+            Err(e) => {
+                eprintln!("error initializing SDL: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => Box::new(TerminalFrontend::new(tx)),
+    };
+
     let mut emu = Emulator::new(machine.cpu, machine.bus, Arc::clone(&shutdown));
     emu.set_cycle_limit(args.limit);
     if let Some(path) = args.trace {
@@ -164,7 +179,6 @@ fn main() -> ExitCode {
         reason
     });
 
-    let mut frontend = TerminalFrontend::new(tx);
     frontend.run(Arc::clone(&shutdown));
 
     println!("exiting run");

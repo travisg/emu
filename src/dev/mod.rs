@@ -25,3 +25,5 @@
 
 pub mod mc6850;
 pub mod memory;
+pub mod wd1793;
+pub mod z80sio;

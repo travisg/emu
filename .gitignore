@@ -16,3 +16,4 @@ compile_commands.json
 .vscode
 .claude/settings.local.json
 /target
+/mbasic-games.img

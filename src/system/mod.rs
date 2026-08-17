@@ -24,6 +24,7 @@
 //! Machines, and the registry that describes them.
 
 pub mod altair680;
+pub mod kaypro;
 pub mod rc2014;
 pub mod registry;
 pub mod sys09;

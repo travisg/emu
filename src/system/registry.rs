@@ -28,16 +28,20 @@
 //! hardcoded anywhere else (the help text is generated from this table).
 
 use crate::bus::Bus;
-use crate::console::ConsoleEndpoint;
+use crate::console::{ConsoleEndpoint, Display};
 use crate::cpu::Cpu;
-use crate::system::{altair680, rc2014, sys09};
+use crate::system::{altair680, kaypro, rc2014, sys09};
 use std::io;
 use std::path::Path;
 
-/// Everything built for one machine: a core and the bus it drives.
+/// Everything built for one machine: a core, the bus it drives, and -- if it
+/// has a screen -- the display handle the main-thread frontend renders from.
 pub struct Machine {
     pub cpu: Box<dyn Cpu + Send>,
     pub bus: Box<dyn Bus + Send>,
+    /// `None` for terminal-only machines, which use the console's serial
+    /// output instead.
+    pub display: Option<Display>,
 }
 
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
@@ -54,6 +58,7 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Resu
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6800::Cpu6800::new()),
         bus: Box::new(altair680::Altair680::new(rom, console)?),
+        display: None,
     })
 }
 
@@ -61,6 +66,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<
     Ok(Machine {
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
         bus: Box::new(rc2014::Rc2014::new(rom, console)?),
+        display: None,
     })
 }
 
@@ -68,6 +74,21 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Ma
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6809::Cpu6809::new()),
         bus: Box::new(sys09::System09::new(rom, console, sub)?),
+        display: None,
+    })
+}
+
+fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
+    let (bus, display) = kaypro::Kaypro::new(
+        rom,
+        Path::new(kaypro::VIDEO_ROM),
+        Path::new(kaypro::DEFAULT_FLOPPY),
+        console,
+    )?;
+    Ok(Machine {
+        cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
+        bus: Box::new(bus),
+        display: Some(display),
     })
 }
 
@@ -83,6 +104,12 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         cpu: "6800",
         default_rom: altair680::DEFAULT_ROM,
         factory: build_altair680,
+    },
+    SystemDescriptor {
+        name: "kaypro",
+        cpu: "z80",
+        default_rom: kaypro::DEFAULT_ROM,
+        factory: build_kaypro,
     },
     SystemDescriptor {
         name: "rc2014",
