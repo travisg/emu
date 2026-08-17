@@ -741,11 +741,18 @@ fn every_fd_cb_opcode_agrees() {
     sweep_page("fdcb", &[0xfd, 0xcb, 0xf0]);
 }
 
-/// A DD prefix in front of an ED opcode: the ED page has no prefix handling at
-/// all, so every one of these executes and then ends the run.
+/// A DD or FD prefix in front of an ED opcode: the ED page has no prefix
+/// handling at all, so every one of these executes and then ends the run.
+/// Both are swept -- that they behave alike is the claim under test, not an
+/// assumption to reason from.
 #[test]
 fn every_dd_ed_opcode_agrees() {
     sweep_page("dded", &[0xdd, 0xed]);
+}
+
+#[test]
+fn every_fd_ed_opcode_agrees() {
+    sweep_page("fded", &[0xfd, 0xed]);
 }
 
 /// Gate: boot the real RC2014 rom through both implementations and require
