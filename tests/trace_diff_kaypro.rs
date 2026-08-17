@@ -33,11 +33,16 @@
 //! only, so a wrong row stride or a mis-drawn glyph produces an identical
 //! trace. The visual gate for that is manual (boot it, look at the window).
 //!
-//! Requirements, all checked at runtime and skipped-not-failed if absent: the
-//! C++ oracle binary (`EMU_ORACLE`), the kaypro roms via the `roms` symlink, and
-//! the floppy image `mbasic-games.img` in the crate root (the C++ loads it from
-//! the cwd, so the Rust side does the same). The C++ child runs with the SDL
-//! dummy video driver so no window flashes up during `cargo test`.
+//! Every case here is `#[ignore]`d, because it needs a C++ oracle binary that
+//! is no longer in the tree: plain `cargo test` reports them as ignored rather
+//! than silently passing a comparison that never ran. To run them, build an
+//! oracle and use `EMU_ORACLE=... cargo test -- --include-ignored` (AGENTS.md
+//! has the worktree recipe). Anything missing then fails loudly.
+//!
+//! Beyond the oracle this needs the kaypro roms via the `roms` symlink and the
+//! floppy image `mbasic-games.img` in the crate root (the C++ loads it from the
+//! cwd, so the Rust side does the same). The C++ child runs with the SDL dummy
+//! video driver so no window flashes up during the run.
 
 use emu::console::ConsoleEndpoint;
 use emu::cpu::z80::CpuZ80;
@@ -52,27 +57,30 @@ const ROM_SIZE: usize = 4 * 1024;
 /// conversion): build it from the last commit that had it, in a worktree, and
 /// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
 /// in-tree location for a worktree that still has one.
-fn emu_binary() -> Option<PathBuf> {
+///
+/// Panics rather than skipping: every case that calls this is `#[ignore]`d, so
+/// reaching it means the oracle gate was asked for explicitly. Returning early
+/// instead would report a pass for a comparison that never ran.
+fn oracle() -> PathBuf {
     let p = std::env::var_os("EMU_ORACLE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
-    p.exists().then_some(p)
+    assert!(
+        p.exists(),
+        "no C++ oracle at {}: build one and point EMU_ORACLE at it -- see AGENTS.md",
+        p.display()
+    );
+    p
 }
 
-/// Everything a run needs beyond the C++ binary. Returns None (and says why)
-/// when the environment can't run the gate.
-fn prerequisites() -> Option<PathBuf> {
-    let bin = emu_binary();
-    if bin.is_none() {
-        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
-    }
+/// Everything a run needs beyond the C++ binary. Panics, for the reason on
+/// `oracle()`: the kaypro gate needs the video rom and the floppy image as
+/// well, and neither being present is a setup error rather than a pass.
+fn prerequisites() -> PathBuf {
     for p in [VIDEO_ROM, DEFAULT_FLOPPY] {
-        if !Path::new(p).exists() {
-            eprintln!("skipping: {p} not present in the crate root");
-            return None;
-        }
+        assert!(Path::new(p).exists(), "{p} not present -- run from the repo root");
     }
-    bin
+    oracle()
 }
 
 /// Per-case scratch directory. `cargo test` runs tests concurrently in one
@@ -171,8 +179,9 @@ fn rom_image(code: &[u8]) -> Vec<u8> {
 /// track), the SIO's status and reset, a bank switch to ram and back, and a
 /// video ram round trip.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn ports_and_banking_match() {
-    let Some(bin) = prerequisites() else { return };
+    let bin = prerequisites();
 
     #[rustfmt::skip]
     let code: Vec<u8> = vec![
@@ -349,13 +358,11 @@ fn ports_and_banking_match() {
 /// and require identical traces. Covers restore, seeks, read-address and the
 /// sector reads that load CP/M, plus the delay loops around them.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn real_rom_boot_matches() {
-    let Some(bin) = prerequisites() else { return };
+    let bin = prerequisites();
     let rom_path = Path::new(DEFAULT_ROM);
-    if !rom_path.exists() {
-        eprintln!("skipping: {} not present", rom_path.display());
-        return;
-    }
+    assert!(rom_path.exists(), "{} not present -- run from the repo root", rom_path.display());
 
     // CP/M is up and at its prompt well before this
     const N: usize = 3_000_000;

@@ -45,7 +45,7 @@ Run from the repo root — default ROM paths are relative (`roms/...`), and `rom
 ## Test
 
 ```bash
-cargo test                       # unit tests + trace-diff suites (which skip without an oracle)
+cargo test                       # unit tests; the oracle-gated cases report as ignored
 cargo clippy --all-targets       # kept clean
 ```
 
@@ -60,16 +60,16 @@ cargo build                         # build first
 
 Requires the `roms` symlink to resolve, plus `script(1)` and `perl`.
 
-**Trace-diff against the C++ oracle** (`tests/trace_diff_{6800,6809,z80,kaypro}.rs`). These drive both implementations over the same ROM image and require byte-identical `--trace` output; they were the load-bearing gate for the port and remain the strongest regression check on the cores. They skip themselves unless `EMU_ORACLE` points at a C++ binary. To build one:
+**Trace-diff against the C++ oracle** (`tests/trace_diff_{6800,6809,z80,kaypro}.rs`). These drive both implementations over the same ROM image and require byte-identical `--trace` output; they were the load-bearing gate for the port and remain the strongest regression check on the cores. All 59 oracle-dependent cases are `#[ignore]`d, so plain `cargo test` reports them as ignored rather than passing a comparison that never ran; the handful in those files that need only the Rust tree still run by default. To run the gate, build an oracle:
 
 ```bash
 git worktree add /tmp/emu-cpp 332e1cd
 git -C /tmp/emu-cpp submodule update --init     # libihex
 make -C /tmp/emu-cpp                            # needs clang, make, sdl2-config, objdump
-EMU_ORACLE=/tmp/emu-cpp/build-emu/emu cargo test
+EMU_ORACLE=/tmp/emu-cpp/build-emu/emu cargo test -- --include-ignored
 ```
 
-Run from the repo root (the ROMs and `mbasic-games.img` are resolved relative to it). About 2.5 minutes wall clock, dominated by spawning the oracle once per case. Two harness rules, learned the hard way and worth keeping: hold the child's stdin open for its whole life (`child.stdin.take()` before `wait()`), and assert trace *lengths* before comparing content.
+Once asked for explicitly, a missing oracle, ROM or floppy image is a hard failure with a message naming what is absent — the tests are opt-in, so silently passing would defeat the point. Run from the repo root (the ROMs and `mbasic-games.img` are resolved relative to it). About 2.5 minutes wall clock, dominated by spawning the oracle once per case. Two harness rules, learned the hard way and worth keeping: hold the child's stdin open for its whole life (`child.stdin.take()` before `wait()`), and assert trace *lengths* before comparing content.
 
 `make -C test` rebuilds the 6809 test ROM sources — needs the ASxxxx toolchain (`as6809`, `aslink`) and `objcopy`; not required for normal development.
 

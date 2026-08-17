@@ -32,8 +32,11 @@
 //! gross divergence but almost no opcode behaviour; these snippets are where
 //! the flag and addressing-mode semantics actually get checked.
 //!
-//! Skipped (not failed) when no C++ oracle is available (`EMU_ORACLE`), so `cargo test` still
-//! works without the C++ tree built.
+//! Every case here is `#[ignore]`d, because it needs a C++ oracle binary that
+//! is no longer in the tree: plain `cargo test` reports them as ignored rather
+//! than silently passing a comparison that never ran. To run them, build an
+//! oracle and use `EMU_ORACLE=... cargo test -- --include-ignored` (AGENTS.md
+//! has the worktree recipe). Anything missing then fails loudly.
 
 use emu::bus::{Bus, MemoryDevice};
 use emu::cpu::m6800::Cpu6800;
@@ -128,11 +131,20 @@ fn rust_trace(rom: &[u8], instructions: usize) -> String {
 /// conversion): build it from the last commit that had it, in a worktree, and
 /// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
 /// in-tree location for a worktree that still has one.
-fn emu_binary() -> Option<PathBuf> {
+///
+/// Panics rather than skipping: every case that calls this is `#[ignore]`d, so
+/// reaching it means the oracle gate was asked for explicitly. Returning early
+/// instead would report a pass for a comparison that never ran.
+fn oracle() -> PathBuf {
     let p = std::env::var_os("EMU_ORACLE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
-    p.exists().then_some(p)
+    assert!(
+        p.exists(),
+        "no C++ oracle at {}: build one and point EMU_ORACLE at it -- see AGENTS.md",
+        p.display()
+    );
+    p
 }
 
 fn cpp_trace(bin: &Path, rom: &[u8], instructions: usize, name: &str) -> String {
@@ -195,10 +207,7 @@ fn assert_traces_match_upto(
     instructions: usize,
     expect_lines: Option<usize>,
 ) {
-    let Some(bin) = emu_binary() else {
-        eprintln!("skipping {name}: no C++ oracle (set EMU_ORACLE)");
-        return;
-    };
+    let bin = oracle();
 
     let rom = rom_image(code);
     let rust = rust_trace(&rom, instructions);
@@ -243,6 +252,7 @@ const LDA_IDX: u8 = 0xa6;
 const STA_IDX: u8 = 0xa7;
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn loads_and_stores() {
     #[rustfmt::skip]
     let code = [
@@ -263,6 +273,7 @@ fn loads_and_stores() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn alu_ops_and_flags() {
     #[rustfmt::skip]
     let code = [
@@ -285,6 +296,7 @@ fn alu_ops_and_flags() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn adc_and_sbc_carry_chains() {
     #[rustfmt::skip]
     let code = [
@@ -307,6 +319,7 @@ fn adc_and_sbc_carry_chains() {
 /// like lsr *and* reads its operand twice. If this test ever starts failing,
 /// someone has "fixed" one side without re-baselining the other.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn shifts_and_rotates_including_the_asr_fallthrough() {
     #[rustfmt::skip]
     let code = [
@@ -331,6 +344,7 @@ fn shifts_and_rotates_including_the_asr_fallthrough() {
 /// Memory-operand read-modify-write, where the asr double-read is observable
 /// as two bus reads rather than one.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn read_modify_write_on_memory() {
     #[rustfmt::skip]
     let code = [
@@ -350,6 +364,7 @@ fn read_modify_write_on_memory() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn inc_dec_edge_cases() {
     #[rustfmt::skip]
     let code = [
@@ -368,6 +383,7 @@ fn inc_dec_edge_cases() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn branches_taken_and_not_taken() {
     #[rustfmt::skip]
     let code = [
@@ -389,6 +405,7 @@ fn branches_taken_and_not_taken() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn signed_branch_conditions() {
     #[rustfmt::skip]
     let code = [
@@ -409,6 +426,7 @@ fn signed_branch_conditions() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn stack_push_pull_and_subroutine_calls() {
     #[rustfmt::skip]
     let code = [
@@ -429,6 +447,7 @@ fn stack_push_pull_and_subroutine_calls() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn jsr_and_rts_via_extended_addressing() {
     // jsr to a subroutine placed later in the rom, which returns
     #[rustfmt::skip]
@@ -445,6 +464,7 @@ fn jsr_and_rts_via_extended_addressing() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn transfer_and_condition_code_ops() {
     #[rustfmt::skip]
     let code = [
@@ -467,6 +487,7 @@ fn transfer_and_condition_code_ops() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn sixteen_bit_compare_and_index_ops() {
     #[rustfmt::skip]
     let code = [
@@ -486,6 +507,7 @@ fn sixteen_bit_compare_and_index_ops() {
 /// implied form where possible. Catches table-entry transcription errors that
 /// targeted tests would miss.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn implied_opcode_sweep() {
     let implied = [
         0x01u8, 0x16, 0x17, 0x30, 0x35, 0x07, 0x06, 0x0b, 0x0d, 0x0f, 0x0a, 0x0c, 0x0e, 0x4f,
@@ -507,12 +529,8 @@ fn implied_opcode_sweep() {
 /// mode, width or target register hides. Unimplemented opcodes are covered
 /// too: one side stopping early shows up as a length difference.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_opcode_agrees() {
-    if emu_binary().is_none() {
-        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
-        return;
-    }
-
     // Give the opcode under test something non-trivial to work with: a stack,
     // known accumulators, and an index register pointing into ram.
     #[rustfmt::skip]
@@ -547,16 +565,11 @@ fn every_opcode_agrees() {
 /// vector, a broken decode, a mis-sized rom bank) rather than opcode
 /// semantics. The snippet tests above are what cover behaviour.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn real_monitor_rom_boot_matches() {
-    let Some(bin) = emu_binary() else {
-        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
-        return;
-    };
+    let bin = oracle();
     let rom_path = Path::new(emu::system::altair680::DEFAULT_ROM);
-    if !rom_path.exists() {
-        eprintln!("skipping: {} not present", rom_path.display());
-        return;
-    }
+    assert!(rom_path.exists(), "{} not present -- run from the repo root", rom_path.display());
 
     const N: usize = 20_000;
 

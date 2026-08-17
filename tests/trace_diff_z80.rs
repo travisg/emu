@@ -36,8 +36,11 @@
 //! so the address decode and the port decode are under test too. With no
 //! console attached, every input port is deterministic.
 //!
-//! Skipped (not failed) when no C++ oracle is available (`EMU_ORACLE`), so `cargo test` still
-//! works without the C++ tree built.
+//! Every case here is `#[ignore]`d, because it needs a C++ oracle binary that
+//! is no longer in the tree: plain `cargo test` reports them as ignored rather
+//! than silently passing a comparison that never ran. To run them, build an
+//! oracle and use `EMU_ORACLE=... cargo test -- --include-ignored` (AGENTS.md
+//! has the worktree recipe). Anything missing then fails loudly.
 
 use emu::cpu::z80::CpuZ80;
 use emu::cpu::Cpu;
@@ -94,11 +97,20 @@ fn with_preamble(code: &[u8]) -> Vec<u8> {
 /// conversion): build it from the last commit that had it, in a worktree, and
 /// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
 /// in-tree location for a worktree that still has one.
-fn emu_binary() -> Option<PathBuf> {
+///
+/// Panics rather than skipping: every case that calls this is `#[ignore]`d, so
+/// reaching it means the oracle gate was asked for explicitly. Returning early
+/// instead would report a pass for a comparison that never ran.
+fn oracle() -> PathBuf {
     let p = std::env::var_os("EMU_ORACLE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
-    p.exists().then_some(p)
+    assert!(
+        p.exists(),
+        "no C++ oracle at {}: build one and point EMU_ORACLE at it -- see AGENTS.md",
+        p.display()
+    );
+    p
 }
 
 /// Per-case scratch directory. `cargo test` runs tests concurrently in one
@@ -181,10 +193,7 @@ fn assert_traces_match_upto(
     instructions: usize,
     expect_lines: Option<usize>,
 ) {
-    let Some(bin) = emu_binary() else {
-        eprintln!("skipping {name}: no C++ oracle (set EMU_ORACLE)");
-        return;
-    };
+    let bin = oracle();
 
     let rom_path = scratch(&format!("{name}.rom"));
     std::fs::write(&rom_path, rom_image(code)).unwrap();
@@ -235,6 +244,7 @@ fn assert_snippet(name: &str, code: &[u8], insns: usize) {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn loads_and_stores() {
     #[rustfmt::skip]
     let code = [
@@ -262,6 +272,7 @@ fn loads_and_stores() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn alu_register_and_immediate_forms_agree() {
     #[rustfmt::skip]
     let code = [
@@ -293,6 +304,7 @@ fn alu_register_and_immediate_forms_agree() {
 /// `(HL)` operands for the whole ALU column, which is a different fetch path
 /// from the register forms.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn alu_against_memory() {
     #[rustfmt::skip]
     let code = [
@@ -312,6 +324,7 @@ fn alu_against_memory() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn inc_dec_edge_cases() {
     #[rustfmt::skip]
     let code = [
@@ -333,6 +346,7 @@ fn inc_dec_edge_cases() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn sixteen_bit_arithmetic() {
     #[rustfmt::skip]
     let code = [
@@ -355,6 +369,7 @@ fn sixteen_bit_arithmetic() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn accumulator_rotates_and_the_decimal_adjust() {
     #[rustfmt::skip]
     let code = [
@@ -382,6 +397,7 @@ fn accumulator_rotates_and_the_decimal_adjust() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn cb_page_rotates_and_shifts() {
     #[rustfmt::skip]
     let code = [
@@ -409,6 +425,7 @@ fn cb_page_rotates_and_shifts() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn bit_res_and_set() {
     #[rustfmt::skip]
     let code = [
@@ -430,6 +447,7 @@ fn bit_res_and_set() {
 /// The conditional forms, covered with relative jumps so the snippet stays
 /// position independent.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn jumps_and_relative_branches() {
     #[rustfmt::skip]
     let code = [
@@ -450,6 +468,7 @@ fn jumps_and_relative_branches() {
 /// The absolute forms, which need a known target: `$0100` is inside the rom
 /// window and filled with nops.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn absolute_jumps() {
     let mut code = vec![0u8; 0x104];
     code[..PREAMBLE.len()].copy_from_slice(&PREAMBLE);
@@ -468,6 +487,7 @@ fn absolute_jumps() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn call_return_and_restart() {
     // The subroutine sits at $0038, which is also rst 7's target, so `rst 38h`
     // and `call $0038` exercise the same landing pad.
@@ -494,6 +514,7 @@ fn call_return_and_restart() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn stack_and_exchanges() {
     #[rustfmt::skip]
     let code = [
@@ -520,6 +541,7 @@ fn stack_and_exchanges() {
 /// The IX/IY forms, including the deliberate unsigned-displacement bug in
 /// `LD r, (IX+d)`: with `d = $ff` it reads (IX+255), not (IX-1).
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn index_register_forms() {
     #[rustfmt::skip]
     let code = [
@@ -553,6 +575,7 @@ fn index_register_forms() {
 /// first three of those also do the undocumented writeback into the encoded
 /// register.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn indexed_bit_operations() {
     #[rustfmt::skip]
     let code = [
@@ -573,6 +596,7 @@ fn indexed_bit_operations() {
 /// having already read the displacement and touched `(HL)`. Both sides must
 /// stop at the same instruction.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn a_prefixed_cb_shift_runs_then_aborts() {
     #[rustfmt::skip]
     let code = [
@@ -592,6 +616,7 @@ fn a_prefixed_cb_shift_runs_then_aborts() {
 /// A DD prefix in front of an instruction with no indexed form reads the
 /// remapped IXh/IXl and *then* ends the run.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn an_unconsumed_prefix_ends_the_run() {
     assert_traces_match_upto(
         "an_unconsumed_prefix_ends_the_run",
@@ -602,6 +627,7 @@ fn an_unconsumed_prefix_ends_the_run() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn ed_page_block_and_misc_operations() {
     #[rustfmt::skip]
     let code = [
@@ -638,6 +664,7 @@ fn ed_page_block_and_misc_operations() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn ed_page_port_block_operations() {
     #[rustfmt::skip]
     let code = [
@@ -660,6 +687,7 @@ fn ed_page_port_block_operations() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn port_io_and_interrupt_flags() {
     #[rustfmt::skip]
     let code = [
@@ -682,11 +710,6 @@ fn port_io_and_interrupt_flags() {
 /// run -- it also pins down exactly which encodings are holes. Filling one in
 /// (or leaving one out) shows up as a trace-length difference.
 fn sweep_page(label: &str, prefix: &[u8]) {
-    if emu_binary().is_none() {
-        eprintln!("skipping {label}: no C++ oracle (set EMU_ORACLE)");
-        return;
-    }
-
     for opcode in 0u16..=0xff {
         let mut code = PREAMBLE.to_vec();
         code.extend_from_slice(prefix);
@@ -708,37 +731,44 @@ fn sweep_page(label: &str, prefix: &[u8]) {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_base_opcode_agrees() {
     sweep_page("base", &[]);
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_ed_opcode_agrees() {
     sweep_page("ed", &[0xed]);
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_cb_opcode_agrees() {
     sweep_page("cb", &[0xcb]);
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_dd_prefixed_opcode_agrees() {
     sweep_page("dd", &[0xdd]);
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_fd_prefixed_opcode_agrees() {
     sweep_page("fd", &[0xfd]);
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_dd_cb_opcode_agrees() {
     // a signed displacement, so the operand lands on the $8ff0 marker
     sweep_page("ddcb", &[0xdd, 0xcb, 0xf0]);
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_fd_cb_opcode_agrees() {
     sweep_page("fdcb", &[0xfd, 0xcb, 0xf0]);
 }
@@ -748,11 +778,13 @@ fn every_fd_cb_opcode_agrees() {
 /// Both are swept -- that they behave alike is the claim under test, not an
 /// assumption to reason from.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_dd_ed_opcode_agrees() {
     sweep_page("dded", &[0xdd, 0xed]);
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_fd_ed_opcode_agrees() {
     sweep_page("fded", &[0xfd, 0xed]);
 }
@@ -765,16 +797,11 @@ fn every_fd_ed_opcode_agrees() {
 /// transmit buffer), so this catches gross divergence rather than opcode
 /// semantics. The snippets above are what cover behaviour.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn real_rom_boot_matches() {
-    let Some(bin) = emu_binary() else {
-        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
-        return;
-    };
+    let bin = oracle();
     let rom_path = Path::new(emu::system::rc2014::DEFAULT_ROM);
-    if !rom_path.exists() {
-        eprintln!("skipping: {} not present", rom_path.display());
-        return;
-    }
+    assert!(rom_path.exists(), "{} not present -- run from the repo root", rom_path.display());
 
     const N: usize = 200_000;
 

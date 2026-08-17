@@ -27,7 +27,11 @@
 //! flat binary, so each snippet is emitted as a synthetic .hex with the code
 //! at 0xc000 and the reset vector pointing at it.
 //!
-//! Skipped (not failed) when no C++ oracle is available (`EMU_ORACLE`).
+//! Every case here is `#[ignore]`d, because it needs a C++ oracle binary that
+//! is no longer in the tree: plain `cargo test` reports them as ignored rather
+//! than silently passing a comparison that never ran. To run them, build an
+//! oracle and use `EMU_ORACLE=... cargo test -- --include-ignored` (AGENTS.md
+//! has the worktree recipe). Anything missing then fails loudly.
 
 use emu::console::ConsoleEndpoint;
 use emu::cpu::StepResult;
@@ -45,11 +49,20 @@ const ROM_BASE: u16 = 0xc000;
 /// conversion): build it from the last commit that had it, in a worktree, and
 /// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
 /// in-tree location for a worktree that still has one.
-fn emu_binary() -> Option<PathBuf> {
+///
+/// Panics rather than skipping: every case that calls this is `#[ignore]`d, so
+/// reaching it means the oracle gate was asked for explicitly. Returning early
+/// instead would report a pass for a comparison that never ran.
+fn oracle() -> PathBuf {
     let p = std::env::var_os("EMU_ORACLE")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
-    p.exists().then_some(p)
+    assert!(
+        p.exists(),
+        "no C++ oracle at {}: build one and point EMU_ORACLE at it -- see AGENTS.md",
+        p.display()
+    );
+    p
 }
 
 /// Emit one Intel HEX record.
@@ -141,10 +154,7 @@ fn cpp_trace(bin: &Path, hex_path: &Path, instructions: usize, name: &str) -> St
 }
 
 fn assert_traces_match_upto(name: &str, code: &[u8], instructions: usize, expect: Option<usize>) {
-    let Some(bin) = emu_binary() else {
-        eprintln!("skipping {name}: no C++ oracle (set EMU_ORACLE)");
-        return;
-    };
+    let bin = oracle();
 
     let dir = std::env::temp_dir().join(format!("emu-tracediff09-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -204,6 +214,7 @@ fn with_setup(code: &[u8]) -> Vec<u8> {
 const SETUP_INSNS: usize = 5;
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn alu_and_flags() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -221,6 +232,7 @@ fn alu_and_flags() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn sixteen_bit_alu_on_d() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -239,6 +251,7 @@ fn sixteen_bit_alu_on_d() {
 /// constant offsets of three widths, accumulator offsets, auto in/decrement by
 /// one and two, PC-relative, and the indirect forms of most of them.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn indexed_addressing_modes() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -264,6 +277,7 @@ fn indexed_addressing_modes() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn indexed_indirect_modes() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -279,6 +293,7 @@ fn indexed_indirect_modes() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn lea_instructions() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -292,6 +307,7 @@ fn lea_instructions() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn exg_and_tfr_register_pairs() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -308,6 +324,7 @@ fn exg_and_tfr_register_pairs() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn push_and_pull_register_sets() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -324,6 +341,7 @@ fn push_and_pull_register_sets() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn read_modify_write_and_shifts() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -350,6 +368,7 @@ fn read_modify_write_and_shifts() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn branches_and_subroutines() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -370,6 +389,7 @@ fn branches_and_subroutines() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn sex_abx_and_dp_relative() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -389,6 +409,7 @@ fn sex_abx_and_dp_relative() {
 }
 
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn loads_and_stores_all_widths() {
     #[rustfmt::skip]
     let code = with_setup(&[
@@ -410,12 +431,8 @@ fn loads_and_stores_all_widths() {
 /// errors that targeted tests miss -- the 6809 table has ~250 entries spread
 /// across three pages, which is a lot of hand-copied rows.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn every_opcode_agrees() {
-    if emu_binary().is_none() {
-        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
-        return;
-    }
-
     for page in [0u8, 0x10, 0x11] {
         for opcode in 0u16..=0xff {
             let mut body = Vec::new();
@@ -439,16 +456,11 @@ fn every_opcode_agrees() {
 
 /// Gate: boot the real BASIC.HEX through both implementations.
 #[test]
+#[ignore = "needs the C++ oracle; see AGENTS.md"]
 fn real_basic_rom_boot_matches() {
-    let Some(bin) = emu_binary() else {
-        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
-        return;
-    };
+    let bin = oracle();
     let rom = Path::new(emu::system::sys09::DEFAULT_ROM);
-    if !rom.exists() {
-        eprintln!("skipping: {} not present", rom.display());
-        return;
-    }
+    assert!(rom.exists(), "{} not present -- run from the repo root", rom.display());
 
     const N: usize = 20_000;
     let rust = rust_trace(rom, N);
