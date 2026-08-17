@@ -1,7 +1,26 @@
 # Phase 3 handoff: Z80 core + RC2014
 
-Working document for the next session. Self-contained: read this plus `AGENTS.md` and you should be
-able to start immediately. The broader roadmap lives in `rust-conversion-plan.md`.
+> **Status: complete (`7143966`).** Kept as a record of what the pre-flight survey got right and
+> wrong; the durable summary now lives in `rust-conversion-plan.md`. Two of the predictions below
+> turned out to be backwards, and they're worth reading before writing the Phase 4 handoff:
+>
+> 1. **"Several flag expressions differ subtly between the `r` and `n` forms — don't factor early"
+>    was wrong.** All eight ALU operations are identical in both forms; they were compared expression
+>    by expression before factoring. One shared `alu()` was safe from the start.
+> 2. **The real hazard was the reverse of the one predicted.** Duplication wasn't the risk —
+>    *over*-generalizing was. A decode table invites you to write what a real Z80 does, and the ED
+>    page here is deliberately incomplete (no `LDI`/`LDD`/`LDDR`, `NEG` only at `0x44`, no `RETN`).
+>    Every hole had to stay a hole. The opcode sweep catches a filled one as a trace-*length*
+>    difference, which was confirmed by mutation.
+> 3. **Everything else in this document held up**, in particular the prefix-consume analysis, the
+>    `LD r, (IX+d)` sign bug, the CB-shift fallthrough, and every test-harness gotcha. The one gap:
+>    the `(IX+d)` sign bug is invisible unless the signed and unsigned target addresses hold
+>    *different* bytes — the test preamble seeds markers at `$90f0` and `$8ff0` for exactly that.
+>
+> Also found, and **not** fixed: the RC2014 monitor can never transmit. Port `$80`'s status byte
+> never sets bit 2 ("transmit buffer empty"), so the ROM spins at `$0116` forever. The C++ behaves
+> identically — this is a pre-existing defect in the C++ tree, not a porting error, and fixing it
+> means changing both trees together or the trace oracle stops agreeing.
 
 ## Where things stand
 
@@ -16,6 +35,7 @@ and abandoned (see "Why the first attempt failed" below); nothing was committed 
 | `fbf7ee4` | Rust MC6850, Altair680, console frontend, main |
 | `89b1024` | Rust 6800 trace-diff coverage hardening |
 | `bb4cd4e` | Rust 6809 core + System09 |
+| `7143966` | Rust Z80 core + RC2014 (this phase) |
 
 Verified today: 6800 and 6809 both byte-identical to the C++ oracle on real-ROM boots, on every opcode
 value, and on targeted snippets; the Rust 6809 passes the full BASIC language regression. 58 tests,

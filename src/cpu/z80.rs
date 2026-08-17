@@ -219,7 +219,7 @@ impl Default for CpuZ80 {
 /// Even parity: true when the number of set bits is even, as the C++
 /// `calc_parity` returns.
 fn parity(val: u8) -> bool {
-    val.count_ones() % 2 == 0
+    val.count_ones().is_multiple_of(2)
 }
 
 impl CpuZ80 {

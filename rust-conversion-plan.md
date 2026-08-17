@@ -329,28 +329,41 @@ clippy clean. What the original plan text below got right or wrong:
   **pre**-decrement; `shared_memwrite` sets N/Z *after* the write; byte `cmp` also sets H; `asr` has
   **no** fallthrough bug here. Still open: `6809-obc` needs `uart16550` and is rejected with an
   explicit error until that lands.
-- **Phase 3 — Z80 + RC2014.** ⚠️ **Not started — scope it as its own session.** The Z80 core is
-  ~1,600 lines of C++ against the 6800's ~1,200 and the 6809's ~1,450, but the real cost is that it
-  has **no decode table**: it's one deep nested match on raw opcodes, so there is no mechanical
-  table-transcription step and every case must be ported individually. Budget it as roughly the 6800
-  and 6809 combined. Findings from reading it in full, which should save the next pass the survey:
-  - **Prefix loop:** `goto restart` maps cleanly onto a `loop` at the top of `step()` — a DD/FD byte
-    sets the flag and `continue`s, anything else breaks out with the opcode. One `step()` is still
-    one instruction, so the cycle-limit and trace semantics carry over unchanged.
-  - **`mPrefixDD`/`mPrefixFD` must be struct fields, not locals**, because `read_r_reg`/`write_r_reg`
-    consult them to remap H/L onto the halves of IX/IY.
-  - **Displacement sign bug to preserve:** `LD r, (IX+d)` (`cpuz80.cpp:1196`) adds `read_n()`
-    **unsigned**, while every other indexed form casts to `int8_t` first. Reproduce exactly.
-  - **CB-prefixed shifts mostly ignore DD/FD:** only `RLC`, `BIT`, `RES` and `SET` honour the prefix.
-    `RRC/RL/RR/SLA/SRA/SLL/SRL` fall through to the `(HL)` form, then fail the end-of-instruction
-    "prefix was consumed" check and abort the run. Preserve the wasted `d` read and the `(HL)` access
-    so traces match right up to the failure.
-  - **`HALT` is treated as `NOP`** (`cpuz80.cpp:1191`), and `RETI` is just a `RET`.
-  - Flag expressions are hand-written per opcode rather than macro'd, and several differ subtly
-    between the `r` and `n` forms of the same operation — port them one at a time, don't factor early.
-  - RC2014 itself is small: a 64K ram bank, a 64K rom with an 8K window selected by `mRomBankSel`,
-    and the hand-rolled single-byte SIO (see the note below). The bus needs `io_read8`/`io_write8`,
-    which the `Bus` trait already has.
+- **Phase 3 — Z80 + RC2014.** ✅ **Done (`7143966`).** Byte-identical to the oracle over a 5,000,000-
+  instruction real-ROM boot, on every value of eight opcode pages (base, ED, CB, DD, FD, DD CB, FD CB,
+  DD ED — 2,048 cases), and on targeted snippets. 86 tests, clippy clean; both 6809 BASIC regressions
+  still pass. What the port actually looks like, and where the pre-flight survey below was wrong:
+  - **The core is *not* table-driven, and shouldn't be.** A 256-entry `OpDecode` like the 6800/6809
+    would be one bespoke entry per opcode, because the DD/FD prefix changes what an opcode means per
+    opcode and the "was the prefix consumed" rule is per encoding. What *is* table-shaped is the
+    operation once the operand is in hand, so the decode is the standard `x/y/z/p/q` bit split and the
+    semantics live in small op-kind enums: `AluOp` (shared by the register *and* immediate forms),
+    `RotOp` (the eight CB rotates), and parameterized `block_in`/`block_out`/`block_cp` helpers for the
+    ED page. Operand *fetch* stays at the call site — that's exactly where the prefix rules differ.
+  - **Correction to the survey: the `r` and `n` ALU forms do *not* differ.** All eight were compared
+    expression by expression (`cpuz80.cpp` 1565↔1767, 1589↔1780, 1617↔1797, 1641↔1810, 1669↔1688,
+    1696↔1714, 1721↔1738, 1744↔1827) and are identical. Factoring them into one `alu()` from the start
+    was safe and removed ~270 lines of duplication.
+  - **The real risk was the opposite of "don't factor early": a table silently *fills holes*.** The ED
+    page is incomplete and must stay so — no `LDI`/`LDD`/`LDDR` (only `LDIR`), `NEG` only at `0x44`,
+    no `RETN`, no `IM` at `0x76`/`0x7e`. The base and CB pages are complete, so this is an ED-only
+    concern. A mutation test confirmed the sweep catches a filled hole, as a trace-*length* difference.
+  - **Prefix loop:** `goto restart` maps cleanly onto a `loop` at the top of `step()`. One `step()` is
+    still one instruction, so cycle-limit and trace semantics carry over unchanged.
+  - **`prefix_dd`/`prefix_fd` are struct fields, not locals**, because `read_r`/`write_r` consult them
+    to remap H/L onto the halves of IX/IY — which happens even when the instruction goes on to abort.
+  - **Displacement sign bug preserved:** `LD r, (IX+d)` (`cpuz80.cpp:1196`) adds `read_n()`
+    **unsigned**, while every other indexed form sign-extends. Note this is invisible to a test unless
+    the two candidate addresses hold *different* bytes — the sweep preamble seeds markers at `$90f0`
+    and `$8ff0` specifically so a mutation here fails.
+  - **CB-prefixed shifts mostly ignore DD/FD:** only `RLC`, `BIT`, `RES` and `SET` honour the prefix;
+    the rest fall through to the `(HL)` form and then abort, after the wasted `d` read.
+  - **`HALT` is a `NOP`** (`cpuz80.cpp:1191`), and `RETI` is just a `RET`.
+  - **Known pre-existing defect, reproduced not fixed:** the RC2014 SIO status byte never reports
+    "transmit buffer empty" (bit 2 of port `$80`), so the monitor ROM initialises the SIO and then
+    spins forever at `$0116` waiting to transmit. The C++ does exactly the same; the Rust port matches
+    it instruction for instruction. Fixing it means changing both trees together, or the trace oracle
+    stops agreeing.
   Original plan text follows.
 - **Phase 3 (original):** IO ports, interrupt *scaffolding*. Restructure the `goto restart/decode`
   prefix machine (`cpuz80.cpp:397-414`; only two labels, three gotos) into a labeled inner loop that
