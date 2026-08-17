@@ -122,18 +122,22 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
+    // Find the system we're supposed to run.
     let Some(desc) = registry::find(&args.system) else {
         eprintln!("unknown system '{}', aborting", args.system);
         return ExitCode::FAILURE;
     };
 
+    // Load the ROM
     let rom = args.rom.unwrap_or_else(|| PathBuf::from(desc.default_rom));
     println!("rom is {}", rom.display());
 
+    // Create the console.
     let shutdown = Arc::new(AtomicBool::new(false));
     let (tx, rx) = mpsc::channel();
     let endpoint = ConsoleEndpoint::new(rx, Box::new(std::io::stdout()));
 
+    // Build the machine object
     let (_, subsystem) = registry::split_name(&args.system);
     let machine = match (desc.factory)(&rom, endpoint, subsystem) {
         Ok(m) => m,
