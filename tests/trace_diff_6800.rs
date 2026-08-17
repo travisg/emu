@@ -32,7 +32,7 @@
 //! gross divergence but almost no opcode behaviour; these snippets are where
 //! the flag and addressing-mode semantics actually get checked.
 //!
-//! Skipped (not failed) when `build-emu/emu` is absent, so `cargo test` still
+//! Skipped (not failed) when no C++ oracle is available (`EMU_ORACLE`), so `cargo test` still
 //! works without the C++ tree built.
 
 use emu::bus::{Bus, MemoryDevice};
@@ -124,13 +124,15 @@ fn rust_trace(rom: &[u8], instructions: usize) -> String {
     String::from_utf8(out).unwrap()
 }
 
+/// The C++ oracle. Not in the tree any more (removed in phase 5 of the
+/// conversion): build it from the last commit that had it, in a worktree, and
+/// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
+/// in-tree location for a worktree that still has one.
 fn emu_binary() -> Option<PathBuf> {
-    let p = Path::new("build-emu/emu").to_path_buf();
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    let p = std::env::var_os("EMU_ORACLE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
+    p.exists().then_some(p)
 }
 
 fn cpp_trace(bin: &Path, rom: &[u8], instructions: usize, name: &str) -> String {
@@ -194,7 +196,7 @@ fn assert_traces_match_upto(
     expect_lines: Option<usize>,
 ) {
     let Some(bin) = emu_binary() else {
-        eprintln!("skipping {name}: build-emu/emu not built");
+        eprintln!("skipping {name}: no C++ oracle (set EMU_ORACLE)");
         return;
     };
 
@@ -507,7 +509,7 @@ fn implied_opcode_sweep() {
 #[test]
 fn every_opcode_agrees() {
     if emu_binary().is_none() {
-        eprintln!("skipping: build-emu/emu not built");
+        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
         return;
     }
 
@@ -547,7 +549,7 @@ fn every_opcode_agrees() {
 #[test]
 fn real_monitor_rom_boot_matches() {
     let Some(bin) = emu_binary() else {
-        eprintln!("skipping: build-emu/emu not built");
+        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
         return;
     };
     let rom_path = Path::new(emu::system::altair680::DEFAULT_ROM);

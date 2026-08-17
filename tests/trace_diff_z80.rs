@@ -36,7 +36,7 @@
 //! so the address decode and the port decode are under test too. With no
 //! console attached, every input port is deterministic.
 //!
-//! Skipped (not failed) when `build-emu/emu` is absent, so `cargo test` still
+//! Skipped (not failed) when no C++ oracle is available (`EMU_ORACLE`), so `cargo test` still
 //! works without the C++ tree built.
 
 use emu::cpu::z80::CpuZ80;
@@ -90,13 +90,15 @@ fn with_preamble(code: &[u8]) -> Vec<u8> {
     full
 }
 
+/// The C++ oracle. Not in the tree any more (removed in phase 5 of the
+/// conversion): build it from the last commit that had it, in a worktree, and
+/// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
+/// in-tree location for a worktree that still has one.
 fn emu_binary() -> Option<PathBuf> {
-    let p = Path::new("build-emu/emu").to_path_buf();
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    let p = std::env::var_os("EMU_ORACLE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
+    p.exists().then_some(p)
 }
 
 /// Per-case scratch directory. `cargo test` runs tests concurrently in one
@@ -180,7 +182,7 @@ fn assert_traces_match_upto(
     expect_lines: Option<usize>,
 ) {
     let Some(bin) = emu_binary() else {
-        eprintln!("skipping {name}: build-emu/emu not built");
+        eprintln!("skipping {name}: no C++ oracle (set EMU_ORACLE)");
         return;
     };
 
@@ -681,7 +683,7 @@ fn port_io_and_interrupt_flags() {
 /// (or leaving one out) shows up as a trace-length difference.
 fn sweep_page(label: &str, prefix: &[u8]) {
     if emu_binary().is_none() {
-        eprintln!("skipping {label}: build-emu/emu not built");
+        eprintln!("skipping {label}: no C++ oracle (set EMU_ORACLE)");
         return;
     }
 
@@ -765,7 +767,7 @@ fn every_fd_ed_opcode_agrees() {
 #[test]
 fn real_rom_boot_matches() {
     let Some(bin) = emu_binary() else {
-        eprintln!("skipping: build-emu/emu not built");
+        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
         return;
     };
     let rom_path = Path::new(emu::system::rc2014::DEFAULT_ROM);

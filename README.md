@@ -1,85 +1,74 @@
 # Emu: Terminal-driven Vintage System Emulator
 
-A terminal-driven emulator for several vintage computer systems, featuring a lightweight interactive console loop.
+A terminal-driven emulator for several vintage computer systems, written in Rust.
 
 ## Supported Systems
 
-- **Motorola 6809**: A powerful 8-bit (with 16-bit features) microprocessor.
-- **MITS Altair 680**: A compact 6800-based computer.
-- **Kaypro II**: A Z80-based CP/M machine.
+- **System09 (Motorola 6809)**: boots the 6809 BASIC ROM to a prompt on the terminal.
+- **MITS Altair 680 (Motorola 6800)**: boots the MITS monitor ROM on the terminal.
+- **RC2014 (Zilog Z80)**: runs the factory ROM image (see the note in `rust-conversion-plan.md`
+  about its serial port).
+- **Kaypro II (Zilog Z80)**: boots CP/M 2.2 from a floppy image into an SDL2 window, with a
+  keyboard and a read-only floppy.
 
 ## Prerequisites
 
-To build and run the emulator, you will need:
-- `clang` / `clang++`
-- `make`
-- `objdump` (Linux) or `otool` (Darwin)
+- A Rust toolchain (`cargo`)
+- The SDL2 development package (`libsdl2-dev` on Debian/Ubuntu, `sdl2` on Homebrew/MacPorts) — the
+  Kaypro window links it dynamically, and it's a build requirement even if you never run the Kaypro
+- ROM images. They aren't in the repo; the emulator looks for them under `roms/` relative to the
+  current directory (`-h` lists the default path per system, `-r` overrides it)
 
-## Building the Project
-
-Build the emulator from the repository root:
-
-```bash
-make
-```
-
-This will produce the following outputs in the `build-emu/` directory:
-- `emu`: The main emulator binary.
-- `emu.lst`: A disassembly listing of the emulator itself.
-
-To clean the build artifacts:
+## Building
 
 ```bash
-make clean
+cargo build              # target/debug/emu
+cargo build --release    # target/release/emu, considerably faster
 ```
 
-Or for a full cleanup:
+## Running
+
+Show the help message and the supported systems with their default ROMs:
 
 ```bash
-make spotless
+./target/debug/emu -h
 ```
 
-## Running the Emulator
-
-### Basic Usage
-
-Run the default system (currently 6809):
+Run a system:
 
 ```bash
-./build-emu/emu
+./target/debug/emu                          # the default system (6809)
+./target/debug/emu -s altair680
+./target/debug/emu -s kaypro                # opens a window; also loads mbasic-games.img from the cwd
+./target/debug/emu -s 6809 -r roms/6809/BASIC.HEX
+./target/debug/emu -s 6809 -l 1000000       # stop after a million instructions
+./target/debug/emu -s 6809 -t trace.txt     # log one line of CPU state per instruction
 ```
 
-### Command Line Options
+The terminal systems run in raw mode and pass Ctrl-C through to the guest. **Ctrl-D exits**; so does
+closing the Kaypro window.
 
-Show the help message and a list of supported systems:
+## Testing
 
 ```bash
-./build-emu/emu -h
+cargo test                          # unit tests; the trace-diff suites skip without an oracle
+./test/run_basic6809_lang_test.sh   # end-to-end: boots BASIC and runs a language test program
 ```
 
-Run a specific system with a custom ROM:
-
-```bash
-# 6809 with BASIC
-./build-emu/emu -s 6809 -r test/BASIC.HEX
-
-# Altair 680 with mits680b ROM
-./build-emu/emu -s altair680 -r mits680b.bin
-
-# Kaypro II with system ROM
-./build-emu/emu -s kaypro -r rom/kaypro/kayproii_u47.bin
-```
-
-### Console Interaction
-
-The emulator runs in a raw terminal mode. 
-- Use **`Ctrl-D`** to exit the interactive console loop and shut down the emulator cleanly.
+The `tests/trace_diff_*.rs` suites compare this emulator instruction by instruction against the
+original C++ implementation it was ported from. The C++ tree is gone from the working tree but not
+from history — `AGENTS.md` has the recipe for building it in a worktree and pointing `EMU_ORACLE` at
+it.
 
 ## Project Structure
 
-- `cpu/`: CPU core implementations (6800, 6809, Z80).
-- `dev/`: Emulated devices (Memory, UARTs, etc.).
-- `system/`: Concrete system implementations and the system factory.
-- `console.cpp`: Terminal handling and interactive loop.
-- `libihex/`: Submodule for Intel HEX file support.
-- `test/`: ROMs, test scripts, and assembly code for verification.
+- `src/cpu/`: CPU cores (6800, 6809, Z80), each implementing the `Cpu` trait against a `Bus`.
+- `src/system/`: one file per machine (the bus, address decode, devices, ROM loading) and the
+  registry that describes them.
+- `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO, WD1793 floppy controller.
+- `src/console/`: the terminal and SDL2 frontends, and the channel/handles that connect them to
+  the CPU thread.
+- `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
+- `tests/`: trace-diff suites. `test/`: the 6809 BASIC regression and the assembly sources of the
+  6809 test ROMs.
+- `rust-conversion-plan.md`: how the port from C++ was done and validated.

@@ -23,8 +23,11 @@
  */
 //! Terminal-driven emulator for several vintage computer systems.
 //!
-//! In-progress Rust port of the C++ tree in the same repo. The C++ `--trace`
-//! output is the reference oracle: see `rust-conversion-plan.md`.
+//! A Rust port of the original C++ emulator, validated instruction by
+//! instruction against it (`--trace` on both sides). The C++ tree was removed
+//! once the port was complete; comments throughout still cite the C++ files
+//! and line numbers, which resolve in the last commit that had them -- see
+//! AGENTS.md. History and rationale: `rust-conversion-plan.md`.
 
 pub mod bus;
 pub mod console;

@@ -1,9 +1,11 @@
 # Plan: Port the vintage-computer emulator from C++ to Rust
 
-## Status (updated after Phase 4)
+## Status (updated after Phase 5 — the port is complete)
 
-All four machines are ported and validated against the C++ oracle. ~8,900 lines of Rust, 108
-tests, clippy clean. Only the Phase 5 cleanup remains.
+All four machines are ported and validated against the C++ oracle, and the C++ tree is gone. ~8,900
+lines of Rust, 108 tests, clippy clean. **The last commit with the C++ tree is `578de51`**; every
+`file.cpp:line` reference in this document and in the Rust comments resolves there
+(`git show 578de51:cpu/cpuz80.cpp`).
 
 | Phase | Scope | State |
 |---|---|---|
@@ -11,8 +13,8 @@ tests, clippy clean. Only the Phase 5 cleanup remains.
 | 1 | 6800 + Altair680 + MC6850 | ✅ `38d6735`, `fbf7ee4` |
 | 2 | 6809 + System09 + Intel HEX | ✅ `bb4cd4e`, `89b1024` |
 | 3 | Z80 + RC2014 | ✅ `7143966`, `2e88ed8`, `934cb9f` |
-| 4 | Kaypro + SDL2 + WD1793 + Z80Sio + video | ✅ this commit |
-| 5 | Delete the C++ tree and `libihex`; docs and CI for Cargo | ⬜ **the next session** |
+| 4 | Kaypro + SDL2 + WD1793 + Z80Sio + video | ✅ `19136f9` |
+| 5 | Delete the C++ tree and `libihex`; docs and CI for Cargo | ✅ the commit after `578de51` |
 
 Validation standing today, all against the C++ `--trace` oracle:
 
@@ -23,13 +25,14 @@ Validation standing today, all against the C++ `--trace` oracle:
 | Z80 | 5,000,000 instructions, identical | every value of 9 pages, 2,304 cases | 2 mutations confirmed caught |
 | Kaypro (machine) | 3,000,000 instructions to the CP/M prompt, identical | n/a (core covered above) | port/bank/FDC/SIO snippet, 3 mutations caught; boots, `DIR` lists the disk |
 
-Still open, in priority order:
+Still open, in priority order — none of it is conversion work any more:
 
-1. **Phase 5 (cleanup)** — delete the C++ tree and `libihex`, retarget docs/CI at Cargo.
-2. **`6809-obc`** needs `uart16550`; the subsystem is currently rejected with an explicit error.
-3. **RC2014 can't transmit** — a pre-existing C++ defect the port reproduces rather than fixes. See
-   "Known defects reproduced, not fixed" below.
-4. **CLI parity gap:** `parse_args` accepts only the separated forms (`-l 100`), not `getopt_long`'s
+1. **`6809-obc`** needs `uart16550`; the subsystem is currently rejected with an explicit error.
+2. **RC2014 can't transmit** — a pre-existing C++ defect the port reproduces rather than fixes. See
+   "Known defects reproduced, not fixed" below. Now that the oracle is retired this can be fixed
+   in the Rust alone; the RC2014 trace-diff cases will then diverge from a `578de51` oracle, which
+   is expected and should be documented in the test when it happens.
+3. **CLI parity gap:** `parse_args` accepts only the separated forms (`-l 100`), not `getopt_long`'s
    `--limit=100` / `-l100` / unambiguous prefixes. Nothing in the repo uses those forms.
 
 ## Context
@@ -473,8 +476,24 @@ clippy clean. What the original plan text below got right or wrong:
   - **Two harness gotchas carry over unchanged** (both cost real time to rediscover once already):
     hold the child's stdin open for its whole life, and assert both trace *lengths* before comparing
     content.
-- **Phase 5 — cleanup:** remove the C++ tree + `libihex` submodule; update `AGENTS.md`/`README.md` for
-  Cargo; wire `cargo build`/`test`/`clippy` (optionally CI, replacing `.github/workflows/makefile.yml`).
+- **Phase 5 — cleanup.** ✅ **Done.** Removed `makefile`, `main.cpp`, `console*`, `cpu/`, `dev/`,
+  `system/`, `trace.h`, `trace_oracle.h`, `bits.h`, the clang config and the `libihex` submodule;
+  rewrote `AGENTS.md`/`README.md` for Cargo; replaced `.github/workflows/makefile.yml` with
+  `rust.yml` (`cargo build`, `clippy -D warnings`, `test`, with `libsdl2-dev` installed). Choices
+  worth recording:
+  - **The trace-diff suites stay.** They are the strongest regression check on the cores, so rather
+    than deleting them with the oracle they now look for `EMU_ORACLE` (falling back to the old
+    `build-emu/emu`) and skip without it. The recipe — `git worktree add ... 578de51`, init the
+    submodule, `make`, export `EMU_ORACLE` — is in `AGENTS.md` and was exercised end to end after
+    the deletion: all 62 trace-diff cases still pass against a worktree-built oracle.
+  - `test/run_basic6809_lang_test.sh` defaults to `target/debug/emu` (`EMU_BIN` still overrides).
+  - `test/makefile` used `libihex/ihextobin` for `rom.bin`; it now uses `objcopy -I ihex -O
+    binary`, which starts the output at the image's lowest address (its `0xc000` origin) — the
+    same result for a contiguous image. Not otherwise exercised.
+  - `phase3-z80-handoff.md` is kept as a record. `emu.code-workspace` lost its makefile launch
+    config.
+  - C++ file:line citations throughout the Rust comments were left in place deliberately; they
+    document *why* a behaviour exists and resolve against `578de51`.
 
 ## Known-defect fixes (resolved in C++ before conversion began)
 

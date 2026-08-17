@@ -27,7 +27,7 @@
 //! flat binary, so each snippet is emitted as a synthetic .hex with the code
 //! at 0xc000 and the reset vector pointing at it.
 //!
-//! Skipped (not failed) when `build-emu/emu` is absent.
+//! Skipped (not failed) when no C++ oracle is available (`EMU_ORACLE`).
 
 use emu::console::ConsoleEndpoint;
 use emu::cpu::StepResult;
@@ -41,8 +41,14 @@ use std::sync::{Arc, Mutex};
 /// Start of the rom bank in the System09 map.
 const ROM_BASE: u16 = 0xc000;
 
+/// The C++ oracle. Not in the tree any more (removed in phase 5 of the
+/// conversion): build it from the last commit that had it, in a worktree, and
+/// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
+/// in-tree location for a worktree that still has one.
 fn emu_binary() -> Option<PathBuf> {
-    let p = Path::new("build-emu/emu").to_path_buf();
+    let p = std::env::var_os("EMU_ORACLE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
     p.exists().then_some(p)
 }
 
@@ -136,7 +142,7 @@ fn cpp_trace(bin: &Path, hex_path: &Path, instructions: usize, name: &str) -> St
 
 fn assert_traces_match_upto(name: &str, code: &[u8], instructions: usize, expect: Option<usize>) {
     let Some(bin) = emu_binary() else {
-        eprintln!("skipping {name}: build-emu/emu not built");
+        eprintln!("skipping {name}: no C++ oracle (set EMU_ORACLE)");
         return;
     };
 
@@ -406,7 +412,7 @@ fn loads_and_stores_all_widths() {
 #[test]
 fn every_opcode_agrees() {
     if emu_binary().is_none() {
-        eprintln!("skipping: build-emu/emu not built");
+        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
         return;
     }
 
@@ -435,7 +441,7 @@ fn every_opcode_agrees() {
 #[test]
 fn real_basic_rom_boot_matches() {
     let Some(bin) = emu_binary() else {
-        eprintln!("skipping: build-emu/emu not built");
+        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
         return;
     };
     let rom = Path::new(emu::system::sys09::DEFAULT_ROM);

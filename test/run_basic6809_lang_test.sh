@@ -4,17 +4,16 @@ set -euo pipefail
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
-# Which emulator to exercise. Defaults to the C++ build; set EMU_BIN to point
-# at the rust one (target/debug/emu or target/release/emu) to run the same
-# test against the port.
-EMU_BIN="${EMU_BIN:-$ROOT_DIR/build-emu/emu}"
+# Which emulator to exercise. Defaults to the debug build; set EMU_BIN to run
+# the same test against another binary (target/release/emu, say).
+EMU_BIN="${EMU_BIN:-$ROOT_DIR/target/debug/emu}"
 ROM_FILE="$ROOT_DIR/roms/6809/BASIC.HEX"
 PROGRAM_FILE="$SCRIPT_DIR/basic6809_lang_test.bas"
 LOG_FILE="${1:-$SCRIPT_DIR/basic6809_lang_test.log}"
 
 if [[ ! -x "$EMU_BIN" ]]; then
     echo "error: emulator binary not found at $EMU_BIN" >&2
-    echo "build first with: make (or cargo build for the rust port)" >&2
+    echo "build first with: cargo build" >&2
     exit 1
 fi
 

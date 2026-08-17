@@ -34,7 +34,7 @@
 //! trace. The visual gate for that is manual (boot it, look at the window).
 //!
 //! Requirements, all checked at runtime and skipped-not-failed if absent: the
-//! C++ binary at `build-emu/emu`, the kaypro roms via the `roms` symlink, and
+//! C++ oracle binary (`EMU_ORACLE`), the kaypro roms via the `roms` symlink, and
 //! the floppy image `mbasic-games.img` in the crate root (the C++ loads it from
 //! the cwd, so the Rust side does the same). The C++ child runs with the SDL
 //! dummy video driver so no window flashes up during `cargo test`.
@@ -48,13 +48,15 @@ use std::process::{Command, Stdio};
 
 const ROM_SIZE: usize = 4 * 1024;
 
+/// The C++ oracle. Not in the tree any more (removed in phase 5 of the
+/// conversion): build it from the last commit that had it, in a worktree, and
+/// point `EMU_ORACLE` at the binary -- see AGENTS.md. Falls back to the old
+/// in-tree location for a worktree that still has one.
 fn emu_binary() -> Option<PathBuf> {
-    let p = Path::new("build-emu/emu").to_path_buf();
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    let p = std::env::var_os("EMU_ORACLE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("build-emu/emu"));
+    p.exists().then_some(p)
 }
 
 /// Everything a run needs beyond the C++ binary. Returns None (and says why)
@@ -62,7 +64,7 @@ fn emu_binary() -> Option<PathBuf> {
 fn prerequisites() -> Option<PathBuf> {
     let bin = emu_binary();
     if bin.is_none() {
-        eprintln!("skipping: build-emu/emu not built");
+        eprintln!("skipping: no C++ oracle (set EMU_ORACLE)");
     }
     for p in [VIDEO_ROM, DEFAULT_FLOPPY] {
         if !Path::new(p).exists() {

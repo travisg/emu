@@ -1,0 +1,32 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # the kaypro frontend links the system SDL2
+    - name: Install SDL2
+      run: sudo apt-get update && sudo apt-get install -y libsdl2-dev
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Clippy
+      run: cargo clippy --all-targets -- -D warnings
+
+    # unit tests only, in effect: the trace-diff suites skip themselves when
+    # there is no C++ oracle (EMU_ORACLE) and the e2e test needs the roms
+    - name: Test
+      run: cargo test --verbose

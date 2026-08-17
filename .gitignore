@@ -1,4 +1,3 @@
-build-*
 *.swp
 *~
 tags
@@ -12,7 +11,6 @@ doit
 *.rst
 *.bin
 *.log
-compile_commands.json
 .vscode
 .claude/settings.local.json
 /target

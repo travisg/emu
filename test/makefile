@@ -5,7 +5,9 @@ ASFLAGS   := -gloaxff
 LINK      := aslink
 LINKFLAGS := -ni
 
-IHEXTOBIN := ../libihex/ihextobin
+# ihex -> flat binary. The libihex submodule (and its ihextobin) went with the
+# C++ tree; objcopy does the same job for a contiguous image.
+OBJCOPY   := objcopy
 
 .PHONY: all clean basic6809-test
 
@@ -23,13 +25,10 @@ all: t6809.ihx test.ihx rom.h
 rom.ihx: rom.rel
 	$(LINK) -niu $(basename $@)
 
-# Build ihextobin if it does not exist yet
-$(IHEXTOBIN):
-	$(MAKE) -C ../libihex
-
-# Convert ihex to flat binary at ROM origin 0xc000
-rom.bin: rom.ihx $(IHEXTOBIN)
-	$(IHEXTOBIN) -o 0xc000 $< $@
+# Convert ihex to flat binary. objcopy starts the output at the lowest address
+# in the image, which for rom.asm is its 0xc000 origin.
+rom.bin: rom.ihx
+	$(OBJCOPY) -I ihex -O binary $< $@
 
 # Generate C array header from the flat binary
 rom.h: rom.bin
