@@ -7,6 +7,9 @@
 	"settings": {
 		"chat.tools.terminal.autoApprove": {
 			"cargo": true
+		},
+		"[rust]": {
+			"editor.formatOnSave": true
 		}
 	}
 }
