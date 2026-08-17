@@ -1,9 +1,9 @@
 # Plan: Port the vintage-computer emulator from C++ to Rust
 
-## Status (updated after Phase 3)
+## Status (updated after Phase 4)
 
-Three of the four machines are ported and validated against the C++ oracle. ~7,200 lines of Rust,
-87 tests, clippy clean.
+All four machines are ported and validated against the C++ oracle. ~8,900 lines of Rust, 108
+tests, clippy clean. Only the Phase 5 cleanup remains.
 
 | Phase | Scope | State |
 |---|---|---|
@@ -11,8 +11,8 @@ Three of the four machines are ported and validated against the C++ oracle. ~7,2
 | 1 | 6800 + Altair680 + MC6850 | ✅ `38d6735`, `fbf7ee4` |
 | 2 | 6809 + System09 + Intel HEX | ✅ `bb4cd4e`, `89b1024` |
 | 3 | Z80 + RC2014 | ✅ `7143966`, `2e88ed8`, `934cb9f` |
-| 4 | Kaypro + SDL2 + WD1793 + Z80Sio + video | ⬜ not started — **the next session** |
-| 5 | Delete the C++ tree and `libihex`; docs and CI for Cargo | ⬜ blocked on Phase 4 |
+| 4 | Kaypro + SDL2 + WD1793 + Z80Sio + video | ✅ this commit |
+| 5 | Delete the C++ tree and `libihex`; docs and CI for Cargo | ⬜ **the next session** |
 
 Validation standing today, all against the C++ `--trace` oracle:
 
@@ -21,10 +21,11 @@ Validation standing today, all against the C++ `--trace` oracle:
 | 6800 | 99,999 instructions, identical | every value, 256 cases | 17 snippet/boot diffs |
 | 6809 | 49,999 instructions, identical | every value of all 3 pages | passes the e2e BASIC regression |
 | Z80 | 5,000,000 instructions, identical | every value of 9 pages, 2,304 cases | 2 mutations confirmed caught |
+| Kaypro (machine) | 3,000,000 instructions to the CP/M prompt, identical | n/a (core covered above) | port/bank/FDC/SIO snippet, 3 mutations caught; boots, `DIR` lists the disk |
 
 Still open, in priority order:
 
-1. **Phase 4 (Kaypro)** — the only unported machine, and the only one needing SDL2.
+1. **Phase 5 (cleanup)** — delete the C++ tree and `libihex`, retarget docs/CI at Cargo.
 2. **`6809-obc`** needs `uart16550`; the subsystem is currently rejected with an explicit error.
 3. **RC2014 can't transmit** — a pre-existing C++ defect the port reproduces rather than fixes. See
    "Known defects reproduced, not fixed" below.
@@ -227,24 +228,25 @@ dirty (text-mode writes are rare, lock cost negligible).
 
 ## Crate layout (single crate)
 
-As built through Phase 3; bracketed entries are what Phase 4 still adds.
+As built through Phase 4.
 
 ```
 Cargo.toml
 src/
-  main.rs      # arg parse (mirror getopt_long in main.cpp:64), thread spawn, join
+  main.rs      # arg parse (mirror getopt_long in main.cpp:64), frontend choice, thread spawn, join
   lib.rs       # so the integration tests can drive the machines directly
   emulator.rs  # Emulator, run loop, StepResult, cycle-limit
   bus.rs       # Bus trait, Endian, IntStatus, MemoryDevice trait
   cpu/  mod.rs (Cpu trait) m6800.rs m6809.rs z80.rs
-  dev/  mod.rs memory.rs mc6850.rs  [uart16550.rs z80sio.rs wd1793.rs later]
-  system/ mod.rs registry.rs altair680.rs sys09.rs rc2014.rs  [kaypro.rs later]
-  console/ mod.rs terminal.rs  [sdl.rs later]
+  dev/  mod.rs memory.rs mc6850.rs z80sio.rs wd1793.rs  [uart16550.rs, for 6809-obc]
+  system/ mod.rs registry.rs altair680.rs sys09.rs rc2014.rs kaypro.rs
+  console/ mod.rs (ConsoleEndpoint, VideoBuffer, Display) terminal.rs sdl.rs
   rom.rs       # Intel HEX (ihex crate) + flat-binary loaders
-tests/         # trace_diff_6800.rs, trace_diff_6809.rs, trace_diff_z80.rs
+tests/         # trace_diff_{6800,6809,z80,kaypro}.rs
 ```
 
-`uart16550.rs` is needed by `6809-obc` as well as by Phase 4, so it may land earlier.
+`uart16550.rs` turned out not to be needed by the Kaypro (the C++ Kaypro doesn't use it either);
+it is only for `6809-obc`.
 
 ## First PR: Phase 0 + Phase 1
 
@@ -413,7 +415,37 @@ clippy clean. What the original plan text below got right or wrong:
   single-byte (non-queued) SIO/2 inline (the fields fixed in `753dd4b`); `Z80Sio` stays Kaypro-only
   despite the generic name, so RC2014's Rust port shouldn't depend on a ported `Z80Sio`. Gate: RC2014
   boot trace-diff + real-boot confirmation.
-- **Phase 4 — Kaypro + SDL2 + WD1793 + Z80Sio + video:** ⬜ **Not started — the next session.**
+- **Phase 4 — Kaypro + SDL2 + WD1793 + Z80Sio + video.** ✅ **Done.** Boots the real Kaypro II
+  rom to the CP/M 2.2 prompt in an SDL window, `DIR` lists `mbasic-games.img`, and Ctrl-D,
+  window-close and `-l` all shut down cleanly (all three exercised via XTest / `WM_DELETE_WINDOW`).
+  Trace-diff is byte-identical over a 3,000,000-instruction boot (5,000,000 checked by hand) and
+  over a synthetic-rom snippet driving every decoded port. What it looks like, and what was learned:
+  - **Shape.** `Machine` grew an `Option<Display>` (`VideoBuffer` + font rom + title); `main`
+    picks `SdlFrontend` or `TerminalFrontend` by whether it's `Some`, not by system name.
+    `VideoBuffer` is `Arc<Mutex<Vec<u8>>>` + `Arc<AtomicBool>` dirty, written by the bus on the CPU
+    thread and snapshotted by the render loop — the Rust form of the `043e199` fix. `SdlFrontend`
+    creates the window before the CPU thread spawns so an SDL failure is a clean exit; the C++
+    `SDL_PushEvent(SDL_QUIT)` wake in `ConsoleSDL::Stop` has no equivalent, the loop just polls
+    the shutdown flag.
+  - **Keyboard** goes down the same `mpsc` channel as the terminal frontend and is drained into
+    the SIO's channel-B FIFO on the CPU thread at the point of the port `$05`/`$07` access.
+  - **WD1793** is a `std::fs::File` opened read-only; the C++ `static int index_counter` became a
+    field. Its per-status-read `printf` spew was not carried over. **Z80Sio** reads RR3..RR7 as 0
+    where the C++ indexes past its 3-entry array.
+  - **The trace-diff harness gotcha that bit this time:** the port snippet's bank-0 switch takes
+    the rom — *and the code running from it* — out of the address space, so both binaries fell
+    into NOPs at the same PC and the trace matched vacuously. Mutation testing caught it (a
+    period change in the FDC index pulse went unnoticed); the tail of the snippet now `LDIR`s
+    itself to `$9000` and runs from ram. Two more mutations were then needed to make the latch
+    readback mask observable (write bit 6 while INTRQ is pending). Three mutations caught in the
+    end.
+  - **The oracle runs headless** under `SDL_VIDEODRIVER=dummy` (renderer creation fails, the C++
+    tolerates it, the trace is unaffected), so `cargo test` doesn't flash a window.
+  - **The floppy image** is still loaded from the cwd as `mbasic-games.img`, matching the C++; it
+    is not in the repo (a symlink to `/storage/space/geist/greaseweazle/kay2/mbasic-games.img` in
+    the checkout works). The kaypro tests skip themselves without it.
+  Original plan text follows.
+- **Phase 4 (original draft, superseded by the entry above — kept for the record):**
   `SdlFrontend`, font extraction from the video ROM, 80×24 render (note the **128-byte row stride**,
   `system_kaypro.cpp:227-228`), WD1793 (read-only image via `std::fs::File` — the C++ command decoder
   has no Write Sector handling at all, not just an opened-read-only file), Z80Sio (`VecDeque` FIFOs,
@@ -504,9 +536,9 @@ being retired anyway.
   ExtendedLinearAddress(u16), ExtendedSegmentAddress(u16), EndOfFile, ..}`. Needed from Phase 2;
   wired in Phase 0's `rom.rs`. ✅ In use and validated — System09 boots BASIC.HEX to a byte-identical
   trace, which exercises the loader end to end.
-- `sdl2` (dynamic link against system SDL2) — Phase 4 only, **not yet a dependency**. Adding it is the
-  first thing Phase 4 does, and the only point in the whole port where the build stops being pure Rust
-  with zero transitive deps.
+- ✅ `sdl2` 0.38 (dynamic link against system SDL2) — Phase 4. The only point in the port where the
+  build stops being pure Rust with zero transitive deps (`sdl2-sys`, `bitflags`, `lazy_static`,
+  `libc`); it is a hard dependency, as the C++ makefile's `sdl2-config` is.
 - Arg parsing: ✅ hand-rolled to mirror `getopt_long` (no `clap`), keeping the dependency count at two.
 - No `pthread` crate — `std::thread` + `std::sync`.
 
@@ -514,14 +546,16 @@ being retired anyway.
 
 **Runs without ROMs/SDL:**
 - `cargo build` / `cargo clippy --all-targets` clean.
-- `cargo test`: 27 unit tests — endian compose/split, MC6850 register behaviour, ihex parsing,
-  registry consistency, cycle-limit arithmetic. The trace-diff suites *skip themselves* (rather than
-  failing) when `build-emu/emu` is absent, so this still works on a tree without the C++ oracle built.
+- `cargo test`: 46 unit tests — endian compose/split, MC6850/Z80Sio/WD1793 register behaviour,
+  Kaypro bank/video/latch decode, ihex parsing, registry consistency, cycle-limit arithmetic. The
+  trace-diff suites *skip themselves* (rather than failing) when `build-emu/emu` is absent, so this
+  still works on a tree without the C++ oracle built.
 
 **Run where ROMs + SDL2 are available:**
 - Per-phase trace-diff: Rust `--trace` vs C++ `--trace` — the load-bearing check for the interpreter
-  cores, and now the bulk of the suite (60 tests across `tests/trace_diff_{6800,6809,z80}.rs`, ~2.2
-  minutes wall clock, dominated by spawning the C++ binary once per case).
+  cores, and now the bulk of the suite (62 tests across `tests/trace_diff_{6800,6809,z80,kaypro}.rs`,
+  ~2.3 minutes wall clock, dominated by spawning the C++ binary once per case). The kaypro suite
+  additionally needs `mbasic-games.img` in the crate root, and skips without it.
   Two things make these tests actually load-bearing rather than decorative, both learned the hard way:
   - **Assert trace *lengths* before comparing content.** `zip` stops at the shorter side, so a short
     or empty C++ trace makes a naive comparison pass vacuously. For the Z80 this is doubly true: an
@@ -549,11 +583,11 @@ being retired anyway.
 | `cpu/cpu.h` | `cpu/mod.rs` | ✅ |
 | `cpu/cpu6800.cpp` / `cpu6809.cpp` / `cpuz80.cpp` | `cpu/m6800.rs` / `m6809.rs` / `z80.rs` | ✅ |
 | `system/altair680.cpp` / `system09.cpp` / `system_rc2014.cpp` | `system/altair680.rs` / `sys09.rs` / `rc2014.rs` | ✅ |
-| `system/system_kaypro.cpp` | `system/kaypro.rs` | Phase 4 |
+| `system/system_kaypro.cpp` | `system/kaypro.rs` + render half in `console/sdl.rs` | ✅ |
 | `dev/memory.*`, `mc6850.*` | `dev/memory.rs`, `dev/mc6850.rs` | ✅ |
 | `dev/uart16550.*` | `dev/uart16550.rs` | needed by `6809-obc` |
-| `dev/z80sio.*`, `wd1793.*` | `dev/z80sio.rs`, `wd1793.rs` | Phase 4 |
+| `dev/z80sio.*`, `wd1793.*` | `dev/z80sio.rs`, `wd1793.rs` | ✅ |
 | `console.*` | `console/mod.rs` + `console/terminal.rs` | ✅ |
-| `console_sdl.*` | `console/sdl.rs` | Phase 4 |
+| `console_sdl.*` | `console/sdl.rs` | ✅ |
 | `main.cpp` (+ `g_cycle_limit`) | `main.rs` (+ `Emulator.cycle_limit`) | ✅ |
 | `libihex` submodule | `ihex` crate (submodule removed in Phase 5) | ✅ |
