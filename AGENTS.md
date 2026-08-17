@@ -6,7 +6,7 @@ Guidance for AI coding agents working in this repository. `CLAUDE.md` imports th
 
 Terminal-driven emulator for several vintage computer systems: Motorola 6809 (System09), MITS Altair 680 (6800), Kaypro II (Z80, CP/M, SDL2 video window), and RC2014 (Z80).
 
-Written in Rust. It is a port of an earlier C++ tree, validated against it instruction by instruction; the C++ tree was removed once the port was complete; its last version is commit `578de51`. Comments in the Rust cite C++ files and line numbers (`cpuz80.cpp:1196` and the like) — those resolve in that commit, e.g. `git show 578de51:cpu/cpuz80.cpp`. `rust-conversion-plan.md` is the history and rationale of the port.
+Written in Rust. It is a port of an earlier C++ tree, validated against it instruction by instruction; the C++ tree was removed once the port was complete; its last version is commit `332e1cd`. Comments in the Rust cite C++ files and line numbers (`cpuz80.cpp:1196` and the like) — those resolve in that commit, e.g. `git show 332e1cd:cpu/cpuz80.cpp`. `rust-conversion-plan.md` is the history and rationale of the port.
 
 ## Build
 
@@ -61,7 +61,7 @@ Requires the `roms` symlink to resolve, plus `script(1)` and `perl`.
 **Trace-diff against the C++ oracle** (`tests/trace_diff_{6800,6809,z80,kaypro}.rs`). These drive both implementations over the same ROM image and require byte-identical `--trace` output; they were the load-bearing gate for the port and remain the strongest regression check on the cores. They skip themselves unless `EMU_ORACLE` points at a C++ binary. To build one:
 
 ```bash
-git worktree add /tmp/emu-cpp 578de51
+git worktree add /tmp/emu-cpp 332e1cd
 git -C /tmp/emu-cpp submodule update --init     # libihex
 make -C /tmp/emu-cpp                            # needs clang, make, sdl2-config, objdump
 EMU_ORACLE=/tmp/emu-cpp/build-emu/emu cargo test

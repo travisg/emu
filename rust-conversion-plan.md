@@ -3,18 +3,18 @@
 ## Status (updated after Phase 5 — the port is complete)
 
 All four machines are ported and validated against the C++ oracle, and the C++ tree is gone. ~8,900
-lines of Rust, 108 tests, clippy clean. **The last commit with the C++ tree is `578de51`**; every
+lines of Rust, 108 tests, clippy clean. **The last commit with the C++ tree is `332e1cd`**; every
 `file.cpp:line` reference in this document and in the Rust comments resolves there
-(`git show 578de51:cpu/cpuz80.cpp`).
+(`git show 332e1cd:cpu/cpuz80.cpp`).
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 | C++ `--trace` oracle, crate scaffold, run loop, terminal frontend, registry, `rom.rs` | ✅ `5839ef9`, `38d6735` |
-| 1 | 6800 + Altair680 + MC6850 | ✅ `38d6735`, `fbf7ee4` |
-| 2 | 6809 + System09 + Intel HEX | ✅ `bb4cd4e`, `89b1024` |
-| 3 | Z80 + RC2014 | ✅ `7143966`, `2e88ed8`, `934cb9f` |
-| 4 | Kaypro + SDL2 + WD1793 + Z80Sio + video | ✅ `19136f9` |
-| 5 | Delete the C++ tree and `libihex`; docs and CI for Cargo | ✅ the commit after `578de51` |
+| 0 | C++ `--trace` oracle, crate scaffold, run loop, terminal frontend, registry, `rom.rs` | ✅ `5839ef9`, `4cbd94d` |
+| 1 | 6800 + Altair680 + MC6850 | ✅ `4cbd94d`, `7f5b346` |
+| 2 | 6809 + System09 + Intel HEX | ✅ `905b0f9`, `82cad17` |
+| 3 | Z80 + RC2014 | ✅ `81c3ea8`, `b78b28c`, `b342261` |
+| 4 | Kaypro + SDL2 + WD1793 + Z80Sio + video | ✅ `a839aa3` |
+| 5 | Delete the C++ tree and `libihex`; docs and CI for Cargo | ✅ the commit after `332e1cd` |
 
 Validation standing today, all against the C++ `--trace` oracle:
 
@@ -30,7 +30,7 @@ Still open, in priority order — none of it is conversion work any more:
 1. **`6809-obc`** needs `uart16550`; the subsystem is currently rejected with an explicit error.
 2. **RC2014 can't transmit** — a pre-existing C++ defect the port reproduces rather than fixes. See
    "Known defects reproduced, not fixed" below. Now that the oracle is retired this can be fixed
-   in the Rust alone; the RC2014 trace-diff cases will then diverge from a `578de51` oracle, which
+   in the Rust alone; the RC2014 trace-diff cases will then diverge from a `332e1cd` oracle, which
    is expected and should be documented in the test when it happens.
 3. **CLI parity gap:** `parse_args` accepts only the separated forms (`-l 100`), not `getopt_long`'s
    `--limit=100` / `-l100` / unambiguous prefixes. Nothing in the repo uses those forms.
@@ -302,14 +302,14 @@ flowchart TD
 
    Optionally make the makefile's `sdl2-config` usage conditional so the oracle builds without SDL —
    portability hygiene for CI, not needed here.
-2. ✅ **Done (`38d6735`).** Stand up the Rust crate: `Bus`, `Cpu`, `Endian`, `IntStatus`, `Memory` (`Box<[u8]>`),
+2. ✅ **Done (`4cbd94d`).** Stand up the Rust crate: `Bus`, `Cpu`, `Endian`, `IntStatus`, `Memory` (`Box<[u8]>`),
    `MemoryDevice`, `Emulator` run loop (cycle-limit decrement **once per `step()`**),
    `TerminalFrontend` (raw termios per `console.cpp:41-61`; read stdin via `poll()`/`select()` with a
    short timeout, checking the shutdown `AtomicBool` each iteration — **matching the fix already made
    to the C++ console, `774f5da`**), registry, arg parsing (mirror `getopt_long`; `-c/--cpu`
    accepted-but-ignored; `-l/--limit` per-instruction), and a Rust `--trace` flag matching the C++
    format byte-for-byte.
-3. ✅ **Done (`38d6735`).** `rom.rs`: the **`ihex`** crate for Intel HEX (removes the `libihex` submodule later) + a
+3. ✅ **Done (`4cbd94d`).** `rom.rs`: the **`ihex`** crate for Intel HEX (removes the `libihex` submodule later) + a
    flat-binary loader (`std::fs::read`, matches `altair680.cpp:83-89`). `ihex` API: `Reader::new(&str)`
    (feed it `std::fs::read_to_string`) yields `Result<Record, _>`; for each `Record::Data { offset,
    value }` write `value` bytes starting at `base + offset`, where `base` is accumulated from
@@ -321,7 +321,7 @@ flowchart TD
    those three. Wrap the real (system09) case in a small `load_ihex(path, &mut impl FnMut(u32, &[u8]))`
    helper so it keeps the existing "write into the decoded device" logic.
 
-**Phase 1 — 6800 + Altair680** ✅ **Done (`38d6735`, `fbf7ee4`).** Boots the real MITS 680b monitor
+**Phase 1 — 6800 + Altair680** ✅ **Done (`4cbd94d`, `7f5b346`).** Boots the real MITS 680b monitor
 ROM, prints its prompt, echoes input, exits cleanly on Ctrl-D. Trace-diff is byte-identical to the
 C++ oracle over 99,999 instructions, and `cargo test` runs 15 snippet/boot diffs plus 27 unit tests,
 clippy clean. What the original plan text below got right or wrong:
@@ -363,7 +363,7 @@ clippy clean. What the original plan text below got right or wrong:
   union → `d: u16` with `a()/b()` accessors (verified: `cpu6809.h:61-67` really is a `union` of
   `struct { mB; mA; }` with `mD`, so the `d: u16` design is faithful rather than an approximation —
   note the C++ union is host-endian-dependent, which the Rust accessors make explicit).
-  ✅ **Done (`bb4cd4e`).** Passes the e2e BASIC regression
+  ✅ **Done (`905b0f9`).** Passes the e2e BASIC regression
   (`EMU_BIN=./target/debug/emu ./test/run_basic6809_lang_test.sh` — the script now honours `EMU_BIN`)
   and matches the oracle byte-for-byte over a 49,999-instruction BASIC.HEX boot, on every opcode of
   all three pages, and on targeted indexed/exg-tfr/push-pull snippets. **Watch out for these five
@@ -372,7 +372,7 @@ clippy clean. What the original plan text below got right or wrong:
   **pre**-decrement; `shared_memwrite` sets N/Z *after* the write; byte `cmp` also sets H; `asr` has
   **no** fallthrough bug here. Still open: `6809-obc` needs `uart16550` and is rejected with an
   explicit error until that lands.
-- **Phase 3 — Z80 + RC2014.** ✅ **Done (`7143966`).** Byte-identical to the oracle over a 5,000,000-
+- **Phase 3 — Z80 + RC2014.** ✅ **Done (`81c3ea8`).** Byte-identical to the oracle over a 5,000,000-
   instruction real-ROM boot, on every value of eight opcode pages (base, ED, CB, DD, FD, DD CB, FD CB,
   DD ED — 2,048 cases), and on targeted snippets. 86 tests, clippy clean; both 6809 BASIC regressions
   still pass. What the port actually looks like, and where the pre-flight survey below was wrong:
@@ -483,7 +483,7 @@ clippy clean. What the original plan text below got right or wrong:
   worth recording:
   - **The trace-diff suites stay.** They are the strongest regression check on the cores, so rather
     than deleting them with the oracle they now look for `EMU_ORACLE` (falling back to the old
-    `build-emu/emu`) and skip without it. The recipe — `git worktree add ... 578de51`, init the
+    `build-emu/emu`) and skip without it. The recipe — `git worktree add ... 332e1cd`, init the
     submodule, `make`, export `EMU_ORACLE` — is in `AGENTS.md` and was exercised end to end after
     the deletion: all 62 trace-diff cases still pass against a worktree-built oracle.
   - `test/run_basic6809_lang_test.sh` defaults to `target/debug/emu` (`EMU_BIN` still overrides).
@@ -493,7 +493,7 @@ clippy clean. What the original plan text below got right or wrong:
   - `phase3-z80-handoff.md` is kept as a record. `emu.code-workspace` lost its makefile launch
     config.
   - C++ file:line citations throughout the Rust comments were left in place deliberately; they
-    document *why* a behaviour exists and resolve against `578de51`.
+    document *why* a behaviour exists and resolve against `332e1cd`.
 
 ## Known-defect fixes (resolved in C++ before conversion began)
 

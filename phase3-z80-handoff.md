@@ -1,6 +1,6 @@
 # Phase 3 handoff: Z80 core + RC2014
 
-> **Status: complete (`7143966`).** Kept as a record of what the pre-flight survey got right and
+> **Status: complete (`81c3ea8`).** Kept as a record of what the pre-flight survey got right and
 > wrong; the durable summary now lives in `rust-conversion-plan.md`. Two of the predictions below
 > turned out to be backwards, and they're worth reading before writing the Phase 4 handoff:
 >
@@ -31,11 +31,11 @@ and abandoned (see "Why the first attempt failed" below); nothing was committed 
 |---|---|
 | `753dd4b` | C++ fix: RC2014 SIO receive-byte race (mutex) |
 | `5839ef9` | C++ `--trace` golden oracle, all three cores |
-| `38d6735` | Rust crate scaffold + 6800 core |
-| `fbf7ee4` | Rust MC6850, Altair680, console frontend, main |
-| `89b1024` | Rust 6800 trace-diff coverage hardening |
-| `bb4cd4e` | Rust 6809 core + System09 |
-| `7143966` | Rust Z80 core + RC2014 (this phase) |
+| `4cbd94d` | Rust crate scaffold + 6800 core |
+| `7f5b346` | Rust MC6850, Altair680, console frontend, main |
+| `82cad17` | Rust 6800 trace-diff coverage hardening |
+| `905b0f9` | Rust 6809 core + System09 |
+| `81c3ea8` | Rust Z80 core + RC2014 (this phase) |
 
 Verified today: 6800 and 6809 both byte-identical to the C++ oracle on real-ROM boots, on every opcode
 value, and on targeted snippets; the Rust 6809 passes the full BASIC language regression. 58 tests,
