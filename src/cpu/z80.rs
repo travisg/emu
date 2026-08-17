@@ -1568,3 +1568,239 @@ impl Cpu for CpuZ80 {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpu::testbus::{run_steps, TestBus};
+
+    /// Load a hand-assembled program at 0 and reset into it -- the z80 has no
+    /// reset vector.
+    fn boot(prog: &[u8]) -> (CpuZ80, TestBus) {
+        let mut bus = TestBus::new();
+        bus.load(0x0000, prog);
+        let mut cpu = CpuZ80::new();
+        cpu.reset(&mut bus);
+        (cpu, bus)
+    }
+
+    #[test]
+    fn reset_starts_at_zero_with_interrupt_mode_one() {
+        let mut bus = TestBus::new();
+        let mut cpu = CpuZ80::new();
+        cpu.a = 0xff;
+        cpu.ix = 0xffff;
+        cpu.reset(&mut bus);
+        assert_eq!(cpu.pc, 0);
+        assert_eq!((cpu.a, cpu.ix, cpu.sp), (0, 0, 0));
+        // the C++ `mRegs = {}` leaves the in-class initializer for im alone
+        assert_eq!(cpu.im, 1);
+    }
+
+    /// Smoke test: sum four bytes through a djnz loop and store the result.
+    #[test]
+    fn sums_a_table_with_a_djnz_loop() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x31, 0x00, 0x80,       // 0000  ld   sp, 0x8000
+            0x21, 0x00, 0x01,       // 0003  ld   hl, 0x0100
+            0x06, 0x04,             // 0006  ld   b, 4
+            0xaf,                   // 0008  xor  a
+            0x86,                   // 0009  add  a, (hl)     <- loop
+            0x23,                   // 000a  inc  hl
+            0x10, 0xfc,             // 000b  djnz loop
+            0x32, 0x00, 0x02,       // 000d  ld   (0x0200), a
+        ]);
+        bus.load(0x0100, &[0x01, 0x02, 0x03, 0x04]);
+
+        // 4 setup + 4 iterations of 3 + the store
+        run_steps(&mut cpu, &mut bus, 17);
+
+        assert_eq!(cpu.a, 0x0a);
+        assert_eq!(cpu.hl(), 0x0104);
+        assert_eq!(cpu.b, 0);
+        assert_eq!(cpu.sp, 0x8000);
+        assert_eq!(cpu.pc, 0x0010);
+        assert_eq!(bus.mem[0x0200], 0x0a);
+    }
+
+    /// `LD r, (IX+d)` adds the displacement **unsigned**, unlike every other
+    /// indexed form. Bug in the C++, preserved deliberately: a real z80 would
+    /// read 0x00ff here.
+    #[test]
+    fn ld_r_indexed_adds_the_displacement_unsigned() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0xdd, 0x21, 0x00, 0x01, // ld ix, 0x0100
+            0xdd, 0x7e, 0xff,       // ld a, (ix-1)
+        ]);
+        bus.mem[0x01ff] = 0xaa; // where this core looks
+        bus.mem[0x00ff] = 0x55; // where a real z80 would
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.a, 0xaa);
+    }
+
+    /// The store direction is the contrast: `LD (IX+d), r` sign-extends, as
+    /// every indexed form other than the one above does.
+    #[test]
+    fn ld_indexed_r_sign_extends_the_displacement() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0xdd, 0x21, 0x00, 0x01, // ld ix, 0x0100
+            0x3e, 0x5a,             // ld a, 0x5a
+            0xdd, 0x77, 0xff,       // ld (ix-1), a
+        ]);
+
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(bus.mem[0x00ff], 0x5a);
+        assert_eq!(bus.mem[0x01ff], 0x00);
+    }
+
+    #[test]
+    fn exx_swaps_the_alternate_register_set() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x01, 0x22, 0x11,       // ld bc, 0x1122
+            0x11, 0x44, 0x33,       // ld de, 0x3344
+            0x21, 0x66, 0x55,       // ld hl, 0x5566
+            0xd9,                   // exx
+            0x01, 0xbb, 0xaa,       // ld bc, 0xaabb
+            0xd9,                   // exx
+        ]);
+
+        run_steps(&mut cpu, &mut bus, 4);
+        assert_eq!((cpu.bc(), cpu.de(), cpu.hl()), (0, 0, 0));
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!((cpu.bc(), cpu.de(), cpu.hl()), (0x1122, 0x3344, 0x5566));
+        assert_eq!(cpu.b_alt, 0xaa);
+        assert_eq!(cpu.c_alt, 0xbb);
+    }
+
+    /// AF has its own exchange, which EXX must not touch.
+    #[test]
+    fn ex_af_swaps_only_the_accumulator_and_flags() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x3e, 0x12,             // ld a, 0x12
+            0x37,                   // scf
+            0x08,                   // ex af, af'
+            0x3e, 0x34,             // ld a, 0x34
+            0x08,                   // ex af, af'
+        ]);
+
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!((cpu.a, cpu.f), (0, 0));
+        assert_eq!(cpu.af_alt(), 0x1201);
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!((cpu.a, cpu.f), (0x12, F_C));
+        assert_eq!(cpu.af_alt(), 0x3400);
+    }
+
+    /// HALT is a NOP here -- nothing in the tree drives an interrupt line, so
+    /// halting would deadlock the run rather than end it.
+    #[test]
+    fn halt_is_a_nop() {
+        let (mut cpu, mut bus) = boot(&[0x76, 0x3e, 0x42]); // halt ; ld a, 0x42
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.a, 0x42);
+        assert_eq!(cpu.pc, 0x0003);
+    }
+
+    #[test]
+    fn ldir_copies_a_block() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x21, 0x00, 0x01,       // ld hl, 0x0100
+            0x11, 0x00, 0x02,       // ld de, 0x0200
+            0x01, 0x04, 0x00,       // ld bc, 4
+            0xed, 0xb0,             // ldir
+        ]);
+        bus.load(0x0100, &[0xde, 0xad, 0xbe, 0xef]);
+
+        // ldir rewinds pc by two to repeat, so it steps once per byte
+        run_steps(&mut cpu, &mut bus, 7);
+
+        assert_eq!(&bus.mem[0x0200..0x0204], &[0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!((cpu.hl(), cpu.de(), cpu.bc()), (0x0104, 0x0204, 0));
+        assert_eq!(cpu.pc, 0x000b);
+    }
+
+    /// The ED page is deliberately incomplete: LDI, LDD and LDDR are holes even
+    /// though LDIR is implemented. Filling them in would diverge from the
+    /// oracle.
+    #[test]
+    fn the_unimplemented_ed_block_moves_stop_the_run() {
+        for op in [0xa0u8, 0xa8, 0xb8] {
+            let (mut cpu, mut bus) = boot(&[0xed, op]);
+            assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode, "ed {op:#04x}");
+        }
+    }
+
+    /// An instruction that saw a DD/FD prefix but had no use for it ends the
+    /// run. This decides trace *length*, so it is load-bearing for the oracle
+    /// diff, not just an error path.
+    #[test]
+    fn an_unconsumed_index_prefix_stops_the_run() {
+        let (mut cpu, mut bus) = boot(&[0xdd, 0x00]); // dd nop
+        assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
+
+        // both prefixes stick, but only one of them can be consumed
+        let (mut cpu, mut bus) = boot(&[0xdd, 0xfd, 0x21, 0x34, 0x12]); // dd fd ld ix, nn
+        assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
+        assert_eq!(cpu.ix, 0x1234, "the instruction still ran");
+    }
+
+    #[test]
+    fn port_io_reaches_the_bus() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x3e, 0x5a,             // ld a, 0x5a
+            0xd3, 0x10,             // out (0x10), a
+            0xdb, 0x20,             // in  a, (0x20)
+        ]);
+        bus.ports[0x20] = 0xa5;
+
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(bus.io_writes, vec![(0x10, 0x5a)]);
+        assert_eq!(cpu.a, 0xa5);
+    }
+
+    #[test]
+    fn add_sets_carry_half_carry_and_overflow() {
+        let add = |a: u8, n: u8| {
+            let (mut cpu, mut bus) = boot(&[0x3e, a, 0xc6, n]); // ld a, a ; add a, n
+            run_steps(&mut cpu, &mut bus, 2);
+            cpu
+        };
+
+        // half carry out of bit 3, nothing else
+        let cpu = add(0x0f, 0x01);
+        assert_eq!(cpu.a, 0x10);
+        assert_eq!(
+            (cpu.flag(F_C), cpu.flag(F_H), cpu.flag(F_Z), cpu.flag(F_S), cpu.flag(F_PV)),
+            (false, true, false, false, false)
+        );
+
+        // carry out of bit 7, result zero
+        let cpu = add(0xff, 0x01);
+        assert_eq!(cpu.a, 0x00);
+        assert_eq!(
+            (cpu.flag(F_C), cpu.flag(F_H), cpu.flag(F_Z), cpu.flag(F_S), cpu.flag(F_PV)),
+            (true, true, true, false, false)
+        );
+
+        // signed overflow: PV, not C
+        let cpu = add(0x7f, 0x01);
+        assert_eq!(cpu.a, 0x80);
+        assert_eq!(
+            (cpu.flag(F_C), cpu.flag(F_H), cpu.flag(F_Z), cpu.flag(F_S), cpu.flag(F_PV)),
+            (false, true, false, true, true)
+        );
+
+        // N is always cleared by add
+        assert!(!add(0x01, 0x01).flag(F_N));
+    }
+}

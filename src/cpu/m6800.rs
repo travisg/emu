@@ -1046,3 +1046,161 @@ impl Cpu for Cpu6800 {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpu::testbus::{run_steps, TestBus};
+
+    /// Load a hand-assembled program at 0xe000 and reset into it.
+    fn boot(prog: &[u8]) -> (Cpu6800, TestBus) {
+        let mut bus = TestBus::new();
+        bus.load(0xe000, prog);
+        bus.set_reset_vector(0xe000);
+        let mut cpu = Cpu6800::new();
+        cpu.reset(&mut bus);
+        (cpu, bus)
+    }
+
+    #[test]
+    fn reset_loads_pc_from_the_vector() {
+        let mut bus = TestBus::new();
+        bus.set_reset_vector(0x1234);
+        let mut cpu = Cpu6800::new();
+        cpu.a = 0xff;
+        cpu.ix = 0xffff;
+        cpu.reset(&mut bus);
+        assert_eq!(cpu.pc, 0x1234);
+        assert_eq!((cpu.a, cpu.b, cpu.ix, cpu.sp, cpu.cc), (0, 0, 0, 0, 0));
+    }
+
+    /// Smoke test: sum four bytes through an indexed loop and store the result.
+    /// Covers immediate/indexed/extended addressing, inx, cpx and a taken
+    /// conditional branch.
+    #[test]
+    fn sums_a_table_with_an_indexed_loop() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x8e, 0x00, 0xff,       // e000  lds  #0x00ff
+            0xce, 0x01, 0x00,       // e003  ldx  #0x0100
+            0x4f,                   // e006  clra
+            0xab, 0x00,             // e007  adda ,x          <- loop
+            0x08,                   // e009  inx
+            0x8c, 0x01, 0x04,       // e00a  cpx  #0x0104
+            0x26, 0xf8,             // e00d  bne  loop
+            0xb7, 0x02, 0x00,       // e00f  sta  0x0200
+        ]);
+        bus.load(0x0100, &[0x01, 0x02, 0x03, 0x04]);
+
+        // 3 setup + 4 iterations of 4 + the store
+        run_steps(&mut cpu, &mut bus, 20);
+
+        assert_eq!(cpu.a, 0x0a);
+        assert_eq!(cpu.ix, 0x0104);
+        assert_eq!(cpu.sp, 0x00ff);
+        assert_eq!(cpu.pc, 0xe012);
+        assert_eq!(bus.mem[0x0200], 0x0a);
+    }
+
+    /// The 6800 stack post-decrements on push, so the pushed low byte lands at
+    /// the higher address and the pointer ends one below the last byte written.
+    #[test]
+    fn jsr_and_rts_round_trip_through_the_stack() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x8e, 0x00, 0xff,       // e000  lds #0x00ff
+            0xbd, 0xe0, 0x07,       // e003  jsr 0xe007
+            0x01,                   // e006  nop      <- return lands here
+            0x86, 0x42,             // e007  lda #0x42
+            0x39,                   // e009  rts
+        ]);
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.pc, 0xe007);
+        assert_eq!(cpu.sp, 0x00fd);
+        assert_eq!((bus.mem[0x00fe], bus.mem[0x00ff]), (0xe0, 0x06));
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.a, 0x42);
+        assert_eq!(cpu.pc, 0xe006);
+        assert_eq!(cpu.sp, 0x00ff);
+    }
+
+    /// `asr` is identical to `lsr` here: the C++ `case ASR:` falls through into
+    /// `case LSR:`, which overwrites the result. A real 6800 would leave 0xc0.
+    /// Do not "fix" this without re-baselining the oracle.
+    #[test]
+    fn asr_falls_through_into_lsr() {
+        let (mut cpu, mut bus) = boot(&[0x86, 0x80, 0x47]); // lda #0x80 ; asra
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.a, 0x40);
+        assert!(!cpu.cc_set(CC_C));
+        assert!(!cpu.cc_set(CC_N));
+    }
+
+    /// The other half of the fallthrough: the discarded ASR pass reads the
+    /// operand before the LSR pass reads it again, so a memory-form `asr` hits
+    /// its address twice. That is invisible in RAM but not on a device
+    /// register, and it is trace-visible.
+    #[test]
+    fn memory_asr_reads_its_operand_twice() {
+        let (mut cpu, mut bus) = boot(&[0x77, 0x01, 0x00]); // asr 0x0100
+        bus.mem[0x0100] = 0x81;
+        bus.watch = Some(0x0100);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(bus.watch_reads, 2);
+        assert_eq!(bus.mem[0x0100], 0x40);
+        // flags come from the LSR pass, which clobbers the ASR pass's
+        assert!(cpu.cc_set(CC_C));
+        assert!(!cpu.cc_set(CC_N));
+        assert!(cpu.cc_set(CC_V)); // V is N xor C
+
+        // lsr, the same operation without the extra read
+        let (mut cpu, mut bus) = boot(&[0x74, 0x01, 0x00]); // lsr 0x0100
+        bus.mem[0x0100] = 0x81;
+        bus.watch = Some(0x0100);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(bus.watch_reads, 1);
+        assert_eq!(bus.mem[0x0100], 0x40);
+    }
+
+    #[test]
+    fn cmpa_sets_z_n_and_c_without_touching_the_accumulator() {
+        let cmp = |a: u8, m: u8| {
+            let (mut cpu, mut bus) = boot(&[0x86, a, 0x81, m]); // lda #a ; cmpa #m
+            run_steps(&mut cpu, &mut bus, 2);
+            assert_eq!(cpu.a, a, "cmp must not write the accumulator");
+            (cpu.cc_set(CC_Z), cpu.cc_set(CC_N), cpu.cc_set(CC_C))
+        };
+
+        assert_eq!(cmp(0x50, 0x50), (true, false, false));
+        assert_eq!(cmp(0x50, 0x30), (false, false, false));
+        assert_eq!(cmp(0x30, 0x50), (false, true, true)); // borrow
+    }
+
+    /// `tpa` reads the two unimplemented condition-code bits back as ones;
+    /// `tap` can only write the low six.
+    #[test]
+    fn tpa_and_tap_mask_the_top_two_condition_code_bits() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x0d,                   // sec
+            0x07,                   // tpa
+            0x86, 0xff,             // lda #0xff
+            0x06,                   // tap
+        ]);
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.a, 0xc1, "tpa reads back cc | 0xc0");
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.cc, 0x3f, "tap writes only the low six bits");
+    }
+
+    #[test]
+    fn an_unimplemented_opcode_stops_the_run() {
+        // 0x00 is not a 6800 instruction and has no table entry
+        let (mut cpu, mut bus) = boot(&[0x00]);
+        assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
+    }
+}

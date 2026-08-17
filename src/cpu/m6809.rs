@@ -1238,3 +1238,210 @@ fn reg_from_nibble(n: u8) -> Option<Reg> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpu::testbus::{run_steps, TestBus};
+
+    /// Load a hand-assembled program at 0xe000 and reset into it.
+    fn boot(prog: &[u8]) -> (Cpu6809, TestBus) {
+        let mut bus = TestBus::new();
+        bus.load(0xe000, prog);
+        bus.set_reset_vector(0xe000);
+        let mut cpu = Cpu6809::new();
+        cpu.reset(&mut bus);
+        (cpu, bus)
+    }
+
+    #[test]
+    fn reset_loads_pc_from_the_vector() {
+        let mut bus = TestBus::new();
+        bus.set_reset_vector(0x1234);
+        let mut cpu = Cpu6809::new();
+        cpu.x = 0xffff;
+        cpu.dp = 0xff;
+        cpu.reset(&mut bus);
+        assert_eq!(cpu.pc, 0x1234);
+        assert_eq!((cpu.a, cpu.b, cpu.x, cpu.y, cpu.u, cpu.s), (0, 0, 0, 0, 0, 0));
+        assert_eq!((cpu.dp, cpu.cc), (0, 0));
+    }
+
+    /// Smoke test: sum four bytes through a post-increment indexed loop.
+    /// Covers the 0x10 opcode page, indexed auto-increment, cmpx and a taken
+    /// conditional branch.
+    #[test]
+    fn sums_a_table_with_a_post_increment_loop() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x10, 0xce, 0x00, 0xff, // e000  lds  #0x00ff
+            0x8e, 0x01, 0x00,       // e004  ldx  #0x0100
+            0x4f,                   // e007  clra
+            0xab, 0x80,             // e008  adda ,x+         <- loop
+            0x8c, 0x01, 0x04,       // e00a  cmpx #0x0104
+            0x26, 0xf9,             // e00d  bne  loop
+            0xb7, 0x02, 0x00,       // e00f  sta  0x0200
+        ]);
+        bus.load(0x0100, &[0x01, 0x02, 0x03, 0x04]);
+
+        // 3 setup + 4 iterations of 3 + the store
+        run_steps(&mut cpu, &mut bus, 16);
+
+        assert_eq!(cpu.a, 0x0a);
+        assert_eq!(cpu.x, 0x0104);
+        assert_eq!(cpu.s, 0x00ff);
+        assert_eq!(cpu.pc, 0xe012);
+        assert_eq!(bus.mem[0x0200], 0x0a);
+    }
+
+    /// Execute one `lea` at 0xe000 over a known register file. `lea` writes the
+    /// effective address straight into a register, so this reads out exactly
+    /// what `indexed_addr` computed -- including any base-register mutation.
+    fn lea_with(opcode: u8, operand: &[u8], setup: impl FnOnce(&mut Cpu6809)) -> Cpu6809 {
+        let mut bus = TestBus::new();
+        let mut prog = vec![opcode];
+        prog.extend_from_slice(operand);
+        bus.load(0xe000, &prog);
+        // pointers the indirect modes chase
+        bus.load(0x0100, &[0xca, 0xfe]);
+        bus.load(0x1234, &[0xbe, 0xef]);
+
+        let mut cpu = Cpu6809::new();
+        cpu.x = 0x0100;
+        cpu.y = 0x0200;
+        cpu.u = 0x0300;
+        cpu.s = 0x0400;
+        cpu.a = 0x12;
+        cpu.b = 0x34;
+        cpu.pc = 0xe000;
+        setup(&mut cpu);
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        cpu
+    }
+
+    fn lea(opcode: u8, operand: &[u8]) -> Cpu6809 {
+        lea_with(opcode, operand, |_| {})
+    }
+
+    const LEAX: u8 = 0x30;
+    const LEAU: u8 = 0x33;
+
+    #[test]
+    fn indexed_postbytes_compute_the_effective_address() {
+        // no offset, and the 5-bit signed offset form
+        assert_eq!(lea(LEAU, &[0x84]).u, 0x0100); // ,x
+        assert_eq!(lea(LEAU, &[0x05]).u, 0x0105); // 5,x
+        assert_eq!(lea(LEAU, &[0x1f]).u, 0x00ff); // -1,x
+
+        // accumulator offsets, sign extended
+        assert_eq!(lea(LEAU, &[0x85]).u, 0x0134); // b,x with b = 0x34
+        assert_eq!(lea(LEAU, &[0x86]).u, 0x0112); // a,x with a = 0x12
+        assert_eq!(lea(LEAU, &[0x8b]).u, 0x1334); // d,x with d = 0x1234
+        assert_eq!(lea_with(LEAU, &[0x85], |c| c.b = 0xff).u, 0x00ff); // -1,x
+
+        // 8- and 16-bit constant offsets
+        assert_eq!(lea(LEAU, &[0x88, 0x10]).u, 0x0110);
+        assert_eq!(lea(LEAU, &[0x88, 0xf0]).u, 0x00f0); // -16,x
+        assert_eq!(lea(LEAU, &[0x89, 0x01, 0x00]).u, 0x0200);
+
+        // program-counter relative: the base is PC *after* the offset bytes
+        assert_eq!(lea(LEAU, &[0x8c, 0x05]).u, 0xe008);
+        assert_eq!(lea(LEAU, &[0x8d, 0x01, 0x00]).u, 0xe104);
+
+        // indirect
+        assert_eq!(lea(LEAU, &[0x94]).u, 0xcafe); // [,x] -> the word at 0x0100
+        assert_eq!(lea(LEAU, &[0x9f, 0x12, 0x34]).u, 0xbeef); // [0x1234]
+
+        // the other three base registers
+        assert_eq!(lea(LEAU, &[0xa4]).u, 0x0200); // ,y
+        assert_eq!(lea(LEAU, &[0xe4]).u, 0x0400); // ,s
+        assert_eq!(lea(LEAX, &[0xc4]).x, 0x0300); // ,u
+    }
+
+    #[test]
+    fn indexed_auto_increment_modes_update_the_base_register() {
+        let cpu = lea(LEAU, &[0x80]); // ,x+
+        assert_eq!((cpu.u, cpu.x), (0x0100, 0x0101));
+
+        let cpu = lea(LEAU, &[0x81]); // ,x++
+        assert_eq!((cpu.u, cpu.x), (0x0100, 0x0102));
+
+        // the decrements happen *before* the address is formed
+        let cpu = lea(LEAU, &[0x82]); // ,-x
+        assert_eq!((cpu.u, cpu.x), (0x00ff, 0x00ff));
+
+        let cpu = lea(LEAU, &[0x83]); // ,--x
+        assert_eq!((cpu.u, cpu.x), (0x00fe, 0x00fe));
+    }
+
+    /// Pushes go high register to low and pre-decrement; pulls come back in the
+    /// mirrored order. Getting either backwards corrupts every subroutine call.
+    #[test]
+    fn push_and_pull_round_trip_in_postbyte_order() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x10, 0xce, 0x04, 0x00, // lds  #0x0400
+            0x86, 0x11,             // lda  #0x11
+            0xc6, 0x22,             // ldb  #0x22
+            0x8e, 0x33, 0x44,       // ldx  #0x3344
+            0x34, 0x16,             // pshs a,b,x
+            0x4f,                   // clra
+            0x5f,                   // clrb
+            0x8e, 0x00, 0x00,       // ldx  #0x0000
+            0x35, 0x16,             // puls a,b,x
+        ]);
+
+        run_steps(&mut cpu, &mut bus, 5);
+        assert_eq!(cpu.s, 0x03fc);
+        assert_eq!(&bus.mem[0x03fc..0x0400], &[0x11, 0x22, 0x33, 0x44]);
+
+        run_steps(&mut cpu, &mut bus, 4);
+        assert_eq!((cpu.a, cpu.b, cpu.x), (0x11, 0x22, 0x3344));
+        assert_eq!(cpu.s, 0x0400);
+    }
+
+    /// Unlike the 6800 core, `asr` here really is an arithmetic shift: the sign
+    /// bit is preserved and the operand is read exactly once.
+    #[test]
+    fn asr_preserves_the_sign_bit_and_reads_its_operand_once() {
+        let (mut cpu, mut bus) = boot(&[0x86, 0x80, 0x47]); // lda #0x80 ; asra
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.a, 0xc0);
+
+        let (mut cpu, mut bus) = boot(&[0x77, 0x01, 0x00]); // asr 0x0100
+        bus.mem[0x0100] = 0x81;
+        bus.watch = Some(0x0100);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(bus.watch_reads, 1);
+        assert_eq!(bus.mem[0x0100], 0xc0);
+        assert!(cpu.cc_set(CC_C));
+        // N and Z come from the written value, set after the write
+        assert!(cpu.cc_set(CC_N));
+        assert!(!cpu.cc_set(CC_Z));
+    }
+
+    #[test]
+    fn exg_swaps_a_pair_and_tfr_copies_one_way() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0xcc, 0x12, 0x34,       // ldd #0x1234
+            0x8e, 0x56, 0x78,       // ldx #0x5678
+            0x1e, 0x01,             // exg d,x
+            0x1f, 0x89,             // tfr a,b
+        ]);
+
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!((cpu.d(), cpu.x), (0x5678, 0x1234));
+
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.a, cpu.b), (0x56, 0x56));
+    }
+
+    #[test]
+    fn an_unimplemented_opcode_stops_the_run() {
+        // 0x01 has no entry on the base page
+        let (mut cpu, mut bus) = boot(&[0x01]);
+        assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
+    }
+}

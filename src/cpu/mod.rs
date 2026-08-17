@@ -30,6 +30,9 @@ pub mod m6800;
 pub mod m6809;
 pub mod z80;
 
+#[cfg(test)]
+mod testbus;
+
 /// Why a `step()` stopped, mapping onto the C++ cores' `Run()` return codes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum StepResult {
