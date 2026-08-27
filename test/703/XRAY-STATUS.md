@@ -102,6 +102,18 @@ files with nothing to misparse in between. In order:
   card 298 is `MAXP EQU ENDP-PEAT+12` and neither operand is defined until
   much further down the deck. `asm703.py` now defers an EQU it cannot evaluate
   and sweeps the leftovers to a fixpoint.
+- **`*` is a comment-card marker too**, not just `'`. The two are distinct
+  glyphs on the page — `'` is a tall high tick, `*` a lobed star at mid-height
+  — and both appear, sometimes on adjacent cards. `xraylist.py`'s `split_card`
+  reads a leading `*` as a *label*, so those cards extract as nonsense source
+  (`*  THIS  IS ...`). Pages 28, 36, 40 and 47 have them so far. Extractor fix,
+  not a transcription error: the pages are right.
+- **The strip crop loses the far right margin.** `scanstrip.sh` cuts at
+  x=5060; comments on cards 1747 and 1825 run to x≈5300 (an author and a date,
+  `J.R. NELSON  9/8/67`). Widen `W` and `OUT_W` together so the downsample
+  ratio — and with it the legibility — stays where it is, then re-read the
+  right edge of the pages already done. Nothing load-bearing is out there, but
+  attributions are worth having.
 - **Print damage that will not assemble.** Card 325 prints `SYR0 EQU X'80`
   with the closing quote missing, which the transcript reproduces faithfully
   and no expression parser will accept. The repair belongs in `xraylist.py`'s
