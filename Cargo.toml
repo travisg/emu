@@ -12,8 +12,12 @@ ihex = "3"
 # termios raw mode and poll(2) for the terminal frontend, as console.cpp does
 libc = "0.2.189"
 # window, events and rendering for the kaypro frontend (phase 4). Links the
-# system SDL2 dynamically, as the C++ makefile does via sdl2-config
-sdl2 = "0.38"
+# system SDL2 dynamically, as the C++ makefile does via sdl2-config.
+# use-pkgconfig makes sdl2-sys locate it with pkg-config instead of assuming the
+# linker's default search path: that is the only thing that finds SDL2 under a
+# non-default prefix (MacPorts' /opt/local, Homebrew's /opt/homebrew on Apple
+# silicon), and it costs a build-time dependency on pkg-config(1).
+sdl2 = { version = "0.38", features = ["use-pkgconfig"] }
 
 [profile.release]
 # the interpreter cores are one giant match each; keep them fast

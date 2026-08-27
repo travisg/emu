@@ -16,6 +16,7 @@ Prerequisites:
 
 - A Rust toolchain (`cargo`, edition 2021)
 - SDL2 development package (`libsdl2-dev` / `sdl2`) — the `sdl2` crate links it dynamically, and it is a hard dependency even for the terminal-only systems
+- `pkg-config` — the `sdl2` crate is built with `use-pkgconfig`, so SDL2 is located by `pkg-config sdl2` rather than by the linker's default search path. That is what makes a non-default prefix work (MacPorts' `/opt/local`, Homebrew's `/opt/homebrew` on Apple silicon); set `PKG_CONFIG_PATH` if SDL2 lives somewhere `pkg-config` doesn't already look
 
 ```bash
 cargo build              # target/debug/emu

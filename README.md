@@ -16,6 +16,10 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 - A Rust toolchain (`cargo`)
 - The SDL2 development package (`libsdl2-dev` on Debian/Ubuntu, `sdl2` on Homebrew/MacPorts) — the
   Kaypro window links it dynamically, and it's a build requirement even if you never run the Kaypro
+- `pkg-config`, which is how the build finds that SDL2: any install prefix works as long as
+  `pkg-config sdl2` resolves, so MacPorts (`/opt/local`) and Homebrew (`/usr/local` or
+  `/opt/homebrew`) need no configuration. Point `PKG_CONFIG_PATH` at the directory holding
+  `sdl2.pc` if it's installed somewhere unusual
 - ROM images. They aren't in the repo; the emulator looks for them under `roms/` relative to the
   current directory (`-h` lists the default path per system, `-r` overrides it)
 
