@@ -28,6 +28,7 @@ use std::io::Write;
 
 pub mod m6800;
 pub mod m6809;
+pub mod ray703;
 pub mod z80;
 
 #[cfg(test)]
