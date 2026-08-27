@@ -46,11 +46,19 @@ are regenerable at any time:
 
 ## Progress
 
-33 of 54 scanned pages transcribed and passing every check. Listing page 1 was
-not scanned — the sheet in its place is the Appendix A divider — so card 1 is
-lost; cards 2 onward are intact.
+**All 54 scanned pages transcribed.** Listing page 1 was not scanned — the
+sheet in its place is the Appendix A divider — so card 1 is lost; cards 2
+onward are intact.
 
-Remaining: the tail of the code pages, and the symbol table on pages 54–55.
+The listing is in two parts. Cards run to **1862**, ending part-way down page
+50; everything after that is the assembler's **cross reference**, one row per
+symbol giving its value and every address that references it, running to page
+55 and printed under a page title that still says `SYMBOL TABLE`. The trailer
+on page 55 reads `NO ERRORS` over `CARDS SYMBOLS LITR STACK` = `1862 278 561
+0 6`, which confirms both the card count the chain reaches and the 278 symbols
+independently.
+
+Still to do: the four `xraylist.py` fixes listed below, then the endgame check.
 
 ## How this is being verified
 
@@ -178,17 +186,17 @@ Cards 1193 and 1207 keep their `SIGR` reading with a `CHECK` note: they sit
 in untaken conditional code, so the assembler never resolved them and no
 authority outside the glyph exists. They are very probably `SIGB` too.
 
-**Letter `O` and digit `0` are contested, and the safe assumption is that they
-cannot be told apart.** Two agents reported the glyphs identical — `LPRO`'s
-final character against the zeros in its own value column. A third measured
-them as distinct (digit `0` about 28×50 with a 15×30 counter, letter `O` about
-33×44 with a 20×23 counter) and read `NDSK0` as a digit on that basis. That
-particular reading is right for an independent reason — page 7 defines
-`NDSK0 EQU 1` — but the metric behind it is the same kind of rule the `SIGB`
-case above shows to be unreliable on this printer. So: settle a name of this
-shape by analogy with its neighbours (`CDRI`/`CDRO`, `LPRI`/`LPRO`,
-`M.DDR`/`M.DDR1`) or by a reference address, and name the choice rather than
-making it silently. `ARH0` is not one of these: the `H` is
+**Letter `O` and digit `0` are distinguishable, by width.** Two agents
+reported them identical and two measured them apart; the measurements win, and
+they agree with each other. The cross reference happens to print the decisive
+pair on one page — `NO` and `N0` are both symbols on page 53 — and measured at
+native resolution the letter is **36 px** wide against the digit's **29 px**,
+a 24% difference that survives ordinary inking variation. Independent
+corroboration: `NDSK0`, `MAG0`, `PCH0`, `PTR0` and `S.LDWI0` all read as digits
+on width and all are confirmed by the code pages (page 7 defines `NDSK0 EQU 1`).
+
+Height does not discriminate and neither does the counter shape by eye, which
+is how the "identical" reading arose. Measure the bounding box. `ARH0` is not one of these: the `H` is
 unambiguous, two stems and a crossbar, and that settles the old ARH/ARM
 dispute for good.
 
