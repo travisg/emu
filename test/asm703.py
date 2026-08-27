@@ -79,6 +79,11 @@ GEN_NONE = {
 }
 GEN_LEVEL = {'INR': 0x0010, 'ENB': 0x0020, 'DSB': 0x0030}
 GEN_PAGE = {'SML': 0x0080, 'SMU': 0x0090}
+
+# SYM II's shorthand for "select whichever page holds this symbol", which
+# saves the programmer working out by hand whether it needs SML or SMU. The
+# X-RAY listing uses it wherever it reaches out of the current page.
+SELECT_BASE = 'SMB'
 GEN_LITERAL = {'IXS': 0x0400, 'DXS': 0x0500, 'LLB': 0x0600, 'CLB': 0x0700}
 GEN_DIO = {'DIN': 0x0200, 'DOT': 0x0300}
 
@@ -96,7 +101,8 @@ GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFT
 # bracket conditionally assembled code and are closed by `ENDC` -- they are not
 # an if/else pair, they are two independent guards, so the X-RAY listing writes
 # out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
-DIRECTIVES = {'ORG', 'WORD', 'DATA', 'TEXT', 'RES', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END'}
+DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'TEXT', 'RES', 'EQU',
+              'TRUE', 'FALS', 'ENDC', 'END'}
 
 # Directives that are processed even inside a conditional that is not being
 # assembled, because they are what opens and closes those conditionals.
@@ -294,7 +300,7 @@ def sizeof(lineno, op, arg):
     """How many words a statement occupies."""
     if op is None:
         return 0
-    if op in ('EQU', 'ORG', 'TRUE', 'FALS', 'ENDC', 'END'):
+    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END'):
         return 0
     if op in ('WORD', 'DATA'):
         return len(arg.split(','))
@@ -350,6 +356,15 @@ def encode(lineno, op, arg, symbols, here):
 
     if op in GEN_PAGE:
         return GEN_PAGE[op] | value(arg, 15)
+
+    if op == SELECT_BASE:
+        # EXR holds a five-bit byte page. A word address's byte page is the
+        # top five bits of twice it, so word >> 10; SML reaches the lower
+        # sixteen pages and SMU the upper sixteen.
+        page = (value(arg) >> 10) & 0x1f
+        if page < 16:
+            return GEN_PAGE['SML'] | page
+        return GEN_PAGE['SMU'] | (page - 16)
 
     if op in GEN_LITERAL:
         v = value(arg)
@@ -420,7 +435,7 @@ def assemble(path):
             if label in symbols:
                 raise AsmError(lineno, f'{label!r} is defined twice')
             symbols[label] = here
-        if op == 'ORG':
+        if op in ('ORG', 'ORIG'):
             here = Expr(arg or '', symbols, here, lineno).value()
             placed.append((lineno, here, op, arg, text))
             continue
@@ -451,7 +466,7 @@ def assemble(path):
             words = [(body[i] << 8) | body[i + 1] for i in range(0, len(body), 2)]
         elif op == 'RES':
             words = [0] * Expr(arg or '', symbols, addr, lineno).value()
-        elif op in ('ORG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
+        elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
             words = []
         else:
             words = [encode(lineno, op, arg, symbols, addr)]
