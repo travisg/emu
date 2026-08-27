@@ -151,10 +151,42 @@ CONDITIONALS = {'TRUE', 'FALS', 'ENDC'}
 
 TEXT_ESCAPES = {'r': 0x0d, 'n': 0x0a, 't': 0x09, '0': 0x00, '\\': 0x5c, '"': 0x22}
 
+# A quoted constant in an operand holds one or two characters, and on this
+# machine characters carry bit 7: the X-RAY listing assembles
+# `DATA 'XR','AY'` (card 363) to D8D2 C1D9, which is ASCII with the high bit
+# set. Pack them left to right, so the value of a literal is simply the integer
+# its bytes spell. The one-character case has no example in the listing, but
+# right justification is forced by `LLB`, whose literal is eight bits wide --
+# a blank-filled left justification could not be loaded by it at all.
+CHAR_HIGH_BIT = 0x80
+
 
 class AsmError(Exception):
     def __init__(self, lineno, message):
         super().__init__(f'line {lineno}: {message}')
+
+
+def char_literal(lineno, body):
+    """Value of a SYM II quoted character constant, high bit set per byte."""
+    chars = []
+    i = 0
+    while i < len(body):
+        if body[i] == '\\':
+            i += 1
+            if i >= len(body):
+                raise AsmError(lineno, 'character constant ends with a backslash')
+            chars.append(TEXT_ESCAPES.get(body[i], ord(body[i])))
+        else:
+            chars.append(ord(body[i]))
+        i += 1
+    if not 1 <= len(chars) <= 2:
+        raise AsmError(lineno, 'a character constant holds one or two characters')
+    value = 0
+    for c in chars:
+        if c > 0x7f:
+            raise AsmError(lineno, f'{chr(c)!r} is not ASCII')
+        value = (value << 8) | (c | CHAR_HIGH_BIT)
+    return value
 
 
 class Expr:
@@ -168,7 +200,7 @@ class Expr:
         \s*(?:
             (?P<hexc>X'[0-9A-Fa-f]+')
           | (?P<hex>0[xX][0-9A-Fa-f]+)
-          | (?P<char>'(?:\\.|[^'])')
+          | (?P<char>'(?:\\.|[^'])(?:\\.|[^'])?')
           | (?P<num>\d+)
           | (?P<name>[A-Za-z_$][A-Za-z0-9_$.]*)
           | (?P<op>[-+*()])
@@ -241,10 +273,7 @@ class Expr:
         if tok.lower().startswith('0x'):
             return int(tok, 16)
         if tok.startswith("'"):
-            body = tok[1:-1]
-            if body.startswith('\\'):
-                return TEXT_ESCAPES.get(body[1], ord(body[1]))
-            return ord(body)
+            return char_literal(self.lineno, tok[1:-1])
         if tok[0].isdigit():
             return int(tok, 10)
         if tok == '$':
@@ -346,6 +375,23 @@ def parse(path):
     return out
 
 
+def operand_list(arg):
+    """Split a comma-separated operand list, ignoring commas inside quotes.
+
+    `D ','` is one operand, not two empty ones -- a comma is a perfectly good
+    character constant.
+    """
+    parts, depth, start = [], False, 0
+    for i, c in enumerate(arg):
+        if c == "'":
+            depth = not depth
+        elif c == ',' and not depth:
+            parts.append(arg[start:i])
+            start = i + 1
+    parts.append(arg[start:])
+    return parts
+
+
 def sizeof(lineno, op, arg):
     """How many words a statement occupies."""
     if op is None:
@@ -355,10 +401,10 @@ def sizeof(lineno, op, arg):
     if op in SUBR_MACROS or op == 'EXCH':
         return 2
     if op in ('WORD', 'DATA', 'D'):
-        return len(arg.split(','))
+        return len(operand_list(arg))
     if op == 'BYTE':
         # two bytes to the word, rounded up
-        return (len(arg.split(',')) + 1) // 2
+        return (len(operand_list(arg)) + 1) // 2
     if op == 'TEXT':
         return None  # needs the decoded string; handled by the caller
     if op == 'RES':
@@ -521,7 +567,7 @@ def assemble(path):
     for lineno, addr, op, arg, text in placed:
         words = []
         if op in ('WORD', 'DATA', 'D'):
-            for part in arg.split(','):
+            for part in operand_list(arg):
                 words.append(Expr(part, symbols, addr + len(words), lineno).value() & 0xffff)
         elif op == 'TEXT':
             body = string_body(lineno, arg)
@@ -538,7 +584,7 @@ def assemble(path):
             # Two bytes to a word, high half first, as everywhere else on this
             # machine. An odd count leaves the low half zero.
             vals = [Expr(part, symbols, addr, lineno).value() & 0xff
-                    for part in arg.split(',')]
+                    for part in operand_list(arg)]
             if len(vals) % 2:
                 vals.append(0)
             words = [(vals[i] << 8) | vals[i + 1] for i in range(0, len(vals), 2)]

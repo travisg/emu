@@ -80,9 +80,11 @@ land on their printed addresses.
 - **`NOP`** appears on page 31 (cards 1235, 1237) and is not in appendix B.
   Both sit in untaken conditional code with no object printed, so its encoding
   is undetermined — and irrelevant to this build.
-- **Character literals.** SYM II stores them with the 703's high bit set:
-  `DATA 'XR','AY'` assembles to `D8D2 C1D9`. `asm703.py` does not do this yet;
-  it matters only when the transcript is assembled.
+- ~~**Character literals.**~~ Done. SYM II stores them with the 703's high bit
+  set, and `asm703.py` now reproduces card 363 (`DATA 'XR','AY'` → `D8D2 C1D9`)
+  exactly. The one-character case has no example in the listing; it is packed
+  right-justified, because `LLB`'s literal is only eight bits wide and a
+  blank-filled left justification could not be loaded by it at all.
 - **Forward references in `EQU`.** `asm703.py` evaluates EQU in pass 1, so an
   EQU naming a symbol defined later will fail. Not yet known whether the
   listing needs it.
