@@ -73,7 +73,20 @@ exactly as error-prone as it sounds:
 
 The endgame check, once the symbol table is in: assemble the extracted source
 and diff it against the extracted object code, then verify all 278 symbols
-land on their printed addresses.
+land on their printed addresses. `asm703.py --map` emits exactly the shape
+`xraylist.py --obj` does, so the first half of that is `diff` on two sorted
+files with nothing to misparse in between. In order:
+
+1. **Conditionals first.** The listing shows which `TRUE`/`FALS` branches the
+   1968 assembly took, by printing no object for the ones it skipped. If our
+   build-config equates differ, or `asm703` evaluates a guard differently, the
+   word diff is enormous and every line of it is misleading. Check
+   taken/not-taken agreement before reading a single word mismatch.
+2. **Then the symbol table**, which is a *third* authority and the only one
+   that can catch what check 4 structurally cannot: a misread definition
+   corroborated by a misread reference. Cross-check every EQU and label value
+   against the printed table.
+3. **Then the word diff.**
 
 ## What is known to be left
 
@@ -85,9 +98,16 @@ land on their printed addresses.
   exactly. The one-character case has no example in the listing; it is packed
   right-justified, because `LLB`'s literal is only eight bits wide and a
   blank-filled left justification could not be loaded by it at all.
-- **Forward references in `EQU`.** `asm703.py` evaluates EQU in pass 1, so an
-  EQU naming a symbol defined later will fail. Not yet known whether the
-  listing needs it.
+- ~~**Forward references in `EQU`.**~~ Done, and the listing does need it:
+  card 298 is `MAXP EQU ENDP-PEAT+12` and neither operand is defined until
+  much further down the deck. `asm703.py` now defers an EQU it cannot evaluate
+  and sweeps the leftovers to a fixpoint.
+- **Print damage that will not assemble.** Card 325 prints `SYR0 EQU X'80`
+  with the closing quote missing, which the transcript reproduces faithfully
+  and no expression parser will accept. The repair belongs in `xraylist.py`'s
+  `--asm` path, not in the transcript and not in `asm703.py`: the transcript's
+  job is fidelity, `--asm`'s job is producing something assemblable. A sweep
+  of the 33 transcribed pages found this to be the only such card.
 - **Output-completion interrupts.** `Tty703` completes a `DOT` instantly and
   never interrupts. The listing has a dedicated output-driver interrupt
   service area, so the real driver may well wait for a signal that never
