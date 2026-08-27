@@ -166,6 +166,10 @@ class AsmError(Exception):
         super().__init__(f'line {lineno}: {message}')
 
 
+class UndefinedSymbol(AsmError):
+    """Raised on its own so that EQU can retry a forward reference."""
+
+
 def char_literal(lineno, body):
     """Value of a SYM II quoted character constant, high bit set per byte."""
     chars = []
@@ -279,7 +283,7 @@ class Expr:
         if tok == '$':
             return self.here
         if tok not in self.symbols:
-            raise AsmError(self.lineno, f'undefined symbol {tok!r}')
+            raise UndefinedSymbol(self.lineno, f'undefined symbol {tok!r}')
         return self.symbols[tok]
 
 
@@ -507,6 +511,8 @@ def assemble(path):
     # to come before the code they configure -- as they do in the X-RAY
     # listing, which states the whole system description on its fifth page.
     cond = []
+    # EQUs whose operand named something not yet defined; settled after the pass.
+    deferred = []
     for lineno, label, op, arg, text in statements:
         if op in CONDITIONALS:
             if op == 'ENDC':
@@ -534,7 +540,16 @@ def assemble(path):
         if op == 'EQU':
             if not label:
                 raise AsmError(lineno, 'EQU needs a label')
-            symbols[label] = Expr(arg or '', symbols, here, lineno).value()
+            try:
+                symbols[label] = Expr(arg or '', symbols, here, lineno).value()
+            except UndefinedSymbol:
+                # SYM II allowed an EQU to name a symbol defined further down
+                # the deck -- the X-RAY listing's card 298 is
+                # `MAXP EQU ENDP-PEAT+12`, and both of those are defined much
+                # later. Set it aside and settle it once the pass has seen
+                # every label. An EQU that some *later* EQU depends on still
+                # resolves, because the leftovers are iterated to a fixpoint.
+                deferred.append((lineno, label, arg, here))
             placed.append((lineno, here, op, arg, text))
             continue
         if label:
@@ -560,6 +575,21 @@ def assemble(path):
             here += Expr(arg or '', symbols, here, lineno).value()
         else:
             here += sizeof(lineno, op, arg)
+
+    # Settle the deferred EQUs. Each sweep that resolves anything may unblock
+    # another, so sweep until one achieves nothing: either they are all done or
+    # what is left is a genuine undefined symbol (or a cycle), and reporting
+    # the first of those is more useful than reporting how many there were.
+    while deferred:
+        rest = []
+        for lineno, label, arg, at in deferred:
+            try:
+                symbols[label] = Expr(arg or '', symbols, at, lineno).value()
+            except UndefinedSymbol as err:
+                rest.append((lineno, label, arg, at, err))
+        if len(rest) == len(deferred):
+            raise rest[0][4]
+        deferred = [item[:4] for item in rest]
 
     # Pass 2: emit.
     core = {}
@@ -608,7 +638,7 @@ def assemble(path):
     image = bytearray()
     for word in range(top + 1):
         image += core.get(word, 0).to_bytes(2, 'big')
-    return bytes(image), listing, symbols
+    return bytes(image), listing, symbols, core
 
 
 def punch_tape(image, origin):
@@ -634,6 +664,10 @@ def main():
     ap.add_argument('source')
     ap.add_argument('-o', '--output', required=True, help='flat big-endian core image')
     ap.add_argument('-l', '--listing', help='write an address/word/source listing')
+    # Deliberately the same "addr word" shape that xraylist.py --obj emits, so
+    # that reassembling a transcribed listing and diffing it against the object
+    # code the 1968 assembler printed is a plain `diff` of two sorted files.
+    ap.add_argument('-m', '--map', help='write "addr word" lines, one per assembled word')
     ap.add_argument('-t', '--tape', help='also write a PTB-loadable paper tape image')
     # Must agree with PTB_LOAD_ORIGIN in src/system/ray703.rs, which is where
     # the machine presets the index register. A tape is a bare run of frames
@@ -644,7 +678,7 @@ def main():
     args = ap.parse_args()
 
     try:
-        image, listing, symbols = assemble(args.source)
+        image, listing, symbols, core = assemble(args.source)
     except AsmError as e:
         print(f'{args.source}: {e}', file=sys.stderr)
         return 1
@@ -661,6 +695,11 @@ def main():
         with open(args.tape, 'wb') as f:
             f.write(tape)
         print(f'{args.source}: {len(tape)} frames -> {args.tape}')
+
+    if args.map:
+        with open(args.map, 'w', encoding='utf-8') as f:
+            for addr in sorted(core):
+                f.write(f'{addr:04X} {core[addr] & 0xffff:04X}\n')
 
     if args.listing:
         with open(args.listing, 'w', encoding='utf-8') as f:
