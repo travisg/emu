@@ -112,6 +112,12 @@ files with nothing to misparse in between. In order:
   `X-REF` line, or require a card number to follow an address/object field.
   Card 1862 itself prints `0 3B9 0*******930` with no source text, and the
   asterisks block the address match, so it falls out of the chain too.
+- **A four-digit card number is also valid hex**, and `xraylist.py`'s `LINE`
+  regex will take it for the object word when what follows can pass as a
+  fields split. Card 1619, `ADD AP`, reports as missing for exactly that
+  reason: `1619` becomes the object and `ADD   A` satisfies the generic
+  alternative. No amount of faithful spacing avoids it — the regex has to
+  anchor on the address/object columns rather than pattern-match them.
 - **`*` is a comment-card marker too**, not just `'`. The two are distinct
   glyphs on the page — `'` is a tall high tick, `*` a lobed star at mid-height
   — and both appear, sometimes on adjacent cards. `xraylist.py`'s `split_card`
@@ -146,6 +152,13 @@ report of a "genuine print discrepancy" in the original.
 
 When two readings conflict, the answer is the film at high magnification, not
 the more confident of the two reports.
+
+**`B` read as `R` is the second failure mode, and it has a cause.** This drum
+printer drops the bottom bar of a `B`, and what is left reads convincingly as
+a clean `R`. `XB` at `024A` was read as `XR` and only the cross reference
+caught it. So a `B`/`R` call must be made against a *dropout* `B` elsewhere on
+the same page, never against a well-printed one — the well-printed one is not
+the glyph you are looking at.
 
 **Letter `O` and digit `0` are a different matter: this print cannot tell them
 apart at all.** `LPRO`'s final glyph is identical to the zeros in its own value
