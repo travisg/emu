@@ -40,6 +40,14 @@ pub(crate) struct TestBus {
     pub ports: [u8; 256],
     /// Every `io_write8` in order, so a test can assert on port traffic.
     pub io_writes: Vec<(u16, u8)>,
+    /// 703 DIO space: 16 devices x 16 functions, addressed by the instruction's
+    /// low byte.
+    pub ports16: [u16; 256],
+    /// Every `io_write16` in order, the wide equivalent of `io_writes`.
+    pub io16_writes: Vec<(u8, u16)>,
+    /// Pending interrupt-level pulses, consumed by the next
+    /// `poll_interrupt_lines`. A test sets this to inject a signal.
+    pub int_lines: u16,
     /// Address to count reads of. Some operations read their operand more than
     /// once, which is invisible in the result but observable on a device
     /// register -- see the 6800 `asr` fallthrough.
@@ -53,6 +61,9 @@ impl TestBus {
             mem: vec![0; 0x10000],
             ports: [0; 256],
             io_writes: Vec::new(),
+            ports16: [0; 256],
+            io16_writes: Vec::new(),
+            int_lines: 0,
             watch: None,
             watch_reads: 0,
         }
@@ -89,6 +100,19 @@ impl Bus for TestBus {
     fn io_write8(&mut self, port: u16, val: u8) {
         self.io_writes.push((port, val));
         self.ports[(port & 0xff) as usize] = val;
+    }
+
+    fn io_read16(&mut self, port: u8) -> u16 {
+        self.ports16[port as usize]
+    }
+
+    fn io_write16(&mut self, port: u8, val: u16) {
+        self.io16_writes.push((port, val));
+        self.ports16[port as usize] = val;
+    }
+
+    fn poll_interrupt_lines(&mut self) -> u16 {
+        std::mem::take(&mut self.int_lines)
     }
 }
 

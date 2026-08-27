@@ -41,10 +41,12 @@ pub enum Endian {
 /// Interrupt lines as seen by the CPU. The lines live in the machine (which
 /// knows what's wired to them); how they're serviced lives in the CPU.
 ///
-/// Forward-looking scaffolding: no C++ core has a working interrupt-injection
-/// path today (the z80's `RaiseIRQ` is never called, NMI is never read, IM0/IM2
-/// are stubs, and the 6800/6809 exception bitmasks are never set beyond reset),
-/// so none of this is trace-validatable against the oracle.
+/// Scaffolding for the ported cores: no C++ core has a working interrupt-
+/// injection path (the z80's `RaiseIRQ` is never called, NMI is never read,
+/// IM0/IM2 are stubs, and the 6800/6809 exception bitmasks are never set beyond
+/// reset), so none of *this* struct is trace-validatable against the oracle.
+/// The Raytheon 703 does run interrupts for real, but its 16 prioritized levels
+/// don't fit an irq/nmi pair -- see `poll_interrupt_lines`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct IntStatus {
     pub irq: bool,
@@ -89,6 +91,16 @@ pub trait Bus {
     }
     fn io_write8(&mut self, _port: u16, _val: u8) {}
 
+    /// 16-bit port IO, for the Raytheon 703's DIO channel: `DIN`/`DOT` move a
+    /// whole word between ACR and the addressed device in one operation, so
+    /// this is a distinct primitive rather than two `io_read8`s. The port is
+    /// the instruction's low byte, a 4-bit device number and a 4-bit function
+    /// code. An absent device reads zero, which is what the hardware does.
+    fn io_read16(&mut self, _port: u8) -> u16 {
+        0
+    }
+    fn io_write16(&mut self, _port: u8, _val: u16) {}
+
     fn read16(&mut self, addr: u32, e: Endian) -> u16 {
         let a = self.read8(addr) as u16;
         let b = self.read8(addr.wrapping_add(1)) as u16;
@@ -128,6 +140,21 @@ pub trait Bus {
     /// Interrupt lines currently asserted. Default: nothing is wired up.
     fn poll_interrupts(&self) -> IntStatus {
         IntStatus::NONE
+    }
+
+    /// Prioritized interrupt lines that have *pulsed* since the last call, one
+    /// bit per level (bit n = level n). Take-and-clear: a machine returns each
+    /// pulse exactly once, and the core latches it into its own per-level
+    /// state.
+    ///
+    /// Separate from `poll_interrupts` for three reasons. The 703's lines are
+    /// momentary signals, not the level-held wires `IntStatus` models; a level
+    /// whose signal arrives while it is disabled is dropped on the floor rather
+    /// than remembered, so "still asserted?" is not a question the machine can
+    /// answer. And this takes `&mut self` because polling genuinely mutates --
+    /// the console device drains `ConsoleEndpoint::try_next_char` here.
+    fn poll_interrupt_lines(&mut self) -> u16 {
+        0
     }
 }
 
