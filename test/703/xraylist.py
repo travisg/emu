@@ -49,6 +49,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+import asm703  # noqa: E402  -- the path has to be set up first
+
 # Mnemonics and directives, used to tell a label from an opcode: if the first
 # token on a card is one of these, the card has no label.
 OPCODES = set("""
@@ -58,7 +61,7 @@ OPCODES = set("""
     SAZ SAP SAM SAO SLS SXE SEQ SNE SGR SLE SNO SSE SS0 SS1 SS2 SS3
     SRA SLA SRAD SLAD SRL SLL SRLD SLLD SRC SLC SRCD SLCD
     SRLL SLLL SRLR SLLR SRCL SLCL SRCR SLCR
-    EQU DATA WORD RES ORG TEXT TRUE FALS ENDC END
+    EQU DATA D WORD BYTE RES ORG ORIG TEXT TRUE FALS ENDC END SMB
 """.split())
 
 # Mnemonics whose operand field is empty, so everything after them is comment.
@@ -70,16 +73,21 @@ NO_OPERAND = set("""
 LINE = re.compile(r"""
     ^\s*
     (?:(?P<addr>[0-9A-Fa-f]\s+[0-9A-Fa-f]{3}\s+[0-9A-Fa-f])\s+)?
+    # Either a whole word and its split fields, or -- from the BYTE directive,
+    # the one thing here that addresses smaller than a word -- a single byte.
+    # These have to be alternatives rather than two optional groups, or the
+    # byte would happily eat the first two digits of a card number.
     (?:
         (?P<obj>[0-9A-Fa-f]{4})\s+
         (?P<fields>
             [0-9A-Fa-f]\s+[01]\s+[0-9A-Fa-f]{3}   # opcode / index / M
           | [0-9A-Fa-f]{3}\s+[0-9A-Fa-f]          # generic group / operand
+          | [0-9A-Fa-f]{2}\s+[0-9A-Fa-f]{2}       # generic group / 8-bit literal
           | [0-9A-Fa-f]{4}                        # an EQU value, not split
         )\s+
+      | (?(addr)(?P<byte>[0-9A-Fa-f]{2})(?=\s|$)\s*|)
     )?
-    (?P<card>\d+)
-    (?P<rest>.*)
+    (?:(?P<card>\d+)(?P<rest>.*))?
     $
 """, re.VERBOSE)
 
@@ -87,12 +95,27 @@ PAGE = re.compile(r'^PAGE\s+(\d+)\s*(.*)$')
 
 
 class Card:
-    __slots__ = ('page', 'card', 'addr', 'obj', 'fields', 'text', 'raw')
+    __slots__ = ('page', 'card', 'addr', 'obj', 'fields', 'text', 'raw', 'bytes')
 
     def __init__(self, page, card, addr, obj, fields, text, raw):
         self.page, self.card = page, card
         self.addr, self.obj, self.fields = addr, obj, fields
         self.text, self.raw = text, raw
+        # (byte position within the word, value) for a BYTE directive, which
+        # is the one thing here that addresses smaller than a word
+        self.bytes = []
+
+
+def addr_of(m):
+    """The word address out of a matched ADDR field."""
+    addr = m.group('addr')
+    return int(addr.split()[1], 16) if addr else None
+
+
+def byte_pos(m):
+    """Which half of the word a BYTE went into: the ADDR field's trailing
+    digit, which is otherwise always zero."""
+    return int(m.group('addr').split()[2], 16)
 
 
 def read_transcript(paths):
@@ -114,16 +137,25 @@ def read_transcript(paths):
                 if not m:
                     problems.append(f'{os.path.basename(path)}:{lineno}: unparsed: {line.strip()}')
                     continue
-                addr = m.group('addr')
-                cards.append(Card(
+                if not m.group('card'):
+                    # A continuation line: the BYTE directive prints its second
+                    # byte on a line of its own, with no card number of its own
+                    # either, so it belongs to the card above it.
+                    if m.group('byte') and m.group('addr') and cards:
+                        cards[-1].bytes.append((byte_pos(m), int(m.group('byte'), 16)))
+                    continue
+                card = Card(
                     page=page,
                     card=int(m.group('card')),
-                    addr=int(addr.split()[1], 16) if addr else None,
+                    addr=addr_of(m),
                     obj=int(m.group('obj'), 16) if m.group('obj') else None,
                     fields=m.group('fields'),
                     text=m.group('rest'),
                     raw=line,
-                ))
+                )
+                if m.group('byte') and m.group('addr'):
+                    card.bytes.append((byte_pos(m), int(m.group('byte'), 16)))
+                cards.append(card)
     cards.sort(key=lambda c: c.card)
     return cards, problems
 
@@ -136,8 +168,10 @@ def recompose(fields):
         # opcode, index bit, 11-bit M field
         return (int(parts[0], 16) << 12) | (int(parts[1]) << 11) | int(parts[2], 16)
     if len(parts) == 2:
-        # a generic: its three-digit group, then the operand nibble
-        return (int(parts[0], 16) << 4) | int(parts[1], 16)
+        # A generic, split at whatever boundary its operand happens to have:
+        # `0A1 F` is a twelve-bit group and a shift count, `04 00` is an
+        # eight-bit group and a literal byte.
+        return (int(parts[0], 16) << (4 * len(parts[1]))) | int(parts[1], 16)
     return None
 
 
@@ -189,8 +223,59 @@ def emit_asm(cards, out):
 
 def emit_obj(cards, out):
     for c in cards:
-        if c.addr is not None and c.obj is not None:
+        if c.addr is None:
+            continue
+        if c.obj is not None:
             out.write(f'{c.addr:04X} {c.obj:04X}\n')
+        elif c.bytes:
+            word = 0
+            for pos, value in c.bytes:
+                word |= value << (8 if pos == 0 else 0)
+            out.write(f'{c.addr:04X} {word:04X}\n')
+
+
+def check_encoding(card):
+    """Assemble one card in isolation and compare with the printed word.
+
+    This is the check that matters most, and it is not the one the listing's
+    own redundancy provides. For a memory reference the FIELDS column is a
+    structural split, so a misread usually fails to recompose -- but for a
+    generic the assembler just prints the word twice, and a misread of both
+    copies the same way sails through. That is how `UNM` came to be read as
+    `0080` when the machine's code for it is `00B0`.
+
+    Anything whose operand needs a symbol cannot be assembled here, so only
+    the opcode and index bit are checked for those; the full comparison waits
+    for the extracted source to be assembled against the extracted object.
+    """
+    label, op, operand, _ = split_card(card.text)
+    if op is None or card.obj is None:
+        return None
+
+    if op in asm703.MEMREF:
+        want = asm703.MEMREF[op] << 12
+        got = card.obj & 0xf000
+        if want != got:
+            return (f'{op} should have opcode {asm703.MEMREF[op]:X} but the '
+                    f'word printed is {card.obj:04X}')
+        if operand and (card.obj & 0x0800 != 0) != operand.lstrip('/').startswith('*') \
+                and not operand.startswith('*'):
+            indexed = 'indexed' if card.obj & 0x0800 else 'not indexed'
+            if operand.startswith('*') != bool(card.obj & 0x0800):
+                return f'{op} {operand} is {indexed} in the word printed'
+        return None
+
+    # Generics: assemble outright when the operand needs no symbol table.
+    try:
+        word = asm703.encode(card.card, op, operand, {}, card.addr or 0)
+    except asm703.AsmError:
+        return None
+    except Exception:  # noqa: BLE001 -- an unknown mnemonic is not our problem here
+        return None
+    if word != card.obj:
+        return (f'{op}{" " + operand if operand else ""} assembles to '
+                f'{word:04X}, but the word printed is {card.obj:04X}')
+    return None
 
 
 def check(cards, problems):
@@ -217,6 +302,11 @@ def check(cards, problems):
         elif rebuilt != c.obj:
             print(f'card {c.card}: fields {c.fields!r} rebuild to '
                   f'{rebuilt:04X}, but the word printed is {c.obj:04X}')
+
+    for c in cards:
+        complaint = check_encoding(c)
+        if complaint:
+            print(f'card {c.card} (page {c.page}): {complaint}')
 
     placed = [c for c in cards if c.addr is not None]
     for a, b in zip(placed, placed[1:]):
