@@ -30,7 +30,7 @@
 use crate::bus::Bus;
 use crate::console::{ConsoleEndpoint, Display};
 use crate::cpu::Cpu;
-use crate::system::{altair680, kaypro, rc2014, sys09};
+use crate::system::{altair680, kaypro, ray703, rc2014, sys09};
 use std::io;
 use std::path::Path;
 
@@ -78,6 +78,21 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Ma
     })
 }
 
+fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Machine> {
+    let mut cpu = crate::cpu::ray703::Cpu703::new();
+    // The one thing the 703 needs that the other machines don't: an operator
+    // at the front panel. PTB is keyed in with the index register preset to
+    // the load origin, so the factory stands in for the operator's hands.
+    if let Some(ixr) = ray703::Ray703::ptb_index(sub) {
+        cpu.set_index(ixr);
+    }
+    Ok(Machine {
+        cpu: Box::new(cpu),
+        bus: Box::new(ray703::Ray703::new(rom, console, sub)?),
+        display: None,
+    })
+}
+
 fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
     let (bus, display) = kaypro::Kaypro::new(
         rom,
@@ -110,6 +125,12 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         cpu: "z80",
         default_rom: kaypro::DEFAULT_ROM,
         factory: build_kaypro,
+    },
+    SystemDescriptor {
+        name: "ray703",
+        cpu: "703",
+        default_rom: ray703::DEFAULT_ROM,
+        factory: build_ray703,
     },
     SystemDescriptor {
         name: "rc2014",

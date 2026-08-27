@@ -132,6 +132,14 @@ impl Cpu703 {
         }
     }
 
+    /// Preset the index register, which on real hardware was done from the
+    /// front panel before pressing RUN. PTB requires it -- the operator keys
+    /// in the load origin minus twelve bytes -- and there is no front panel
+    /// here, so the machine's factory does it instead.
+    pub fn set_index(&mut self, ixr: u16) {
+        self.ixr = ixr;
+    }
+
     // -- memory ------------------------------------------------------------
 
     fn read_word(&self, bus: &mut dyn Bus, waddr: u16) -> u16 {

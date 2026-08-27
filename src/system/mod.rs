@@ -25,6 +25,7 @@
 
 pub mod altair680;
 pub mod kaypro;
+pub mod ray703;
 pub mod rc2014;
 pub mod registry;
 pub mod sys09;
