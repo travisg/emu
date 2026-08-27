@@ -102,6 +102,16 @@ files with nothing to misparse in between. In order:
   card 298 is `MAXP EQU ENDP-PEAT+12` and neither operand is defined until
   much further down the deck. `asm703.py` now defers an EQU it cannot evaluate
   and sweeps the leftovers to a fixpoint.
+- **The tail of the listing is a cross reference, not listing cards.** The code
+  ends at card 1862 on page 50; from there the pages print `X-REF` rows —
+  name, value, and the addresses referencing it — under a page title that
+  still says `SYMBOL TABLE`. `xraylist.py`'s `LINE` regex reads an all-digit
+  X-REF *value* as a card number, so `--check` invents duplicate cards and
+  address-goes-backwards errors on those pages. Values holding a hex letter
+  are unaffected, which is why this stayed hidden. Skip everything after the
+  `X-REF` line, or require a card number to follow an address/object field.
+  Card 1862 itself prints `0 3B9 0*******930` with no source text, and the
+  asterisks block the address match, so it falls out of the chain too.
 - **`*` is a comment-card marker too**, not just `'`. The two are distinct
   glyphs on the page — `'` is a tall high tick, `*` a lobed star at mid-height
   — and both appear, sometimes on adjacent cards. `xraylist.py`'s `split_card`
@@ -136,3 +146,17 @@ report of a "genuine print discrepancy" in the original.
 
 When two readings conflict, the answer is the film at high magnification, not
 the more confident of the two reports.
+
+**Letter `O` and digit `0` are a different matter: this print cannot tell them
+apart at all.** `LPRO`'s final glyph is identical to the zeros in its own value
+column. High magnification does not help and never will, so a name ending that
+way is settled by analogy with its neighbours (`CDRI`/`CDRO`, `LPRI`/`LPRO`,
+`M.DDR`/`M.DDR1`) or by a reference address, and the choice is worth naming
+rather than making silently. `ARH0` is not one of these: the `H` is
+unambiguous, two stems and a crossbar, and that settles the old ARH/ARM
+dispute for good.
+
+The cross reference is a better authority than a plain symbol table would have
+been, because each row carries the addresses that reference the symbol — so it
+checks the *uses* as well as the definition, which is exactly the case
+`--fix-references` cannot see.
