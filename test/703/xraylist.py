@@ -45,6 +45,7 @@ not. The real proof is assembling `--asm` and diffing against `--obj`.
 
 import argparse
 import glob
+import pathlib
 import os
 import re
 import sys
@@ -111,9 +112,10 @@ PAGE = re.compile(r'^PAGE\s+(\d+)\s*(.*)$')
 
 class Card:
     __slots__ = ('page', 'card', 'addr', 'obj', 'fields', 'text', 'raw',
-                 'bytes', 'extra')
+                 'bytes', 'extra', 'path', 'lineno')
 
-    def __init__(self, page, card, addr, obj, fields, text, raw):
+    def __init__(self, page, card, addr, obj, fields, text, raw,
+                 path=None, lineno=None):
         self.page, self.card = page, card
         self.addr, self.obj, self.fields = addr, obj, fields
         self.text, self.raw = text, raw
@@ -123,6 +125,8 @@ class Card:
         # (address, word) for the extra words a macro generated, which print on
         # continuation lines with no card number of their own
         self.extra = []
+        # where the line came from, so a correction can be written back
+        self.path, self.lineno = path, lineno
 
 
 def addr_of(m):
@@ -179,6 +183,8 @@ def read_transcript(paths):
                     fields=m.group('fields'),
                     text=m.group('rest'),
                     raw=line,
+                    path=path,
+                    lineno=lineno,
                 )
                 if m.group('byte') and m.group('addr'):
                     card.bytes.append((byte_pos(m), int(m.group('byte'), 16)))
@@ -318,6 +324,55 @@ def check_encoding(card):
     return None
 
 
+def build_symbols(cards):
+    """Label to value, from the transcript itself.
+
+    A label on a card that generated code takes that card's address; a label on
+    an EQU takes the value the assembler printed for it.
+    """
+    symbols = {}
+    for c in cards:
+        label, op, _, _ = split_card(c.text)
+        if not label:
+            continue
+        if op == 'EQU' and c.obj is not None:
+            symbols[label] = c.obj
+        elif c.addr is not None:
+            # SUBR names its second word, the STX, not the return slot
+            symbols[label] = c.addr + 1 if op == 'SUBR' else c.addr
+    return symbols
+
+
+BARE_SYMBOL = re.compile(r'^\*?(?P<sym>[A-Za-z][A-Za-z0-9_.]*)(?P<off>[-+]\d+)?$')
+
+
+def find_bad_references(cards, symbols):
+    """Check that a memory reference's address field really is its symbol.
+
+    This closes the same blind spot the per-card check closes for generics.
+    `LDX M.TFA` printed as 9083 recomposes perfectly from its own fields
+    `9 0 083`, so nothing local can tell that M.TFA is at 0B3 and the word
+    should be 90B3 -- only comparing against where the symbol actually landed
+    can. It is the 8-versus-B confusion again, and it hides in the address
+    field of every instruction that names a symbol.
+    """
+    for c in cards:
+        if c.obj is None or c.addr is None:
+            continue
+        _, op, operand, _ = split_card(c.text)
+        if op not in asm703.MEMREF or op in ('STB', 'CMB', 'LDB') or not operand:
+            # byte instructions address bytes, so their field is not simply the
+            # symbol's word address; leave those to the full assembly
+            continue
+        m = BARE_SYMBOL.match(operand)
+        if not m or m.group('sym') not in symbols:
+            continue
+        want = (symbols[m.group('sym')] + int(m.group('off') or 0)) & 0x07ff
+        got = c.obj & 0x07ff
+        if want != got:
+            yield c, want, got, op, operand
+
+
 def check(cards, problems):
     """Report everything the listing can be made to say about itself."""
     for p in problems:
@@ -348,6 +403,10 @@ def check(cards, problems):
         if complaint:
             print(f'card {c.card} (page {c.page}): {complaint}')
 
+    for c, want, got, op, operand in find_bad_references(cards, build_symbols(cards)):
+        print(f'card {c.card} (page {c.page}): {op} {operand} should address '
+              f'{want:03X}, but the word printed is {c.obj:04X} ({got:03X})')
+
     # An ORG legitimately moves the location counter anywhere, so only
     # complain about a backwards step that no ORG explains.
     previous = None
@@ -372,12 +431,65 @@ def check(cards, problems):
           f'addresses {lo:04X}..{hi:04X}')
 
 
+def fix_references(cards):
+    """Rewrite the address field of every reference that names a symbol whose
+    value is known and disagrees.
+
+    Only ever applied when the symbol's own value is corroborated -- the
+    defining card plus at least one reference that already agrees with it --
+    since otherwise a single misread definition would propagate outwards
+    instead of inwards.
+    """
+    symbols = build_symbols(cards)
+    agreeing = {}
+    for c in cards:
+        if c.obj is None:
+            continue
+        _, op, operand, _ = split_card(c.text)
+        if op not in asm703.MEMREF or not operand:
+            continue
+        m = BARE_SYMBOL.match(operand)
+        if m and m.group('sym') in symbols:
+            want = (symbols[m.group('sym')] + int(m.group('off') or 0)) & 0x07ff
+            if want == c.obj & 0x07ff:
+                agreeing[m.group('sym')] = agreeing.get(m.group('sym'), 0) + 1
+
+    edits, skipped = {}, []
+    for c, want, _got, op, operand in find_bad_references(cards, symbols):
+        sym = BARE_SYMBOL.match(operand).group('sym')
+        if not agreeing.get(sym):
+            skipped.append((c, op, operand, sym))
+            continue
+        edits.setdefault(c.path, {})[c.lineno] = (c, want)
+
+    for path, by_line in edits.items():
+        lines = pathlib.Path(path).read_text().splitlines()
+        for lineno, (c, want) in by_line.items():
+            fixed = (c.obj & 0xf800) | want
+            line = lines[lineno - 1]
+            line = line.replace(f'{c.obj:04X}', f'{fixed:04X}', 1)
+            if c.fields:
+                parts = c.fields.split()
+                line = line.replace(c.fields,
+                                    f'{parts[0]} {parts[1]} {want:03X}', 1)
+            lines[lineno - 1] = line
+            print(f'card {c.card}: {c.obj:04X} -> {fixed:04X}')
+        pathlib.Path(path).write_text('\n'.join(lines) + '\n')
+
+    for c, op, operand, sym in skipped:
+        print(f'card {c.card}: left alone -- nothing else agrees with '
+              f'{sym}, so it may be the definition that is misread')
+    return len(edits)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('transcript', help='a page-NNN.txt file, or a directory of them')
     ap.add_argument('--asm', help='write the source cards here')
     ap.add_argument('--obj', help='write "addr word" lines here')
     ap.add_argument('--check', action='store_true', help='report on consistency')
+    ap.add_argument('--fix-references', action='store_true',
+                    help="correct address fields that disagree with their symbol")
     args = ap.parse_args()
 
     if os.path.isdir(args.transcript):
@@ -396,6 +508,10 @@ def main():
     if args.obj:
         with open(args.obj, 'w', encoding='utf-8') as f:
             emit_obj(cards, f)
+    if args.fix_references:
+        fix_references(cards)
+        return 0
+
     if args.check or not (args.asm or args.obj):
         check(cards, problems)
     return 0
