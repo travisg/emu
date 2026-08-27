@@ -28,14 +28,19 @@ readonly W=4500
 # that consecutive bands overlap by a line and a half -- without that, a line
 # landing on a boundary is cut in half twice and read in neither.
 readonly H=1250
-readonly STEP=1080
-readonly Y0=380
-readonly BANDS=4
+readonly STEP=1000
+# Sheets are not registered identically: some pages sit as much as 200 pixels
+# lower than others, so the first band starts above where any of them begin and
+# there is one band more than a page strictly needs. Missing content is far
+# more expensive than reading a blank band.
+readonly Y0=200
+readonly BANDS=5
 # Final width. 4500 down to 1650 is a 2.7:1 downsample and still legible.
 readonly OUT_W=1650
-# Percent ink below which a band is blank page rather than content. Sparse
-# pages are common -- conditional assembly that was not taken prints nothing.
-readonly INK_MIN=1.6
+# Percent ink below which a band is blank page rather than content. Set low:
+# a band holding two lines of a sparse page reads under 1%, and dropping one
+# would be a silent hole in the transcript.
+readonly INK_MIN=0.6
 
 usage() {
     echo "usage: $0 extract <pdf> <first> <last> <outdir>" >&2

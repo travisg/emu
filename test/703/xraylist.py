@@ -61,12 +61,16 @@ OPCODES = set("""
     SAZ SAP SAM SAO SLS SXE SEQ SNE SGR SLE SNO SSE SS0 SS1 SS2 SS3
     SRA SLA SRAD SLAD SRL SLL SRLD SLLD SRC SLC SRCD SLCD
     SRLL SLLL SRLR SLLR SRCL SLCL SRCR SLCR
-    EQU DATA D WORD BYTE RES ORG ORIG TEXT TRUE FALS ENDC END SMB
+    EQU DATA D WORD BYTE RES ORG ORIG TEXT TRUE FALS ENDC END SMB SUBR EXIT SXP SXM EXCH
 """.split())
+
+# Shift mnemonics that take a trailing D, L or R to name their double-length
+# and single-byte variants, which the printer separates with a space.
+SHIFT_STEMS = {'SRA', 'SLA', 'SRL', 'SLL', 'SRC', 'SLC'}
 
 # Mnemonics whose operand field is empty, so everything after them is comment.
 NO_OPERAND = set("""
-    HLT SLM SGM CEX CXE MSK UNM CLR CMP INV CAX CXA ENDC END
+    HLT SLM SGM CEX CXE MSK UNM CLR CMP INV CAX CXA ENDC END SUBR SXP SXM EXCH
     SAZ SAP SAM SAO SLS SXE SEQ SNE SGR SLE SNO SSE SS0 SS1 SS2 SS3
 """.split())
 
@@ -80,14 +84,25 @@ LINE = re.compile(r"""
     (?:
         (?P<obj>[0-9A-Fa-f]{4})\s+
         (?P<fields>
-            [0-9A-Fa-f]\s+[01]\s+[0-9A-Fa-f]{3}   # opcode / index / M
+            [0-9A-Fa-f]\s+[01]\s+[0-9A-Fa-f]{3}\s+[0-9A-Fa-f](?=\s|$)
+                                                  # a byte instruction, which
+                                                  # splits M again into a word
+                                                  # and which byte of it. The
+                                                  # lookahead keeps this from
+                                                  # swallowing the first digit
+                                                  # of the card number.
+          | [0-9A-Fa-f]\s+[01]\s+[0-9A-Fa-f]{3}   # opcode / index / M
           | [0-9A-Fa-f]{3}\s+[0-9A-Fa-f]          # generic group / operand
           | [0-9A-Fa-f]{2}\s+[0-9A-Fa-f]{2}       # generic group / 8-bit literal
           | [0-9A-Fa-f]{4}                        # an EQU value, not split
-        )\s+
+        )\s*
       | (?(addr)(?P<byte>[0-9A-Fa-f]{2})(?=\s|$)\s*|)
     )?
-    (?:(?P<card>\d+)(?P<rest>.*))?
+    # A card number is a decimal run standing on its own. Requiring the space
+    # after it is what stops `60B4`, on a continuation line that has object
+    # code but no card number, from being read as card 60.
+    (?:(?P<card>\d+)(?=\s|$))?
+    (?P<rest>.*)
     $
 """, re.VERBOSE)
 
@@ -95,7 +110,8 @@ PAGE = re.compile(r'^PAGE\s+(\d+)\s*(.*)$')
 
 
 class Card:
-    __slots__ = ('page', 'card', 'addr', 'obj', 'fields', 'text', 'raw', 'bytes')
+    __slots__ = ('page', 'card', 'addr', 'obj', 'fields', 'text', 'raw',
+                 'bytes', 'extra')
 
     def __init__(self, page, card, addr, obj, fields, text, raw):
         self.page, self.card = page, card
@@ -104,6 +120,9 @@ class Card:
         # (byte position within the word, value) for a BYTE directive, which
         # is the one thing here that addresses smaller than a word
         self.bytes = []
+        # (address, word) for the extra words a macro generated, which print on
+        # continuation lines with no card number of their own
+        self.extra = []
 
 
 def addr_of(m):
@@ -138,11 +157,19 @@ def read_transcript(paths):
                     problems.append(f'{os.path.basename(path)}:{lineno}: unparsed: {line.strip()}')
                     continue
                 if not m.group('card'):
-                    # A continuation line: the BYTE directive prints its second
-                    # byte on a line of its own, with no card number of its own
-                    # either, so it belongs to the card above it.
-                    if m.group('byte') and m.group('addr') and cards:
+                    # A continuation line belongs to the card above it. BYTE
+                    # prints its second byte this way, and the SUBR and EXIT
+                    # macros print their second word this way -- and SUBR goes
+                    # further, putting the card number on the first line but
+                    # the label and mnemonic on the second.
+                    if not cards or not m.group('addr'):
+                        continue
+                    if m.group('byte'):
                         cards[-1].bytes.append((byte_pos(m), int(m.group('byte'), 16)))
+                    elif m.group('obj'):
+                        cards[-1].extra.append((addr_of(m), int(m.group('obj'), 16)))
+                    if m.group('rest') and not cards[-1].text.strip():
+                        cards[-1].text = m.group('rest')
                     continue
                 card = Card(
                     page=page,
@@ -167,6 +194,11 @@ def recompose(fields):
     if len(parts) == 3:
         # opcode, index bit, 11-bit M field
         return (int(parts[0], 16) << 12) | (int(parts[1]) << 11) | int(parts[2], 16)
+    if len(parts) == 4:
+        # A byte instruction: opcode, index bit, the word part of M, and then
+        # which byte of that word -- M's own low bit, printed on its own.
+        return ((int(parts[0], 16) << 12) | (int(parts[1]) << 11)
+                | (int(parts[2], 16) << 1) | int(parts[3], 16))
     if len(parts) == 2:
         # A generic, split at whatever boundary its operand happens to have:
         # `0A1 F` is a twelve-bit group and a shift count, `04 00` is an
@@ -181,6 +213,7 @@ def split_card(text):
     A card whose first character is a quote is a SYM II comment card; it is
     returned with everything in the comment so the extracted source keeps it.
     """
+    text = text.split('<<<')[0]
     if text.lstrip().startswith("'"):
         return None, None, None, text.strip()[1:]
     tokens = text.split()
@@ -192,6 +225,11 @@ def split_card(text):
     if not tokens:
         return label, None, None, ''
     op, tokens = tokens[0].upper(), tokens[1:]
+    # The double and byte shifts print with a gap -- `SRC D`, `SRL L`, `SLC R`
+    # -- exactly as appendix B of the reference manual writes them. That is one
+    # mnemonic, not a mnemonic and an operand.
+    if op in SHIFT_STEMS and tokens and tokens[0].upper() in ('D', 'L', 'R'):
+        op, tokens = op + tokens[0].upper(), tokens[1:]
     if op in NO_OPERAND or not tokens:
         return label, op, None, ' '.join(tokens)
     operand, tokens = tokens[0], tokens[1:]
@@ -227,6 +265,8 @@ def emit_obj(cards, out):
             continue
         if c.obj is not None:
             out.write(f'{c.addr:04X} {c.obj:04X}\n')
+            for addr, word in c.extra:
+                out.write(f'{addr:04X} {word:04X}\n')
         elif c.bytes:
             word = 0
             for pos, value in c.bytes:
@@ -308,11 +348,22 @@ def check(cards, problems):
         if complaint:
             print(f'card {c.card} (page {c.page}): {complaint}')
 
+    # An ORG legitimately moves the location counter anywhere, so only
+    # complain about a backwards step that no ORG explains.
+    previous = None
+    for c in cards:
+        _, op, _, _ = split_card(c.text)
+        if op in ('ORG', 'ORIG'):
+            previous = None
+            continue
+        if c.addr is None:
+            continue
+        if previous is not None and c.addr < previous.addr:
+            print(f'card {c.card}: address {c.addr:04X} goes backwards from '
+                  f'{previous.addr:04X} with no ORG between them')
+        previous = c
+
     placed = [c for c in cards if c.addr is not None]
-    for a, b in zip(placed, placed[1:]):
-        if b.addr < a.addr:
-            print(f'card {b.card}: address {b.addr:04X} goes backwards from '
-                  f'{a.addr:04X} (an ORG, or a misread)')
 
     words = len(placed)
     lo = min((c.addr for c in placed), default=0)

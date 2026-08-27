@@ -101,8 +101,49 @@ GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFT
 # bracket conditionally assembled code and are closed by `ENDC` -- they are not
 # an if/else pair, they are two independent guards, so the X-RAY listing writes
 # out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
-DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'TEXT', 'RES', 'EQU',
+DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'RES', 'EQU',
               'TRUE', 'FALS', 'ENDC', 'END'}
+
+# Mnemonics found only in the period listings, never in the reference manual,
+# because they are the assembler's rather than the machine's. Each is given
+# here with the word it actually produced in the X-RAY listing.
+#
+# SXP is `IXS 0` and SXM is `DXS 0`: change the index by nothing and skip on
+# its sign. The literal forms are loop steps; under these names they are what
+# they are being used for, a test of the index.
+GEN_ALIAS = {'SXP': 0x0400, 'SXM': 0x0500}
+
+# Shift mnemonics that take a trailing D, L or R to name their double-length
+# and single-byte variants. Appendix B of the manual, and the listings, print
+# the suffix separated by a space.
+SHIFT_STEMS = {'SRA', 'SLA', 'SRL', 'SLL', 'SRC', 'SLC'}
+
+# The subroutine convention on a machine with no stack, as two macros that
+# generate two words each. JSX leaves the return address in the index
+# register, so a subroutine's first act is to put it somewhere:
+#
+#   FDA   SUBR            0000            a slot for the return address
+#                         STX  slot       ...filled in on entry
+#
+# and its last act is to go back through it:
+#
+#         EXIT FDA        LDX  slot
+#                         JSX  *0         indexed through the index register
+#
+# Note the label binds to the STX, not to the slot, so that `JSX FDA` from a
+# caller lands on the instruction rather than on the data word in front of it.
+# Both forms and both encodings are taken from the X-RAY listing, which prints
+# FDA's prologue as 0000 / 60B4 at words 0B4 and 0B5, and its EXIT as 90B4 /
+# 2800.
+SUBR_MACROS = {'SUBR', 'EXIT'}
+
+# EXCH swaps the accumulator and the index register, as two SLCD 8 in a row:
+# the double-length circular shift rotates the 32-bit ACR:IXR pair, so two
+# rotations of eight make sixteen, which lands each register in the other.
+# There is no single instruction that does it -- the shift count is only four
+# bits, so 16 cannot be encoded. Taken from the X-RAY listing, which prints
+# 0A78 twice at words 13F and 140.
+EXCH_WORD = 0x0a78
 
 # Directives that are processed even inside a conditional that is not being
 # assembled, because they are what opens and closes those conditionals.
@@ -292,7 +333,16 @@ def parse(path):
             label, op, arg = m.group('label'), m.group('op'), m.group('arg')
             if label:
                 label = label.rstrip(':')
-            out.append((lineno, label, op.upper() if op else None, arg, text))
+            op = op.upper() if op else None
+            # The double and byte shifts are printed with a gap in the period
+            # listings -- `SRC D 15`, `SRL L 4` -- following appendix B of the
+            # reference manual. That is one mnemonic, not a mnemonic and an
+            # operand, so glue it back together before anything else looks.
+            if op in SHIFT_STEMS and arg:
+                head, _, tail = arg.partition(' ')
+                if head.upper() in ('D', 'L', 'R'):
+                    op, arg = op + head.upper(), tail.strip() or None
+            out.append((lineno, label, op, arg, text))
     return out
 
 
@@ -302,8 +352,13 @@ def sizeof(lineno, op, arg):
         return 0
     if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END'):
         return 0
-    if op in ('WORD', 'DATA'):
+    if op in SUBR_MACROS or op == 'EXCH':
+        return 2
+    if op in ('WORD', 'DATA', 'D'):
         return len(arg.split(','))
+    if op == 'BYTE':
+        # two bytes to the word, rounded up
+        return (len(arg.split(',')) + 1) // 2
     if op == 'TEXT':
         return None  # needs the decoded string; handled by the caller
     if op == 'RES':
@@ -345,6 +400,11 @@ def encode(lineno, op, arg, symbols, here):
                 f'{unit} address {addr:#x} is outside the 11-bit M field; '
                 f'the 703 reaches the rest of core through EXR (SML/SMU)')
         return (MEMREF[op] << 12) | (0x0800 if indexed else 0) | addr
+
+    if op in GEN_ALIAS:
+        if arg:
+            raise AsmError(lineno, f'{op} takes no operand')
+        return GEN_ALIAS[op]
 
     if op in GEN_NONE:
         if arg:
@@ -434,7 +494,9 @@ def assemble(path):
         if label:
             if label in symbols:
                 raise AsmError(lineno, f'{label!r} is defined twice')
-            symbols[label] = here
+            # SUBR lays down a return slot and then the STX that fills it; the
+            # name belongs to the STX, so that callers jump to code.
+            symbols[label] = here + 1 if op == 'SUBR' else here
         if op in ('ORG', 'ORIG'):
             here = Expr(arg or '', symbols, here, lineno).value()
             placed.append((lineno, here, op, arg, text))
@@ -458,12 +520,28 @@ def assemble(path):
     listing = []
     for lineno, addr, op, arg, text in placed:
         words = []
-        if op in ('WORD', 'DATA'):
+        if op in ('WORD', 'DATA', 'D'):
             for part in arg.split(','):
                 words.append(Expr(part, symbols, addr + len(words), lineno).value() & 0xffff)
         elif op == 'TEXT':
             body = string_body(lineno, arg)
             words = [(body[i] << 8) | body[i + 1] for i in range(0, len(body), 2)]
+        elif op == 'EXCH':
+            words = [EXCH_WORD, EXCH_WORD]
+        elif op == 'SUBR':
+            words = [0x0000, (MEMREF['STX'] << 12) | (addr & 0x07ff)]
+        elif op == 'EXIT':
+            entry = Expr(arg or '', symbols, addr, lineno).value()
+            words = [(MEMREF['LDX'] << 12) | ((entry - 1) & 0x07ff),
+                     (MEMREF['JSX'] << 12) | 0x0800]
+        elif op == 'BYTE':
+            # Two bytes to a word, high half first, as everywhere else on this
+            # machine. An odd count leaves the low half zero.
+            vals = [Expr(part, symbols, addr, lineno).value() & 0xff
+                    for part in arg.split(',')]
+            if len(vals) % 2:
+                vals.append(0)
+            words = [(vals[i] << 8) | vals[i + 1] for i in range(0, len(vals), 2)]
         elif op == 'RES':
             words = [0] * Expr(arg or '', symbols, addr, lineno).value()
         elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
