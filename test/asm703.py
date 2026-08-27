@@ -92,7 +92,15 @@ LOGICAL_SHIFTS = ['SRL', 'SLL', 'SRLD', 'SLLD', 'SRC', 'SLC', 'SRCD', 'SLCD',
 GEN_SHIFT = {name: 0x0900 | (i << 4) for i, name in enumerate(ARITH_SHIFTS)}
 GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFTS)})
 
-DIRECTIVES = {'ORG', 'WORD', 'TEXT', 'RES', 'EQU'}
+# `DATA` is SYM II's name for a word of data; `WORD` is ours. `TRUE`/`FALS`
+# bracket conditionally assembled code and are closed by `ENDC` -- they are not
+# an if/else pair, they are two independent guards, so the X-RAY listing writes
+# out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
+DIRECTIVES = {'ORG', 'WORD', 'DATA', 'TEXT', 'RES', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END'}
+
+# Directives that are processed even inside a conditional that is not being
+# assembled, because they are what opens and closes those conditionals.
+CONDITIONALS = {'TRUE', 'FALS', 'ENDC'}
 
 TEXT_ESCAPES = {'r': 0x0d, 'n': 0x0a, 't': 0x09, '0': 0x00, '\\': 0x5c, '"': 0x22}
 
@@ -115,7 +123,7 @@ class Expr:
           | (?P<hex>0[xX][0-9A-Fa-f]+)
           | (?P<char>'(?:\\.|[^'])')
           | (?P<num>\d+)
-          | (?P<name>[A-Za-z_$][A-Za-z0-9_$]*)
+          | (?P<name>[A-Za-z_$][A-Za-z0-9_$.]*)
           | (?P<op>[-+*()])
         )
     """, re.VERBOSE)
@@ -222,6 +230,33 @@ def unescape(text, lineno):
 
 LINE = re.compile(r'^(?P<label>\S+)?\s*(?:(?P<op>\S+)(?:\s+(?P<arg>.*?))?)?\s*$')
 
+# The relations a TRUE/FALS guard can test. SYM II writes them without spaces,
+# as in `TRUE NDSK=0` or `FALS CORESIZE=4096`.
+RELATION = re.compile(r'^(?P<lhs>.+?)(?P<rel><=|>=|<>|=|<|>)(?P<rhs>.+)$')
+
+
+def condition(text, symbols, here, lineno):
+    """Evaluate a TRUE/FALS guard.
+
+    Relations are handled here rather than in `Expr` because they appear
+    nowhere else: an operand is always a plain address expression, and letting
+    `<` into the general grammar would only create ways to write nonsense.
+    """
+    m = RELATION.match(text or '')
+    if not m:
+        raise AsmError(lineno, f'{text!r} is not a condition')
+    lhs = Expr(m.group('lhs'), symbols, here, lineno).value()
+    rhs = Expr(m.group('rhs'), symbols, here, lineno).value()
+    rel = m.group('rel')
+    return {
+        '=': lhs == rhs,
+        '<>': lhs != rhs,
+        '<': lhs < rhs,
+        '>': lhs > rhs,
+        '<=': lhs <= rhs,
+        '>=': lhs >= rhs,
+    }[rel]
+
 
 def parse(path):
     """Split the source into (lineno, label, mnemonic, operand, text) tuples."""
@@ -229,6 +264,11 @@ def parse(path):
     with open(path, encoding='utf-8') as f:
         for lineno, raw in enumerate(f, 1):
             text = raw.rstrip('\n')
+            # SYM II's comment card: a quote in column 1. Period listings are
+            # full of them, and it cannot be confused with a character literal
+            # or an X'..' constant because those never start a line.
+            if text.startswith("'"):
+                continue
             # strip comments, but not a ';' inside a string literal
             stripped, quoted = [], False
             for c in text:
@@ -254,9 +294,9 @@ def sizeof(lineno, op, arg):
     """How many words a statement occupies."""
     if op is None:
         return 0
-    if op == 'EQU' or op == 'ORG':
+    if op in ('EQU', 'ORG', 'TRUE', 'FALS', 'ENDC', 'END'):
         return 0
-    if op == 'WORD':
+    if op in ('WORD', 'DATA'):
         return len(arg.split(','))
     if op == 'TEXT':
         return None  # needs the decoded string; handled by the caller
@@ -341,7 +381,35 @@ def assemble(path):
     symbols = {}
     placed = []
     here = 0
+    # Stack of "are we assembling?" flags, one per open TRUE/FALS. Conditions
+    # are evaluated here in pass 1, which is why the configuration equates have
+    # to come before the code they configure -- as they do in the X-RAY
+    # listing, which states the whole system description on its fifth page.
+    cond = []
     for lineno, label, op, arg, text in statements:
+        if op in CONDITIONALS:
+            if op == 'ENDC':
+                if not cond:
+                    raise AsmError(lineno, 'ENDC without TRUE or FALS')
+                cond.pop()
+            elif all(cond):
+                taken = condition(arg, symbols, here, lineno)
+                cond.append(taken if op == 'TRUE' else not taken)
+            else:
+                # already inside skipped code: the guard is not evaluated at
+                # all, since the symbols it names may never have been defined
+                cond.append(False)
+            placed.append((lineno, here, op, arg, text))
+            continue
+        if not all(cond):
+            # Skipped code places nothing and defines nothing, not even its
+            # labels -- otherwise a label in the untaken half of a choice would
+            # collide with the one in the taken half.
+            placed.append((lineno, here, None, arg, text))
+            continue
+        if op == 'END':
+            placed.append((lineno, here, op, arg, text))
+            break
         if op == 'EQU':
             if not label:
                 raise AsmError(lineno, 'EQU needs a label')
@@ -375,7 +443,7 @@ def assemble(path):
     listing = []
     for lineno, addr, op, arg, text in placed:
         words = []
-        if op == 'WORD':
+        if op in ('WORD', 'DATA'):
             for part in arg.split(','):
                 words.append(Expr(part, symbols, addr + len(words), lineno).value() & 0xffff)
         elif op == 'TEXT':
@@ -383,7 +451,7 @@ def assemble(path):
             words = [(body[i] << 8) | body[i + 1] for i in range(0, len(body), 2)]
         elif op == 'RES':
             words = [0] * Expr(arg or '', symbols, addr, lineno).value()
-        elif op in ('ORG', 'EQU', None):
+        elif op in ('ORG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
             words = []
         else:
             words = [encode(lineno, op, arg, symbols, addr)]
