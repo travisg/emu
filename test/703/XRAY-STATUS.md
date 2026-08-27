@@ -160,12 +160,35 @@ caught it. So a `B`/`R` call must be made against a *dropout* `B` elsewhere on
 the same page, never against a well-printed one — the well-printed one is not
 the glyph you are looking at.
 
-**Letter `O` and digit `0` are a different matter: this print cannot tell them
-apart at all.** `LPRO`'s final glyph is identical to the zeros in its own value
-column. High magnification does not help and never will, so a name ending that
-way is settled by analogy with its neighbours (`CDRI`/`CDRO`, `LPRI`/`LPRO`,
-`M.DDR`/`M.DDR1`) or by a reference address, and the choice is worth naming
-rather than making silently. `ARH0` is not one of these: the `H` is
+**And the dropout is intermittent, which defeats glyph metrics entirely.**
+`SIGB` is the worked example, and it is worth reading before trusting any
+measurement of this print. Card 906 prints a glyph indistinguishable from the
+`R` in the `ORI` beside it on the same line; card 1197, on another page,
+prints a clean two-bowl `B`. Two agents and I all read 906 as `SIGR`. It is
+`SIGB`: the cross reference holds exactly one `SIG` row, `SIGB` at `254`,
+whose reference list includes `1B2` — card 906's own address — and the
+assembly trailer says `NO ERRORS`, so an undefined `SIGR` is impossible.
+The same drum printed both a clean `B` and a dropout `B` within a few pages.
+Any rule of the form "B has two counters and is 50px tall, R has one and is
+43px" will therefore be right most of the time and silently wrong the rest,
+which is worse than having no rule. Corroborate against the object code or
+the cross reference, or leave it flagged.
+
+Cards 1193 and 1207 keep their `SIGR` reading with a `CHECK` note: they sit
+in untaken conditional code, so the assembler never resolved them and no
+authority outside the glyph exists. They are very probably `SIGB` too.
+
+**Letter `O` and digit `0` are contested, and the safe assumption is that they
+cannot be told apart.** Two agents reported the glyphs identical — `LPRO`'s
+final character against the zeros in its own value column. A third measured
+them as distinct (digit `0` about 28×50 with a 15×30 counter, letter `O` about
+33×44 with a 20×23 counter) and read `NDSK0` as a digit on that basis. That
+particular reading is right for an independent reason — page 7 defines
+`NDSK0 EQU 1` — but the metric behind it is the same kind of rule the `SIGB`
+case above shows to be unreliable on this printer. So: settle a name of this
+shape by analogy with its neighbours (`CDRI`/`CDRO`, `LPRI`/`LPRO`,
+`M.DDR`/`M.DDR1`) or by a reference address, and name the choice rather than
+making it silently. `ARH0` is not one of these: the `H` is
 unambiguous, two stems and a crossbar, and that settles the old ARH/ARM
 dispute for good.
 
