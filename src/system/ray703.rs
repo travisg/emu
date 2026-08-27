@@ -116,6 +116,14 @@ impl Ray703 {
                     sys.core.load_at(word * 2, &insn.to_be_bytes());
                 }
                 sys.reader.load_image(rom_path)?;
+                println!(
+                    "703: PTB keyed into words 0-A; the tape will load at word {:#06x}.",
+                    PTB_LOAD_ORIGIN
+                );
+                println!(
+                    "703: PTB is a loader and stops there -- an operator would now press \
+                     HALT and RESET and key in a start address."
+                );
             }
             other => {
                 return Err(io::Error::new(
@@ -259,9 +267,12 @@ mod tests {
 
         let path = scratch_file("bootstrap", &tape);
         let mut sys = machine("ptb", &path).unwrap();
+        // The factory presets the index and main.rs resets afterwards, so do
+        // it in that order here: a reset that clobbered the preset would leave
+        // PTB storing frames over itself.
         let mut cpu = Cpu703::new();
-        cpu.reset(&mut sys);
         cpu.set_index(Ray703::ptb_index("ptb").unwrap());
+        cpu.reset(&mut sys);
 
         for _ in 0..10000 {
             assert_eq!(cpu.step(&mut sys), StepResult::Ok);

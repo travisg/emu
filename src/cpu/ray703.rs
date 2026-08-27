@@ -602,15 +602,22 @@ impl Cpu703 {
 
 impl Cpu for Cpu703 {
     fn reset(&mut self, _bus: &mut dyn Bus) {
-        *self = Cpu703::new();
-        // "Initialization of the Raytheon 703 (power ON or RESET) sets all
-        // interrupt levels to the Disabled state and removes the interrupt
-        // inhibit mask" (3-2) -- which is what `new` already gives us.
-        //
+        // The manual documents exactly this much: "Initialization of the
+        // Raytheon 703 (power ON or RESET) sets all interrupt levels to the
+        // Disabled state and removes the interrupt inhibit mask" (3-2).
+        self.levels = [Level::default(); 16];
+        self.inhibit = false;
+
         // There is no reset vector: on real hardware the operator keys a
         // starting address into the front panel and presses RUN. With no panel
         // here, word 0 is the convention, which is also where PTB is entered.
         self.pcr = 0;
+
+        // ACR, IXR, EXR and the flip flops are left alone on purpose. Nothing
+        // in the manual says RESET clears them, and PTB's operating procedure
+        // is explicit that the operator sets the index register *after*
+        // pressing RESET -- so clearing it here would wipe out this machine's
+        // stand-in for that step. See `set_index`.
     }
 
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
@@ -704,20 +711,26 @@ mod tests {
         bus.read16((waddr as u32) << 1, Endian::Big)
     }
 
+    /// Reset does what the manual says it does -- disable every level, drop
+    /// the inhibit mask -- and nothing more. In particular it must not touch
+    /// the index register, which is the one thing PTB needs preset before RUN.
     #[test]
-    fn reset_clears_everything_and_starts_at_word_zero() {
+    fn reset_clears_the_interrupt_system_and_leaves_the_registers() {
         let mut bus = TestBus::new();
         let mut cpu = Cpu703::new();
-        cpu.acr = 0x1234;
-        cpu.exr = 0x1f;
+        cpu.pcr = 0x1234;
+        cpu.acr = 0x5678;
+        cpu.set_index(0x01f4);
         cpu.inhibit = true;
-        cpu.levels[3].enabled = true;
+        cpu.levels[3] = Level { enabled: true, pending: true, active: true };
+
         cpu.reset(&mut bus);
+
         assert_eq!(cpu.pcr, 0);
-        assert_eq!(cpu.acr, 0);
-        assert_eq!(cpu.exr, 0);
         assert!(!cpu.inhibit);
-        assert!(cpu.levels.iter().all(|l| !l.enabled));
+        assert!(cpu.levels.iter().all(|&l| l == Level::default()));
+        assert_eq!(cpu.ixr, 0x01f4, "the front panel sets this after RESET");
+        assert_eq!(cpu.acr, 0x5678);
     }
 
     // -- load/store, arithmetic, logic -------------------------------------
