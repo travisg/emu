@@ -72,7 +72,7 @@ make -C test ray703-test            # builds the image, then runs the test
 ./test/run_ray703_demo_test.sh      # if the image is already built
 ```
 
-Needs `script(1)` and python3, but no ROMs and no oracle. It waits for the banner to appear in the live log rather than sleeping: the emulator only starts listening once it has put the terminal in raw mode, and anything typed before that is eaten by the line discipline, which looks exactly like a broken emulator.
+Needs `script(1)` and python3, and no oracle. No period ROM image is involved — the demo is built from source in this tree — but the `roms` symlink still has to resolve, because that is where `make -C test ray703` writes the image and where the registry's `default_rom` looks for it. The test waits for the banner to appear in the live log rather than sleeping: the emulator only starts listening once it has put the terminal in raw mode, and anything typed before that is eaten by the line discipline, which looks exactly like a broken emulator.
 
 **Trace-diff against the C++ oracle** (`tests/trace_diff_{6800,6809,z80,kaypro}.rs`). These drive both implementations over the same ROM image and require byte-identical `--trace` output; they were the load-bearing gate for the port and remain the strongest regression check on the cores. All 59 oracle-dependent cases are `#[ignore]`d, so plain `cargo test` reports them as ignored rather than passing a comparison that never ran; the handful in those files that need only the Rust tree still run by default. To run the gate, build an oracle:
 

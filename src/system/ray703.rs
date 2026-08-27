@@ -80,6 +80,10 @@ const PTB: [u16; 11] = [
 /// routine to rewrite itself, so this makes the first real frame land on the
 /// origin. Word 0x100 is the first word above PTB and its interrupt block that
 /// is a round number.
+///
+/// `test/asm703.py --tape-origin` has to agree with this, since a tape's
+/// contents are meaningless at any other address; it defaults to the same
+/// number and says so.
 const PTB_LOAD_ORIGIN: u16 = 0x0100;
 
 pub struct Ray703 {
@@ -197,7 +201,10 @@ mod tests {
     /// A path that exists and holds `bytes`. These constructors take a path
     /// rather than bytes, so there is no way to test them without a file.
     fn scratch_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("emu-ray703-test-{name}"));
+        // The pid keeps two people running the suite on one machine from
+        // fighting over the same file.
+        let pid = std::process::id();
+        let path = std::env::temp_dir().join(format!("emu-ray703-{pid}-{name}"));
         std::fs::write(&path, bytes).unwrap();
         path
     }

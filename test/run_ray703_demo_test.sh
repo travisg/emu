@@ -59,8 +59,11 @@ mkfifo "$FIFO"
 : > "$LOG_FILE"
 trap 'rm -f "$FIFO"' EXIT
 
-# -f flushes after every write, which is what makes wait_for work at all.
-script -qfec "$EMU_BIN -s ray703" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
+# -f flushes after every write, which is what makes wait_for work at all. The
+# image is named absolutely so this works from any directory -- the registry's
+# default_rom is relative to the repo root, and `make -C test ray703-test` does
+# not run there.
+script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
 EMU_PID=$!
 
 # Hold the write end open for the emulator's whole life: closing it looks like

@@ -456,7 +456,7 @@ impl Cpu703 {
                 self.set_compare(a - b < 0, a == b);
             }
             0x8 => return self.exec_skip(f1),
-            0x9 | 0xa => self.shift(fn_field, f1, f2 as u32),
+            0x9 | 0xa => return self.shift(fn_field, f1, f2 as u32),
             // The 703 could be ordered with multiply/divide hardware (section
             // 6), but appendix B lists no opcodes for it and the manual never
             // gives an encoding, so there is nothing to implement.
@@ -531,7 +531,7 @@ impl Cpu703 {
     /// directly. The byte forms go through a `u16` because a count of 8 or
     /// more is a legal way to empty a byte, and shifting a `u8` that far is a
     /// panic in Rust rather than the zero the hardware produces.
-    fn shift(&mut self, class: u16, f1: u16, n: u32) {
+    fn shift(&mut self, class: u16, f1: u16, n: u32) -> StepResult {
         debug_assert!(n < 16);
         if class == 0x9 {
             match f1 {
@@ -559,9 +559,12 @@ impl Cpu703 {
                         self.ovf = true;
                     }
                 }
-                _ => {}
+                // Appendix B assigns 090 through 093 and stops. Everything
+                // else in the arithmetic class is as unassigned as the
+                // multiply and divide the optional hardware would have used.
+                _ => return StepResult::BadOpcode,
             }
-            return;
+            return StepResult::Ok;
         }
 
         // Logical shifts. The manual omits the equations for these ("to keep
@@ -585,8 +588,10 @@ impl Cpu703 {
             0xd => self.byte_shift(true, |b| b.rotate_left(n % 8)), // SLCL
             0xe => self.byte_shift(false, |b| b.rotate_right(n % 8)), // SRCR
             0xf => self.byte_shift(false, |b| b.rotate_left(n % 8)), // SLCR
-            _ => {}
+            // f1 is a nibble and all sixteen are assigned in this class
+            _ => unreachable!("f1 is four bits"),
         }
+        StepResult::Ok
     }
 
     /// Apply a shift to one half of ACR. `left` picks the manual's "left
@@ -1191,6 +1196,55 @@ mod tests {
     fn halt_stops_the_core() {
         let (mut cpu, mut bus) = boot(&[0x0000]);
         assert_eq!(cpu.step(&mut bus), StepResult::Halted);
+    }
+
+    /// Everything appendix B leaves out reports a bad opcode rather than
+    /// quietly doing nothing. That includes the optional multiply/divide
+    /// hardware described in section 6, which the appendix gives no encoding
+    /// for, and the tail of the arithmetic shift class -- 090 to 093 are
+    /// assigned and 094 upwards are not.
+    #[test]
+    fn unassigned_generics_are_bad_opcodes() {
+        for insn in [
+            0x0940u16, // past SLAD, the last assigned arithmetic shift
+            0x09f0,    // ...and the top of that class
+            0x0150,    // past CXA, the last register generic
+            0x00c0,    // past UNM, the last control generic
+            0x0b00,    // no generic class B at all
+            0x0f00,    // ...or F
+        ] {
+            let (mut cpu, mut bus) = boot(&[insn]);
+            assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode, "insn {insn:04x}");
+        }
+    }
+
+    /// ...but every encoding the appendix does assign executes.
+    #[test]
+    fn every_assigned_generic_executes() {
+        let mut assigned: Vec<u16> = vec![0x0000]; // HLT is assigned but stops
+        for f1 in 0x1..=0xb {
+            assigned.push(f1 << 4); // control generics, class 0
+        }
+        for f1 in 0x0..=0x4 {
+            assigned.push(0x0100 | (f1 << 4)); // register generics
+        }
+        for fn_field in [0x2, 0x3, 0x4, 0x5, 0x6, 0x7] {
+            assigned.push(fn_field << 8); // DIN, DOT, IXS, DXS, LLB, CLB
+        }
+        for f1 in 0x0..=0xf {
+            assigned.push(0x0800 | (f1 << 4)); // skips
+            assigned.push(0x0a00 | (f1 << 4)); // logical shifts
+        }
+        for f1 in 0x0..=0x3 {
+            assigned.push(0x0900 | (f1 << 4)); // arithmetic shifts
+        }
+
+        for insn in assigned {
+            let (mut cpu, mut bus) = boot(&[insn]);
+            let expected =
+                if insn == 0x0000 { StepResult::Halted } else { StepResult::Ok };
+            assert_eq!(cpu.step(&mut bus), expected, "insn {insn:04x}");
+        }
     }
 
     // -- interrupts --------------------------------------------------------

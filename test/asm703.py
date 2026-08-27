@@ -428,8 +428,12 @@ def main():
     ap.add_argument('-o', '--output', required=True, help='flat big-endian core image')
     ap.add_argument('-l', '--listing', help='write an address/word/source listing')
     ap.add_argument('-t', '--tape', help='also write a PTB-loadable paper tape image')
+    # Must agree with PTB_LOAD_ORIGIN in src/system/ray703.rs, which is where
+    # the machine presets the index register. A tape is a bare run of frames
+    # with no address in it, so it is meaningless anywhere else.
     ap.add_argument('--tape-origin', default='0x100',
-                    help='word the tape loads at; must match the machine (default 0x100)')
+                    help='word the tape loads at; must match PTB_LOAD_ORIGIN '
+                         'in src/system/ray703.rs (default 0x100)')
     args = ap.parse_args()
 
     try:
