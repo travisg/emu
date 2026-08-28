@@ -20,10 +20,17 @@
 
 set -euo pipefail
 
-# Left margin to skip, and the width that covers address through comment. The
-# "BLD nnnn" sequence numbers past that are not worth reading.
-readonly X=560
-readonly W=4500
+# The crop runs almost the full width of the sheet, for three reasons the
+# original 560..5060 window missed. On the left, the assembly trailer -- CARDS,
+# SYMBOLS, the error count -- is printed further out than the body columns, and
+# it is the transcription's only independent check on how many cards there
+# were. On the right sit the page number and the card sequence numbers
+# ("BLD nnnn", "NP nnnnn"); the sequence numbers are not worth reading, but the
+# page number beside them lets a transcriber confirm the page is the one they
+# were asked for, and a page read twice or skipped is the worst failure here.
+# In between, the widest comment lines ran past the old right edge.
+readonly X=100
+readonly W=5760
 # A band is about fifteen source lines. The step is shorter than the height so
 # that consecutive bands overlap by a line and a half -- without that, a line
 # landing on a boundary is cut in half twice and read in neither.
@@ -35,8 +42,10 @@ readonly STEP=1000
 # more expensive than reading a blank band.
 readonly Y0=200
 readonly BANDS=5
-# Final width. 4500 down to 1650 is a 2.7:1 downsample and still legible.
-readonly OUT_W=1650
+# Final width. Keep this in step with W: 5760 down to 2110 is the same 2.7:1
+# downsample that was found to be legible, and widening one without the other
+# is what makes a strip unreadable.
+readonly OUT_W=2110
 # Percent ink below which a band is blank page rather than content. Set low:
 # a band holding two lines of a sparse page reads under 1%, and dropping one
 # would be a silent hole in the transcript.
@@ -65,7 +74,11 @@ strips)
             -crop "${W}x${H}+${X}+$((Y0 + band * STEP))" +repage \
             -resize "${OUT_W}x" "$out"
         ink=$(convert "$out" -format "%[fx:100*(1-mean)]" info:)
-        if (( $(echo "$ink < $INK_MIN" | bc -l) )); then
+        # awk rather than bc: a blank band's mean rounds to 1 and the fx
+        # formatter prints the difference in scientific notation, which bc
+        # cannot parse. It errored and kept the band -- the safe direction, but
+        # it buried the message in noise on every blank page.
+        if awk -v i="$ink" -v m="$INK_MIN" 'BEGIN{exit !(i+0 < m+0)}'; then
             rm -f "$out"
         else
             printf '%s  (ink %.1f%%)\n' "$out" "$ink"

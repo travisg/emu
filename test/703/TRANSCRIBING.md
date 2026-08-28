@@ -1,17 +1,29 @@
-# Transcribing the X-RAY EXEC assembly listing
+# Transcribing a Raytheon 700-series assembly listing
 
 You are transcribing pages of a 1968 Raytheon 703 assembly listing from 600 dpi
 scans. Accuracy matters far more than speed: a single wrong hex nibble is a
 silent bug in a program nobody can debug by inspection. **Never guess. Never
 infer a line you cannot actually see.**
 
+Most of this file was written while transcribing X-RAY EXEC (DN 390779) and
+uses it for its examples, but the listings all came off the same assembler and
+the method transfers. Per-document facts — where the scans are, how page
+numbers map, what the print does badly — are in your prompt and in "Other
+listings" at the end. **Your prompt wins over the examples here.**
+
 ## Paths
 
     SCAN=<the directory holding pg-NNN.png, given to you in your prompt>
     STRIP=/mnt/nas2/src/svn/emu/test/703/scanstrip.sh
 
-Listing PAGE N is the image `$SCAN/pg-MMM.png`, where **MMM = N - 1**, zero
-padded to three digits. Listing page 6 is `pg-005.png`, page 40 is `pg-039.png`.
+For X-RAY, listing PAGE N is `$SCAN/pg-MMM.png` where **MMM = N - 1**, zero
+padded to three digits: page 6 is `pg-005.png`, page 40 is `pg-039.png`. Other
+documents map differently — your prompt says which.
+
+The strips now include the page number printed in the right margin. **Check it
+against the page you were asked for, every time, and say in your summary what
+it said.** A page read twice or skipped is a silent hole, which is the worst
+thing that can happen here, and this is the cheap way to catch it.
 
 ## Procedure, per page
 
@@ -260,3 +272,38 @@ bands instead of four to cover it, but if a page looks like it is missing lines
 at the top or bottom, render the whole page and check before believing the
 strips. A dropped band is a silent hole in the transcript, which is the worst
 thing that can happen here.
+
+## Other listings
+
+The same method covers the rest of the 700-series documents. What differs per
+document is collected here as each one is done.
+
+### Relocating Loader - Basic (DN 390682, revision C, 08/9/68)
+
+`~/dropbox/tech_docs/computers/ray703/70x/390682C_RelocatingLoaderBasic_Nov1968.pdf`,
+52 pages. Pages 1-21 are prose and flowcharts, page 23 the "APPENDIX A /
+ASSEMBLY LISTING" divider, and **pages 24-51 are the listing, printed as PAGE 2
+through PAGE 29**. Extract from PDF page 22 and the numbering lines up: `$SCAN`
+holds `pg-000.png` (blank) through `pg-029.png`, and **`pg-NNN.png` is listing
+PAGE NNN** with no offset — unlike X-RAY.
+
+    ./scanstrip.sh extract <the pdf> 22 51 /storage/scratch/rl703
+
+- **The print is clean.** This came off a well-inked printer, not the worn drum
+  that printed X-RAY, and there is no stroke dropout. The `B`/`R`, `8`/`B` and
+  `O`/`0` forensics below are not needed. If a character looks ambiguous here
+  it probably *is* ambiguous, so flag it rather than measuring it.
+- Header line: the program label `RELOADD` or the document title, a section
+  title, the date `08/9/68`, `PASS B`, and the page number.
+- The right margin carries `NP nnnnn` card sequence numbers, one per card.
+  **Ignore them** — they are the punched-card sequence field and the card
+  number column already gives a running count. They are in the strip only
+  because the page number sits beside them.
+- Card numbers run **1 to 1786**. The trailer on PAGE 29 reads
+  `CARDS 1786  SYMBOLS 175  583  LITR 0  STACK 6`.
+- Conditional assembly is on `LOADER`, which is `BASIC` (0), `STANDARD` (1) or
+  `DISK` (2); this listing is `LOADER EQU BASIC`, so the standard and disk
+  sections print with no object code.
+- Both `*` and `'` appear as comment-card markers, sometimes on adjacent cards.
+- The tail is a `SYMBOL TABLE` cross reference by PAGE 26, in the same shape as
+  X-RAY's: value, name, then every referencing address.

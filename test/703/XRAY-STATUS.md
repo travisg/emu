@@ -30,7 +30,7 @@ survive the session that made it. Nothing is lost when it goes:
 
 ```bash
 ./split-transcript.sh <master.txt> <pagedir>       # working files back from the master
-./sync-transcript.sh  <pagedir> <header.txt> <master.txt>   # and forward again
+./sync-transcript.sh  <pagedir> <header.txt> <master.txt> 54   # and forward again
 ./scanstrip.sh extract <pdf> 29 83 <scratchdir>    # listing page N -> pg-(N-1).png
 ```
 
