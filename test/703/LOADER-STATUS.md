@@ -9,11 +9,14 @@ The durable pair is the master transcript and the PDF; everything else is
 regenerable.
 
     ~/dropbox/tech_docs/computers/ray703/70x/390682C_RelocatingLoaderBasic_Nov1968.pdf
-    ~/dropbox/tech_docs/computers/ray703/70x/390682C_RelocatingLoader_listing.txt
+    test/703/listings/390682C_RelocatingLoader_listing.txt   <- canonical
 
     ./scanstrip.sh extract <pdf> 22 51 <scandir>      # page images, 600 dpi
     ./split-transcript.sh <master.txt> <pagedir>      # master -> per-page files
     ./sync-transcript.sh  <pagedir> <header.txt> <master.txt> 28   # and back
+
+`xraylist.py` reads the master directly, so the per-page split is only needed
+to hand pages to transcribing agents.
 
 Round trip verified exact, so the per-page files are working state and may be
 deleted freely.

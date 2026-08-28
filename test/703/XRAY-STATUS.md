@@ -20,7 +20,7 @@ X-RAY is entered at word `X'40'`. Its code runs from about `018` to about
 |---|---|
 | the scans | `~/dropbox/tech_docs/computers/ray703/70x/390779_XRAY_ExecBasic_Feb1968.pdf` |
 | ISA transcription | `~/dropbox/.../ray703/Raytheon703refMan_isa.txt` |
-| the master transcript | `~/dropbox/.../70x/390779_XRAY_listing.txt` |
+| the master transcript | `test/703/listings/390779_XRAY_listing.txt` (canonical; a copy sits beside the PDF) |
 | survey notes | `~/dropbox/.../70x/390779_XRAY_TRANSCRIPTION_NOTES.md` |
 | per-page working files | a scratch directory, one `page-NNN.txt` per listing page |
 

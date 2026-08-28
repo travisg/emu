@@ -186,10 +186,20 @@ def read_transcript(paths):
     cards, page, problems, in_xref = [], 0, [], False
     after_trailer_head = False
     for path in paths:
+        # A master transcript opens with a header block of prose, and that
+        # block explains the column layout by showing a sample listing line.
+        # Parsed as a card it is a duplicate at a made-up address, which shows
+        # up as "word assembled twice" a thousand lines later. Everything
+        # before the first rule is prose; a per-page file starts with one, so
+        # this costs nothing there.
+        seen_rule = False
         with open(path, encoding='utf-8') as f:
             for lineno, raw in enumerate(f, 1):
                 line = raw.rstrip()
-                if not line.strip() or line.startswith('='):
+                if line.startswith('='):
+                    seen_rule = True
+                    continue
+                if not seen_rule or not line.strip():
                     continue
                 m = PAGE.match(line.strip())
                 if m:

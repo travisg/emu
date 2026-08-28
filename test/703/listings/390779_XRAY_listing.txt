@@ -1,0 +1,2493 @@
+X-RAY EXEC - BASIC, DN 390779, ID code BLD (Revision B), 02/07/68
+Assembly listing (Appendix A of the scanned document), transcribed by hand
+from the 600 dpi page images.  The PDF has no OCR text layer.
+
+Layout of a listing line, reproduced as printed:
+
+    ADDR    OBJ   FIELDS    CARD  LABEL   OP    OPERAND      COMMENT
+    0 066 0 603F  6 0 03F   515           STX   M.OPENR      SAVE RETURN
+
+  ADDR    word address, with the assembler's leading and trailing digits
+  OBJ     the assembled word
+  FIELDS  the same word split into opcode / index bit / M field.  This is
+          redundant with OBJ and is the transcription's built-in check: the
+          fields must recompose to the word.
+  CARD    source card number, 1..1862
+  ...     label, mnemonic, operand and comment as punched
+
+Lines with no ADDR/OBJ generated no object code: either they are comments
+(a quote in column 1) or they fall inside a conditional assembly that was not
+taken (TRUE cond ... ENDC).
+
+Trailer of the original listing: NO ERRORS / CARDS 1862 SYMBOLS 278 501 /
+LITR 0 6.
+
+GAP: listing PAGE 1 is not in the scan.  The sheet in its place is the
+"APPENDIX A / ASSEMBLY LISTING of X-RAY EXEC - BASIC" divider, so card 1 --
+almost certainly a comment, since card 2 is one -- is lost.  Everything from
+card 2 on is present.
+
+Transcription progress: 54 of 54 scanned pages.
+
+================================================================
+PAGE 2      X-RAY EXEC, BASIC   DN 390779
+
+                              2     ' X-RAY EXEC - BASIC   DN 390779
+
+================================================================
+PAGE 3      GENERAL MONITOR PARAMETERS
+
+                              3     ' GENERAL MONITOR PARAMETERS
+        000C  000C            4     DUM     EQU   12
+        000D  000D            5     TTY     EQU   13
+        000E  000E            6     MAG0    EQU   14
+        000F  000F            7     MAG1    EQU   15
+        0010  0010            8     MAG2    EQU   16
+        0011  0011            9     MAG3    EQU   17
+        0012  0012            10    DSK0    EQU   18
+        0013  0013            11    PCH0    EQU   19
+        0014  0014            12    PTR0    EQU   20
+        0015  0015            13    CDR0    EQU   21
+        0016  0016            14    CPC0    EQU   22
+        0019  0019            15    DSK1    EQU   25
+        0017  0017            16    LPR0    EQU   23
+        0001  0001            17    MASS    EQU   1
+        0000  0000            18    NMAS    EQU   0
+        0000  0000            19    NO      EQU   0
+        0001  0001            20    YES     EQU   1
+
+================================================================
+PAGE 4      SYSTEM DESCRIPTION
+
+                              21    '       SYSTEM DESCRIPTION
+                              22    '       UNIT NAME CONSTRUCTION
+                              23    ' PHYSICAL UNITS ARE IDENTIFIED BY THREE LETTER
+                              24    ' MNEMONICS, AS FOLLOWS
+                              25    '       DSK   DISK UNITS
+                              26    '       MAG   MAG TAPE UNITS
+                              27    '       TTY   TELETYPE ASR 33 OR 35
+                              28    '       PTR   HIGH SPEED PAPER TAPE READER
+                              29    '       PCH   HIGH SPEED PAPER TAPE PUNCH
+                              30    '       CDR   CARD READER
+                              31    '       CPC   CARD PUNCH
+                              32    '       LPR   LINE PRINTER
+                              33    ' THE NUMBER OF UNITS OF A PARTICULAR TYPE IS
+                              34    ' ASSIGNED A SYMBOL OF THE FORM NXXX, WHERE XXX IS
+                              35    ' THE UNIT MNEMONIC.  THUS NDSK REPRESENTS THE
+                              36    ' NUMBER OF DISK UNITS IN A PARTICULAR SYSTEM.
+                              37    '
+                              38    ' THE INTERRUPT CHANNEL TO WHICH A PARTICULAR
+                              39    ' DEVICE HAS BEEN ASSIGNED IS DESIGNATED XXXI.  THUS
+                              40    ' TTYI IS THE INTERRUPT CHANNEL FOR THE TELETYPE.
+                              41    '
+                              42    '
+                              43    '
+                              44    '   SYSTEM DESCRIPTION SECTION
+                              45    ' TO DESCRIBE A PARTICULAR SYSTEM THE FOLLOWING
+                              46    ' PARAMETERS MUST BE DEFINED, USING EQUATE CARDS
+                              47    '
+                              48    '   STATE CORESIZE
+                              49    'CORESIZE EQU  NUMBER OF WORDS OF CORE
+                              50
+                              51    '   STATE NUMBER OF INTERRUPT CHANNELS, ICHN
+                              52    'ICHN     EQU  NUMBER OF CHANNELS
+                              53    '
+                              54    '   STATE NUMBER OF MAG TAPE UNITS, NMAG
+                              55    'NMAG     EQU  NUMBER OF UNITS
+                              56    ' IS THE TAPE UNIT A CHAINING UNIT
+                              57    'CHAIN    EQU  YES OR NO
+                              58    '
+                              59    '   STATE NUMBER OF DISK UNITS, NDSK
+                              60    'NDSK     EQU  NUMBER OF DISKS
+                              61    '
+                              62    '   IS THERE A HIGH SPEED READER
+                              63    'NPTR     EQU  YES OR NO
+                              64    '
+                              65    '   IS THERE A HIGH SPEED PUNCH
+                              66    'NPCH     EQU  YES OR NO
+                              67    '
+                              68    '   IS THERE A CARD READER
+                              69    'NCDR     EQU  YES OR NO
+                              70    '
+                              71    '   IS THERE A CARD PUNCH
+                              72    'NCPC     EQU  YES OR NO
+                              73    '
+
+================================================================
+PAGE 5      SYSTEM DESCRIPTION
+
+                              74    '   IS THERE A LINE PRINTER
+                              75    'NLPR     EQU  NUMBER OF LINE PRINTERS
+                              76    '
+                              77    '   DEFINE INTERRUPT CHANNEL NUMBER FOR ALL DEVICES
+                              78    '   PRESENT IN THE SYSTEM
+                              79    'TTYI     EQU  NUMBER
+                              80    'MAGI     EQU  NUMBER
+                              81    '   AND SO ON
+                              82    '
+                              83    '           SYSTEM DESCRIPTION PARAMETERS
+                              84    '*******************DN390779-000*******************
+                              85    '*******************DN390779-000*******************
+                              86    '*******************DN390779-000*******************
+                              87    '*******************DN390779-000*******************
+                              88    '*******************DN390779-000*******************
+                              89    '*******************DN390779-000***********
+        1000  1000            90    CORESIZE EQU  4096            DN390779-000
+        0001  0001            91    ICHN     EQU  1               DN390779-000
+        0000  0000            92    NMAG     EQU  0               DN390779-000
+        0000  0000            93    CHAIN    EQU  NO              DN390779-000
+        0000  0000            94    NDSK     EQU  0               DN390779-000
+        0000  0000            95    NPCH     EQU  NO              DN390779-000
+        0000  0000            96    NPTR     EQU  NO              DN390779-000
+        0000  0000            97    NCDR     EQU  NO              DN390779-000
+        0000  0000            98    NCPC     EQU  NO              DN390779-000
+        0000  0000            99    NLPR     EQU  NO              DN390779-000
+        0000  0000            100   TTYI     EQU  0               DN390779-000
+                              101   '*******************DN390779-000***********
+                              102   '*******************DN390779-000*******************
+                              103   '*******************DN390779-000*******************
+                              104   '*******************DN390779-000*******************
+                              105   '*******************DN390779-000*******************
+                              106   '  SOFTWARE SYSTEM TYPE SELECTION,
+        0000  0000            107   BASIC    EQU  0
+        0001  0001            108   STANDARD EQU  1
+                              109   '  IF EXTENDED IS SELECTED A DISK MUST BE PRESENT IN
+                              110   '  THE SYSTEM,
+                              111            TRUE  NDSK=0
+        0001  0001            112   EXTENDED EQU  STANDARD
+                              113            ENDC
+                              114            FALS  NDSK=0
+                              115   EXTENDED EQU  2
+                              116            ENDC
+                              117   '  IF CORESIZE EQUALS 4096 BASIC SOFTWARE IS
+                              118   '  AUTOMATICALLY GENERATED.
+                              119            TRUE  CORESIZE=4096
+        0000  0000            120   SOFTWARE EQU  BASIC
+                              121            ENDC
+                              122            FALS  CORESIZE=4096
+                              123   '        INSERT SOFTWARE SELECTION CARD HERE
+                              124   '*************************************************
+                              125   SOFTWARE EQU  BASIC
+                              126   '*************************************************
+
+================================================================
+PAGE 6      SYSTEM DESCRIPTION
+
+                              127            ENDC
+
+================================================================
+PAGE 7      UNIT ASSIGNMENT PARAMETER COMPUTATION
+
+                              128   '        UNIT ASSIGNMENT PARAMETER COMPUTATION
+        0000  0000            129   NUNITS  EQU   NMAG+NDSK+NPTR+NCDR+NCPC+NPCH+NLPR
+        0000  0000            130   PNCH    EQU   NPCH
+                              131   ' SELECT HIGHEST LEVEL DEVICE OF EACH TYPE
+                              132   ' 1. NON-MASS INPUT
+                              133           TRUE  NCDR>0
+                              134   NMI     EQU   CDR0
+                              135           ENDC
+                              136           TRUE  NCDR=0
+                              137           TRUE  NPTR>0
+                              138   NMI     EQU   PTR0
+                              139           ENDC
+                              140           TRUE  NPTR=0
+        000D  000D            141   NMI     EQU   TTY
+                              142           ENDC
+                              143           ENDC
+                              144   '
+                              145   ' 2. NON-MASS OUTPUT
+                              146           TRUE  NCPC>0
+                              147   NMO     EQU   CPC0
+                              148           ENDC
+                              149           TRUE  NCPC=0
+                              150           FALS  NPCH=0
+                              151   NMO     EQU   PCH0
+                              152           ENDC
+                              153           TRUE  NPCH=0
+        000D  000D            154   NMO     EQU   TTY
+                              155           ENDC
+                              156           ENDC
+                              157   ' 3. MASS STORAGE
+                              158           TRUE  NDSK+NMAG=0
+        000C  000C            159   MASU    EQU   DUM
+                              160           ENDC
+                              161           FALS  NDSK=0
+                              162   MASU    EQU   DSK0
+                              163           ENDC
+                              164           TRUE  NDSK=0
+                              165           FALS  NMAG=0
+                              166   MASU    EQU   MAG0
+                              167           ENDC
+                              168           ENDC
+                              169           FALS  NDSK=0
+                              170   NDSK0   EQU   1
+                              171           ENDC
+                              172           TRUE  NDSK=0
+        0000  0000            173   NDSK0   EQU   0
+                              174           ENDC
+        0000  0000            175   NMSU    EQU   NDSK+NMAG
+
+================================================================
+PAGE 8      LOGICAL UNIT ASSIGNMENTS
+
+                              176   '        LOGICAL UNIT ASSIGNMENTS
+                              177   '  ASSIGN SYSTEM FILE UNIT
+                              178           FALS  MASU=DUM
+                              179   ASYSF   EQU   MASU
+                              180           ENDC
+                              181           TRUE  MASU=DUM
+        000D  000D            182   ASYSF   EQU   NMI
+                              183           ENDC
+                              184   '
+                              185   '  ASSIGN SYSTEM INPUT UNIT
+        000D  000D            186   ASYSI   EQU   TTY
+                              187   '
+                              188   '  ASSIGN PRINCIPAL INPUT UNIT
+        000D  000D            189   APRIN   EQU   NMI
+                              190   '
+                              191   '  ASSIGN LISTING UNIT
+                              192           TRUE  NLPR=0
+        000D  000D            193   ALIST   EQU   TTY
+                              194           ENDC
+                              195           FALS  NLPR=0
+                              196   ALIST   EQU   LPR0
+                              197           ENDC
+                              198   '
+                              199   '  ASSIGN BINARY OUTPUT UNIT
+        000D  000D            200   ABOUT   EQU   NMO
+                              201   '  ASSIGN BINARY INPUT UNIT
+                              202           TRUE  ABOUT=CPC0
+                              203   ABIN    EQU   NMI
+                              204           ENDC
+                              205           FALS  ABOUT=CPC0
+                              206           TRUE  NPTR=0
+        000D  000D            207   ABIN    EQU   TTY
+                              208           ENDC
+                              209           FALS  NPTR=0
+                              210   ABIN    EQU   PTR0
+                              211           ENDC
+                              212           ENDC
+                              213   '  ASSIGN SCRATCH UNIT
+                              214           TRUE  NMAG>1
+                              215           FALS  MASU=DSK0
+                              216   ASCR    EQU   MAG1
+                              217           ENDC
+                              218           TRUE  MASU=DSK0
+                              219   ASCR    EQU   MASU
+                              220           ENDC
+                              221           ENDC
+                              222           FALS  NMAG>1
+        000C  000C            223   ASCR    EQU   MASU
+                              224           ENDC
+                              225   '  ASSIGN UNCOMMITTED LOGICAL UNITS
+                              226   '
+        000D  000D            227   ALOGA   EQU   NMI
+        000D  000D            228   ALOGB   EQU   NMO
+
+================================================================
+PAGE 9      LOGICAL UNIT ASSIGNMENTS
+
+        000C  000C            229   ALOGC   EQU   MASU
+                              230           TRUE  MASU=MAG0
+                              231           TRUE  NMAG>1
+                              232   ALOGD   EQU   MAG1
+                              233           ENDC
+                              234           TRUE  NMAG>2
+                              235   ALOGE   EQU   MAG2
+                              236           ENDC
+                              237           ENDC
+                              238           TRUE  MASU=DSK0
+                              239           FALS  NMAG=0
+                              240   ALOGD   EQU   MAG0
+                              241           ENDC
+                              242           TRUE  NMAG>1
+                              243   ALOGE   EQU   MAG1
+                              244           ENDC
+                              245           ENDC
+                              246           TRUE  NMSU<2
+        000C  000C            247   ALOGE   EQU   DUM
+                              248           ENDC
+                              249           TRUE  NMSU<1
+        000C  000C            250   ALOGD   EQU   DUM
+                              251           ENDC
+                              252           TRUE  NMSU=0
+        0000  0000            253   SYS     EQU   NMAS
+                              254           ENDC
+                              255           FALS  NMSU=0
+                              256   SYS     EQU   MASS
+                              257           ENDC
+                              258   '   ASSIGN DUMMY VALUES TO INTERRUPT CHANNEL NUMBERS
+                              259   '   FOR ABSENT DEVICES
+                              260           TRUE  NPTR=0
+        0011  0011            261   PTRI    EQU   17
+                              262           ENDC
+                              263           TRUE  NPCH=0
+        0012  0012            264   PCHI    EQU   18
+                              265           ENDC
+                              266           TRUE  NMAG=0
+        0013  0013            267   MAGI    EQU   19
+                              268           ENDC
+                              269           TRUE  NDSK=0
+        0014  0014            270   DSKI    EQU   20
+                              271           ENDC
+                              272           TRUE  NCDR=0
+        0015  0015            273   CDRI    EQU   21
+                              274           ENDC
+                              275           TRUE  NCPC=0
+        0016  0016            276   CPCI    EQU   22
+                              277           ENDC
+                              278           TRUE  NLPR=0
+        0017  0017            279   LPRI    EQU   23
+                              280           ENDC
+                              281   '   TEST FOR MORE THAN ONE DEVICE ON AN INTERRUPT CHANNEL
+
+================================================================
+PAGE 10     LOGICAL UNIT ASSIGNMENTS
+
+                              282           FALS  PTRI=TTYI
+                              283           FALS  PCHI=TTYI
+                              284           FALS  PTRI=PCHI
+        0000  0000            285   ISHARE  EQU   0
+                              286           ENDC
+                              287           ENDC
+                              288           ENDC
+                              289           TRUE  PTRI=TTYI
+                              290   ISHARE  EQU   1
+                              291           ENDC
+                              292           TRUE  PCHI=TTYI
+                              293   ISHARE  EQU   1
+                              294           ENDC
+                              295           TRUE  PCHI=PTRI
+                              296   ISHARE  EQU   1
+                              297           ENDC
+        001C  001C            298   MAXP    EQU   ENDP-PEAT+12
+                              299   '   CONSTRUCT SYSTEM TYPE WORD PARAMETERS
+                              300           TRUE  NMSU=0
+        0000  0000            301   SYL0    EQU   0
+                              302           ENDC
+                              303           TRUE  NMSU>0
+                              304   SYL0    EQU   X'80'
+                              305           ENDC
+                              306           TRUE  CHAIN=YES
+                              307   SYL1    EQU   X'40'
+                              308           ENDC
+                              309           TRUE  CHAIN=NO
+        0000  0000            310   SYL1    EQU   0
+                              311           ENDC
+                              312           TRUE  NPCH>0
+                              313   SYL6    EQU   2
+                              314           ENDC
+                              315           TRUE  NPCH=0
+        0000  0000            316   SYL6    EQU   0
+                              317           ENDC
+                              318           TRUE  NPTR>0
+                              319   SYL7    EQU   1
+                              320           ENDC
+                              321           TRUE  NPTR=0
+        0000  0000            322   SYL7    EQU   0
+                              323           ENDC
+                              324           TRUE  NCPC>0
+                              325   SYR0    EQU   X'80
+                              326           ENDC
+                              327           TRUE  NCPC=0
+        0000  0000            328   SYR0    EQU   0
+                              329           ENDC
+                              330           TRUE  NCDR>0
+                              331   SYR1    EQU   X'40'
+                              332           ENDC
+                              333           TRUE  NCDR=0
+        0000  0000            334   SYR1    EQU   0
+
+================================================================
+PAGE 11     LOGICAL UNIT ASSIGNMENTS
+
+                              335           ENDC
+                              336           TRUE  NLPR=0
+        0000  0000            337   SYR2    EQU   0
+                              338           ENDC
+                              339           TRUE  NLPR=1
+                              340   SYR2    EQU   X'10'
+                              341           ENDC
+                              342           TRUE  NLPR=2
+                              343   SYR2    EQU   X'30'
+                              344           ENDC
+                              345           TRUE  NDSK>3
+                              346   SYR4    EQU   X'C'
+                              347           ENDC
+                              348           FALS  NDSK>3
+        0000  0000            349   SYR4    EQU   NDSK+NDSK+NDSK+NDSK
+                              350           ENDC
+                              351           TRUE  NMAG>3
+                              352   SYR6    EQU   3
+                              353           ENDC
+                              354           FALS  NMAG>3
+        0000  0000            355   SYR6    EQU   NMAG
+                              356           ENDC
+        0000  0000            357   LBSTYP  EQU   SYL0+SYL1+SYL6+SYL7
+        0000  0000            358   RBSTYP  EQU   SYR0+SYR1+SYR2+SYR4+SYR6
+                              359           TRUE  SOFTWARE=BASIC
+                              360           ORIG  24
+0 018 0 0080  0080            361           SMB   XRAY
+0 019 0 2266  2 0 266         362           JSX   XRAY
+0 01A 0 D8D2  D8D2            363           DATA  'XR','AY'
+0 01B 0 C1D9  C1D9
+                              364           ENDC
+
+================================================================
+PAGE 12     STATUS SUBROUTINE
+
+                              365   '                 STATUS SUBROUTINE
+                              366   '       LDX   =STAT
+                              367   '       JSX   *0
+                              368   '       DATA  FIOT
+                              369   '       DATA  ERR
+0 01C 0 00A0  00A0            370   STAT    MSK                 SET MASK OFF
+0 01D 0 603F  6 0 03F         371           STX   M.SRET
+0 01E 0 9800  9 1 000         372           LDX   *0            LOAD FIOT ADD
+0 01F 0 8800  8 1 000         373           LDW   *0            LOAD BB
+0 020 0 0810  0810            374           SAP                 BB ON
+0 021 0 102C  1 0 02C         375           JMP   M.SM1R        YES
+0 022 0 0400  04 00           376           IXS   0             NO IS FIOT ONLY ARG
+0 023 0 102F  1 0 02F         377           JMP   M.SP1R        YES
+0 024 0 8803  8 1 003         378           LDW   *3            LOAD STATUS WORD
+0 025 0 0830  0830            379           SAO                 NO IS ERR BIT ON
+0 026 0 1032  1 0 032         380           JMP   M.SP2R        ERROR BIT NOT ON
+0 027 0 903F  9 0 03F         381           LDX   M.SRET        YES
+0 028 0 9801  9 1 001         382           LDX   *1            GO TO ERROR ROUTINE
+0 029 0 803F  8 0 03F         383           LDW   M.SRET        WITH A REG= TO STAT RETURN
+0 02A 0 00B0  00B0            384           UNM
+0 02B 0 2800  2 1 000         385           JSX   *0
+0 02C 0 903F  9 0 03F         386   M.SM1R  LDX   M.SRET        GO BACK AND TRY AGAIN
+0 02D 0 00B0  00B0            387           UNM                 ALLOW IRS
+0 02E 0 101C  1 0 01C         388           JMP   STAT
+0 02F 0 903F  9 0 03F         389   M.SP1R  LDX   M.SRET
+0 030 0 00B0  00B0            390           UNM
+0 031 0 2801  2 1 001         391           JSX   *1
+0 032 0 903F  9 0 03F         392   M.SP2R  LDX   M.SRET
+0 033 0 00B0  00B0            393           UNM
+0 034 0 2802  2 1 002         394           JSX   *2
+0 035 0 0010  0010            395   X10     D     X'10'
+0 036 0 0020  0020            396   X20     D     X'20'
+0 037 0 0040  0040            397   X40     D     X'40'
+0 038 0 00B0  00B0            398   XB0     D     X'B0'
+0 039 0 000F  000F            399   XF      D     X'F'
+0 03A 0 00F0  00F0            400   XF0     D     X'F0'
+0 03B 0 00FF  00FF            401   XFF     D     X'FF'
+0 03C 0 01FF  01FF            402   X1FF    D     X'1FF'
+0 03D 0 0200  0200            403   X200    D     X'200'
+0 03E 0 A0A0  A0A0            404   XA0A    D     X'A0A0'
+0 03F 0 0000  0000            405   M.OPENR DATA  0
+                              406           FALS  SOFTWARE=BASIC
+                              407   'NO SYSTEM JUMP TABLE FOR STANDARD OR EXTENDED SYSTEMS
+                              408           ENDC
+                              409           TRUE  SOFTWARE=BASIC
+
+================================================================
+PAGE 13     SYSTEM JUMP TABLE
+
+                              410   'SYSTEM JUMP TABLE
+0 040 0                       411           RES   64-$
+0 040 0 0080  0080            412           SMB   XRAY
+0 041 0 1266  1 0 266         413           JMP   XRAY
+0 042 0 0080  0080            414           SMB   OPEN
+0 043 0 1065  1 0 065         415           JMP   OPEN          MONITOR ROUTINES
+0 044 0 0080  0080            416           SMB   DOIO
+0 045 0 1083  1 0 083         417           JMP   DOIO
+0 046 0 0080  0080            418           SMB   STAT
+0 047 0 101C  1 0 01C         419           JMP   STAT
+                              420           TRUE  SYS=NMAS
+0 048 0 2801  2 1 001         421           JSX   *1            RETURN FOR THESE CELLS
+0 049 0 2801  2 1 001         422           JSX   *1
+0 04A 0 2801  2 1 001         423           JSX   *1
+0 04B 0 2801  2 1 001         424           JSX   *1
+0 04C 0 2801  2 1 001         425           JSX   *1
+0 04D 0 2801  2 1 001         426           JSX   *1
+0 04E 0 2801  2 1 001         427           JSX   *1
+0 04F 0 2801  2 1 001         428           JSX   *1
+0 050 0 0080  0080            429           SMB   WEOF
+0 051 0 11F3  1 0 1F3         430           JMP   WEOF
+0 052 0 2801  2 1 001         431   S.STUS  JSX   *1
+0 053 0 2801  2 1 001         432           JSX   *1
+                              433           ENDC
+                              434           TRUE  SYS=MASS
+                              435           SMB   S.BKSP
+                              436           JMP   S.BKSP
+                              437           SMB   S.WKSP
+                              438           JMP   S.WKSP
+                              439           SMB   S.SEOF
+                              440           JMP   S.SEOF
+                              441           SMB   S.RWND
+                              442           JMP   S.RWND
+                              443           SMB   WEOF
+                              444           JMP   WEOF
+                              445           SMB   S.STUS
+                              446           JMP   S.STUS
+                              447           ENDC
+0 054 0 03B9  03B9            448   END     D     ENDA
+0 055 0 0000  0000            449   RBEG    DATA  0
+0 056 0 0080  0080            450           SMB   DMP
+0 057 0 12DF  1 0 2DF         451           JMP   DMP
+                              452   '  SYSTEM TYPE WORD
+0 058 0       00              453   STYPE   BYTE  LBSTYP,RBSTYP
+0 058 1               00
+                              454   '
+                              455   '     THIS WORD IDENTIFIES THE PRESENCE OF PHYSICAL
+                              456   '     DEVICES IN THE SYSTEM. THE BITS OF THIS WORD HAVE
+                              457   '     THE FOLLOWING MEANINGS
+                              458   '       0     TRUE FOR MASS SYSTEMS
+                              459   '       2     TRUE FOR CHAINING TAPE UNIT
+                              460   '       3-5   NOT USED
+                              461   '       6     HIGH SPEED TAPE PUNCH
+
+================================================================
+PAGE 14     SYSTEM JUMP TABLE
+
+                              462   '       7     HIGH SPEED TAPE READER
+                              463   '       8     CARD PUNCH
+                              464   '       9     CARD READER
+                              465   '       10    LINE PRINTER 1
+                              466   '       11    LINE PRINTER 0
+                              467   '       12-13 NUMBER OF DISKS
+                              468   '       14-15 NUMBER OF MAG TAPE UNITS
+0 059 0 0000  000 0           469           HLT                 DONT USE THIS ONE
+0 05A 0 0FFF  0FFF            470   ULIM    D     CORESIZE-1
+0 05B 0 0266  0266            471   ENDM    D     XRAY
+0 05C 0 0FFF  0FFF            472   CORE    D     CORESIZE-1
+0 05D 0 0000  0000            473   DATE    RES   4             DATE
+0 061 0 0000  0000            474   NAME    RES   4             ID NAME
+0 064 0 0000  0000            475           ENDC
+        032D  032D            476   S.TBUFF EQU   S.TEMP4       UNPACKED WORD SAVE HERE
+        0331  0331            477   S.SAVE1 EQU   S.TEMP8       PACKED WORDS SAVED HERE
+        0332  0332            478   S.SAVE2 EQU   S.TEMP9
+        032C  032C            479   S.XSAVE EQU   S.TEMP3                 X SAVED HERE
+        032C  032C            480   S.NBR   EQU   S.TEMP3       NBR OF WORD (LOCATIONS) SAVED HERE
+        032A  032A            481   S.LOC   EQU   S.TEMP1       LOCATION TO STORE INTO SAVED HERE
+        032B  032B            482   S.NBR1  EQU   S.TEMP2                 NBR WORDS TO OUTPUT
+        032A  032A            483   S.LOC1  EQU   S.TEMP1                 LOCATION TO OUTPUT FROM
+        0334  0334            484   BUF     EQU   S.BUFF
+        032A  032A            485   ARG     EQU   S.TEMP1
+        032A  032A            486   S.ARG   EQU   S.TEMP1
+        0257  0257            487   S.SX    EQU   M.OBUF
+        032B  032B            488   S.DATA  EQU   S.TEMP2       DATA WORD TO STORE SAVED HERE
+        017B  017B            489   S.XACNT EQU   M.PA
+        017B  017B            490   TMP1    EQU   M.PA
+        0238  0238            491   S.CHAR  EQU   M.OTMNW
+        0001  0001            492   SYSI    EQU   1
+        0003  0003            493   LIST    EQU   3
+        0005  0005            494   BOUT    EQU   5
+        0004  0004            495   BIN     EQU   4
+        000B  000B            496   RTIK    EQU   X'000B'
+        0009  0009            497   RTIP    EQU   X'0009'
+        000E  000E            498   WTTY    EQU   X'000E'
+        0000  0000            499   ALPH    EQU   X'0000'
+        0001  0001            500   BINT    EQU   1
+
+================================================================
+PAGE 15     SUBROUTINE OPEN
+
+                              501   '                         SUBROUTINE OPEN
+                              502   '  SUBROUTINE OPEN
+                              503   '       JSX   OPEN
+                              504   '       DATA  FIOT
+                              505   '       DATA  BUF
+                              506   '       DATA  WC
+                              507   '       DATA  UNIT
+                              508   '       DATA  OPER
+                              509   '       DATA  MODE
+                              510   '
+        003F  003F            511   M.SRET  EQU   M.OPENR
+        003F  003F            512   M.DR    EQU   M.OPENR
+        00B3  00B3            513   M.DF    EQU   M.TFA
+0 065 0 00A0  00A0            514   OPEN    MSK                 SET MASK OFF
+0 066 0 603F  6 0 03F         515           STX   M.OPENR       SAVE RETURN
+0 067 0 8239  8 0 239         516           LDW   ARH0
+0 068 0 7001  7 0 001         517           STW   1
+                              518           TRUE  ICHN=4
+                              519           LDW   ARH1
+                              520           STW   5
+                              521           LDW   ARH2
+                              522           STW   9
+                              523           LDW   ARH3
+                              524           STW   13
+                              525           ENDC
+0 069 0 8805  8 1 005         526           LDW   *5            LOAD MODE
+0 06A 0 0A1F  0A1 F           527           SLL   15            MOVE MODE AROUND
+0 06B 0 C802  C 1 002         528           ORI   *2            MERG MODE AND NO WORDS
+0 06C 0 7238  7 0 238         529           STW   M.OTMNW
+0 06D 0 8801  8 1 001         530           LDW   *1            LOAD BUFFER ADDRESS
+0 06E 0 7257  7 0 257         531           STW   M.OBUF
+0 06F 0 8803  8 1 003         532           LDW   *3            LOAD UNIT
+0 070 0 7258  7 0 258         533           STW   M.OUNIT
+0 071 0 8804  8 1 004         534           LDW   *4            LOAD OPERATION
+0 072 0 9800  9 1 000         535           LDX   *0            LOAD FIOT ADD
+0 073 0 7802  7 1 002         536           STW   *2            STORE OPERATION
+0 074 0 8238  8 0 238         537           LDW   M.OTMNW       SET MODE AND NO WORDS
+0 075 0 7801  7 1 001         538           STW   *1
+0 076 0 8257  8 0 257         539           LDW   M.OBUF        SET BUFFER ADDRESS
+0 077 0 7800  7 1 000         540           STW   *0
+0 078 0 8258  8 0 258         541           LDW   M.OUNIT
+0 079 0 0A14  0A1 4           542           SLL   4             POSITION
+0 07A 0 C802  C 1 002         543           ORI   *2            PACK ACTUAL UNIT
+0 07B 0 7802  7 1 002         544           STW   *2            AND STORE IN FIOT
+0 07C 0 0100  0100            545           CLR
+0 07D 0 7803  7 1 003         546           STW   *3
+0 07E 0 0140  0140            547           CXA                 FIOT ADDR TO A FOR FDA
+0 07F 0 20B5  2 0 0B5         548           JSX   FDA           FORCE CORRECT LUN INTO FIOT
+0 080 0 903F  9 0 03F         549           LDX   M.OPENR       RETURN ALL DONE
+0 081 0 00B0  00B0            550           UNM
+0 082 0 1806  1 1 006         551           JMP   *6
+
+================================================================
+PAGE 16     DOIO SUBROUTINE
+
+                              552   '                 DOIO SUBROUTINE
+                              553   '
+                              554   '       LDX   =DOIO
+                              555   '       JSX   *0
+                              556   '       DATA  FIOT
+                              557   '       DATA  BUF
+                              558   '       DATA  WC            BUF AND WC ARE OPTIONAL ARGS
+0 083 0 0140  0140            559   DOIO    CXA                 SAVE RETURN IN A
+0 084 0 0130  0130            560           CAX                 FOR LOOP
+0 085 0 9800  9 1 000         561           LDX   *0            GET FIOT ADDRESS
+0 086 0 9800  9 1 000         562           LDX   *0            GET FIRST WORD
+0 087 0 0400  0400            563           SXP                 BUSY?
+0 088 0 1084  1 0 084         564           JMP   $-4           YES, WAIT
+0 089 0 00A0  00A0            565   DORS    MSK                 NO GO
+0 08A 0 703F  7 0 03F         566           STW   M.DR          SAVE RETURN
+0 08B 0 0130  0130            567           CAX
+0 08C 0 8800  8 1 000         568           LDW   *0            GET FIOT ADDRESS FROM ARGS
+0 08D 0 0130  0130            569           CAX                 TO XREG
+0 08E 0 8806  8 1 006         570           LDW   *6            GET FIOT(6)
+0 08F 0 0A6F  0A6 F           571           SRC D 15
+0 090 0 0A41  0A4 1           572           SRC   1             A15 TO A0, FLAG SPEC FORMAT
+0 091 0 70B3  7 0 0B3         573           STW   M.DF          SAVE IT
+0 092 0 803F  8 0 03F         574           LDW   M.DR          LOAD RETURN
+0 093 0 0850  0850            575           SXE                 LAST ARG OR NOT  X15WAS A0
+0 094 0 10A7  1 0 0A7         576           JMP   M.DGO         YES
+0 095 0 903F  9 0 03F         577           LDX   M.DR          FIND CALLING SEQUENCE
+0 096 0 8801  8 1 001         578           LDW   *1            GET NEXT ARG
+0 097 0 F23E  F 0 23E         579           CMW   NM1           REMEMBER IF IT IS LAST ARG
+0 098 0 90B3  9 0 0B3         580           LDX   M.DF
+0 099 0 7800  7 1 000         581           STW   *0            STORE NEW BUFFER
+0 09A 0 803F  8 0 03F         582           LDW   M.DR          RECOVER RETURN
+0 09B 0 0880  0880            583           SGR                 WAS IT LAST ARG
+0 09C 0 10A5  1 0 0A5         584           JMP   M.DGO1
+0 09D 0 8801  8 1 001         585           LDW   *1            GET FIOT(1)
+0 09E 0 C252  C 0 252         586           ORI   X7FF          BLACK OUT ALL BUT MODE
+0 09F 0 903F  9 0 03F         587           LDX   M.DR          GET CALLING STRING
+0 0A0 0 E802  E 1 002         588           AND   *2            PACK IN SIGN BIT OF WORD
+0 0A1 0 90B3  9 0 0B3         589           LDX   M.DF          2 IS ON THIS SAVES MODE
+0 0A2 0 7801  7 1 001         590           STW   *1            PUT IT BACK
+0 0A3 0 803F  8 0 03F         591           LDW   M.DR
+0 0A4 0 A242  A 0 242         592           ADD   N1
+0 0A5 0 A242  A 0 242         593   M.DGO1  ADD   N1
+0 0A6 0 703F  7 0 03F         594           STW   M.DR
+0 0A7 0 90B3  9 0 0B3         595   M.DGO   LDX   M.DF          NOW SET BUSY BIT
+0 0A8 0 8800  8 1 000         596           LDW   *0
+0 0A9 0 C254  C 0 254         597           ORI   SIGB          SET BB
+0 0AA 0 7800  7 1 000         598           STW   *0
+0 0AB 0 F23E  F 0 23E         599           CMW   NM1           WAS BUF ADD =0
+0 0AC 0 0140  0140            600           CXA                 FIOT ADDRESS TO A
+0 0AD 0 0870  0870            601           SNE
+0 0AE 0 C254  C 0 254         602           ORI   SIGB          YES SET SPECIAL FORMAT
+0 0AF 0 70B3  7 0 0B3         603           STW   M.DF          AND PUT BACK ADDRESS
+0 0B0 0 20B5  2 0 0B5         604           JSX   FDA
+
+================================================================
+PAGE 17     DOIO SUBROUTINE
+
+0 0B1 0 9238  9 0 238         605           LDX   M.OTMNW       LOAD DRIVER ADDRESS
+0 0B2 0 2800  2 1 000         606           JSX   *0
+0 0B3 0 0000  0000            607   M.TFA   D     0
+
+================================================================
+PAGE 18     SUBROUTINE M.FDA  FIND DRIVER ADDRESS
+
+                              608   '                 SUBROUTINE M.FDA  FIND DRIVER ADDRESS
+0 0B4 0 0000  0000            609
+0 0B5 0 60B4  6 0 0B4               FDA     SUBR
+0 0B6 0 0130  0130            610           CAX
+0 0B7 0 7238  7 0 238         611           STW   M.OTMNW       SAVE THE FIOT ADDRESS
+0 0B8 0 8802  8 1 002         612           LDW   *2            CLEAN LOG UNIT,FC
+0 0B9 0 E03C  E 0 03C         613   M.OSDEV AND   X1FF          MASK TRASH
+0 0BA 0 7802  7 1 002         614           STW   *2
+0 0BB 0 0A04  0A0 4           615           SRL   4
+0 0BC 0 070C  07 0C           616           CLB   12            IS IT A PHYSICAL UNIT NUMBER
+0 0BD 0 0880  0880            617           SGR
+0 0BE 0 10C4  1 0 0C4         618           JMP   NGTR
+0 0BF 0 0A11  0A1 1           619           SLL   1             DOUBLE
+0 0C0 0 071C  07 1C           620           CLB   MAXP          TEST FOR TO LARG ADDRESS
+0 0C1 0 0840  0840            621           SLS
+0 0C2 0 10CD  1 0 0CD         622           JMP   NYET-1
+0 0C3 0 B23C  B 0 23C         623           SUB   N12
+0 0C4 0 A23A  A 0 23A         624   NGTR    ADD   AP
+0 0C5 0 0130  0130            625           CAX
+0 0C6 0 8800  8 1 000         626           LDW   *0            GET UNIT
+0 0C7 0 0820  0820            627           SAM
+0 0C8 0 10CE  1 0 0CE         628           JMP   NYET
+0 0C9 0 9801  9 1 001         629           LDX   *1            GET DRIVER ADDRESS
+0 0CA 0 6238  6 0 238         630           STX   M.OTMNW       AND SAVE IT FOR OTHERS
+0 0CB 0 90B4  9 0 0B4         631           EXIT  FDA
+0 0CC 0 2800  2 1 000
+0 0CD 0 8250  8 0 250         632           LDW   XC00          CHANGE LUN TO DUMMY
+0 0CE 0 0A04  0A0 4           633   NYET    SRL   4             POSITION FOR FIOT
+0 0CF 0 7258  7 0 258         634           STW   M.OUNIT       AS GOOD A TEMP AS ANY
+0 0D0 0 9238  9 0 238         635           LDX   M.OTMNW       GET SAVED FIOT ADDRESS
+0 0D1 0 8039  8 0 039         636           LDW   XF            MASK ALL BUT FUNCTION CODE
+0 0D2 0 E802  E 1 002         637           AND   *2
+0 0D3 0 C258  C 0 258         638           ORI   M.OUNIT       PLUG IN NEW UNIT DESIGNATION
+0 0D4 0 10B9  1 0 0B9         639           JMP   M.OSDEV
+0 0D5 0 0000  0000            640
+0 0D6 0 60D5  6 0 0D5               SFIOT   SUBR                SUBROUTINE TO STORE AWAY THE FIOT ADD
+0 0D7 0 80B3  8 0 0B3         641           LDW   M.TFA
+0 0D8 0 20B5  2 0 0B5         642           JSX   FDA           FIND DRIVER ADDRESS
+0 0D9 0 0A08  0A0 8           643           SRL   8             POSITION
+0 0DA 0 E039  E 0 039         644           AND   XF            WIPE ALL BUT IRL
+0 0DB 0 0130  0130            645           CAX                 CALC IR ADDRESS FOR FIOT
+0 0DC 0 823E  8 0 23E         646           LDW   NM1           CALC ADD OF FIOT ADDRESS
+0 0DD 0 A23B  A 0 23B         647           ADD   N10
+0 0DE 0 0501  05 01           648           DXS   1
+0 0DF 0 10DD  1 0 0DD         649           JMP   $-2
+0 0E0 0 A239  A 0 239         650           ADD   ARH0
+0 0E1 0 0130  0130            651           CAX
+0 0E2 0 80B3  8 0 0B3         652           LDW   M.DF          RELOCATE FIOT
+0 0E3 0 7800  7 1 000         653           STW   *0
+0 0E4 0 90D5  9 0 0D5         654           EXIT  SFIOT         RETURN
+0 0E5 0 2800  2 1 000
+
+================================================================
+PAGE 19     SETUP AREA FOR TTY AND HSPT DRIVERS
+
+                              655   '             SETUP AREA FOR TTY AND HSPT DRIVERS
+        0257  0257            656   M.TSD   EQU   M.OBUF
+        017B  017B            657   M.TT    EQU   M.PA
+0 0E6 0 21D8  2 0 1D8         658   M.THSPT JSX   NABL          ENABLE IR FOR DEVICE
+0 0E7 0 0138  0138            659           D     TIRS
+0 0E8 0 2260  2 0 260         660           JSX   ST            GET STATUS
+0 0E9 0 0820  0820            661           SAM                 IS THE PUNCH READY
+0 0EA 0 10EE  1 0 0EE         662           JMP   PCHN          YES
+0 0EB 0 803F  8 0 03F         663           LDW   M.DR          NO, GO BACK TO DOIO
+0 0EC 0 00B0  00B0            664           UNM                 ; check column glyph damaged, prints like 0090
+0 0ED 0 1089  1 0 089         665           JMP   DORS
+0 0EE 0 20D6  2 0 0D6         666   PCHN    JSX   SFIOT         STORE FIOT AWAY
+0 0EF 0 90B3  9 0 0B3         667           LDX   M.DF          LOAD FIOT TO X REG
+0 0F0 0 8802  8 1 002         668           LDW   *2            RELOAD FC
+                              669           TRUE  NPTR>0
+                              670           CLB   X'4B'         DID WE END UP WITH READ
+                              671           SNE                 KEYBOARD ON THE PHOTOREADER?
+                              672           LLB   X'49'         YES, THAT'S STUPID. FIX IT
+                              673           ENDC
+0 0F1 0 E039  E 0 039         674           AND   XF            CLEAN FC
+0 0F2 0 903F  9 0 03F         675           LDX   M.OPENR       FORCE WRITE MODE IF WEOF
+0 0F3 0 0400  0400            676           SXP
+0 0F4 0 060E  06 0E           677           LLB   X'E'
+0 0F5 0 90B3  9 0 0B3         678           LDX   M.DF          RELOAD FIOT ADDRESS
+0 0F6 0 070E  07 0E           679           CLB   X'E'          IS IT WRITE
+0 0F7 0 C24C  C 0 24C         680           ORI   X300          WRITE
+0 0F8 0 0860  0860            681           SEQ
+0 0F9 0 D256  D 0 256         682           ORE   X81           READ 8100
+0 0FA 0 C257  C 0 257         683           ORI   M.TSD
+0 0FB 0 7803  7 1 003         684           STW   *3            STORE  DOT OR DIN    DEVANDFC
+0 0FC 0 0860  0860            685           SEQ
+0 0FD 0 D255  D 0 255         686           ORE   X84           READ
+0 0FE 0 710C  7 0 10C         687           STW   NSPEC
+0 0FF 0 803F  8 0 03F         688           LDW   M.OPENR       GET RETURN
+0 100 0 068A  06 8A           689           LLB   X'8A'         LOAD L/F
+0 101 0 0810  0810            690           SAP                 IS WEOF FLAG SET
+0 102 0 0687  06 87           691           LLB   X'87'         IT'S END OF FILE
+0 103 0 0870  0870            692           SNE                 IS IT READ
+0 104 0 0500  0500            693           SXM                 IS IT SPECIAL
+0 105 0 110C  1 0 10C         694           JMP   NSPEC         READ NO OUTPUT CHAR NEEDED
+0 106 0 9800  9 1 000         695           LDX   *0            WRITE LOAD CHAR1
+0 107 0 8800  8 1 000         696           LDW   *0            GET FIRST WORD
+0 108 0 0401  04 01           697           IXS   1             WAS BUF ADR 7FFF (FFFF)
+0 109 0 0130  0130            698           CAX                 NO, POSITION SO SHIFT WILL
+0 10A 0 0A38  0A3 8           699           SLL D 8             SHIFT IN CORRECT CHARACTER
+0 10B 0 90B3  9 0 0B3         700           LDX   M.DF
+0 10C 0 0000  0000            701   NSPEC   D     0             SELECT THE DEVICE
+0 10D 0 803F  8 0 03F         702           LDW   M.OPENR       GET WEOF FLAG BIT 0
+0 10E 0 0810  0810            703           SAP                 IS IT WEOF
+0 10F 0 1134  1 0 134         704           JMP   DREOF         YES FIX JUMP TODISCONNECT
+                              705   '  COMPUTE THE CORRECT JUMP COUNT
+0 110 0 0100  0100            706           CLR                 NOW SET JMP COUNTER FOR READ
+0 111 0 0400  0400            707           SXP                 TEST FOR SPECIAL FORMAT
+
+================================================================
+PAGE 20     SETUP AREA FOR TTY AND HSPT DRIVERS
+
+0 112 0 0606  06 06           708           LLB   X'6'          SKIP READ FORMAT CHARACTERS
+0 113 0 0860  0860            709           SEQ                 BUT IS IT WRITE
+0 114 0 111B  1 0 11B         710           JMP   M.TSCR        NO,SET JUMP COUNT
+0 115 0 060E  06 0E           711           LLB   X'E'          SKIP WRITE BYTE COUNT
+0 116 0 0400  0400            712           SXP                 IF IT IS SPECIAL FORMAT
+0 117 0 111B  1 0 11B         713           JMP   M.TSCR        IT IS
+0 118 0 9801  9 1 001         714           LDX   *1            IT ISN'T, GET MODE
+0 119 0 0400  0400            715           SXP                 IS IT ALPHA, IF NOT X'E' IS OK
+0 11A 0 060A  06 0A           716           LLB   X'A'          NO, SET PUNCH BYTE COUNT
+0 11B 0 0A18  0A1 8           717   M.TSCR  SLL   8             REPOSITION JUMP COUNT LEFT
+0 11C 0 90B3  9 0 0B3         718           LDX   M.DF          LOAD FIOT ADD
+0 11D 0 C802  C 1 002         719           ORI   *2
+0 11E 0 7802  7 1 002         720           STW   *2            STORE JUMP COUNTER
+                              721   '  STUFF STARTING AND ENDING BYTE ADDRESS AND COUNT
+0 11F 0 8800  8 1 000         722           LDW   *0
+0 120 0 0A11  0A1 1           723           SLL   1
+0 121 0 0500  0500            724           SXM                 TEST FOR SPECIAL FORMAT
+0 122 0 1125  1 0 125         725           JMP   NS1           NO
+0 123 0 0870  0870            726           SNE                 ADD 1 IF WRITE
+0 124 0 A242  A 0 242         727           ADD   N1            FIRST CHAR ALREADY GONE
+0 125 0 7804  7 1 004         728   NS1     STW   *4            STORE INITIAL BYTE ADDRESS
+0 126 0 F23E  F 0 23E         729           CMW   NM1           WAS IT ZERO BEFORE 1 WAS ADDED
+0 127 0 9801  9 1 001         730           LDX   *1
+0 128 0 823D  8 0 23D         731           LDW   N27           DUMMY WORD COUNT FOR LEADER
+0 129 0 0860  0860            732           SEQ                 AND USE IT IF LEADER CALL
+0 12A 0 8800  8 1 000         733           LDW   *0
+0 12B 0 90B3  9 0 0B3         734           LDX   M.DF          STORE END BYTE ADDRESS - DONE WITH SETUP
+0 12C 0 0A11  0A1 1           735           SLL   1
+0 12D 0 7807  7 1 007         736           STW   *7            SET BYTE COUNT FOR SPECIAL FMAT
+0 12E 0 A800  A 1 000         737           ADD   *0            COMPUTE END BYTE  <<< NOTE: handwritten "6040" over this line
+0 12F 0 A800  A 1 000         738           ADD   *0            ADDRESS  <<< NOTE: handwritten "1580" over this line
+0 130 0 7805  7 1 005         739           STW   *5            STORE END BYTE ADDRESS-DONE WITH SETUP
+        0131  0131            740   DRRET   EQU   $
+                              741           TRUE  ISHARF=YES
+                              742           LDW   WEE           LOAD STATUS WORD
+                              743           SRL   4
+                              744           AND   N3
+                              745           EXCH
+                              746           SLM
+                              747           STW   *FIOTS        STORE AWAY FIOT ADDRESS
+                              748           ENDC
+0 131 0 903F  9 0 03F         749           LDX   M.OPENR       RETURN AND WAIT FOR IRS
+0 132 0 00B0  00B0            750           UNM
+0 133 0 2801  2 1 001         751           JSX   *1
+0 134 0 8253  8 0 253         752   DREOF   LDW   X1200         JUMP TO DISC
+0 135 0 C802  C 1 002         753           ORI   *2
+0 136 0 7802  7 1 002         754           STW   *2
+0 137 0 1131  1 0 131         755           JMP   DRRET
+
+================================================================
+PAGE 21     INTERRUPT SERVICE AREA FOR TTY AND HSPT DRIVERS
+
+                              756   '             INTERRUPT SERVICE AREA FOR TTY AND HSPT DRIVERS
+0 138 0 603F  6 0 03F         757   TIRS    STX   M.OPENR       SAVE XR
+                              758           TRUE  ISHARE=NO
+0 139 0 9805  9 1 005         759           LDX   *5            RELOCATE FIOT ADDRESS
+0 13A 0 60B3  6 0 0B3         760           STX   M.TFA
+                              761           ENDC
+                              762           TRUE  ISHARE=YES
+                              763           SLM
+                              764           LDX   N3            LOAD COUNT OF DEVICES
+                              765   BL      DXS   1             COUNT DOWN NO, DEVICES
+                              766   SLOOP   LDW   *DINS         MOVE STATUS INSTRUCTION
+                              767           STW   $+1
+                              768           DATA  0             AQUIRE STATUS
+                              769           SRL   8
+                              770           SAO                 IR OR NO
+                              771           JMP   BL            NO LOOK FOR ANOTHER
+                              772           LDX   *FIOTS        LOAD FIOT ADDRESS
+                              773           STX   M.TFA
+                              774           SGM
+                              775           ENDC
+0 13B 0 8802  8 1 002         776           LDW   *2
+0 13C 0 0A09  0A0 9           777           SRL   9
+0 13D 0 A155  A 0 155         778           ADD   M.TJMPA
+0 13E 0 9803  9 1 003         779           LDX   *3            LOAD OPERATION
+0 13F 0 0A78  0A78            780           EXCH                A=OPERATION , X=JUMP ADD
+0 140 0 0A78  0A78
+0 141 0 71CF  7 0 1CF         781           STW   M.TDOT2       STORE IN CASE OF OUTPUT
+0 142 0 0820  0820            782           SAM                 READ OR WRITE
+0 143 0 1800  1 1 000         783           JMP   *0            WRITE
+0 144 0 D255  D 0 255         784           ORE   X84           READ
+0 145 0 7146  7 0 146         785           STW   $+1
+0 146 0 0000  0000            786   M.TDIN  DATA  0             DIN CHAR
+0 147 0 1800  1 1 000         787           JMP   *0            GO SERVICE CHAR
+                              788   '  FOLLOWING IS THE JUMP TABLES
+0 148 0 1156  1 0 156         789   M.TJMP  JMP   M.TLFI        INPUT JUMP TABLE
+0 149 0 115E  1 0 15E         790           JMP   M.1CHAR
+0 14A 0 11AB  1 0 1AB         791           JMP   M.TNWI
+0 14B 0 116A  1 0 16A         792           JMP   M.TDATAI
+0 14C 0 11A3  1 0 1A3         793           JMP   DNWR
+                              794   '
+0 14D 0 11D3  1 0 1D3         795           JMP   M.TNWO        OUTPUT JUMP TABLES
+0 14E 0 11D3  1 0 1D3         796           JMP   M.TNWO
+0 14F 0 11C4  1 0 1C4         797           JMP   M.TDATAO
+0 150 0 11D1  1 0 1D1         798           JMP   M.TCRO
+0 151 0 11CE  1 0 1CE         799           JMP   M.TBLK
+0 152 0 11CE  1 0 1CE         800           JMP   M.TBLK
+0 153 0 11CE  1 0 1CE         801           JMP   M.TBLK
+0 154 0 1194  1 0 194         802           JMP   M.TDISC2      DISC UNIT NOW
+0 155 0 0148  0148            803   M.TJMPA DATA  M.TJMP        JUMP TABLE ADDRESS
+0 156 0 078A  07 8A           804   M.TLFI  CLB   X'8A'         SEARCH FOR L/F CHAR
+0 157 0 0870  0870            805           SNE
+0 158 0 11B4  1 0 1B4         806           JMP   M.TIJR
+0 159 0 0787  07 87           807           CLB   X'87'         IS IT END OF FILE
+
+================================================================
+PAGE 22     INTERRUPT SERVICE AREA FOR TTY AND HSPT DRIVERS
+
+0 15A 0 0860  0860            808           SEQ                 DID WE FIND IT
+0 15B 0 11B8  1 0 1B8         809           JMP   M.TIRR        NO TRY AGAIN LATER
+0 15C 0 8035  8 0 035         810           LDW   X10           YES SET EOF BIT HA HA
+0 15D 0 118F  1 0 18F         811           JMP   M.TDISC+1
+                              812   '
+                              813   'THIS ROUTINE EXCEPTS FIRST CHARACTER AFTER LINE FEED
+0 15E 0 0700  07 00           814   M.1CHAR CLB   0             TEST FOR ALPHA CHAR
+0 15F 0 0840  0840            815           SLS
+0 160 0 11AB  1 0 1AB         816           JMP   M.TNWI        NO, SET WORD COUNT
+0 161 0 717B  7 0 17B         817           STW   M.TT          SAVE IT
+0 162 0 90B3  9 0 0B3         818           LDX   M.DF          GET FIOT ADDRESS
+0 163 0 8802  8 1 002         819           LDW   *2            GET JUMP COUNT
+0 164 0 A24E  A 0 24E         820           ADD   X400          SKIP 2
+0 165 0 7802  7 1 002         821           STW   *2            PUT BACK
+0 166 0 8801  8 1 001         822           LDW   *1            GET MODE WORD
+0 167 0 E252  E 0 252         823           AND   X7FF          SET ALPHA MODE
+0 168 0 7801  7 1 001         824           STW   *1            PUT BACK
+0 169 0 817B  8 0 17B         825           LDW   M.TT          GET THIS ALPHA CHARACTER
+                              826   '  THIS ROUTINE SERVICES RECEIVING OF DATA TO BE STORED IN USER BUFFER
+                              827   '
+0 16A 0 90B3  9 0 0B3         828   M.TDATAILDX   M.TFA         LOAD MODE
+0 16B 0 9801  9 1 001         829           LDX   *1            BIN OR ALPHA
+0 16C 0 0400  04 00           830           IXS   0
+0 16D 0 1177  1 0 177         831           JMP   TLWA
+0 16E 0 07DF  07 DF           832           CLB   X'DF'         IS CHAR A DELETE RECORD
+0 16F 0 0870  0870            833           SNE
+0 170 0 11BA  1 0 1BA         834           JMP   DELR          YES
+0 171 0 F03B  F 0 03B         835           CMW   DELE          IS CH DELETE CHER
+0 172 0 0870  0870            836           SNE
+0 173 0 11BF  1 0 1BF         837           JMP   DELC          YES
+0 174 0 078D  07 8D           838           CLB   X'8D'         IS CHAR A C/R
+0 175 0 0870  0870            839           SNE
+0 176 0 118E  1 0 18E         840           JMP   M.TDISC       YES DISCONNECT UNIT
+0 177 0 90B3  9 0 0B3         841   TLWA    LDX   M.TFA         LOAD FIOT
+0 178 0 9804  9 1 004         842           LDX   *4
+0 179 0 3800  3 1 000 0       843           STB   *0            DO DIRTY DEED
+0 17A 0 0401  04 01           844           IXS   1             INC WA
+0 17B 0 0000  0000            845   M.PA    D     0
+0 17C 0 0140  0140            846           CXA
+0 17D 0 90B3  9 0 0B3         847           LDX   M.TFA
+0 17E 0 7804  7 1 004         848           STW   *4            RESTORE WORK ADD
+0 17F 0 F805  F 1 005         849           CMW   *5            TEST FOR EOBUFFER
+0 180 0 0860  0860            850           SEQ                 WA ET END ADDRESS (EA)
+0 181 0 119D  1 0 19D         851           JMP   M.TDMD        NO
+0 182 0 0400  0400            852           SXP                 TEST FOR SPECIAL FORMAT
+0 183 0 118B  1 0 18B         853           JMP   M.TDISC3
+0 184 0 8803  8 1 003         854           LDW   *3            LOAD OPERATION
+0 185 0 0820  0820            855           SAM                 READ OR WRITE
+0 186 0 11B4  1 0 1B4         856           JMP   M.TIJR        WRITE
+0 187 0 8802  8 1 002         857           LDW   *2            READ PREPARE TO
+0 188 0 A03D  A 0 03D         858           ADD   X200          SKIP THE REMAINING RECORD
+0 189 0 7802  7 1 002         859           STW   *2            INC JC
+0 18A 0 11A3  1 0 1A3         860           JMP   DNWR
+
+================================================================
+PAGE 23     INTERRUPT SERVICE AREA FOR TTY AND HSPT DRIVERS
+
+                              861   '
+                              862   ' THIS ROUTINE WILL DISCONNECT THE DEVICE BEING USED
+                              863   '
+0 18B 0 8802  8 1 002         864   M.TDISC3 LDW  *2            INC JUMP COUNTER BY 4 TO DISC UNIT
+0 18C 0 A24F  A 0 24F         865           ADD   X800          ADD 4 TO JUMP COUNTER
+0 18D 0 7802  7 1 002         866           STW   *2
+0 18E 0 0100  0100            867   M.TDISC CLR                 CLEAR STATUS WORD
+0 18F 0 90B3  9 0 0B3         868           LDX   M.TFA         LOAD FOIT ADDRESS
+0 190 0 7807  7 1 007         869           STW   *7
+0 191 0 8803  8 1 003         870           LDW   *3            MASK OFF FUNCTION
+0 192 0 0820  0820            871           SAM
+0 193 0 11B4  1 0 1B4         872           JMP   M.TIJR        OUT DISC NEXT IR TIME
+0 194 0 90B3  9 0 0B3         873   M.TDISC2 LDX  M.TFA         LOAD FIOT AGAIN
+0 195 0 8803  8 1 003         874           LDW   *3            LOAD WORD 3 AGAIN ALSO
+0 196 0 E251  E 0 251         875           AND   X7F           7FF0
+0 197 0 C24C  C 0 24C         876           ORI   X300          MAKE DOT
+0 198 0 7199  7 0 199         877           STW   $+1
+0 199 0 0000  0000            878           DATA  0
+0 19A 0 8807  8 1 007         879           LDW   *7            MOVE STATUS WORD
+0 19B 0 7803  7 1 003         880           STW   *3
+0 19C 0 120A  1 0 20A         881           JMP   M.DDR         GO TO DRIVER DONE
+0 19D 0 8801  8 1 001         882   M.TDMD  LDW   *1            LOAD MODE
+0 19E 0 0820  0820            883           SAM                 BIN OR ALPHA
+0 19F 0 11B8  1 0 1B8         884           JMP   M.TIRR        ALPHA
+0 1A0 0 8803  8 1 003         885           LDW   *3            INPUT OR OUTPUT
+0 1A1 0 0820  0820            886           SAM
+0 1A2 0 11B8  1 0 1B8         887           JMP   M.TIRR        OUTPUT SKIP DEC NO BYTES
+0 1A3 0 90B3  9 0 0B3         888   DNWB    LDX   M.TFA         LOAD FIOT ADDRESS
+0 1A4 0 8807  8 1 007         889           LDW   *7            BIN DEC NO. WORDS IN RECORD
+0 1A5 0 B242  B 0 242         890           SUB   N1
+0 1A6 0 F241  F 0 241         891           CMW   N0
+0 1A7 0 0870  0870            892           SNE
+0 1A8 0 118E  1 0 18E         893           JMP   M.TDISC       YES DISC UNIT
+0 1A9 0 7807  7 1 007         894           STW   *7            NO RESTORE DECREM BYTE COUNT
+0 1AA 0 11B8  1 0 1B8         895           JMP   M.TIRR
+                              896   '
+                              897   ' THIS ROUTINE STORES AWAY THE NO. BYTES IN THE BINARY RECORD
+                              898   '
+0 1AB 0 90B3  9 0 0B3         899   M.TNWI  LDX   M.TFA         LOAD FIOT ADDRESS
+0 1AC 0 717B  7 0 17B         900           STW   M.TT
+0 1AD 0 8807  8 1 007         901           LDW   *7            LOAD NO. BYTES
+0 1AE 0 0A18  0A1 8           902           SLL   8
+0 1AF 0 C17B  C 0 17B         903           ORI   M.TT          MERG IN NEW CHAR
+0 1B0 0 7807  7 1 007         904           STW   *7
+0 1B1 0 8801  8 1 001         905           LDW   *1            GET MODE WORD
+0 1B2 0 C254  C 0 254         906           ORI   SIGB          AFFIRM BINARY MODE
+0 1B3 0 7801  7 1 001         907           STW   *1            AND REPLACE IT
+0 1B4 0 90B3  9 0 0B3         908   M.TIJR  LDX   M.TFA         LOAD FIOT ADDRESS
+0 1B5 0 8802  8 1 002         909           LDW   *2            YES INC JUMP COUNTER AND RETURN
+0 1B6 0 A03D  A 0 03D         910           ADD   X200          AND GO TO IRR
+0 1B7 0 7802  7 1 002         911           STW   *2
+0 1B8 0 903F  9 0 03F         912   M.TIRR  LDX   M.OPENR
+0 1B9 0 1800  1 1 000         913           JMP   *0
+
+================================================================
+PAGE 24     INTERRUPT SERVICE AREA FOR TTY AND HSPT DRIVERS
+
+0 1BA 0 90B3  9 0 0B3         914   DELR    LDX   M.TFA         LOAD FIOT ADDRESS
+0 1BB 0 8802  8 1 002         915           LDW   *2
+0 1BC 0 E03C  E 0 03C         916           AND   X1FF
+0 1BD 0 7802  7 1 002         917           STW   *2
+0 1BE 0 10EE  1 0 0EE         918           JMP   PCHN
+0 1BF 0 90B3  9 0 0B3         919   DELC    LDX   M.TFA         DELETE CHAR
+0 1C0 0 8804  8 1 004         920           LDW   *4            LOAD WORKING ADDRESS
+0 1C1 0 B242  B 0 242         921           SUB   N1
+0 1C2 0 7804  7 1 004         922           STW   *4            RESTORE
+0 1C3 0 11B8  1 0 1B8         923           JMP   M.TIRR        RETURN
+
+================================================================
+PAGE 25     TTY AND HSPT OUTPUT DRIVER AREA
+
+                              924   '                      TTY AND HSPT OUTPUT DRIVER AREA
+0 1C4 0 71CC  7 0 1CC         925   M.TDATAO STW  M.TDOT        A = OPERATION
+0 1C5 0 90B3  9 0 0B3         926           LDX   M.TFA
+0 1C6 0 8800  8 1 000         927           LDW   *0            GET BUFFER ADDRESS
+0 1C7 0 F23E  F 0 23E         928           CMW   NM1           IS IT LEADER CALL
+0 1C8 0 0100  0100            929           CLR                 OUTPUT BLANKS
+0 1C9 0 9804  9 1 004         930           LDX   *4            LOAD WA
+0 1CA 0 0860  0860            931           SEQ                 SEE IF THATS WHAT I SHOULD DO
+0 1CB 0 5800  5 1 000 0       932           LDB   *0            LOAD NEW BYTE
+0 1CC 0 0000  0000            933   M.TDOT  DATA  0
+0 1CD 0 117A  1 0 17A         934           JMP   M.PA-1
+0 1CE 0 0100  0100            935   M.TBLK  CLR                 OUTPUT A ZERO
+0 1CF 0 0000  0000            936   M.TDOT2 DATA  0
+0 1D0 0 11B4  1 0 1B4         937           JMP   M.TIJR
+0 1D1 0 068D  06 8D           938   M.TCRO  LLB   X'8D'         LOAD C/R FOR OUTPUT
+0 1D2 0 11CF  1 0 1CF         939           JMP   M.TDOT2
+0 1D3 0 90B3  9 0 0B3         940   M.TNWO  LDX   M.TFA         LOAD FIOT ADDRESS
+0 1D4 0 8807  8 1 007         941           LDW   *7
+0 1D5 0 0A48  0A4 8           942           SRC   8             SHIFT AROUND THE NO WORDS
+0 1D6 0 7807  7 1 007         943           STW   *7            RESTORE NEW NO WORDS
+0 1D7 0 11CF  1 0 1CF         944           JMP   M.TDOT2
+        003B  003B            945   DELE    EQU   XFF
+                              946           TRUE  ISHARE=YES
+                              947   DINS    DATA  X'2C0',X'2D0',X'2E0'
+                              948   FIOTS   RES   3
+                              949   SETIRI  DIN   X'C',0
+                              950           ENDC
+                              951           TRUE  SYS=NMAS
+
+================================================================
+PAGE 26     NOT ASSEMBLED FOR NON-MASS SYSTEMS
+
+                              952   'NOT ASSEMBLED FOR NON-MASS SYSTEMS
+        021B  021B            953   M.DMD   EQU   M.DUM
+                              954           ENDC
+                              955           TRUE  SYS=MASS
+                              956   '                      DISK AND MAGT DRIVER AREA
+                              957   M.DMD   STW   TMP1
+                              958           AND   XFF           CLEAN DEV, UNIT
+                              959           ORI   X200
+                              960           STW   M.DSTAT+1
+                              961           STW   M.SMT
+                              962           STW   DS2
+                              963           AND   X7F           7FF0
+                              964           ORI   X301          MERGE IN DOT AND A 1
+                              965           STW   M.DMA         STORE  DOT  DEV,1
+                              966           ADD   N1
+                              967           STW   M.DTS         STORE     DOT   DEV,2
+                              968           AND   XMBG          FFF0
+                              969           STW   M.OBUF
+                              970           TRUE  CHAIN=YES
+                              971           LDX   M.TFA
+                              972           LDW   *6            TEST FOR SPECIAL FORMAT
+                              973           SAP
+                              974           JMP   M.DDR
+                              975           LDW   *0            TEST FOR LEADER CALL
+                              976           CMW   NM1
+                              977           SNE
+                              978           JMP   M.DDR
+                              979           LDW   *2
+                              980           AND   XF
+                              981           CLB   2
+                              982           SGR                 IS IT A CHAIN CODE
+                              983           JMP   CH.CHAIN      YES
+                              984           LDW   MISA
+                              985           STW   ISRA
+                              986           ENDC
+                              987           LDX   M.TFA         GET FIOT ADR
+                              988           LDW   *2            GET FUNCTION CODE
+                              989           AND   XF            REDUCE TO SAME
+                              990           CLB   7             CHECK VERIFY CODE
+                              991           SNE                 IS IT VERIFY DATA ON DISK
+                              992           JMP   DSDT          YES IT IS OK THEN
+                              993           CLB   X'E'          IS IT WRITE
+                              994   M.MTCOM LDW   N4
+                              995           SEQ                 BUT IS IT REALLY WRITE
+                              996           LDW   N6            YES
+                              997   DSDT    ORI   M.OBUF        STORE     DOT   DEV,FC
+                              998           STW   M.DNW
+                              999           CLR                 SET WA TO ZERO FOR LAST IR
+                              1000          STW   *4
+                              1001  M.MTORD LDW   M.DSTAT+1     IS DEV DISK OR MAGT
+                              1002          AND   XF0
+                              1003          CMW   X20           COMPARE TO MAG DEV
+                              1004          SEQ
+
+================================================================
+PAGE 27     NOT ASSEMBLED FOR NON-MASS SYSTEMS
+
+                              1005          JMP   M.DOIT        NO
+                              1006  M.SMT   DATA  0               DIN  MT,UNIT
+                              1007          SLL   10              ARE WE STILL WITHIN CONTINUE
+                              1008          SAM
+                              1009          JMP   M.DOIT
+                              1010          LDW   *2            CHECK FOR CONTINUE FC
+                              1011          AND   XF
+                              1012          STW   LSR           SAVE NEW FC
+                              1013          LDW   M.DSTAT+1     LOAD UNIT NO
+                              1014          AND   XF
+                              1015          CAX                 X=UNIT
+                              1016          LDW   *M.OFC        LOAD OLD FC
+                              1017          CMW   LSR
+                              1018          SNE
+                              1019          JMP   FCEQ          FCODES =
+                              1020          LDW   LSR           SET NEW OLD FC
+                              1021          STW   *M.OFC
+                              1022          JMP   M.DOIT
+                              1023  FCEQ    LDW   M.DNW         = FCS
+                              1024          AND   X7F           7FF0
+                              1025          ORI   N3
+                              1026          STW   M.DNW
+                              1027          JMP   NDIT          DO OPERATION
+                              1028  M.DOIT  JSX   M.DSTAT       GO GET STATUS
+                              1029  NDIT    LDW   TMP1
+                              1030          JSX   NABL
+                              1031  ISRA    D     M.IDDR
+                              1032          JSX   SFIOT         SET FIOT ADDRESS
+                              1033          LDX   M.TFA         GET FIOT ADDRESS
+                              1034          LDW   *5
+                              1035          SLL   1             CALC TRACK AND SECTOR
+                              1036          SRL R 1
+                              1037          SLL L 2
+                              1038  M.DTS   DATA  0             OUTPUT TRACK AND SECTOR
+                              1039          LDW   *1            SET MAG) SPEED
+                              1040          AND   SIGB
+                              1041          STW   M.DTS
+                              1042          LDW   *0
+                              1043          ORE   SIGB          MASK OFF BB
+                              1044          ORI   M.DTS
+                              1045  M.DMA   DATA  0             OUTPUT MEMORY ADDRESS
+                              1046          LDX   *1
+                              1047          LDW   M.DSTAT+1
+                              1048          SLL   14
+                              1049          ORI   *0
+                              1050  M.DNW   DATA  0             OUTPUT NO. WORDS
+                              1051          SUB   N1            A REG=NO, WORDS
+                              1052          CAX
+                              1053          CLR
+                              1054          ADD   N1
+                              1055          DXS   47            CALC NO NEW SSECTORS
+                              1056          JMP   $-2
+                              1057          LDX   M.TFA         LOAD FIOT ADDRESS
+
+================================================================
+PAGE 28     NOT ASSEMBLED FOR NON-MASS SYSTEMS
+
+                              1058          ADD   *5
+                              1059          STW   *5            RESTORE NEW SECTOR NO
+                              1060          LDX   M.OPENR
+                              1061          UNM
+                              1062          JSX   *1            RETURN
+                              1063  M.DSTAT STX   LSR           SAVE RETURN
+                              1064          DATA  0             STUFFED WITH STAT CALL
+                              1065          SAM                 CONTROLLER BUSY
+                              1066          JMP   LS            NO LETS GO
+                              1067          SLL   1
+                              1068          SAM                 IS DEVICE BUSY
+                              1069          JMP   M.DSTAT+1     NO WAIT FOR CONTROLLER
+                              1070          LDX   FORK          NO DELAY  10 ML SEC.
+                              1071          DXS   1
+                              1072          JMP   $-1           TARRY A WHILE
+                              1073  DS2     DATA  0             DIN DEV,UNIT
+                              1074          SLL   1             STILL NOT READY
+                              1075          SAM
+                              1076          JMP   M.DSTAT+1     OK
+                              1077          LDW   M.DSTAT+1     DELAY AND DISPLAY
+                              1078          LDX   X7FF
+                              1079          AND   XFF
+                              1080          DXS   1
+                              1081          JMP   $-2
+                              1082          CLR
+                              1083          LDX   X7FF          DELAY AGAIN
+                              1084          DXS   1
+                              1085          JMP   $-1
+                              1086          JMP   M.DSTAT+1     GO TRY AGAIN
+                              1087  LS      LDX   LSR           LOAD RETURN
+                              1088          JMP   *0
+                              1089  LSR     D     0
+                              1090          TRUE  CHAIN=YES
+                              1091  '   CHAIN DEVICE DRIVER AND ITS SUBROUTINES
+                              1092  * THIS IS THE CHAIN DRIVER FOR  CHAINING MAG TAPE UNIT
+                              1093  CH.CHAIN JSX  M.DSTAT       GET STATUS BEFORE START
+                              1094          LDW   M.DSTAT+1     HAS DEVICE NO IN IT
+                              1095          JSX   STUF+3        SO STUF DOESN'T HAVE TO FIND SAME
+                              1096          LDX   M.TFA         FIND FIOT
+                              1097          LDW   *7            GET NEXT IOT ADDRESS
+                              1098          JSX   CHDT          GO SEND CHAIN DATA
+                              1099          LDW   CISA
+                              1100          STW   ISRA
+                              1101          LDX   M.TFA         RECOVER FIOT ADDRESS
+                              1102          LDW   *2            GET FUNCTION
+                              1103          AND   XF
+                              1104          CLB   1             IS IT WRITE (OR READ)
+                              1105          JMP   M.MTCOM       COMMON SEQUENCE WILL KNOW
+                              1106  STUF    SUBR                STUFFS THE DINS AND DOTS
+                              1107          JSX   FDA           GET THE UNIT
+                              1108          LDX   STUF-1        RESET RETURN
+                              1109          AND   XFF           CLEAN OT IRL
+                              1110          ORI   X200          MAKE DIN STAT
+
+================================================================
+PAGE 29     NOT ASSEMBLED FOR NON-MASS SYSTEMS
+
+                              1111          STW   CH.STAT1
+                              1112          STW   CH.STAT2
+                              1113          AND   XF0
+                              1114          ORI   X308          DOT CHAIN BUF ADR
+                              1115          STW   DBFA
+                              1116          ADD   N1            MAKES DOT CHAIN WORD CT
+                              1117          STW   DWCT
+                              1118          ADD   N1            MAKE DOT STOP CHAIN
+                              1119          STW   CSTP
+                              1120          STW   M.RATERR
+                              1121          JMP   *0            ALL OD
+                              1122  CHDT    SUBR                EXECUTES CHAIN DOTS
+                              1123          CAX                 ADDR OF FIOT TO X
+                              1124          LDW   *0            GET BUFF ADR
+                              1125          AND   X7FF          DITCH EXTRANEOUS
+                              1126  DBFA    D     0             STUFFED BY STUF
+                              1127          LDX   *1            GET WORD COUNT ADRR
+                              1128          LDW   *0            GET TYE WORD COUNT
+                              1129          AND   X3FF          8K MAXIMUM
+                              1130          ORI   SIGB          SET CHAIN FLAG
+                              1131  DWCT    D     0             STUFFED BY STUF
+                              1132          EXIT  CHDT          ALL DONE
+                              1133  CISA    D     CH.IDDR
+                              1134  MISA    D     M.IDDR
+                              1135          ENDC
+                              1136  '              MISC MAGT AREA
+                              1137  S.BKSP  MSK
+                              1138          LDW   S.032C        LOAD BACKSPACE FC
+                              1139          JMP   M.MGEN        GO TO GENERAL ROUTINE
+                              1140  S.WKSP  MSK
+                              1141          LDW   S.0327        WRITE 3 INCH BLANK TAPE
+                              1142          JMP   M.MGEN
+                              1143  S.SEOF  MSK
+                              1144          LDW   S.032D        SEARCH FOR EOF FORWARD
+                              1145          JMP   M.MGEN
+                              1146  S.RWND  MSK
+                              1147          LDW   S.032B        REWIND TAPE
+                              1148          JMP   M.MGEN
+                              1149  S.WEOF  LDW   S.0325        WRITE AN END OF FILE
+                              1150  M.MGEN  STW   M.MFCDOT
+                              1151          STX   M.OPENR
+                              1152          LDW   *0            LOAD FIOT ADDRESS
+                              1153          JSX   FDA
+                              1154          AND   XFF           CLEAN TO UNIT
+                              1155          ORI   X200          MAKE DIN STATUS
+                              1156          STW   M.MSTAT
+                              1157          AND   XF            CLEAN OLD FUNCTION CODES
+                              1158          CAX
+                              1159          SLL   14            SHIFT OVER UNIT NO FOR LATER
+                              1160          STW   *M.OFC
+                              1161  M.MSTAT DATA  0             GET STATUS FOR MISC MAG TAPE OPERATIONS
+                              1162          SAM
+                              1163          JMP   M.MRUN        DEVICE NOT BUSY
+
+================================================================
+PAGE 30     NOT ASSEMBLED FOR NON-MASS SYSTEMS
+
+                              1164          LDX   M.OPENR       DEVICE BUSY
+                              1165          LDW   M.MFCDOT      ALLOW IRS
+                              1166          UNM
+                              1167          MSK
+                              1168          JMP   M.MGEN        GO TRY AGAIN
+                              1169  M.MRUN  LDW   *M.OFC        RESET UNIT NO
+                              1170  M.MFCDOT DATA 0             PERFORM OPERATION
+                              1171  M.MRET  LDX   M.OPENR
+                              1172          UNM
+                              1173          JSX   *1            RETURN
+                              1174  S.0325  DATA  X'0325'
+                              1175  S.0327  DATA  X'0327'
+                              1176  S.032D  DATA  X'032D'
+                              1177  S.032B  DATA  X'032B'
+                              1178  S.032C  DATA  X'032C'
+                              1179  M.OFC   RES   4
+                              1180          TRUE  CHAIN=YES
+                              1181  '   CHAIN INTERRUPT SERVICE ROUTINE
+                              1182  CH.IDDR MSK                 PREVENT INTERRUPTS
+                              1183          STX   M.OPENR
+                              1184          LDW   *5            GET FIOT ADDRESS
+                              1185          STW   TMP1          AND SAVE IT
+                              1186          JSX   STUF          STUFF DINS AND DOTS
+                              1187          LDX   TMP1          GET THE FIOT ADDRESS
+                              1188          CLR
+                              1189          STW   *3            CLEAR ANY LEFT OVER STATUS
+                              1190          STW   *4            AND END ADDRESS
+                              1191  CH.STAT1 NOP                STUFFED <<< CHECK: op not in the known list
+                              1192          AND   XC1           C010
+                              1193          ORE   SIGR          REVERSE CONTROLLER BUSY  <<< CHECK: glyph reads SIGR, but the only symbol in the assembly is SIGB (254); dead code, so the X-REF cannot settle it
+                              1194          SAZ                 ANY TRUE
+                              1195          JMP   CH.EOR
+                              1196          LDW   *7            ADDR OF NEXT FIOT
+                              1197          ORI   SIGB          SET THE BUFFER PROTECT
+                              1198          STW   *7            AND PUT IT BACK
+                              1199          LDX   *2            GET THE UNIT NUMBER
+                              1200          EXCH
+                              1201          STW   *2            COPY IT TO NEW FIOT
+                              1202          CXA                 FIOT ADDR TO ACC
+                              1203          LDX   M.OPENR       POINTS TO INTERRUP SEQ
+                              1204          STW   *5            SET TO NEXT FIOT
+                              1205          CAX                 FIOT ADDRESS TO X
+                              1206          LDW   *0            GET FIRST WORD
+                              1207          ORI   SIGR          SET BUSY BIT  <<< CHECK: glyph reads SIGR, but the only symbol in the assembly is SIGB (254); dead code, so the X-REF cannot settle it
+                              1208          STW   *0            PUT IT BACK
+                              1209          LDW   *7            GET NEXT NEXT FIOT
+                              1210          SAP                 IS BUFFER PROTECT BIT ON
+                              1211          JMP   RARE          YES, PUNISH
+                              1212          SAZ                 IS THIS THE END OF CHAIN
+                              1213          JMP   GOON
+                              1214  CSTP    D     0             YES, STUFFED WITH STOP
+                              1215          LDW   TMP1          RECOVER FIOT POINTER
+                              1216          JSX   FDA           GET THE DEVICE DATA
+
+================================================================
+PAGE 31     NOT ASSEMBLED FOR NON-MASS SYSTEMS
+
+                              1217          SRL   8             POSITION THE INTERRUPT LEVEL
+                              1218          JSX   SSRA          CHANGE THE SERVICE ROUTINE
+                              1219          D     M.IDDR        TO THE STANDARD ONE
+                              1220          JMP   $+2           AND DEPART
+                              1221  GOON    JSX   CHDT          GOT SET UP CHAIN
+                              1222          LDX   TMP1          RECOVER CURRENT IODT
+                              1223          JMP   M.DDR1        FINISH UP
+                              1224  '  FOLLOWING PROCESSES END OF RECORD
+                              1225  CH.EOR  LDX   M.OPENR       MAKE IT RECURSIVE
+                              1226          UNM
+                              1227          JMP   M.IDDR        LET IDDR FINISH UP
+                              1228  '  SEQUENCE FOR A SOFTWARE RATE ERROR
+                              1229  RARE    AND   X7FF          DOUSE PROTECT BIT
+                              1230          STW   *7            PUT IT BACK
+                              1231          LDX   TMP1          GET CURRENT FIOT
+                              1232          LDW   *0            GET ITS FIRST WORD
+                              1233          AND   X7FF          TURN OFF ITS BUSY BIT
+                              1234          STW   *0            THIS IS THE ONLY CHANCE
+                              1235  M.RATERR NOP                STUFFED WITH STOP CHAIN  <<< CHECK: op not in the known list
+                              1236          LDX   M.OPENR       SO WE WILL BE RECURSIVE
+                              1237  CH.STAT2 NOP                STUFFED, STATUS DIN  <<< CHECK: op not in the known list
+                              1238          SAM                 IS CONTROLLER BUSY
+                              1239          JMP   STPD          NO, IT HAS STOPPED
+                              1240          LDW   CH.STAT2      SAVE THE INSTRUCTION
+                              1241          UNM                 ALLOW AN INTERRUPT
+                              1242          MSK                 THIS ROUTINE CAN BE RECURSED
+                              1243          STW   CH.STAT2      PUT IT BACK NOW
+                              1244          JMP   CH.STAT2
+                              1245  STPD    STX   M.OPENR       SAVE RETURN
+                              1246          LDX   *5            GET THE FIOT ADDRESS
+                              1247          LDW   X41           0041 MFG ERROR STATUS
+                              1248          STW   *3            SET SAME
+                              1249          LDW   *0
+                              1250          STW   *4            MAKE WORKING ADDRESS
+                              1251          STX   M.TFA         FOR M.DDR
+                              1252          JMP   M.DDR         FINISH UP
+                              1253          ENDC
+                              1254          ENDC
+                              1255          ENDC
+
+================================================================
+PAGE 32     NABL AND DISABL SUBROUTINES
+
+                              1256  '   NABL AND DISABL SUBROUTINES
+        003D  003D            1257  DINI    EQU   X200
+        0036  0036            1258  ENBI    EQU   X20
+0 1D8 0 717B  7 0 17B         1259  NABL    STW   TMP1
+0 1D9 0 0A08  0A0 8           1260          SRL   8             POSITION
+0 1DA 0 E039  E 0 039         1261          AND   XF            REDUCE TO INTERRUPT
+0 1DB 0 C036  C 0 036         1262          ORI   ENBI          CONSTRUCT ENB
+0 1DC 0 71DD  7 0 1DD         1263          STW   $+1           EXECUTE SAME
+0 1DD 0 0000  0000            1264          D     0             STUFFED WITH ENB
+0 1DE 0 61DD  6 0 1DD         1265  SSRA    STX   $-1           SET SERVICE ROUTINE
+0 1DF 0 E039  E 0 039         1266          AND   XF            JUST IRL NEEDED
+0 1E0 0 0A12  0A1 2           1267          SLL   2             MUP BY 4
+0 1E1 0 9800  9 1 000         1268          LDX   *0            GET ARGUMENT
+0 1E2 0 0A78  0A78            1269          EXCH                <<< CHECK: op not in the known list
+0 1E3 0 0A78  0A78
+0 1E4 0 7803  7 1 003         1270          STW   *3            SET SERVICE ADDRESS
+0 1E5 0 817B  8 0 17B         1271          LDW   TMP1
+0 1E6 0 91DD  9 0 1DD         1272          EXIT  SSRA,1        GO BACK
+0 1E7 0 2801  2 1 001
+0 1E8 0 0000  0000            1273
+0 1E9 0 61E8  6 0 1E8               DSBL    SUBR                DISABLE AN INTERRUPT
+0 1EA 0 20B5  2 0 0B5         1274          JSX   FDA
+0 1EB 0 0A08  0A0 8           1275          SRL   8             POSITION IR NUMBER
+0 1EC 0 E039  E 0 039         1276          AND   XF            REDUCE TO IRL ONLY
+                              1277          TRUE  ISHARE=YES
+                              1278          SAZ                 TEST TO ESE IF IRO IS DOING
+                              1279          JMP   GODSIR        NO-ANY OTHER I/O
+                              1280          LDW   SETIRT        DIN   X'C',0
+                              1281  DTSM    CAX
+                              1282          STW   $+1           STORE DIN INST
+                              1283          D     0
+                              1284          SAP
+                              1285          JMP   EDSBL         EXIT DO DISABLE IR
+                              1286          CXA
+                              1287          ADD   X10
+                              1288          CLB   X'F0'         SEE IF WE ARE DONE
+                              1289          SEQ
+                              1290          JMP   DTSM
+                              1291          CLR
+                              1292          ENDC
+0 1ED 0 C1F2  C 0 1F2         1293  GODSIR  ORI   DSBI
+0 1EE 0 71EF  7 0 1EF         1294          STW   $+1           AND EXECUTE IT
+0 1EF 0 0000  0000            1295          D     0
+0 1F0 0 91E8  9 0 1E8         1296  EDSBL   EXIT  DSBL          RETURN
+0 1F1 0 2800  2 1 000
+0 1F2 0 0030  003 0           1297  DSBI    DSB   0
+        01F3  01F3            1298  WEOF    EQU   $
+                              1299          TRUE  SYS=MASS
+                              1300          MSK
+                              1301          STX   M.DR
+                              1302          LDW   *0            GET FIOT
+                              1303          JSX   FDA
+                              1304          AND   XF0           MASK ALL BUT DEVICE CODE
+
+================================================================
+PAGE 33     NABL AND DISABL SUBROUTINES
+
+                              1305          CLB   X'20'         IS TI MAG TAPE?
+                              1306          LDX   M.OPENR
+                              1307          SNE                 HUH?
+                              1308          JMP   S.WEOF        YES, HARDWARE WILL DO IT
+                              1309          UNM
+                              1310          SGR                 IS IT DISK
+                              1311          JSX   *1            NOTHING WILL DO IT
+                              1312          ENDC
+0 1F3 0 0140  0140            1313          CXA                 RETURN TO ACC
+0 1F4 0 C254  C 0 254         1314          ORI   SIGB          SET SIGN FOR WEOF FLAG
+0 1F5 0 0130  0130            1315          CAX                 AND IMITATE JSX TO
+0 1F6 0 1083  1 0 083         1316          JMP   DOIO          DOIO
+
+================================================================
+PAGE 34     I/O DONE AREA
+
+                              1317  '                  I/O DONE AREA
+0 1F7 0 00A0  00A0            1318  M.IDDR  MSK
+0 1F8 0 603F  6 0 03F         1319          STX   M.OPENR       SAVE RETURN
+0 1F9 0 8805  8 1 005         1320          LDW   *5            LOAD FIOT ADDRESS
+0 1FA 0 70B3  7 0 0B3         1321          STW   M.TFA
+0 1FB 0 225A  2 0 25A         1322          JSX   GST           GET STATUS
+0 1FC 0 90B3  9 0 0B3         1323          LDX   M.TFA         GET FIOT ADDRESS
+0 1FD 0 7803  7 1 003         1324          STW   *3            STORE STATUS
+0 1FE 0 8804  8 1 004         1325          LDW   *4            TEST WA FOR DMA DEVICE
+0 1FF 0 0800  0800            1326          SAZ
+0 200 0 120A  1 0 20A         1327          JMP   M.DDR         NOT DMA LEAVE ALONE
+0 201 0 80B3  8 0 0B3         1328          LDW   M.TFA
+0 202 0 20B5  2 0 0B5         1329          JSX   FDA           FIND DEVICE NUMBER
+0 203 0 E03A  E 0 03A         1330          AND   XF0
+0 204 0 C24B  C 0 24B         1331          ORI   X204          DIN DEV,4..GET W.A.+1
+0 205 0 7206  7 0 206         1332          STW   $+1
+0 206 0 0000  0000            1333  M.WA    DATA  0
+0 207 0 0A11  0A1 1           1334          SLL   1             MAKE BYTE ADDRESS
+0 208 0 90B3  9 0 0B3         1335          LDX   M.TFA
+0 209 0 7804  7 1 004         1336          STW   *4
+0 20A 0 80B3  8 0 0B3         1337  M.DDR   LDW   M.TFA         GET FIOT ADR
+0 20B 0 21E9  2 0 1E9         1338          JSX   DSBL          TURN OF THE INTERRUPT
+0 20C 0 90B3  9 0 0B3         1339          LDX   M.TFA         GET THE FIOT ADR
+0 20D 0 8800  8 1 000         1340  M.DDR1  LDW   *0
+0 20E 0 E252  E 0 252         1341          AND   X7FF          7FFF
+0 20F 0 7800  7 1 000         1342          STW   *0
+0 210 0 8806  8 1 006         1343          LDW   *6            LOAD END ACTION
+0 211 0 E252  E 0 252         1344          AND   X7FF               DO NOT TEST SIGN BIT
+0 212 0 0800  0800            1345          SAZ
+0 213 0 1217  1 0 217         1346          JMP   M.EA
+0 214 0 903F  9 0 03F         1347          LDX   M.OPENR       NO END ACTION
+0 215 0 00B0  00B0            1348          UNM
+0 216 0 2800  2 1 000         1349          JSX   *0
+0 217 0 803F  8 0 03F         1350  M.EA    LDW   M.OPENR       LOAD RETURN FOR END ACTION
+0 218 0 9806  9 1 006         1351          LDX   *6            GO TO END ACTION
+0 219 0 00B0  00B0            1352          UNM
+0 21A 0 2800  2 1 000         1353          JSX   *0
+0 21B 0 903F  9 0 03F         1354  M.DUM   LDX   M.OPENR       SET BB OFF
+0 21C 0 9800  9 1 000         1355          LDX   *0            LOAD FIOT ADDRESS
+0 21D 0 120A  1 0 20A         1356          JMP   M.DDR
+
+================================================================
+PAGE 35     INTERRUPT HERE AREA
+
+                              1357  '                 INTERRUPT HERE AREA
+0 21E 0 7225  7 0 225         1358  IRH0    STW   $+7
+0 21F 0 6226  6 0 226         1359          STX   $+7
+0 220 0 9003  9 0 003         1360          LDX   3             FOR TY AND HSPT
+0 221 0 2800  2 1 000         1361          JSX   *0
+0 222 0 8225  8 0 225         1362          LDW   $+3
+0 223 0 9226  9 0 226         1363          LDX   $+3
+0 224 0 0010  001 0           1364          INR   0
+0 225 0 0000  0000            1365          DATA  0
+0 226 0 0000  0000            1366          DATA  0
+0 227 0 0000  0000            1367          DATA  0             THIS CELL FOR FIOT ADDRESS
+                              1368          TRUE  ICHN=4
+                              1369  IRH1    STW   $+7
+                              1370          STX   $+7
+                              1371          LDX   7             SPARE
+                              1372          JSX   *0
+                              1373          LDW   $+3
+                              1374          LDX   $+3
+                              1375          INR   1
+                              1376          DATA  0
+                              1377          DATA  0
+                              1378          DATA  0             THIS CELL FOR FIOT ADDRESS
+                              1379  IRH2    STW   $+7
+                              1380          STX   $+7
+                              1381          LDX   11            MAGT
+                              1382          JSX   *0
+                              1383          LDW   $+3
+                              1384          LDX   $+3
+                              1385          INR   2
+                              1386          DATA  0
+                              1387          DATA  0
+                              1388          DATA  0             THIS CELL FOR FIOT ADDRESS
+                              1389  IRH3    STW   $+7
+                              1390          STX   $+7
+                              1391          LDX   15            DISK
+                              1392          JSX   *0
+                              1393          LDW   $+3
+                              1394          LDX   $+3
+                              1395          INR   3
+                              1396          DATA  0
+                              1397          DATA  0
+                              1398          DATA  0             THIS CELL FOR FIOT ADDRESS
+                              1399          ENDC
+
+================================================================
+PAGE 36     PEAT TABLE
+
+                              1400  '                PEAT TABLE
+                              1401  *                        NAME     UNIT
+                              1402  *  THE PHYSICAL UNIT ASSIGNMENT TABLE IS GENERATED
+                              1403  *  UP TO THE HIGHEST NUMBERED UNIT PRESENT IN THE
+                              1404  *  SYSTEM
+                              1405  *  PETE TABLE FORMAT IS AS FOLLOWS
+                              1406  *                 *******************
+                              1407  *         PETE(0) *P   INH* DEV* UN *    WORD 1
+                              1408  *                 *******************
+                              1409  *         PETE(1) * DRIVER ADDRESS  *    WORD 2
+                              1410  *                 *******************
+0 228 0       0D              1411  PEAT    BYTE  ASYSF,0     SYSF     0
+0 228 1              00
+0 229 0       0D              1412          BYTE  ASYSI,0     SYSI     1
+0 229 1              00
+0 22A 0       0D              1413          BYTE  APRIN,0     PRIN     2
+0 22A 1              00
+0 22B 0       0D              1414          BYTE  ALIST,0     LIST     3
+0 22B 1              00
+0 22C 0       0D              1415          BYTE  ABIN,0      BIN      4
+0 22C 1              00
+0 22D 0       0D              1416          BYTE  ABOUT,0     BOUT     5
+0 22D 1              00
+0 22E 0       0C              1417          BYTE  ASCR,0      SCR      6
+0 22E 1              00
+0 22F 0       0D              1418          BYTE  ALOGA,0
+0 22F 1              00
+0 230 0       0D              1419          BYTE  ALOGB,0
+0 230 1              00
+0 231 0       0C              1420          BYTE  ALOGC,0
+0 231 1              00
+0 232 0       0C              1421          BYTE  ALOGD,0
+0 232 1              00
+0 233 0       0C              1422          BYTE  ALOGE,0
+0 233 1              00
+0 234 0       80              1423          BYTE  X'80',0     DUMMY    12
+0 234 1              00
+0 235 0 021B  021B            1424          DATA  M.DUM
+0 236 0       80              1425          BYTE  X'80'+TTYI,X'E0'     TTY      13
+0 236 1              E0
+0 237 0 00E6  00E6            1426          DATA  M.THSPT
+                              1427          FALS  NUNITS=0
+                              1428          BYTE  X'80'+MAGI,X'20'     MAG0     14
+                              1429          DATA  M.DMD
+                              1430          BYTE  X'80'+MAGI,X'21'     MAG1     15
+                              1431          DATA  M.DMD
+                              1432          BYTE  X'80'+MAGI,X'22'     MAG2     16
+                              1433          DATA  M.DMD
+                              1434          BYTE  X'80'+MAGI,X'23'     MAG3     17
+                              1435          DATA  M.DMD
+                              1436          FALS  NUNITS-NMAG=0
+                              1437          BYTE  X'80'+DSKI,X'10'     DSK0     18
+                              1438          DATA  M.DMD
+
+================================================================
+PAGE 37     PEAT TABLE
+
+                              1439          FALS  NUNITS-NMAG-NDSK0=0
+                              1440          BYTE  X'80'+PCHI,X'C0'     PNCH     19
+                              1441          DATA  M.THSPT
+                              1442          FALS  NUNITS-NMAG-NDSK0-NPCH=0
+                              1443          BYTE  X'80'+PTRI,X'D0'     REDR     20
+                              1444          DATA  M.THSPT
+                              1445          FALS  NUNITS-NMAG-NDSK0-NPCH-NPTR=0
+                              1446          BYTE  DUM,0                CARD RDR 21
+                              1447          D     0
+                              1448          FALS  NUNITS-NMAG-NDSK0-NPTR-NCDR-NPCH=0
+                              1449          BYTE  DUM,0                CARD PCH 22
+                              1450          D     0
+                              1451          FALS  NUNITS-NMAG-NDSK0-NPTR-NCDR-NCPC-NPCH=0
+                              1452          BYTE  DUM,0                LN PRTR 0 23
+                              1453          D     0
+                              1454          BYTE  DUM,0                LN PRTR 1 24
+                              1455          D     0
+                              1456          FALS  NUNITS-NMAG-NDSK0-NPTR-NCDR-NCPC-NPCH-NLPR=0
+                              1457          BYTE  X'80'+DSKI,X'11'     DSK1     25
+                              1458          D     M.DMD
+                              1459          BYTE  X'80'+DSKI,X'12'     DSK2     26
+                              1460          D     M.DMD
+                              1461          BYTE  X'80'+DSKI,X'13'     DSK3     27
+                              1462          D     M.DMD
+                              1463          ENDC
+                              1464          ENDC
+                              1465          ENDC
+                              1466          ENDC
+                              1467          ENDC
+                              1468          ENDC
+                              1469          ENDC
+                              1470          ENDC
+                              1471          ENDC
+        0238  0238            1472  ENDP    EQU   $
+
+================================================================
+PAGE 38     CONSTANTS AREA
+
+                              1473  '                CONSTANTS AREA
+0 238 0 0000  0000            1474  M.OTMNW DATA  0
+0 239 0 021E  021E            1475  ARH0    D     IRH0
+                              1476          TRUE  ICHN=4
+                              1477  ARH1    D     IRH1
+                              1478  ARH2    D     IRH2
+                              1479  ARH3    D     IRH3
+                              1480          ENDC
+0 23A 0 0228  0228            1481  AP      D     PEAT
+0 23B 0 000A  000A            1482  N10     D     10
+0 23C 0 000C  000C            1483  N12     D     12
+0 23D 0 001B  001B            1484  N27     D     27
+0 23E 0 FFFF  FFFF            1485  NM1     D     -1
+0 23F 0 FFFC  FFFC            1486  NM4     D     -4
+0 240 0 FFE5  FFE5            1487  NM27    D     -27
+                              1488          TRUE  SYS=MASS
+                              1489  FORK    DATA  4096
+                              1490  N6      DATA  6
+                              1491  N15H    D     1500
+                              1492  X41     D     X'41'
+                              1493  X301    D     X'301'
+                              1494  X308    D     X'308'
+                              1495  X3FF    D     X'3FFF'
+                              1496  X4      D     X'4000'
+                              1497  XC0     D     X'C000'
+                              1498  XC1     D     X'C010'
+                              1499  XMBG    D     X'FFF0'
+                              1500          ENDC
+0 241 0 0000  0000            1501  N0      D     0
+0 242 0 0001  0001            1502  N1      DATA  1
+0 243 0 0002  0002            1503  N2      DATA  2
+0 244 0 0003  0003            1504  N3      D     3
+0 245 0 0004  0004            1505  N4      DATA  4
+0 246 0 0005  0005            1506  N5      DATA  5
+0 247 0 0007  0007            1507  N7      DATA  7
+0 248 0 0008  0008            1508  N8      D     8
+0 249 0 0009  0009            1509  N9      D     9
+0 24A 0 000B  000B            1510  XB      D     X'B'
+0 24B 0 0204  0204            1511  X204    D     X'204'
+0 24C 0 0300  0300            1512  X300    D     X'300'
+0 24D 0 030E  030E            1513  X30E    D     X'30E'
+0 24E 0 0400  0400            1514  X400    D     X'400'
+0 24F 0 0800  0800            1515  X800    D     X'800'
+0 250 0 0C00  0C00            1516  XC00    DATA  X'C00'
+0 251 0 7FF0  7FF0            1517  X7F     D     X'7FF0'
+0 252 0 7FFF  7FFF            1518  X7FF    D     X'7FFF'
+0 253 0 1200  1200            1519  X1200   D     X'1200'
+0 254 0 8000  8000            1520  SIGB    D     X'8000'
+0 255 0 8004  8004            1521  X84     D     X'8004'
+0 256 0 8100  8100            1522  X81     D     X'8100'
+0 257 0 0000  0000            1523  M.OBUF  DATA  0
+0 258 0 0000  0000            1524  M.OUNIT DATA  0
+                              1525          TRUE  SYS=MASS
+
+================================================================
+PAGE 39     CONSTANTS AREA
+
+                              1526  S.STUS  LDW   *0            GET FIOT ARGUMENT
+                              1527          MSK
+                              1528          STX   LSR           SAVE RETURN
+                              1529          JSX   GST
+                              1530          LDX   LSR           RECOVER RETURN
+                              1531          UNM
+                              1532          JMP   *1            AND GO BACK
+                              1533          ENDC
+0 259 0 0000  0000            1534
+0 25A 0 6259  6 0 259                 GST     SUBR
+0 25B 0 20B5  2 0 0B5         1535           JSX   FDA
+0 25C 0 E03B  E 0 03B         1536           AND   XFF           REDUCE TO DEVICE ONLY
+0 25D 0 2261  2 0 261         1537           JSX   ST+1
+0 25E 0 9259  9 0 259         1538           EXIT  GST           RETURN
+0 25F 0 2800  2 1 000
+0 260 0 E03A  E 0 03A         1539  ST      AND   XF0             CLEAN
+0 261 0 7257  7 0 257         1540          STW   M.TSD         SAVE DEVICE
+                              1541          TRUE  PNCH=1
+                              1542          CLB   X'C0'
+                              1543          SNE                 SKIP IF NO PUNCH
+                              1544          DOT   X'C',?        YES TURN IT ON
+                              1545          ENDC
+0 262 0 C03D  C 0 03D         1546          ORI   X200          BUILD BIN STATUS
+0 263 0 7264  7 0 264         1547          STW   $+1
+0 264 0 0000  0000            1548  WEE     DATA  0
+0 265 0 2800  2 1 000         1549          JSX   *0            RETURN
+                              1550          FALS  SOFTWARE=BASIC
+                              1551  'XRAY IS A PART OF THE MONITOR FOR BASIC SYSTEMS ONLY
+                              1552          ENDC
+                              1553          TRUE  SOFTWARE=BASIC
+
+================================================================
+PAGE 40     X-RAY MAIN CONTROL SUBROUTINE
+
+                              1554  '                     X-RAY MAIN CONTROL SUBROUTINE
+                              1555  *       AL    ABSO LOAD     S.FILL
+                              1556  *       RL    RELO LOAL     S.RLOAD
+                              1557  *       RM    LOAD MAP      S.MAP
+                              1558  *       DA    SET DATE
+                              1559  *       ID    SET ID NAME
+                              1560  *       D     DUMP          S.DUMP
+                              1561  *       H     HEX CORRECT   S.HXCORR
+                              1562  *       T     TRANSFER      S.TRANS
+                              1563  *       BB    MULTIPLE INSERTION OF HEX DATA
+                              1564  *       P     PUNCH         S.PUNCH
+                              1565  *       LL    LIB LOAD      S.LLIB <<< CHECK: final letter B/R ambiguous; symbol not in the table
+                              1566  *
+0 266 0 2065  2 0 065         1567  XRAY    JSX   OPEN,FIOT,BUF,N27,SYSI,RTIK,ALPH
+0 267 0 0321  0321
+0 268 0 0334  0334
+0 269 0 023D  023D
+0 26A 0 0001  0001
+0 26B 0 000B  000B
+0 26C 0 8000  8000
+0 26D 0 2083  2 0 083         1568          JSX   DOIO,FIOT
+0 26E 0 8321  8321
+0 26F 0 201C  2 0 01C         1569          JSX   STAT,FIOT
+0 270 0 8321  8321
+0 271 0 8334  8 0 334         1570          LDW   BUF           LOAD DIRECTIVE CHAR
+0 272 0 924A  9 0 24A         1571          LDX   XB            LOOK FOR 12 DIRECTIVES
+0 273 0 FA87  F 1 287         1572  S.XSSM  CMW   * S.XDA
+0 274 0 0870  0870            1573          SNE
+0 275 0 1283  1 0 283         1574          JMP   S.XFD
+0 276 0 0501  05 01           1575          DXS   1
+0 277 0 1273  1 0 273         1576          JMP   S.XSSM
+0 278 0 8323  8 0 323         1577          LDW   FIOT+2        GET READY TO OUTPUT
+0 279 0 D246  D 0 246         1578          ORE   N5            2 QUESTION MARKS
+0 27A 0 7323  7 0 323         1579          STW   FIOT+2
+0 27B 0 2083  2 0 083         1580          JSX   DOIO,FIOT,QMES,N1
+0 27C 0 0321  0321
+0 27D 0 0282  0282
+0 27E 0 8242  8242
+0 27F 0 201C  2 0 01C         1581          JSX   STAT,FIOT
+0 280 0 8321  8321
+0 281 0 1266  1 0 266         1582          JMP   XRR           GET A BETTER DIR NEXT TIME
+0 282 0 BFBF  BFBF            1583  QMES    DATA  X'BFBF'
+0 283 0 9A93  9 1 293         1584  S.XFD   LDX   * S.XDSUBS    LOAD ADDRESS OF ROUTINE
+0 284 0 8267  8 0 267         1585          LDW   XRAY+1        LOAD FIOT ADDRESS
+0 285 0 2800  2 1 000         1586          JSX   * 0
+0 286 0 1266  1 0 266         1587          JMP   XRR           RETURN TO X-RAY
+0 287 0 D0A0  D0A0            1588  S.XDA   DATA  'P '          PUNCH ABSO TAPE
+0 288 0 C4C1  C4C1            1589          DATA  'DA'          DATE
+0 289 0 D4A0  D4A0            1590          DATA  'T '          TRANSFER
+0 28A 0 C2C2  C2C2            1591          DATA  'BB'
+0 28B 0 C8A0  C8A0            1592          DATA  'H '          HEX CORRECTION
+0 28C 0 C4A0  C4A0            1593          DATA  'D '          DUMP
+0 28D 0 C9C4  C9C4            1594          DATA  'ID'          NAME
+
+================================================================
+PAGE 41     X-RAY MAIN CONTROL SUBROUTINE
+
+0 28E 0 C1CC  C1CC            1595          DATA  'AL'          ABSO LOAD
+0 28F 0 C5D4  C5D4            1596          D     'ET'
+0 290 0 C3CC  C3CC            1597          D     'CL'
+0 291 0 C9CC  C9CC            1598          D     'IL'
+0 292 0 C9CF  C9CF            1599          D     'IO'          IO REASSIGNMENT
+0 293 0 0352  0352            1600  S.XDSUBS DATA PXCH          PUNCH ABSOLUTE TAPE
+0 294 0 02A0  02A0            1601          DATA  DATR
+0 295 0 0319  0319            1602          DATA  S.TRANS       TRANSFER
+0 296 0 0386  0386            1603          DATA  BB
+0 297 0 036F  036F            1604          DATA  HX
+0 298 0 02E8  02E8            1605          DATA  DUMP
+0 299 0 02A3  02A3            1606          DATA  ID
+0 29A 0 03A6  03A6            1607          DATA  S.FILL              ABSO LOAD
+0 29B 0 07FD  07FD            1608  MMAP    D     2045
+0 29C 0 07FE  07FE            1609  LBLD    D     2046
+0 29D 0 07FF  07FF            1610  RELD    D     2047
+0 29E 0 029F  029F            1611          D     IORE
+        0266  0266            1612  XRR     EQU   XRAY
+                              1613          TRUE  SYS+NPCH+NPTR>0
+                              1614  IORE    JSX   UNPK
+                              1615          LDW   S.TEMP1       GET LUN
+                              1616          CLB   12            IS IT ASSIGNABLE
+                              1617          SLS
+                              1618          JMP   XRR           NO
+                              1619          ADD   AP            COMPUTE PEAT ADDRESS
+                              1620          CAX
+                              1621          LDW   S.TEMP2       GET NEW ASSIGNMENT
+                              1622          SLL   8             POSITION
+                              1623          STW   * 0           SET ASSIGNMENT
+                              1624          JMP   XRR
+                              1625          ENDC
+                              1626          FALS  SYS+NPCH+NPTR>0
+0 29F 0 1266  1 0 266         1627  IORE    JMP   XRR
+                              1628          ENDC
+0 2A0 0 82A7  8 0 2A7         1629  DATR    LDW   IDC           SET ADDRESS IN ID
+0 2A1 0 B245  B 0 245         1630          SUB   N4
+0 2A2 0 72A7  7 0 2A7         1631          STW   IDC
+0 2A3 0 0040  0040            1632  ID      SLM                 PREPARE TO MOVE DATA TO LOWER CORE
+0 2A4 0 923F  9 0 23F         1633          LDX   NM4           -4
+0 2A5 0 8B39  8 1 339         1634          LDW   * BUF+5
+0 2A6 0 0080  008 0           1635          SML   0
+0 2A7 0 7865  7 1 065         1636  IDC     STW   * NAME+4
+0 2A8 0 0401  04 01           1637          IXS   1             DECREMENT COUNT IN XR
+0 2A9 0 12A5  1 0 2A5         1638          JMP   $-4           DO MORE
+0 2AA 0 82AD  8 0 2AD         1639          LDW   $+3           RESET ADDRESS
+0 2AB 0 72A7  7 0 2A7         1640          STW   IDC
+0 2AC 0 1266  1 0 266         1641          JMP   XRR
+0 2AD 0 7865  7 1 065         1642          STW   * NAME+4
+
+================================================================
+PAGE 42     X-RAY SUBROUTINE UNPK
+
+                              1643  '                     X-RAY SUBROUTINE UNPK
+0 2AE 0 0000  0000            1644
+0 2AF 0 62AE  6 0 2AE               UNPK    SUBR
+0 2B0 0 0100  0100            1645          CLR                 ZERO ARGUMENT COUNTER
+0 2B1 0 72DE  7 0 2DE         1646          STW   COMC          CLEAR COMMA COUNTER
+0 2B2 0 7238  7 0 238         1647          STW   S.CHAR        ZERO CHAR STORAGE
+0 2B3 0 717B  7 0 17B         1648          STW   S.XACNT
+0 2B4 0 8321  8 0 321         1649          LDW   FIOT
+0 2B5 0 A242  A 0 242         1650          ADD   N1
+0 2B6 0 0A11  0A1 1           1651          SLL   1             MAKE BYTE ADD
+0 2B7 0 12BA  1 0 2BA         1652          JMP   $+3
+0 2B8 0 8257  8 0 257         1653  S.XBEG  LDW   S.SX
+0 2B9 0 A242  A 0 242         1654          ADD   N1
+0 2BA 0 F325  F 0 325         1655          CMW   FIOT+4        OMPARE TO END ADD
+0 2BB 0 0870  0870            1656          SNE
+0 2BC 0 12D9  1 0 2D9         1657          JMP   S.XUR         DONE GO TO RETURN
+0 2BD 0 7257  7 0 257         1658          STW   S.SX          NOT DONE YET
+0 2BE 0 0130  0130            1659          CAX
+0 2BF 0 5800  5 1 000 0       1660          LDB   * 0           LOAD THE NEXT CHAR
+0 2C0 0 07AC  07 AC           1661          CLB   ','           IS CHAR A COMMA
+0 2C1 0 0870  0870            1662          SNE
+0 2C2 0 12CD  1 0 2CD         1663          JMP   S.COMMA       YES
+0 2C3 0 A037  A 0 037         1664          ADD   X40
+0 2C4 0 0700  07 00           1665          CLB   0
+0 2C5 0 0840  0840            1666          SLS
+0 2C6 0 A249  A 0 249         1667          ADD   N9
+0 2C7 0 0A1C  0A1 C           1668          SLL   12
+0 2C8 0 0130  0130            1669          CAX
+0 2C9 0 8238  8 0 238         1670          LDW   S.CHAR        LOAD PREVIOUS CHARS
+0 2CA 0 0A74  0A7 4           1671          SLC D 4             SHIFT IN NEW CHARS
+0 2CB 0 7238  7 0 238         1672          STW   S.CHAR
+0 2CC 0 12B8  1 0 2B8         1673          JMP   S.XBEG        GO DO ANOTHER CHAR
+0 2CD 0 917B  9 0 17B         1674  S.COMMA LDX   S.XACNT       COMMA FOUND MOVE DATA TO ARG ARRAY
+0 2CE 0 82DE  8 0 2DE         1675          LDW   COMC          INC NO OF COMMAS
+0 2CF 0 A242  A 0 242         1676          ADD   N1            IE, NO OF DATA TO STORE
+0 2D0 0 72DE  7 0 2DE         1677          STW   COMC
+0 2D1 0 8238  8 0 238         1678          LDW   S.CHAR
+0 2D2 0 7B2A  7 1 32A         1679          STW   * S.ARG
+0 2D3 0 0140  0140            1680          CXA
+0 2D4 0 A242  A 0 242         1681          ADD   N1
+0 2D5 0 717B  7 0 17B         1682          STW   S.XACNT
+0 2D6 0 0100  0100            1683          CLR
+0 2D7 0 7238  7 0 238         1684          STW   S.CHAR
+0 2D8 0 12B8  1 0 2B8         1685          JMP   S.XBEG
+0 2D9 0 917B  9 0 17B         1686  S.XUR   LDX   S.XACNT
+0 2DA 0 8238  8 0 238         1687          LDW   S.CHAR
+0 2DB 0 7B2A  7 1 32A         1688          STW   * S.ARG
+0 2DC 0 92AE  9 0 2AE         1689          EXIT  UNPK
+0 2DD 0 2800  2 1 000
+0 2DE 0 0000  0000            1690  COMC    DATA  0
+
+================================================================
+PAGE 43     X-RAY DUMP SUBROUTINE
+
+                              1691  '                     X-RAY DUMP SUBROUTINE
+                              1692  *       DUMP  LOC1,LOC2
+                              1693  *             DYNAMIC DUMP FROM PROGRAMS
+0 2DF 0 8800  8 1 000         1694  DMP     LDW   * 0
+0 2E0 0 732A  7 0 32A         1695          STW   S.LOC1        RELOCATE ADDRESSES
+0 2E1 0 8801  8 1 001         1696          LDW   * 1
+0 2E2 0 732B  7 0 32B         1697          STW   S.NBR1
+0 2E3 0 0402  04 02           1698          IXS   2
+0 2E4 0 0000  000 0           1699          HLT
+0 2E5 0 62E7  6 0 2E7         1700          STX   DUMP-1
+0 2E6 0 12EA  1 0 2EA         1701          JMP   DUMP+2        GO DUMP NOW
+                              1702  *  DUMP SUBROUTINE                         J.R. NELSON     RAYTHEON
+                              1703  *
+                              1704          NTRY  DUMP <<< CHECK: op not in the known list
+0 2E7 0 0000  0000            1705
+0 2E8 0 62E7  6 0 2E7               DUMP    SUBR
+0 2E9 0 22AF  2 0 2AF         1706          JSX   UNPK          UNPACK ARGUMENTS
+0 2EA 0 2065  2 0 065         1707          JSX   OPEN,FIOT,S.BUFF,N27,LIST,WTTY,ALPH
+0 2EB 0 0321  0321
+0 2EC 0 0334  0334
+0 2ED 0 023D  023D
+0 2EE 0 0003  0003
+0 2EF 0 000E  000E
+0 2F0 0 8000  8000
+0 2F1 0 832B  8 0 32B         1708          LDW   S.NBR1        CALC NO WORDS TO OUTPUT
+0 2F2 0 B32A  B 0 32A         1709          SUB   S.LOC1
+0 2F3 0 732B  7 0 32B         1710          STW   S.NBR1
+0 2F4 0 9240  9 0 240         1711  S.NEXTL LDX   NM27          -27
+0 2F5 0 632C  6 0 32C         1712          STX   S.XSAVE
+0 2F6 0 8329  8 0 329         1713          LDW   S.LDW10
+0 2F7 0 72FC  7 0 2FC         1714          STW   S.NEXTW+1
+0 2F8 0 832A  8 0 32A         1715          LDW   S.LOC1
+0 2F9 0 12FD  1 0 2FD         1716          JMP   S.PAK         GO PRINT(LOCATION)
+0 2FA 0 632C  6 0 32C         1717          STX   S.XSAVE
+0 2FB 0 932A  9 0 32A         1718  S.NEXTW LDX   S.LOC1
+0 2FC 0 8800  8 1 000         1719          LDW   * 0           PICKUP VALUE FROM CORE LOCATION
+0 2FD 0 2392  2 0 392         1720  S.PAK   JSX   S.PACK        GO PACK WORD
+0 2FE 0 932C  9 0 32C         1721          LDX   S.XSAVE
+0 2FF 0 8331  8 0 331         1722          LDW   S.SAVE1
+0 300 0 7B4F  7 1 34F         1723          STW   * S.BUFF+27         SAVE PACKED WORD
+0 301 0 8332  8 0 332         1724          LDW   S.SAVE2
+0 302 0 7B50  7 1 350         1725          STW   * S.BUFF+28
+0 303 0 803E  8 0 03E         1726          LDW   XA0A          A0A0
+0 304 0 7B51  7 1 351         1727          STW   * S.BUFF+29
+0 305 0 82FC  8 0 2FC         1728          LDW   S.NEXTW+1             INCR
+0 306 0 A242  A 0 242         1729          ADD   N1
+0 307 0 72FC  7 0 2FC         1730          STW   S.NEXTW+1
+0 308 0 0403  04 03           1731          IXS   3             SEE IF ALL OUTPUT
+0 309 0 12FA  1 0 2FA         1732          JMP   S.NEXTW-1           NO
+0 30A 0 2083  2 0 083         1733          JSX   DOIO,FIOT     OUTPUT LINE
+0 30B 0 8321  8321
+0 30C 0 201C  2 0 01C         1734          JSX   STAT,FIOT
+0 30D 0 8321  8321
+
+================================================================
+PAGE 44     X-RAY DUMP SUBROUTINE
+
+0 30E 0 832B  8 0 32B         1735          LDW   S.NBR1        YES
+0 30F 0 B248  B 0 248         1736          SUB   N8
+0 310 0 0810  0810            1737          SAP                 SEE IF MORE LINES TO OUTPUT
+0 311 0 1317  1 0 317         1738          JMP   DEND          NO
+0 312 0 732B  7 0 32B         1739          STW   S.NBR1
+0 313 0 832A  8 0 32A         1740          LDW   S.LOC1        YES
+0 314 0 A248  A 0 248         1741          ADD   N8
+0 315 0 732A  7 0 32A         1742          STW   S.LOC1
+0 316 0 12F4  1 0 2F4         1743  S.JERRY JMP   S.NEXTL       GO GET NEXT LINE
+0 317 0 92E7  9 0 2E7         1744  DEND    EXIT  DUMP
+0 318 0 2800  2 1 000
+
+================================================================
+PAGE 45     TRANSFER
+
+                              1745  '                   TRANSFER
+0 319 0 22AF  2 0 2AF         1746  S.TRANS JSX   UNPK          UNPACK ARGUMENTS
+0 31A 0 832A  8 0 32A         1747          LDW   S.ARG         IF S.ARG=0 THEN GO TO S.RBEGIN
+0 31B 0 F241  F 0 241         1748          CMW   N0
+0 31C 0 9055  9 0 055         1749          LDX   RBEG
+0 31D 0 0870  0870            1750          SNE
+0 31E 0 2800  2 1 000         1751          JSX   * 0
+0 31F 0 932A  9 0 32A         1752          LDX   S.ARG
+0 320 0 2800  2 1 000         1753          JSX   * 0
+0 321 0 0000  0000            1754  FIOT    RES   8
+0 329 0 87FF  87FF            1755  S.LDWI0 DATA  X'87FF'
+0 32A 0 0000  0000            1756  S.TEMP1 DATA  0
+0 32B 0 0000  0000            1757  S.TEMP2 DATA  0
+0 32C 0 0000  0000            1758  S.TEMP3 DATA  0
+0 32D 0 0000  0000            1759  S.TEMP4 DATA  0
+0 32E 0 0000  0000            1760  S.TEMP5 DATA  0
+0 32F 0 0000  0000            1761  S.TEMP6 DATA  0
+0 330 0 0000  0000            1762  S.TEMP7 DATA  0
+0 331 0 0000  0000            1763  S.TEMP8 DATA  0
+0 332 0 0000  0000            1764  S.TEMP9 DATA  0
+0 333 0 0000  0000            1765  S.TEMP10 DATA  0
+0 334 0 0000  0000            1766  S.BUFF  RES   30
+
+================================================================
+PAGE 46     PUNCH
+
+0 351 0 0000  0000            1767  '                   PUNCH
+0 352 0 22AF  2 0 2AF         1768  PXCH    JSX   UNPK          UNPACK ARGUMENTS
+0 353 0 2065  2 0 065         1769          JSX   OPEN,FIOT,X'7FFF',N1,BOUT,WTTY,BINT
+0 354 0 0321  0321
+0 355 0 7FFF  7FFF
+0 356 0 0242  0242
+0 357 0 0005  0005
+0 358 0 000E  000E
+0 359 0 8001  8001
+                              1770          TRUE  NPCH=NO
+0 35A 0 0000  000 0           1771          HLT                 WAIT FOR TURN ON OF PUNCH
+                              1772          ENDC
+0 35B 0 2083  2 0 083         1773          JSX   DOIO,FIOT     PUT LEADER ON TAPE
+0 35C 0 8321  8321
+0 35D 0 2083  2 0 083         1774          JSX   DOIO,FIOT,S.ARG PUNCH LOCATION
+0 35E 0 0321  0321
+0 35F 0 832A  832A
+0 360 0 832A  8 0 32A         1775          LDW   S.ARG         RELOCATE BUFFER ADDRESS
+0 361 0 7367  7 0 367         1776          STW   S.PD+2
+0 362 0 832B  8 0 32B         1777          LDW   S.ARG+1       CALC NO WORDS TO OUTPUT
+0 363 0 B32A  B 0 32A         1778          SUB   S.ARG
+0 364 0 732B  7 0 32B         1779          STW   S.ARG+1
+0 365 0 2083  2 0 083         1780  S.PD    JSX   DOIO,FIOT,,S.ARG+1 PUNCH DATA OUT
+0 366 0 0321  0321
+0 367 0 0000  0000
+0 368 0 832B  832B
+0 369 0 2083  2 0 083         1781          JSX   DOIO,FIOT,X'7FFF' PUT LEADER ON TAPE
+0 36A 0 0321  0321
+0 36B 0 FFFF  FFFF
+0 36C 0 201C  2 0 01C         1782          JSX   STAT,FIOT
+0 36D 0 8321  8321
+                              1783          TRUE  NPCH=YES
+                              1784          DOT   X'C',3        TURN OFF PUNCH
+                              1785          ENDC
+0 36E 0 1266  1 0 266         1786          JMP   XRR           RETURN TO X-RAY
+
+================================================================
+PAGE 47     X-RAY S.HXCORR SUBROUTINE
+
+                              1787  '                  X-RAY  S.HXCORR SUBROUTINE
+                              1788  *   INSERT DATA IN CORE SUBROUTINE
+0 36F 0 22AF  2 0 2AF         1789  HX      JSX   UNPK          UNPACK ARGS
+0 370 0 8385  8 0 385         1790          LDW   ADAT          RESET DATA LOC
+0 371 0 7378  7 0 378         1791          STW   S.DL
+0 372 0 832A  8 0 32A         1792          LDW   S.LOC         SET STORAGE LOC
+0 373 0 0820  0820            1793          SAM                 IF NEG CONT LAST ADD
+0 374 0 737D  7 0 37D         1794          STW   S.LL          SET STORAGE LOC
+0 375 0 9378  9 0 378         1795  HXCR    LDX   S.DL
+0 376 0 8800  8 1 000         1796          LDW   * 0           LOAD NEXT DATA
+0 377 0 0401  04 01           1797          IXS   1             INC AND STORE NEXT DATA
+0 378 0 0000  0000            1798  S.DL    DATA  0             LOCATION
+0 379 0 6378  6 0 378         1799          STX   S.DL
+0 37A 0 937D  9 0 37D         1800          LDX   S.LL          LOAD LOC TO STORE DATA
+0 37B 0 7800  7 1 000         1801          STW   * 0
+0 37C 0 0401  04 01           1802          IXS   1             INC AND STORE NEXT LOC
+0 37D 0 0000  0000            1803  S.LL    DATA  0             TO STORE DATA
+0 37E 0 637D  6 0 37D         1804          STX   S.LL
+0 37F 0 82DE  8 0 2DE         1805          LDW   COMC          DEC NO OF TIMES TO STORE
+0 380 0 B242  B 0 242         1806          SUB   N1
+0 381 0 72DE  7 0 2DE         1807          STW   COMC
+0 382 0 0800  0800            1808          SAZ
+0 383 0 1375  1 0 375         1809          JMP   HXCR
+0 384 0 1266  1 0 266         1810          JMP   XRR           RETURN ALL DONE
+0 385 0 032B  032B            1811  ADAT    DATA  S.DATA
+                              1812  *                  BLANK BUFFER AREA
+                              1813  *
+0 386 0 22AF  2 0 2AF         1814  BB      JSX   UNPK          UNPACK ARGS
+0 387 0 932A  9 0 32A         1815          LDX   S.LOC         LOAD STORAGE LOCATION
+0 388 0 832B  8 0 32B         1816          LDW   S.DATA        LOAD DATA TO STORE
+0 389 0 7800  7 1 000         1817          STW   * 0           STORE DATA
+0 38A 0 832C  8 0 32C         1818          LDW   S.NBR         SUB 1 FROM NUMBER OF TIMES TO STORE
+0 38B 0 B242  B 0 242         1819          SUB   N1
+0 38C 0 732C  7 0 32C         1820          STW   S.NBR
+0 38D 0 0800  0800            1821          SAZ                 TEST FOR DONE
+0 38E 0 0401  04 01           1822          IXS   1
+0 38F 0 1266  1 0 266         1823          JMP   XRR           RETURN TO X-RAY
+0 390 0 1388  1 0 388         1824          JMP   BB+2
+                              1825  *   PACK TO OUTPUT TO TTL SUBROUTINE        J.R. NELSON       9/8/67
+                              1826  *
+0 391 0 0000  0000            1827
+0 392 0 6391  6 0 391               S.PACK  SUBR
+0 393 0 7332  7 0 332         1828          STW   S.SAVE2
+0 394 0 239C  2 0 39C         1829          JSX   S.XPND
+0 395 0 7331  7 0 331         1830          STW   S.SAVE1
+0 396 0 8332  8 0 332         1831          LDW   S.SAVE2
+0 397 0 0A18  0A1 8           1832          SLL   8
+0 398 0 239C  2 0 39C         1833          JSX   S.XPND
+0 399 0 7332  7 0 332         1834          STW   S.SAVE2
+0 39A 0 9391  9 0 391         1835          EXIT  S.PACK
+0 39B 0 2800  2 1 000
+0 39C 0                       1836  S.XPND  RES   0
+0 39C 0 0A04  0A0 4           1837          SRL   4
+
+================================================================
+PAGE 48     S.HXCORR SUBROUTINE
+
+0 39D 0 0AA4  0AA 4           1838          SRL R 4
+0 39E 0                       1839  S.XPNC  RES   0
+0 39E 0 0810  0810            1840          SAP
+0 39F 0 2800  2 1 000         1841          JSX   *0
+0 3A0 0 0A58  0A5 8           1842          SLC   8
+0 3A1 0 0709  07 09           1843          CLB   9
+0 3A2 0 0890  0890            1844          SLE
+0 3A3 0 A247  A 0 247         1845          ADD   N7
+0 3A4 0 A038  A 0 038         1846          ADD   XB0
+0 3A5 0 139E  1 0 39E         1847          JMP   S.XPNC
+
+================================================================
+PAGE 49     SUBROUTINE S.FILL
+
+                              1848  '                  X-RAY SUBROUTINE S.FILL
+0 3A6 0 2065  2 0 065         1849  S.FILL  JSX   OPEN,FIOT,S.ARG,X7F,BIN,RTIP,HINT
+0 3A7 0 0321  0321
+0 3A8 0 032A  032A
+0 3A9 0 0251  0251
+0 3AA 0 0004  0004
+0 3AB 0 0009  0009
+0 3AC 0 8001  8001
+0 3AD 0 2083  2 0 083         1850          JSX   DOIO,FIOT     READ PROGRAM LOCATION
+0 3AE 0 8321  8321
+0 3AF 0 201C  2 0 01C         1851          JSX   STAT,FIOT
+0 3B0 0 8321  8321
+0 3B1 0 832A  8 0 32A         1852          LDW   S.ARG
+0 3B2 0 7321  7 0 321         1853          STW   FIOT
+0 3B3 0 2083  2 0 083         1854          JSX   DOIO,FIOT     NOW READ PROGRAM
+0 3B4 0 8321  8321
+0 3B5 0 201C  2 0 01C         1855          JSX   STAT,FIOT
+0 3B6 0 8321  8321
+                              1856          TRUE  NPTR=NO
+0 3B7 0 0000  000 0           1857          HLT
+                              1858          ENDC
+0 3B8 0 1266  1 0 266         1859          JMP   XRR           RETURN TO X-RAY
+0 3B9 0 0000  0000            1860  ENDA    DATA  0
+
+================================================================
+PAGE 50     SYMBOL TABLE
+
+                              1861  '                 SYMBOL TABLE
+0 3B9 0*******930             1862
+
+X-REF
+
+    000D    ABIN      0 000 0   0 22C 0
+    000D    ABOUT     0 000 0   0 000 0   0 000 0   0 22D 0
+    0 385 0 ADAT      0 370 0
+    000D    ALIST     0 000 0   0 22B 0
+    000D    ALOGA     0 000 0   0 22F 0
+    000D    ALOGB     0 000 0   0 230 0
+    000C    ALOGC     0 000 0   0 231 0
+    000C    ALOGD     0 000 0   0 232 0
+    000C    ALOGE     0 000 0   0 233 0
+    0000    ALPH      0 065 0   0 26C 0   0 2F0 0
+    0 23A 0 AP        0 0C4 0
+    000D    APRIN     0 000 0   0 22A 0
+    0 32A 0 ARG       0 065 0
+    0 239 0 ARH0      0 067 0   0 0E0 0
+    000C    ASCR      0 000 0   0 22E 0
+    000D    ASYSF     0 000 0   0 228 0
+    000D    ASYSI     0 000 0   0 229 0
+    0000    BASIC     0 000 0   0 000 0   0 000 0   0 040 0   0 040 0   0 266 0   0 266 0
+    0 386 0 BR        0 296 0   0 390 0
+    0004    BIN       0 065 0   0 3AA 0
+    0001    BINT      0 065 0   0 359 0   0 3AC 0
+    0005    BOUT      0 065 0   0 357 0
+    0 334 0 BUF       0 065 0   0 268 0   0 271 0   0 2A5 0
+    0015    CDRI      0 000 0
+    0015    CDRO      0 000 0
+    0000    CHAIN     0 000 0   0 000 0   0 000 0
+    0 2DE 0 COMC      0 2B1 0   0 2CF 0   0 2D0 0   0 37F 0   0 381 0
+    0 05C 0 CORE
+    1000    CORESIZE  0 000 0   0 000 0   0 000 0   0 05A 0   0 05C 0
+    0016    CPCI      0 000 0
+    0016    CPCO      0 000 0   0 000 0   0 000 0
+    0 05D 0 DATE
+    0 2A0 0 DATR      0 294 0
+    0 1BF 0 DELC      0 173 0
+    0 03B 0 DELE      0 171 0   0 1D8 0
+    0 1BA 0 DELR      0 170 0
+    0 317 0 DEND      0 311 0
+    0 03D 0 DINI      0 1D8 0
+    0 2DF 0 DMP       0 056 0   0 057 0
+    0 1A3 0 DNWB      0 14C 0   0 18A 0
+    0 083 0 DOIO      0 044 0   0 045 0   0 1F6 0   0 26D 0   0 27B 0   0 30A 0   0 35B 0   0 35D 0
+                      0 365 0   0 369 0   0 3AD 0   0 3B3 0
+    0 089 0 DORS      0 0ED 0
+    0 134 0 DREOF     0 10F 0
+    0 131 0 DRRET     0 131 0   0 137 0
+    0 1F2 0 DSBI      0 1ED 0
+    0 1E9 0 DSBL      0 1F0 0   0 20B 0
+    0014    DSKI      0 000 0
+
+================================================================
+PAGE 51     SYMBOL TABLE
+
+    0012    DSKO      0 000 0   0 000 0
+    0019    DSK1      0 000 0
+    000C    DUM       0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+DEF 0 2E8 0 DUMP      0 298 0   0 2E5 0   0 2E6 0   0 317 0
+    0 1F0 0 EDSBL
+    0 036 0 ENBI      0 1D8 0   0 1DB 0
+    0 054 0 END
+    0 3B9 0 ENDA      0 054 0
+    0 05B 0 ENDM
+    0 238 0 ENDP      0 000 0   0 238 0
+    0001    EXTENDED  0 000 0
+    0 0B5 0 FDA       0 07F 0   0 0B0 0   0 0CB 0   0 0D8 0   0 1EA 0   0 202 0   0 25B 0
+    0 321 0 FIOT      0 267 0   0 26E 0   0 270 0   0 278 0   0 27A 0   0 27C 0   0 280 0   0 284 0
+                      0 2BA 0   0 2E8 0   0 30B 0   0 30D 0   0 354 0   0 35C 0   0 35E 0   0 366 0
+                      0 36A 0   0 36D 0   0 3A7 0   0 3AE 0   0 3B0 0   0 3B2 0   0 3B4 0   0 3B6 0
+    0 1ED 0 GOUSIR
+    0 25A 0 GST       0 1FB 0   0 25E 0
+    0 36F 0 HX        0 297 0
+    0 375 0 HXCR      0 383 0
+    0001    ICHN      0 000 0   0 069 0   0 228 0   0 23A 0
+    0 2A3 0 ID        0 299 0
+    0 2A7 0 IDC       0 2A0 0   0 2A2 0   0 2AB 0
+    0 29F 0 IORE      0 29E 0
+    0 21E 0 IRH0      0 239 0
+    0000    ISHARE    0 000 0   0 131 0   0 139 0   0 13B 0   0 1D8 0   0 1ED 0
+    0 29C 0 LHLD
+    0000    LBSTYP    0 000 0   0 058 0
+    0003    LIST      0 065 0   0 2EE 0
+    0017    LPRI      0 000 0
+    0017    LPRO      0 000 0
+    0 20A 0 M.DDR     0 19C 0   0 200 0   0 21D 0
+    0 20D 0 M.DDR1
+    0 0B3 0 M.DF      0 065 0   0 091 0   0 098 0   0 0A1 0   0 0A7 0   0 0AF 0   0 0E2 0   0 0EF 0
+                      0 0F5 0   0 10B 0   0 11C 0   0 12B 0   0 162 0
+    0 0A7 0 M.DGO     0 094 0
+    0 0A5 0 M.DGO1    0 09C 0
+    0 21B 0 M.DMD     0 1D8 0
+    0 03F 0 M.DR      0 065 0   0 08A 0   0 092 0   0 095 0   0 09A 0   0 09F 0   0 0A3 0   0 0A6 0
+                      0 0EB 0
+    0 21B 0 M.DUM     0 1D8 0   0 235 0
+    0 217 0 M.EA      0 213 0
+    0 1F7 0 M.IDDR
+    0 257 0 M.OBUF    0 065 0   0 06E 0   0 076 0   0 0E6 0
+    0 03F 0 M.OPENR   0 065 0   0 065 0   0 066 0   0 080 0   0 0F2 0   0 0FF 0   0 10D 0   0 131 0
+                      0 1B8 0   0 1F8 0   0 214 0   0 217 0   0 21B 0
+    0 089 0 M.OSDEV   0 0D4 0
+    0 238 0 M.OTMNW   0 065 0   0 06C 0   0 074 0   0 0B1 0   0 0B7 0   0 0CA 0   0 0D0 0
+    0 258 0 M.OUNIT   0 070 0   0 078 0   0 0CF 0   0 0D3 0
+    0 178 0 M.PA      0 065 0   0 065 0   0 0F6 0   0 1CD 0
+    0 02C 0 M.SM1R    0 021 0
+    0 02F 0 M.SP1R    0 023 0
+    0 032 0 M.SP2R    0 026 0
+    0 03F 0 M.SRET    0 01D 0   0 027 0   0 029 0   0 02C 0   0 02F 0   0 032 0   0 065 0
+
+================================================================
+PAGE 52     SYMBOL TABLE
+
+    0 1CE 0 M.TBLK    0 151 0   0 152 0   0 153 0
+    0 1D1 0 M.TCRO    0 150 0
+    0 16A 0 M.TDATAI  0 14B 0
+    0 1C4 0 M.TDATAO  0 14F 0
+    0 146 0 M.TDIN
+    0 18E 0 M.TDISC   0 15D 0   0 176 0   0 1A8 0
+    0 194 0 M.TDISC2  0 154 0
+    0 18B 0 M.TDISC3  0 183 0
+    0 19D 0 M.TDMD    0 181 0
+    0 1CC 0 M.TDOT    0 1C4 0
+    0 1CF 0 M.TDOT2   0 141 0   0 1D2 0   0 1D7 0
+    0 0B3 0 M.TFA     0 065 0   0 0D7 0   0 13A 0   0 16A 0   0 177 0   0 17D 0   0 18F 0   0 194 0
+                      0 1A3 0   0 1AB 0   0 1B4 0   0 1BA 0   0 1BF 0   0 1C5 0   0 1D3 0   0 1FA 0
+                      0 1FC 0   0 201 0   0 208 0   0 20A 0   0 20C 0
+    0 0E6 0 M.THSPT   0 237 0
+    0 1B4 0 M.TIJR    0 158 0   0 186 0   0 193 0   0 1D0 0
+    0 1B8 0 M.TIRR    0 15B 0   0 19F 0   0 1A2 0   0 1AA 0   0 1C3 0
+    0 148 0 M.TJMP    0 155 0
+    0 155 0 M.TJMPA   0 13D 0
+    0 156 0 M.TLFI    0 148 0
+    0 1AB 0 M.TNWI    0 14A 0   0 160 0
+    0 1D3 0 M.TNWO    0 14D 0   0 14E 0
+    0 11B 0 M.TSCR    0 114 0   0 117 0
+    0 257 0 M.TSD     0 0E6 0   0 0FA 0   0 261 0
+    0 17B 0 M.TT      0 0E6 0   0 161 0   0 169 0   0 1AC 0   0 1AF 0
+    0 206 0 M.WA
+    0 15E 0 M.1CHAR   0 149 0
+    0013    MAGI      0 000 0
+    000E    MAG0      0 000 0   0 000 0
+    000F    MAG1      0 000 0
+    0010    MAG2      0 000 0
+    0011    MAG3      0 000 0
+    0001    MASS      0 000 0   0 054 0   0 1D8 0   0 1F3 0   0 241 0   0 259 0
+    000C    MASU      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+    001C    MAXP      0 000 0   0 0C0 0
+    0 29B 0 MMAP
+    0 1D8 0 NABL      0 0E6 0
+    0 061 0 NAME      0 2A7 0   0 2AD 0
+    0000    NCDR      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+    0000    NCPC      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+    0000    NDSK      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+                      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+                      0 000 0
+    0000    NDSK0     0 000 0
+    0 0C4 0 NGTR      0 0BE 0
+    0000    NLPR      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+    0000    NMAG      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+                      0 000 0   0 000 0   0 000 0
+    0000    NMAS      0 000 0   0 000 0   0 048 0   0 1D8 0
+    000D    NMI       0 000 0   0 000 0   0 000 0   0 000 0
+    000D    NMO       0 000 0   0 000 0   0 000 0
+    0000    NMSU      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+    0 23E 0 NM1       0 097 0   0 0AB 0   0 0DC 0   0 126 0   0 1C7 0
+
+================================================================
+PAGE 53     SYMBOL TABLE
+
+    0 240 0 NM27      0 2F4 0
+    0 23F 0 NM4       0 2A4 0
+    0000    NO        0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+                      0 139 0   0 35A 0   0 3B7 0
+    0000    NPCH      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+                      0 29F 0   0 29F 0   0 35A 0   0 36E 0
+    0000    NPTR      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+                      0 000 0   0 0F1 0   0 29F 0   0 29F 0   0 3B7 0
+    0 10C 0 NSPEC     0 0FE 0   0 105 0
+    0 125 0 NS1       0 122 0
+    0000    NUNITS    0 000 0   0 238 0
+    0 0CE 0 NYET      0 0C2 0   0 0C8 0
+    0 241 0 N0        0 1A6 0   0 31B 0
+    0 242 0 N1        0 0A4 0   0 0A5 0   0 124 0   0 1A5 0   0 1C1 0   0 27E 0   0 2B5 0   0 2B9 0
+                      0 2CF 0   0 2D4 0   0 306 0   0 356 0   0 380 0   0 38B 0
+    0 23B 0 N10       0 0DD 0
+    0 23C 0 N12       0 0C3 0
+    0 243 0 N2
+    0 23D 0 N27       0 128 0   0 269 0   0 2ED 0
+    0 244 0 N3
+    0 245 0 N4        0 2A1 0
+    0 246 0 N5        0 279 0
+    0 247 0 N7        0 3A3 0
+    0 248 0 N8        0 30F 0   0 314 0
+    0 249 0 N9        0 2C6 0
+    0 065 0 OPEN      0 042 0   0 043 0   0 266 0   0 2EA 0   0 353 0   0 3A6 0
+    0012    PCHI      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+    0 0EE 0 PCHN      0 0EA 0   0 1BE 0
+    0013    PCH0      0 000 0
+    0 228 0 PEAT      0 000 0   0 23A 0
+    0000    PNCH      0 000 0   0 262 0
+    0011    PTRI      0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+    0014    PTR0      0 000 0
+    0 352 0 PXCH      0 293 0
+    0 282 0 QMES      0 27D 0
+    0 055 0 RBEG      0 31C 0
+    0000    RBSTYP    0 000 0   0 058 1
+    0 29D 0 RELD
+    000B    RTIK      0 065 0   0 26B 0
+    0009    RTIP      0 065 0   0 3AB 0
+    0 32A 0 S.ARG     0 065 0   0 2D2 0   0 2DB 0   0 31A 0   0 31F 0   0 35F 0   0 360 0   0 362 0
+                      0 363 0   0 364 0   0 368 0   0 3A8 0   0 3B1 0
+    0 334 0 S.BUFF    0 065 0   0 2EC 0   0 300 0   0 302 0   0 304 0
+    0 238 0 S.CHAR    0 065 0   0 2B2 0   0 2C9 0   0 2CB 0   0 2D1 0   0 2D7 0   0 2DA 0
+    0 2CD 0 S.COMMA   0 2C2 0
+    0 32B 0 S.DATA    0 065 0   0 385 0   0 388 0
+    0 378 0 S.DL      0 371 0   0 375 0   0 379 0
+    0 3A6 0 S.FILL    0 29A 0
+    0 316 0 S.JERRY
+    0 329 0 S.LDWI0   0 2F6 0
+    0 37D 0 S.LL      0 374 0   0 37A 0   0 37E 0
+    0 32A 0 S.LOC     0 065 0   0 372 0   0 387 0
+    0 32A 0 S.LOC1    0 065 0   0 2E0 0   0 2F2 0   0 2F8 0   0 2FB 0   0 313 0   0 315 0
+
+================================================================
+PAGE 54     SYMBOL TABLE
+X-REF FORMAT:  DEFINITION-VALUE   NAME   REFERENCE-ADDRESSES ...
+
+XRAY            SYMBOL TABLE            02/07/68     PASS B     PAGE 54
+
+0 32C 0   S.NBR      0 065 0   0 38A 0   0 38C 0
+0 32B 0   S.NBR1     0 065 0   0 2E2 0   0 2F1 0   0 2F3 0   0 30E 0   0 312 0
+0 2F4 0   S.NEXTL    0 316 0
+0 2FB 0   S.NEXTW    0 2F7 0   0 305 0   0 307 0   0 309 0
+0 392 0   S.PACK     0 2FD 0   0 39A 0
+0 2FD 0   S.PAK      0 2F9 0
+0 365 0   S.PD       0 361 0
+0 331 0   S.SAVE1    0 065 0   0 2FF 0   0 395 0
+0 332 0   S.SAVE2    0 065 0   0 301 0   0 393 0   0 396 0   0 399 0
+0 052 0   S.STUS
+0 257 0   S.SX       0 065 0   0 2B8 0   0 2B0 0
+0 32D 0   S.TBUFF    0 065 0
+0 32A 0   S.TEMP1    0 065 0   0 065 0   0 065 0   0 065 0
+0 333 0   S.TEMP10
+0 32B 0   S.TEMP2    0 065 0   0 065 0
+0 32C 0   S.TEMP3    0 065 0   0 065 0
+0 32D 0   S.TEMP4    0 065 0
+0 32E 0   S.TEMP5
+0 32F 0   S.TEMP6
+0 330 0   S.TEMP7
+0 331 0   S.TEMP8    0 065 0
+0 332 0   S.TEMP9    0 065 0
+0 319 0   S.TRANS    0 295 0
+0 17B 0   S.XACNT    0 065 0   0 2B3 0   0 2CD 0   0 2D5 0   0 2D9 0
+0 2B8 0   S.XBEG     0 2CC 0   0 2D8 0
+0 287 0   S.XDA      0 273 0
+0 293 0   S.XDSUBS   0 283 0
+0 283 0   S.XFD      0 275 0
+0 39E 0   S.XPNC     0 3A5 0
+0 39C 0   S.XPNU     0 394 0   0 398 0
+0 32C 0   S.XSAVE    0 065 0   0 2F5 0   0 2FA 0   0 2FF 0
+0 273 0   S.XSSM     0 277 0
+0 2D9 0   S.XUR      0 2BC 0
+0 0D6 0   SFIOT      0 0E4 0   0 0EE 0
+0 254 0   SIGB       0 0A9 0   0 0AE 0   0 1B2 0   0 1F4 0
+0000      SOFTWARE   0 000 0   0 000 0   0 040 0   0 040 0   0 266 0   0 266 0
+0 1DE 0   SSRA       0 1E6 0
+0 260 0   ST         0 0E8 0   0 25D 0
+0001      STANDARD   0 000 0   0 000 0
+0 01C 0   STAT       0 02E 0   0 046 0   0 047 0   0 26F 0   0 27F 0   0 30C 0   0 36C 0   0 3AF 0   0 3B5 0
+0 058 0   'STYPE
+0000      SYL0       0 000 0   0 000 0
+0000      SYL1       0 000 0   0 000 0
+0000      SYL6       0 000 0   0 000 0
+0000      SYL7       0 000 0   0 000 0
+0000      SYR0       0 000 0   0 000 0
+0000      SYR1       0 000 0   0 000 0
+0000      SYR2       0 000 0   0 000 0
+0000      SYR4       0 000 0   0 000 0
+0000      SYR6       0 000 0   0 000 0
+0000      SYS        0 000 0   0 048 0   0 054 0   0 1D8 0   0 1D8 0   0 1F3 0   0 241 0   0 259 0   0 29F 0   0 29F 0
+
+================================================================
+PAGE 55     SYMBOL TABLE
+X-REF FORMAT:  DEFINITION-VALUE   NAME   REFERENCE-ADDRESSES ...
+
+XRAY            SYMBOL TABLE            02/07/68     PASS B     PAGE 55
+
+0001      SYSI       0 065 0   0 26A 0
+0 138 0   TIRS       0 0E7 0
+0 177 0   TLWA       0 16D 0
+0 17B 0   TMP1       0 065 0   0 1D8 0   0 1E5 0
+000D      TTY        0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 000 0
+0000      TTYI       0 000 0   0 000 0   0 000 0   0 000 0   0 000 0   0 236 0
+0 05A 0   ULIM
+0 2AF 0   UNPK       0 2DC 0   0 2E9 0   0 319 0   0 352 0   0 36F 0   0 386 0
+0 264 0   WEE
+0 1F3 0   WEOF       0 050 0   0 051 0   0 1F3 0
+000E      WTTY       0 065 0   0 2EF 0   0 358 0
+0 03E 0   XA0A       0 303 0
+0 24A 0   XB         0 272 0
+0 038 0   XB0        0 3A4 0
+0 250 0   XC00       0 0CD 0
+0 039 0   XF         0 0D1 0   0 0DA 0   0 0F1 0   0 1DA 0   0 1DF 0   0 1EC 0
+0 03B 0   XFF        0 1D8 0   0 25C 0
+0 03A 0   XF0        0 203 0   0 260 0
+0 266 0   XRAY       0 018 0   0 019 0   0 040 0   0 041 0   0 05B 0   0 284 0   0 29F 0
+0 266 0   XRR        0 281 0   0 286 0   0 29F 0   0 29F 0   0 2AC 0   0 36E 0   0 384 0   0 38F 0   0 3B8 0
+0 03C 0   X1FF       0 0B9 0   0 1BC 0
+0 035 0   X10        0 15C 0
+0 253 0   X1200      0 134 0
+0 036 0   X20        0 1D8 0
+0 03D 0   X200       0 188 0   0 1B6 0   0 1D8 0   0 262 0
+0 24B 0   X204       0 204 0
+0 24D 0   X30E
+0 24C 0   X300       0 0F7 0   0 197 0
+0 037 0   X40        0 2C3 0
+0 24E 0   X400       0 164 0
+0 251 0   X7F        0 196 0   0 3A9 0
+0 252 0   X7FF       0 09E 0   0 167 0   0 20E 0   0 211 0
+0 24F 0   X800       0 18C 0
+0 256 0   X81        0 0F9 0
+0 255 0   X84        0 0FD 0   0 144 0
+0001      YES        0 000 0   0 000 0   0 131 0   0 13B 0   0 1D8 0   0 1ED 0   0 36E 0
+
+NO ERRORS
+
+CARDS  SYMBOLS    LITR  STACK
+1862   278   561   0     6

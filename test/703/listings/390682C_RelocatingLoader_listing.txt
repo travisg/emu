@@ -1,0 +1,1300 @@
+RELOCATING LOADER - BASIC, DN 390682 (Revision C), 08/9/68, ID code BNP
+Assembly listing (Appendix A of the scanned document), transcribed by hand
+from the 600 dpi page images.  The PDF has no OCR text layer.
+
+Source: 390682C_RelocatingLoaderBasic_Nov1968.pdf, 52 pages.  Pages 1-21 are
+prose and flowcharts; page 23 is the "APPENDIX A / ASSEMBLY LISTING" divider;
+pages 24-51 are the listing, printed as PAGE 2 through PAGE 29.  Listing PAGE 1
+is not in the scan -- the divider sheet stands in its place -- so card 1 is
+lost, exactly as it is for X-RAY.  Everything from card 2 on is present.
+
+Layout of a listing line, reproduced as printed:
+
+    ADDR    OBJ   FIELDS    CARD  LABEL   OP    OPERAND      COMMENT
+    0 63D 0 7546  7 0 546   500           STW   BIAS          SAVE IT
+
+  ADDR    word address, with the assembler's leading and trailing digits
+  OBJ     the assembled word
+  FIELDS  the same word split into opcode / index bit / M field.  This is
+          redundant with OBJ and is the transcription's built-in check: the
+          fields must recompose to the word.
+  CARD    source card number, 1..1786
+  ...     label, mnemonic, operand and comment as punched
+
+Lines with no ADDR/OBJ generated no object code: they are comment cards (a
+quote or an asterisk in column 1), or directives that produce no word, or the
+TRUE/FALS/ENDC conditionals themselves.
+
+CARD NUMBERS ARE NOT CONTIGUOUS, and this listing differs from X-RAY's in the
+way that matters most.  When a conditional is not taken, its body is not
+printed at all -- not printed without object code, simply absent, with its card
+numbers missing from the sequence.  Card 5 is `TRUE LOADER=STANDARD` and card 7
+is its `ENDC`; card 6 is nowhere on the page.  X-RAY's listing printed untaken
+bodies in full, which is why a third of that transcript is code that never
+assembled.  Here there is nothing to transcribe: the source of the STANDARD and
+DISK loaders is not in this document.
+
+So a gap in the card numbers is normal and is not a dropped line.  The
+conditional and its ENDC always print, and page boundaries are contiguous.
+
+The right margin of the printed page carries the punched-card sequence field,
+"NP nnnnn", one per card.  It is not transcribed -- the card number column
+already gives a running count -- and neither is the page number beside it,
+which appears in the PAGE headings below.
+
+This assembly is LOADER EQU BASIC.  Every card printed here was assembled, so
+every card has printed object to check a transcription against -- which is not
+true of X-RAY's listing.
+
+Trailer of the original listing: CARDS 1786 SYMBOLS 175 583 LITR 0 STACK 6.
+
+Transcription progress: 28 of 28 scanned pages.
+
+================================================================
+PAGE 2      RELOCATING LOADER - 703 BASIC SYSTEMS   DN390682
+
+                                 2  '   RELOCATING LOADER - 703 BASIC SYSTEMS   DN390682
+                                 3           ORIG  0             NEEDED FOR REVERSE ORIG
+                                 4           ENDC
+                                 5           TRUE  LOADER=STANDARD
+                                 7           ENDC
+                                 8           TRUE  LOADER=DISK
+                                10           ENDC
+        0040  0040              11  XRAY     EQU   X'40'
+        0044  0044              12  DOIO     EQU   X'44'
+        0046  0046              13  STAT     EQU   X'46'
+        0048  0048              14  BKSP     EQU   X'48'
+        004E  004E              15  RWND     EQU   X'4E'
+        0054  0054              16  ENDA     EQU   X'54'
+        0055  0055              17  RBEG     EQU   X'55'
+        005A  005A              18  ULIM     EQU   X'5A'
+        0058  0058              19  STYP     EQU   X'58'
+        006E  006E              20  TYPE     EQU   X'6E'
+        0074  0074              21  DVEC     EQU   X'74'
+        002F  002F              22  RCRDSIZE EQU   47
+        001D  001D              23  SECTINCR EQU   29
+        0000  0000              24  BASIC    EQU   0
+        0001  0001              25  STANDARD EQU   1
+        0002  0002              26  DISK     EQU   2
+                                27  *  LOADER DEFINITION CARD
+                                28  *
+                                29  *
+        0000  0000              30  LOADER   EQU   BASIC
+                                31  *
+                                32  ********************************************************
+                                33           FALS  LOADER=BASIC
+                                35           ENDC
+                                36           TRUE  LOADER=BASIC
+        0002  0002              37  NAMESIZE EQU   2
+                                38           ENDC
+                                39  *
+                                40  *        LOADER FLAGS
+                                41  *
+                                42  *       0   PRINT ONLY UNDEFINED, ALSO READ ERROR FLAG
+                                43  *       1   THERE ARE UNDEFINED NAMES IN THE ENT
+                                44  *       2   BYTEPAGE REQUIRED
+                                45  *       3   LIBRARY PHASE
+                                46  *       4   PRINT A LOAD MAP
+                                47  *       5   LOAD DRUG AND HALT BEFORE EXECUTION
+                                48  *       6   EXECUTE DESPITE MISSING
+                                49  *       7   UNCONDITION NO PRINT
+                                50  *       8   FORTRAN TYPE,(UNPAGED)
+                                51  *       9   PAGE ASSIGNED BY BLK PSEUDO-OP
+                                52           FALS  LOADER=BASIC
+                                54           ENDC
+        0545  0545              55  START    EQU   $
+                                56           FALS  LOADER=BASIC
+                                90           ENDC
+
+================================================================
+PAGE 3      CONSTANTS AND TEMPS
+
+                                91  '  CONSTANTS AND TEMPS
+                                92  *  FOLLOWING TEMPS ARE ASSEMBLED TO LOOK LIKE FIOT FOR DISK LOADER
+0 545 0 0545  0545              93  BASE     D     TEMP3
+0 546 0 007F  007F              94  BIAS     D     X'7F'         WORD COUNT IN CELL 7F
+0 547 0 0009  0009              95  BYTEPNT  D     9             READ SYSF
+0 548 0 0000  0000              96  DEF11    D     0
+0 549 0 0000  0000              97  DEF15    D     0
+0 54A 0 0000  0000              98  SMBDEF   D     0
+0 54B 0 0000  0000              99  ENTPOINT D     0
+0 54C 0 0000  0000             100  OTHERBUF D     0
+0 54D 0 0000  0000             101  EXADDR   D     0
+0 54E 0 002F  002F             102  WCT      D     RCRDSIZE
+0 54F 0 0000  0000             103  LOADFIOT D     0
+0 550 0 854E  854E             104           D     X'8000'+WCT   BINARY
+0 551 0 0049  0049             105  UNIT     D     X'49'         READ, UNIT 4
+0 552 0 0000  0000             106           RES   5
+0 557 0 0000  0000             107  PRINFIOT RES   2
+0 559 0 003E  003E             108           D     X'3E'         WRITE, UNIT 3
+0 55A 0 0000  0000             109           RES   5
+0 55F 0 0000  0000             110  BUF1     RES   RCRDSIZE
+0 58E 0 0000  0000             111  BUF2     RES   RCRDSIZE
+0 5BD 0 0000  0000             112  BUF3     RES   NAMESIZE
+0 5BF 0 A0A0  A0A0             113  BLBL     D     '  '
+0 5C0 0 0000  0000             114           RES   2
+0 5C2 0 A0A0  A0A0             115  BUF3END  D     '  '
+                               116  *  SURROGATE LITERAL POOL
+                               117  *
+                               118  *
+0 5C3 0 0006  0006             119  BUF3CT   D     BUF3END-BUF3+1
+0 5C4 0 0400  0400             120  D1024    D     1024
+0 5C5 0 0080  0080             121  X80      D     X'80'
+0 5C6 0 07FF  07FF             122  X7FF     D     X'7FF'
+0 5C7 0 F800  F800             123  XF800    D     X'F800'
+0 5C8 0 055F  055F             124  ABUF1    D     BUF1
+0 5C9 0 058E  058E             125  ABUF2    D     BUF2
+        05F3  05F3             126  X1       EQU   D1
+0 5CA 0 8000  8000             127  X8000    D     X'8000'
+0 5CB 0 05E0  05E0             128  LOCXC    D     EXECUTE
+                               129           TRUE  LOADER=BASIC
+0 5CC 0 0545  0545             130  LOWLOC   D     START
+                               131           ENDC
+                               132           FALS  LOADER=BASIC
+                               145           ENDC
+                               146           TRUE  LOADER=BASIC
+0 5CD 0 0C00  0C00             147  D3072    D     3072
+0 5CE 0 0400  0400             148  MEMMAP   D     1024,1024
+0 5CF 0 0400  0400
+        0054  0054             149  ENTBASE  EQU   ENDA
+
+================================================================
+PAGE 4      BASIC LOADER FRONT END
+
+                               150  '  BASIC LOADER FRONT END
+0 5D0 0 85C4  8 0 5C4          151  S.RLOAD  LDW   D1024
+0 5D1 0 75CE  7 0 5CE          152           STW   MEMMAP
+0 5D2 0 B5F3  B 0 5F3          153           SUB   D1            THROW AWAY LAST CELL
+0 5D3 0 75CF  7 0 5CF          154           STW   MEMMAP+1
+0 5D4 0 85CB  8 0 5CB          155           LDW   LOCXC         GET ADDRESS OF EXECUTE ROUTINE
+0 5D5 0 7055  7 0 055          156           STW   RBEG
+0 5D6 0 8054  8 0 054          157           LDW   ENTBASE
+0 5D7 0 76F4  7 0 6F4          158           STW   ENTLIMIT
+0 5D8 0 263B  2 0 63B          159  S.LLOAD  JSX   RELOAD
+0 5D9 0 0000  0000             160           D     0
+0 5DA 0 000F  000F             161  XF       D     X'F'          CONSTANT DOUBLES AS HALT
+0 5DB 0 0800  0800             162           SAZ                 IS IT END OF FILE
+0 5DC 0 15DE  1 0 5DE          163           JMP   FINI          YES, DEPART
+0 5DD 0 08C0  08C0             164           SS0                 CONTINUE LOADING
+0 5DE 0 2040  2 0 040          165  FINI     JSX   XRAY
+0 5DF 0 15D8  1 0 5D8          166           JMP   S.LLOAD
+                               167           ENDC
+                               168           FALS  LOADER=BASIC
+                               239           ENDC
+                               240           TRUE  LOADER=STANDARD
+                               286           ENDC
+                               287           TRUE  LOADER=DISK
+                               347           ENDC
+
+================================================================
+PAGE 5      PRE-EXECUTION CLEAN-UP ROUTINES
+
+                               348  '  PRE-EXECUTION CLEAN-UP ROUTINES
+        05E0  05E0             349  EXECUTE  EQU   $
+                               350           TRUE  LOADER=STANDARD
+                               354           ENDC
+                               355           FALS  LOADER=BASIC
+                               358           ENDC
+0 5E0 0 27E6  2 0 7E6          359           JSX   FLAG,X'8800'  SET TO PRINT UNDEF ONLY
+0 5E1 0 8800  8800
+0 5E2 0 27E6  2 0 7E6          360           JSX   FLAG,X'A010'  TURN OFF UNCONDITIONAL NO-PRINT
+0 5E3 0 A010  A010
+0 5E4 0 25FE  2 0 5FE          361           JSX   PRINTENT      FIND UNDEFINED
+0 5E5 0 27E6  2 0 7E6          362           JSX   FLAG,X'F400'  CHECK UNDEFINED
+0 5E6 0 F400  F400
+0 5E7 0 25F1  2 0 5F1          363           JSX   MISSING
+        05E8  05E8             364  FORCEX   EQU   $
+                               365           FALS  LOADER=BASIC
+                               367           ENDC
+0 5E8 0 854D  8 0 54D          368           LDW   EXADDR        EXECUTION ADDRESS
+0 5E9 0 0800  0800             369           SAZ                 IS THERE ONE
+0 5EA 0 15EE  1 0 5EE          370           JMP   GOEX          YES
+0 5EB 0 27DD  2 0 7DD          371           JSX   ERRM,'NX'     NO,COMPLAIN
+0 5EC 0 CED8  CED8
+0 5ED 0 15F6  1 0 5F6          372           JMP   EXRAY
+0 5EE 0 7055  7 0 055          373  GOEX     STW   RBEG          SET FOR RESTARTS
+                               374           FALS  LOADER=BASIC
+                               377           ENDC
+0 5EF 0 0130  0130             378           CAX
+0 5F0 0 2800  2 1 000          379           JSX   * 0           AND BEGIN
+0 5F1 0 27DD  2 0 7DD          380  MISSING  JSX   ERRM,'MS'
+0 5F2 0 CDD3  CDD3
+                               381           TRUE  LOADER=BASIC
+0 5F3 0 0001  0001             382  D1       D     1             CONSTANT DOUBLES AS HALT
+0 5F4 0 08D0  08D0             383           SS1
+                               384           ENDC
+                               385           FALS  LOADER=BASIC
+                               387           ENDC
+0 5F5 0 15E8  1 0 5E8          388           JMP   FORCEX        YES
+0 5F6 0 2040  2 0 040          389  EXRAY    JSX   XRAY
+0 5F7 0 0000  0000             390
+0 5F8 0 65F7  6 0 5F7               S.MAP    SUBR                PRINT THE ENT
+0 5F9 0 27E6  2 0 7E6          391           JSX   FLAG,X'A810'  ALLOW ALL TO PRINT
+0 5FA 0 A810  A810
+0 5FB 0 25FE  2 0 5FE          392           JSX   PRINTENT
+0 5FC 0 95F7  9 0 5F7          393           EXIT  S.MAP
+0 5FD 0 2800  2 1 000
+
+================================================================
+PAGE 6      PRINT THE ENT
+
+                              394   '  PRINT THE ENT
+0 5FE 0 6711  6 0 711         395   PRINTENT STX   RETSAVE
+0 5FF 0 27E6  2 0 7E6         396           JSX   FLAG,X'A400' SET OFF UNDEFINED FLAG
+0 600 0 A400  A400
+0 601 0 0100  0100            397           CLR
+0 602 0 7557  7 0 557         398           STW   PRINFIOT    SET IT NOT BUSY
+0 603 0 8054  8 0 054         399           LDW   ENTBASE
+0 604 0 754B  7 0 54B         400           STW   ENTPOINT
+0 605 0 854B  8 0 54B         401   PRINLOOP LDW   ENTPOINT
+0 606 0 F6F4  F 0 6F4         402           CMW   ENTLIMIT
+0 607 0 0840  0840            403           SLS                     END OF ENT YET
+0 608 0 170F  1 0 70F         404           JMP   RETURNER      BUG OUT
+0 609 0 0130  0130            405           CAX                     NO, POINTER TO X REG
+0 60A 0 06A0  06 A0           406           LLB   ' '
+0 60B 0 3385  3 0 1C2 1       407           STB   BUF3END+1     SET NOTHING SPECIAL
+0 60C 0 8800  8 1 000         408           LDW   * 0           GET DATUM
+0 60D 0 75BD  7 0 5BD         409           STW   BUF3
+0 60E 0 06C4  06 C4           410           LLB   'D'           DOUBLE DEFINED FLAG
+0 60F 0 0820  0820            411           SAM                     WAS IT A DOUBLE DEFINED
+0 610 0 3385  3 0 1C2 1       412           STB   BUF3END+1     YES,MARK IT SO
+                              413           TRUE  NAMESIZE>1
+0 611 0 8801  8 1 001         414           LDW   * 1
+0 612 0 75BE  7 0 5BE         415           STW   BUF3+1
+                              416           FALS  LOADER=BASIC
+                              425           ENDC
+                              426           ENDC
+                              427           TRUE  NAMESIZE>2
+                              430           ENDC
+                              431           TRUE  NAMESIZE>3
+                              434           ENDC
+0 613 0 0402  04 02           435           IXS   NAMESIZE
+0 614 0 7FFF  7FFF            436   X7FFF   D     X'7FFF'
+0 615 0 8800  8 1 000         437           LDW   * 0
+                              438           FALS  LOADER=BASIC
+                              440           ENDC
+0 616 0 0401  04 01           441   PRIN1   IXS   1
+0 617 0 0000  0000            442   TEMP2   D     0
+                              443           FALS  LOADER=BASIC
+                              448           ENDC
+0 618 0 654B  6 0 54B         449   PRIN2   STX   ENTPOINT      REMEMBER POINTER
+                              450           TRUE  LOADER=BASIC
+0 619 0 0820  0820            451           SAM                     BASIC - IS IT DEFINED?
+                              452           ENDC
+                              453           FALS  LOADER=BASIC
+                              455           ENDC
+0 61A 0 1634  1 0 634         456           JMP   NOTDEF        IT'S NOT
+0 61B 0 27E6  2 0 7E6         457           JSX   FLAG,X'F810' IS PRINT-OUT TURNED OFF
+0 61C 0 F810  F810
+0 61D 0 1605  1 0 605         458           JMP   PRINLOOP      NO
+0 61E 0 E614  E 0 614         459   PRIN3   AND   X7FFF         DITCH SIGN BIT
+0 61F 0 778D  7 0 78D         460           STW   TEMP
+0 620 0 97B3  9 0 7B3         461           LDX   DM4
+0 621 0 0040  0040            462           SLM
+
+================================================================
+PAGE 7      PRINT THE ENT
+
+0 622 0 878D  8 0 78D         463   ADDR1   LDW   TEMP
+0 623 0 0A54  0A5 4           464           SLC   4
+0 624 0 778D  7 0 78D         465           STW   TEMP
+0 625 0 E5DA  E 0 5DA         466           AND   XF
+0 626 0 C70C  C 0 70C         467           ORI   XB0           COMPLETE ASCII CHARACTER
+0 627 0 07B9  07 B9           468           CLB   X'B9'         A OR GREATER?
+0 628 0 0890  0890            469           SLE
+0 629 0 A7D2  A 0 7D2         470           ADD   D7            YES, MAKE IT A TO F
+0 62A 0 3B84  3 1 1C2 0       471           STB   * BUF3+NAMESIZE+NAMESIZE+6
+0 62B 0 0401  04 01           472           IXS   1
+0 62C 0 1622  1 0 622         473           JMP   ADDR1
+0 62D 0 2044  2 0 044         474           JSX   DOIO,PRINFIOT,BUF3,BUF3CT
+0 62E 0 0557  0557
+0 62F 0 05BD  05BD
+0 630 0 85C3  85C3
+0 631 0 2046  2 0 046         475           JSX   STAT,PRINFIOT
+0 632 0 8557  8557
+0 633 0 1605  1 0 605         476           JMP   PRINLOOP
+0 634 0 27E6  2 0 7E6         477   NOTDEF  JSX   FLAG,X'8400' SET UNDEFINED
+0 635 0 8400  8400
+0 636 0 06DF  06 DF           478           LLB   X'DF'         GET ARROW
+0 637 0 3385  3 0 1C2 1       479           STB   BUF3END+1     SET IT
+0 638 0 0100  0100            480           CLR                     PRINT 0 FOR UNDEFINEDS
+                              481           FALS  LOADER=BASIC
+                              484           ENDC
+0 639 0 161E  1 0 61E         485           JMP   PRIN3         YES, PRINT IT
+
+================================================================
+PAGE 8      RELOCATING LOADER, A SUBROUTINE
+
+                              486   '  RELOCATING LOADER,  A SUBROUTINE
+                              487   *  CALLING SEQUENCE
+                              488   *      JSX   RELOAD
+                              489   *      D     LOADBIAS
+                              490   *      ERROR RETURN, IF UNRECECOVERABLE LOAD ERROR
+                              491   *      NORMAL RETURN, IF ALL WENT WELL
+                              492   *  LOADBIAS IS THE LITERAL VALUE OF THE AMOUNT BY WHICH
+                              493   *  THE PROGRAM SHOULD BE SHIFTED IN ACTUAL CORE,  FOR A NORMAL
+                              494   *  EXECUTABLE LOAD THIS MUST BE ZERO,
+                              495   *
+                              496   *
+                              497   *
+0 63A 0 0000  0000            498
+0 63B 0 663A  6 0 63A                RELOAD  SUBR
+0 63C 0 8800  8 1 000         499           LDW   * 0           GET BIAS
+0 63D 0 7546  7 0 546         500           STW   BIAS          SAVE IT
+0 63E 0 85C8  8 0 5C8         501           LDW   ABUF1
+0 63F 0 754F  7 0 54F         502           STW   LOADFIOT      INITIALIZE
+0 640 0 85C9  8 0 5C9         503           LDW   ABUF2
+0 641 0 754C  7 0 54C         504           STW   OTHERBUF      INITIALIZE BUFFER SWITCH
+0 642 0 27E6  2 0 7E6         505           JSX   FLAG,X'AE1C' DOUSE ALL BUT INPUT FLAGS
+0 643 0 AE1C  AE1C
+0 644 0 0100  0100            506   NEXTCARD CLR
+0 645 0 7547  7 0 547         507           STW   BYTEPNT       INITIALIZE POINTER
+0 646 0 77C1  7 0 7C1         508           STW   LASTBYTE      FORCE READING FIRST CARD
+0 647 0 7557  7 0 557         509           STW   PRINFIOT      SET NOT BUSY
+0 648 0 0649  06 49           510           LLB   X'49'         READ BIN
+0 649 0 27E6  2 0 7E6         511           JSX   FLAG,X'F100' BUT IS IT LIBRARY PHASE
+0 64A 0 F100  F100
+0 64B 0 0609  06 09           512           LLB   X'09'         YES , SO READ SYSF INSTEAD
+0 64C 0 7551  7 0 551         513           STW   UNIT          SELECT IO DEVICE
+0 64D 0 2044  2 0 044         514           JSX   DOIO,LOADFIOT READ FIRST RECORD
+0 64E 0 854F  854F
+0 64F 0 2799  2 0 799         515   PROCTEXT JSX   GETBYTE       FETCH A BYTE
+0 650 0 0130  0130            516           CAX                     FOR LATER
+0 651 0 070C  07 0C           517           CLB   JTEND-JTSTART
+0 652 0 0840  0840            518           SLS                     IS IT A LEGAL CODE
+0 653 0 1671  1 0 671         519           JMP   IDERR         NO
+0 654 0 0700  07 00           520           CLB   0             LOOKING FOR - BYTE
+0 655 0 0040  0040            521           SLM                     FOR RELATIVE JUMP
+0 656 0 0840  0840            522           SLS                     IS IT REPEATABLE
+0 657 0 2E65  2 1 665         523           JSX   * JMPTAB+8     SETS GLOBAL MODE TOO
+0 658 0 E5DA  E 0 5DA         524           AND   XF            GET REPEAT COUNT
+0 659 0 7680  7 0 680         525           STW   REPCOUNT
+0 65A 0 0100  0100            526           CLR                     SO IT WONT SHIFT INTO X
+0 65B 0 0A24  0A2 4           527           SRL D 4                 SHIFT TO INDEX IT
+0 65C 0 2E55  2 1 655         528           JSX   * JMPTAB-8     -8 SUBTRACTS LEAD BIT
+0 65D 0 1681  1 0 681         529   JMPTAB  JMP   RELW11        REPEATABLE CODES- 8
+0 65E 0 1684  1 0 684         530           JMP   RELW15        9
+0 65F 0 1688  1 0 688         531           JMP   RELB16        A
+0 660 0 168B  1 0 68B         532           JMP   RELB11        B
+0 661 0 168E  1 0 68E         533           JMP   ABSO          C
+0 662 0 1671  1 0 671         534           JMP   DFILL         SCATTER LOAD
+
+================================================================
+PAGE 9      RELOCATING LOADER, A SUBROUTINE
+
+0 663 0 1671  1 0 671         535           JMP   DBLOCF        DATA BLOCK DATA FILL
+0 664 0 1671  1 0 671         536           JMP   IDERR         F      NOT USED
+0 665 0 164F  1 0 64F         537   JTSTART JMP   PROCTEXT      ZERO IGNORED
+0 666 0 1690  1 0 690         538           JMP   LIBR          LIBRARY NAME
+0 667 0 1692  1 0 692         539           JMP   EXTN          EXTERNAL
+0 668 0 16B0  1 0 6B0         540           JMP   SMB           SMB
+0 669 0 16B6  1 0 6B6         541           JMP   ILOC          INCREMENT LOC
+0 66A 0 16BF  1 0 6BF         542           JMP   NTRY          ENTRY NAME
+0 66B 0 16D6  1 0 6D6         543           JMP   END           END CODE
+0 66C 0 1671  1 0 671         544           JMP   EXTN15        15 BIT STRING
+0 66D 0 1690  1 0 690         545           JMP   NBLK          NAMED BLOCK
+0 66E 0 16E1  1 0 6E1         546           JMP   SIZE          PROGRAM SIZE
+0 66F 0 16E1  1 0 6E1         547           JMP   SIZEW         PR SIZE (WORD PAGE)
+0 670 0 16E4  1 0 6E4         548           JMP   SIZEB         PR SIZE (BYTE PAGE)
+                              549           FALS  LOADER=BASIC
+                              552           ENDC
+        0671  0671            553   JTEND   EQU   $
+
+================================================================
+PAGE 10     TEXT PROCESSORS
+
+                              554   '  TEXT PROCESSORS
+0 671 0 27D6  2 0 7D6         555   IDERR   JSX   HERRM,'LC'
+0 672 0 CCC3  CCC3
+0 673 0 963A  9 0 63A         556   LDERR   EXIT  RELOAD,1    AND MAKE ERROR EXIT
+0 674 0 2801  2 1 001
+                              557   *
+                              558   *   REPEATER SUBROUTINE SERVICES REPEATABLE LOADER CODES
+                              559   *
+0 675 0 0000  0000            560
+0 676 0 6675  6 0 675                 REPEATER SUBR
+0 677 0 2785  2 0 785         561   REPOUT  JSX   GETWORD     GET NEXT DATA WORD
+0 678 0 9675  9 0 675         562           EXIT  REPEATER    RETURN AGAIN
+0 679 0 2800  2 1 000
+0 67A 0 9680  9 0 680         563   REPEAT  LDX   REPCOUNT    GET COUNT
+0 67B 0 0501  05 01           564           DXS   1           BUMP SAME
+0 67C 0 167E  1 0 67E         565           JMP   $+2         MORE TO COME
+0 67D 0 164F  1 0 64F         566           JMP   PROCTEXT    DONE
+0 67E 0 6680  6 0 680         567           STX   REPCOUNT    KEEP COUNT
+0 67F 0 1677  1 0 677         568           JMP   REPOUT      RETURN AGAIN
+0 680 0 0000  0000            569   REPCOUNT D    0
+                              570   *
+                              571   *   RELW11 - 11 BIT RELO WORD ADDRESSES
+                              572   *
+0 681 0 2676  2 0 676         573   RELW11  JSX   REPEATER    SET-UP
+0 682 0 2745  2 0 745         574   REL11A  JSX   RELO11      RELOCATE WORD
+0 683 0 1686  1 0 686         575           JMP   REL15A      GO STORE IT
+                              576   *
+                              577   *   RELW15 - 15 BIT RELO WORD ADDRESSES
+                              578   *
+0 684 0 2676  2 0 676         579   RELW15  JSX   REPEATER    SET-UP
+0 685 0 A545  A 0 545         580   REL15B  ADD   BASE        RELOCATE WORD
+0 686 0 274D  2 0 74D         581   REL15A  JSX   STORE       STORE RESULT
+0 687 0 167A  1 0 67A         582           JMP   REPEAT
+                              583   *
+                              584   *   RELB16 - 16 BIT RELO BYTE ADDRESS
+                              585   *
+0 688 0 2676  2 0 676         586   RELB16  JSX   REPEATER
+0 689 0 A545  A 0 545         587           ADD   BASE        RELOCATE ONCE
+0 68A 0 1685  1 0 685         588           JMP   REL15B      RELOCATE AGAIN
+                              589   *
+                              590   *   RELB11 - 11 BIT RELO BYTE ADDRESS
+                              591   *
+0 68B 0 2676  2 0 676         592   RELB11  JSX   REPEATER    SET-UP
+0 68C 0 2745  2 0 745         593           JSX   RELO11      RELOCATE ONCE
+0 68D 0 1682  1 0 682         594           JMP   REL11A      RELOCATE AGAIN
+                              595   *
+                              596   *   ABSO    - ABSOLUTE PROGRAM WORD
+                              597   *
+0 68E 0 2676  2 0 676         598   ABSO    JSX   REPEATER
+0 68F 0 1686  1 0 686         599           JMP   REL15A      GO STORE IT
+                              600   *
+                              601           FALS  LOADER=BASIC
+                              618           ENDC
+
+================================================================
+PAGE 11     TEXT PROCESSORS
+
+                              619   *   LIBR    - LIBRARY NAMES
+                              620   *
+0 690 0 278E  2 0 78E         621   LIBR    JSX   GETNAME     GET THE ANME
+                              622           FALS  LOADER=STANDARD
+0 691 0 164F  1 0 64F         623           JMP   PROCTEXT    THROW IT AWAY IF NOT STANDARD
+                              624           ENDC
+                              625           TRUE  LOADER=STANDARD
+                              635           ENDC
+                              636   *
+                              637   *   EXTN    - 11 BIT EXTERNAL STRING
+                              638   *
+0 692 0 2779  2 0 779         639   EXTN    JSX   GETVAL      GET NAME AND START OF STRING
+0 693 0 26FD  2 0 6FD         640           JSX   SERCHENT    IS IT IN THE ENT?
+                              641           TRUE  LOADER=BASIC
+0 694 0 1697  1 0 697         642           JMP   EXTN1       YES
+0 695 0 0100  0100            643           CLR               NO, SO PUT IT THERE
+0 696 0 16C3  1 0 6C3         644           JMP   NTRY1       WHICH PUTS IT THERE
+0 697 0 878D  8 0 78D         645   EXTN1   LDW   TEMP        GET END OF STRING
+0 698 0 F614  F 0 614         646           CMW   X7FFF       IT IT ALL ONES
+0 699 0 0870  0870            647           SNE               IF IT IS
+0 69A 0 164F  1 0 64F         648           JMP   PROCTEXT    FORGET IT, ITS JUST A LOAD
+0 69B 0 954B  9 0 54B         649           LDX   ENTPOINT
+0 69C 0 8800  8 1 000         650           LDW * 0           GET VALUE
+0 69D 0 0820  0820            651           SAM               IS IT DEFINED
+0 69E 0 16A3  1 0 6A3         652           JMP   EXTN2       NO
+0 69F 0 273C  2 0 73C         653           JSX   FILLDEF     YES, SET UP DEFINITIONS
+0 6A0 0 878D  8 0 78D         654           LDW   TEMP        GET END OF STRING
+0 6A1 0 2717  2 0 717         655           JSX   STRING11    FILL IT
+0 6A2 0 164F  1 0 64F         656           JMP   PROCTEXT
+0 6A3 0 E5C6  E 0 5C6         657   EXTN2   AND   X7FF        MASK ALL BUT LAST 11 BITS
+0 6A4 0 754A  7 0 54A         658           STW   SMBDEF      SAVE OLD END IN UNUSED CELL
+0 6A5 0 0100  0100            659           CLR
+0 6A6 0 7549  7 0 549         660           STW   DEF15       PREVENT FILL OF STRING
+0 6A7 0 878D  8 0 78D         661           LDW   TEMP        GET START OF NEW STRING
+0 6A8 0 7800  7 1 000         662           STW * 0           NEW END TO ENT
+0 6A9 0 2717  2 0 717         663           JSX   STRING11    FOLLOW NEW STRING
+0 6AA 0 0130  0130            664           CAX
+0 6AB 0 8800  8 1 000         665           LDW * 0           GET END WORD OF NEW
+0 6AC 0 E5C7  E 0 5C7         666           AND   XF800       MASK OP - CODE
+0 6AD 0 C54A  C 0 54A         667           ORI   SMBDEF      LINK TO OLD STRING
+0 6AE 0 7800  7 1 000         668           STW * 0           AND PUT IT BACK
+0 6AF 0 164F  1 0 64F         669           JMP   PROCTEXT
+                              670           ENDC
+                              671           FALS  LOADER=BASIC
+                              740           ENDC
+                              741   *
+                              742   *   SMB     - FORTRAN SET MEMORY BANK
+                              743   *
+0 6B0 0 2785  2 0 785         744   SMB     JSX   GETWORD     GET ADDRESS
+0 6B1 0 A545  A 0 545         745           ADD   BASE        RELOCATE IT
+0 6B2 0 0A0A  0A0 A           746           SRL   10          SHIFT FOR SMB OPERAND
+0 6B3 0 C5C5  C 0 5C5         747           ORI   X80         CONSTRUCT SMB
+0 6B4 0 274D  2 0 74D         748           JSX   STORE       STORE THIS INSTRUCTION
+
+================================================================
+PAGE 12     TEXT PROCESSORS
+
+0 6B5 0 164F  1 0 64F         749           JMP   PROCTEXT
+                              750   *
+                              751   *   ILOC    - INCREMENT LOCATION COUNTER
+                              752   *
+0 6B6 0 2785  2 0 785         753   ILOC    JSX   GETWORD
+                              754           FALS  LOADER=BASIC
+                              761           ENDC
+0 6B7 0 B5F3  B 0 5F3         762   ILOC1   SUB   D1          REDUCE COUNT
+0 6B8 0 0810  0810            763           SAP               IS IT MINUS?
+0 6B9 0 164F  1 0 64F         764           JMP   PROCTEXT    YES, ALL DONE
+0 6BA 0 778D  7 0 78D         765           STW   TEMP        SAVE COUNT
+0 6BB 0 0100  0100            766           CLR               ZERO
+0 6BC 0 274D  2 0 74D         767           JSX   STORE       AND STORE A ZERO
+0 6BD 0 878D  8 0 78D         768           LDW   TEMP        RECOVER COUNT
+0 6BE 0 16B7  1 0 6B7         769           JMP   ILOC1       ANY MORE?
+                              770   *
+                              771   *   NTRY    - ENTRY NAME DEFINITION
+                              772   *
+0 6BF 0 2779  2 0 779         773   NTRY    JSX   GETVAL      GET NAME AND DATA
+0 6C0 0 26FD  2 0 6FD         774           JSX   SERCHENT
+0 6C1 0 16C6  1 0 6C6         775           JMP   FILSTRS     IN ENT, GO FILL STRINGS
+0 6C2 0 85CA  8 0 5CA         776   NTRY2   LDW   X8000       SET DEFINED BIT
+0 6C3 0 C78D  C 0 78D         777   NTRY1   ORI   TEMP        PACK IN DATA
+0 6C4 0 26EC  2 0 6EC         778           JSX   STORENT     ENTER IT
+0 6C5 0 164F  1 0 64F         779           JMP   PROCTEXT
+0 6C6 0 0810  0810            780   FILSTRS SAP               ALREADY DEFINED
+0 6C7 0 16D2  1 0 6D2         781           JMP   DDS         YES
+0 6C8 0 878D  8 0 78D         782           LDW   TEMP        GET VALUE OF SYMBOL
+0 6C9 0 273C  2 0 73C         783           JSX   FILLDEF
+0 6CA 0 954B  9 0 54B         784           LDX   ENTPOINT
+0 6CB 0 8800  8 1 000         785           LDW * 0
+                              786           FALS  LOADER=BASIC
+                              791           ENDC
+0 6CC 0 2717  2 0 717         792           JSX   STRING11
+                              793           FALS  LOADER=BASIC
+                              795           ENDC
+0 6CD 0 954B  9 0 54B         796           LDX   ENTPOINT
+0 6CE 0 8549  8 0 549         797           LDW   DEF15
+0 6CF 0 C5CA  C 0 5CA         798           ORI   X8000
+0 6D0 0 7800  7 1 000         799           STW * 0
+0 6D1 0 164F  1 0 64F         800           JMP   PROCTEXT
+0 6D2 0 8796  8 0 796         801   DDS     LDW   NAME
+0 6D3 0 E614  E 0 614         802           AND   X7FFF       TURN OFF LEAD BIT TO FLAG IT
+0 6D4 0 7796  7 0 796         803           STW   NAME        SET DOUBLE DEFINED
+0 6D5 0 16C2  1 0 6C2         804           JMP   NTRY2
+                              805   *
+                              806   *   END     - END OF LOADER TEXT
+                              807   *
+0 6D6 0 2785  2 0 785         808   END     JSX   GETWORD     GET THE END ADDRESS
+0 6D7 0 0800  0800            809           SAZ               IS IT ZERO
+0 6D8 0 16DA  1 0 6DA         810           JMP   $+2         REMEMBER IT
+0 6D9 0 16DC  1 0 6DC         811           JMP   LOADEXIT    FORGET IT
+0 6DA 0 A545  A 0 545         812           ADD   BASE        RELOCATE IT
+
+================================================================
+PAGE 13     TEXT PROCESSORS
+
+0 6DB 0 754D  7 0 54D         813           STW   EXADDR      AND REMEMBER IT
+0 6DC 0 2046  2 0 046         814   LOADEXIT JSX  STAT,LOADFIOT DELAY FOR LAST BUFFER
+0 6DD 0 854F  854F
+0 6DE 0 0100  0100            815           CLR               NOT EOF EXIT
+        06DF  06DF            816   LDX2    EQU   $
+0 6DF 0 963A  9 0 63A         817           EXIT  RELOAD,2
+0 6E0 0 2802  2 1 002
+                              818   *
+                              819   *   EXTN15 - 15 BIT EXTERNAL STRING
+                              820   *
+                              821           FALS  LOADER=BASIC
+                              882           ENDC
+                              883   *
+                              884   *   SIZEW   - WORD PAGE SIZE DECLARATION
+                              885   *
+0 6E1 0 27E6  2 0 7E6         886   SIZEW   JSX   FLAG,X'A200'  DON'T NEED A BYTE PAGE
+0 6E2 0 A200  A200
+0 6E3 0 16E6  1 0 6E6         887           JMP   SIZCOM
+                              888   *
+                              889   *   SIZEB   - BYTE PAGE SIZE DECLARATION
+                              890   *
+0 6E4 0 27E6  2 0 7E6         891   SIZEB   JSX   FLAG,X'8200'  DO NEED A BYTE PAGE
+0 6E5 0 8200  8200
+0 6E6 0 2785  2 0 785         892   SIZCOM  JSX   GETWORD
+                              893           TRUE  LOADER=STANDARD
+                              897           ENDC
+0 6E7 0 2754  2 0 754         898           JSX   ALLOCATE    GET THE STORAGE
+0 6E8 0 7751  7 0 751         899           STW   POINTER     SET THE STORE POINTER
+0 6E9 0 A546  A 0 546         900           ADD   BIAS
+0 6EA 0 7545  7 0 545         901           STW   BASE        SET THE RELOCATION BASE
+0 6EB 0 164F  1 0 64F         902           JMP   PROCTEXT
+                              903           FALS  LOADER=BASIC
+                              931           ENDC
+                              932           TRUE  LOADER=BASIC
+        0671  0671            933   EXTN15  EQU   IDERR
+        0690  0690            934   NBLK    EQU   LIBR        IGNORES BLOCK DIRECTIVE
+        06E1  06E1            935   SIZE    EQU   SIZEW
+        0671  0671            936   DFILL   EQU   IDERR
+        0671  0671            937   DBLOCD  EQU   IDERR
+        0671  0671            938   DBLOCF  EQU   IDERR
+        0545  0545            939   TEMP3   EQU   BASE        JUST DEFINE THE SYMBOL
+                              940           ENDC
+
+================================================================
+PAGE 14     STORENT, PUSHOUT, AND PUSHNEXT - ENT STORAGE PROCESSORS
+
+                              941   '  STORENT, PUSHOUT, AND PUSHNEXT - ENT STORAGE PROCESSORS
+0 6EC 0 6711  6 0 711         942   STORENT STX   RETSAVE       STORE A NAME IN THE ENT
+0 6ED 0 96F4  9 0 6F4         943           LDX   ENTLIMIT
+0 6EE 0 7802  7 1 002         944           STW   *NAMESIZE     STORE DATA WORD
+0 6EF 0 8796  8 0 796         945           LDW   NAME          MOVE NAME INTO ENT
+0 6F0 0 7800  7 1 000         946           STW   *0
+                              947           TRUE  NAMESIZE>1
+0 6F1 0 8797  8 0 797         948           LDW   NAME+1
+0 6F2 0 7801  7 1 001         949           STW   *1
+                              950           ENDC
+                              951           TRUE  NAMESIZE>2
+                              954           ENDC
+                              955           TRUE  NAMESIZE>3
+                              958           ENDC
+0 6F3 0 0403  04 03           959           IXS   NAMESIZE+1
+0 6F4 0 0000  0000            960   ENTLIMIT D    0             WORD IS SKIPPED
+0 6F5 0 0140  0140            961   STORENT1 CXA                TO A TO CHECK
+0 6F6 0 76F4  7 0 6F4         962           STW   ENTLIMIT      IT DIDN'T
+0 6F7 0 26F9  2 0 6F9         963           JSX   CHEKLOW
+0 6F8 0 170F  1 0 70F         964           JMP   RETURNER
+                              965   *
+                              966   *  CHECKLOW ROUTINE CHECKS FOR LOW END OVERLAPS AND SELECTS LOWLIM
+                              967   *
+        06F9  06F9            968   CHEKLOW EQU   $
+                              969           FALS  LOADER=BASIC
+                              973           ENDC
+0 6F9 0 F5CC  F 0 5CC         974           CMW   LOWLOC        DOES THIS OVERLAP LOWEST USED
+0 6FA 0 0840  0840            975           SLS                 ?
+0 6FB 0 1775  1 0 775         976           JMP   NOBLOK        YES, DISASTER
+                              977           FALS  LOADER=BASIC
+                              987           ENDC
+0 6FC 0 1800  1 1 000         988           JMP   *0            RETURN
+                              989           FALS  LOADER=BASIC
+                             1035           ENDC
+
+================================================================
+PAGE 15     SERCHENT - ROUTINE TO SEARCH THE ENT
+
+                             1036   '  SERCHENT - ROUTINE TO SEARCH THE ENT
+0 6FD 0 6711  6 0 711        1037   SERCHENT STX  RETSAVE
+0 6FE 0 9054  9 0 054        1038           LDX   ENTBASE       GET BASE
+0 6FF 0 0140  0140           1039   SRLOOP  CXA                 TO TEST
+0 700 0 F6F4  F 0 6F4        1040           CMW   ENTLIMIT      OUT OF ENT YET?
+0 701 0 0840  0840           1041           SLS
+0 702 0 1715  1 0 715        1042           JMP   NOTINENT      YES, NOT IN ENT
+0 703 0 8800  8 1 000        1043           LDW   *0            MATCH WORD 1
+0 704 0 F796  F 0 796        1044           CMW   NAME
+0 705 0 0860  0860           1045           SEQ
+0 706 0 1712  1 0 712        1046           JMP   NOTENTRY
+                             1047           TRUE  NAMESIZE>1    MATCH WORD 2
+0 707 0 8801  8 1 001        1048           LDW   *1
+0 708 0 F797  F 0 797        1049           CMW   NAME+1
+0 709 0 0860  0860           1050           SEQ
+0 70A 0 1712  1 0 712        1051           JMP   NOTENTRY
+                             1052           ENDC
+                             1053           TRUE  NAMESIZE>2    MATCH WORD 3
+                             1058           ENDC
+                             1059           TRUE  NAMESIZE>3    MATCH WORD 4
+                             1064           ENDC
+0 70B 0 0402  04 02          1065           IXS   NAMESIZE      MATCHED, POINT TO DATUM
+0 70C 0 00B0  00B0           1066   XB0     D     X'B0'
+0 70D 0 8800  8 1 000        1067           LDW   *0            GET DATUM
+0 70E 0 654B  6 0 54B        1068           STX   ENTPOINT      SAVE POINTER
+0 70F 0 9711  9 0 711        1069   RETURNER EXIT RETURN
+0 710 0 2800  2 1 000
+0 711 0 0000  0000           1070   RETSAVE D     0             COMMON RETURN CELL
+        0712  0712           1071   RETURN  EQU   RETSAVE+1
+                             1072           TRUE  LOADER=BASIC
+0 712 0 0403  04 03          1073   NOTENTRY IXS  NAMESIZE+1
+0 713 0 0900  0900           1074           NOP                                 <<< CHECK: op not in the known list
+                             1075           ENDC
+                             1076           FALS  LOADER=BASIC
+                             1084           ENDC
+0 714 0 16FF  1 0 6FF        1085           JMP   SRLOOP        CONTINUE
+0 715 0 9711  9 0 711        1086   NOTINENT EXIT RETURN,1      RETURN SKIP
+0 716 0 2801  2 1 001
+
+================================================================
+PAGE 16     STRING11 - FOLLOW AND PERHAPS FILL AN 11 BIT STRING
+
+                             1087   '  STRING11 - FOLLOW AND PERHAPS FILL AN 11 BIT STRING
+                             1088   *  STRING IS FILLED UNLESS DEF11 =0. CALL WITH START OF
+                             1089   *  STRING IN ACC. RETURNS WITH END OF STRING IN ACC.
+                             1090   *
+0 717 0 6711  6 0 711        1091   STRING11 STX  RETSAVE
+0 718 0 77CF  7 0 7CF        1092           STW   TEMP1         SAVE
+0 719 0 E72E  E 0 72E        1093           AND   X7800         EXTRACT BLOCK
+0 71A 0 7617  7 0 617        1094           STW   TEMP2         SAVE IT
+0 71B 0 87CF  8 0 7CF        1095   ST11A   LDW   TEMP1         GET NEXT ADDRESS
+0 71C 0 E5C6  E 0 5C6        1096           AND   X7FF          MASK COMPARE ADDRESS
+0 71D 0 F5C6  F 0 5C6        1097           CMW   X7FF
+0 71E 0 0870  0870           1098           SNE                 IS IT END OF STRING
+0 71F 0 173A  1 0 73A        1099           JMP   ST11D         YES
+0 720 0 C617  C 0 617        1100           ORI   TEMP2         NO, BUILD ADDRESS
+0 721 0 B546  B 0 546        1101           SUB   BIAS          RELOCATE TO ACTUAL CORE
+0 722 0 0130  0130           1102           CAX
+0 723 0 8800  8 1 000        1103           LDW   *0            GET ITEM
+0 724 0 77CF  7 0 7CF        1104           STW   TEMP1         SAVE FOR ADDRESS
+0 725 0 E5C7  E 0 5C7        1105           AND   XF800
+0 726 0 0800  0800           1106           SAZ                 IS IT SMB
+0 727 0 1730  1 0 730        1107           JMP   ST11B         NO
+0 728 0 854A  8 0 54A        1108           LDW   SMBDEF
+0 729 0 778D  7 0 78D        1109   ST11C   STW   TEMP
+0 72A 0 0100  0100           1110           CLR
+0 72B 0 F549  F 0 549        1111           CMW   DEF15         AM I TURNED ON?
+0 72C 0 878D  8 0 78D        1112           LDW   TEMP          GET INSTRUCTION
+0 72D 0 0860  0860           1113           SEQ                 FILL IT
+0 72E 0 7800  7 1 000        1114   X7800   STW   *0            YES   INSTRUCTION IS ALSO CONSTANT
+0 72F 0 171B  1 0 71B        1115           JMP   ST11A         NO
+0 730 0 0A54  0A5 4          1116   ST11B   SLC   4             PUT X BIT IN SIGN
+0 731 0 0703  07 03          1117           CLB   3             IS IT BYTE INSTRUCTION
+0 732 0 0860  0860           1118           SEQ                 WHICH MEANS 15 BIT ADDRESS
+0 733 0 1737  1 0 737        1119           JMP   ST11E         NO
+0 734 0 0600  06 00          1120           LLB   0             YES, BLANK OP-CODE
+0 735 0 C549  C 0 549        1121           ORI   DEF15         PACK DEFINITION WITH SIGN
+0 736 0 1729  1 0 729        1122           JMP   ST11C
+0 737 0 0A44  0A4 4          1123   ST11E   SRC   4             PUT OP CODE BACK
+0 738 0 C548  C 0 548        1124           ORI   DEF11         PACK 11 BIT DEFINITION
+0 739 0 1729  1 0 729        1125           JMP   ST11C         GO STORE IT
+0 73A 0 0140  0140           1126   ST11D   CXA                 END OF STRING TO ACC
+0 73B 0 170F  1 0 70F        1127           JMP   RETURNER
+                             1128   *
+0 73C 0 E614  E 0 614        1129   FILLDEF AND   X7FFF
+0 73D 0 7549  7 0 549        1130           STW   DEF15
+0 73E 0 E5C6  E 0 5C6        1131           AND   X7FF
+0 73F 0 7548  7 0 548        1132           STW   DEF11
+0 740 0 8549  8 0 549        1133           LDW   DEF15
+0 741 0 0A0A  0A0 A          1134           SRL   10
+0 742 0 C5C5  C 0 5C5        1135           ORI   X80           SMB
+0 743 0 754A  7 0 54A        1136           STW   SMBDEF
+0 744 0 1800  1 1 000        1137           JMP   *0
+                             1138           FALS  LOADER=BASIC
+                             1163           ENDC
+
+================================================================
+PAGE 17     11 BIT RELOCATION AND STORE SUBROUTINES
+
+                             1164   '  11 BIT RELOCATION AND STORE SUBROUTINES
+0 745 0 77CF  7 0 7CF        1165   RELO11  STW   TEMP1         SAVE IT
+0 746 0 A545  A 0 545        1166           ADD   BASE          RELOCATE
+0 747 0 E5C6  E 0 5C6        1167           AND   X7FF          MASK ADDRESS
+0 748 0 7617  7 0 617        1168           STW   TEMP2         SAVE ADDRESS
+0 749 0 87CF  8 0 7CF        1169           LDW   TEMP1         GET THE DATA
+0 74A 0 E5C7  E 0 5C7        1170           AND   XF800         MASK OP-CODE
+0 74B 0 C617  C 0 617        1171           ORI   TEMP2
+0 74C 0 1800  1 1 000        1172           JMP   *0
+                             1173           FALS  LOADER=BASIC
+                             1204           ENDC
+                             1205           TRUE  LOADER=BASIC
+                             1206   *  SIMPLIFIED STORE FOR BASIC LOADER
+0 74D 0 6711  6 0 711        1207   STORE   STX   RETSAVE
+0 74E 0 9751  9 0 751        1208           LDX   POINTER
+0 74F 0 7800  7 1 000        1209           STW   *0            STORE DATUM
+0 750 0 0401  04 01          1210           IXS   1             NEXT LOCATION
+0 751 0 0000  0000           1211   POINTER D     0             SKIPPED
+0 752 0 6751  6 0 751        1212           STX   POINTER       SET FOR NEXT WORD
+0 753 0 170F  1 0 70F        1213           JMP   RETURNER
+                             1214           ENDC
+
+================================================================
+PAGE 18     MEMORY ALLOCATOR
+
+                                1215   '       MEMORY ALLOCATOR
+                                1216           TRUE  LOADER=BASIC
+        0775  0775              1217   NOFIT   EQU   NOBLOK
+0 754 0 6711  6 0 711           1218   ALLOCATE STX  RETSAVE
+0 755 0 7617  7 0 617           1219           STW   TEMP2         SAVE SPACE REQUIRED
+0 756 0 85CE  8 0 5CE           1220           LDW   MEMMAP        WILL IT FIT
+0 757 0 B617  B 0 617           1221           SUB   TEMP2
+0 758 0 0820  0820              1222           SAM
+0 759 0 1760  1 0 760           1223           JMP   ITFIT
+0 75A 0 27E6  2 0 7E6           1224           JSX   FLAG,X'F200'  BYTEPAGE REQUIRED?
+0 75B 0 F200  F200
+0 75C 0 1767  1 0 767           1225           JMP   BYTEPAGE      YES
+0 75D 0 A5CF  A 0 5CF           1226           ADD   MEMMAP+1      ADD SECOND PAGE
+0 75E 0 0810  0810              1227           SAP                 NOW WILL IT FIT?
+0 75F 0 1775  1 0 775           1228           JMP   NOFIT         NO
+0 760 0 85CD  8 0 5CD           1229   ITFIT   LDW   D3072
+0 761 0 B5CE  B 0 5CE           1230           SUB   MEMMAP        COMPUTE ADDRESS
+0 762 0 77CF  7 0 7CF           1231           STW   TEMP1         SAVE IT
+0 763 0 85CE  8 0 5CE           1232           LDW   MEMMAP        COMPUTE REMAINING STORAGE
+0 764 0 B617  B 0 617           1233           SUB   TEMP2
+0 765 0 75CE  7 0 5CE           1234           STW   MEMMAP
+0 766 0 1773  1 0 773           1235           JMP   ALLEX         EXIT
+0 767 0 85CE  8 0 5CE           1236   BYTEPAGE LDW  MEMMAP
+0 768 0 0820  0820              1237           SAM                 HAS LOWER PAGE OVERFLOWED
+0 769 0 0100  0100              1238           CLR                 NO
+0 76A 0 A5CF  A 0 5CF           1239           ADD   MEMMAP+1      COMPUTE UPPER PAGE LEFT
+0 76B 0 B617  B 0 617           1240           SUB   TEMP2         REDUCE BY SPACE REQUIRED
+0 76C 0 0810  0810              1241           SAP                 WILL IT FIT?
+0 76D 0 1775  1 0 775           1242           JMP   NOFIT         NO
+0 76E 0 85CF  8 0 5CF           1243           LDW   MEMMAP+1
+0 76F 0 B617  B 0 617           1244           SUB   TEMP2         COMPUTE REMAINDER
+0 770 0 75CF  7 0 5CF           1245           STW   MEMMAP+1
+0 771 0 A5CD  A 0 5CD           1246           ADD   D3072         AND ADDRESS
+0 772 0 1774  1 0 774           1247           JMP   ALLEX+1
+0 773 0 87CF  8 0 7CF           1248   ALLEX   LDW   TEMP1
+0 774 0 170F  1 0 70F           1249           JMP   RETURNER
+                                1250           ENDC
+                                1251           FALS  LOADER=BASIC
+                                1281           ENDC
+0 775 0 27D6  2 0 7D6           1282   NOBLOK  JSX   HERRM,'MX'    ABANDON ALL
+0 776 0 CDD8  CDD8
+0 777 0 1673  1 0 673           1283           JMP   LDERR
+                                1284           FALS  LOADER=BASIC
+                                1428           ENDC
+
+================================================================
+PAGE 19     DATA FETCH ROUTINES - GETVAL, GETVALB,GETHEX
+
+                                1429   '       DATA FETCH ROUTINES - GETVAL, GETVALB,GETHEX
+0 778 0 0000  0000              1430
+0 779 0 6778  6 0 778                  GETVAL  SUBR
+0 77A 0 278E  2 0 78E           1431           JSX   GETNAME       GET THE LABEL
+0 77B 0 2785  2 0 785           1432           JSX   GETWORD       GET ITS VALUE
+0 77C 0 0120  0120              1433           INV                 IF IT WAS ALL ONES
+0 77D 0 0800  0800              1434           SAZ                 NOW IT IS ALL ZEROES
+0 77E 0 8545  8 0 545           1435           LDW   BASE          RELOCATE CONDITIONALLY
+0 77F 0 A78D  A 0 78D           1436           ADD   TEMP          OR ELSE GET ALL ONES BACK
+0 780 0 E614  E 0 614           1437           AND   X7FFF         MASK SIGN BIT
+0 781 0 778D  7 0 78D           1438           STW   TEMP          AND SAVE IT
+0 782 0 9778  9 0 778           1439           EXIT  GETVAL
+0 783 0 2800  2 1 000
+                                1440           FALS  LOADER=BASIC
+                                1519           ENDC
+
+================================================================
+PAGE 20     DATA FETCH SUBROUTINES - GETWORD AND GETNAME
+
+                                1520   '       DATA FETCH SUBROUTINES - GETWORD AND GETNAME
+                                1521   *
+                                1522   *       GETWORD - INPUTS AND CONCATENATES 2 BYTES FROM INPUT STREAM
+                                1523   *
+0 784 0 0000  0000              1524
+0 785 0 6784  6 0 784                  GETWORD SUBR
+0 786 0 2799  2 0 799           1525           JSX   GETBYTE
+0 787 0 371A  3 0 38D 0         1526           STB   TEMP          SAVE LEFT BYTE
+0 788 0 2799  2 0 799           1527           JSX   GETBYTE
+0 789 0 371B  3 0 38D 1         1528           STB   TEMP+1        SET RIGHT BYTE
+0 78A 0 878D  8 0 78D           1529           LDW   TEMP          FETCH RESULT
+0 78B 0 9784  9 0 784           1530           EXIT  GETWORD
+0 78C 0 2800  2 1 000
+0 78D 0 0000  0000              1531   TEMP    D     0
+                                1532   *
+                                1533   *
+0 78E 0 6711  6 0 711           1534   GETNAME STX   RETSAVE       GET A NAME
+0 78F 0 2785  2 0 785           1535           JSX   GETWORD       GET FIRST TWO CHARACTERS
+0 790 0 7796  7 0 796           1536           STW   NAME
+0 791 0 2785  2 0 785           1537           JSX   GETWORD
+                                1538           TRUE  NAMESIZE>1
+0 792 0 7797  7 0 797           1539           STW   NAME+1
+                                1540           ENDC
+0 793 0 2785  2 0 785           1541           JSX   GETWORD
+                                1542           TRUE  NAMESIZE>2
+                                1544           ENDC
+0 794 0 2785  2 0 785           1545           JSX   GETWORD
+                                1546           TRUE  NAMESIZE>3
+                                1548           ENDC
+0 795 0 170F  1 0 70F           1549           JMP   RETURNER
+0 796 0 0000  0000              1550   NAME    RES   NAMESIZE
+
+================================================================
+PAGE 21     INPUT ROUTINES - GETBYTE AND GETCARD
+
+0 797 0 0000  0000              1551   '       INPUT ROUTINES - GETBYTE AND GETCARD
+                                1552   *
+0 798 0 0000  0000              1553
+0 799 0 6798  6 0 798                  GETBYTE SUBR                FETCHES 1 BYTE
+0 79A 0 8547  8 0 547           1554   GB1     LDW   BYTEPNT
+0 79B 0 F7C1  F 0 7C1           1555           CMW   LASTBYTE      IS IT THE  CHECKSUM BYTE
+0 79C 0 0870  0870              1556           SNE
+0 79D 0 17A5  1 0 7A5           1557           JMP   GETCARD       YES, GET ANOTHER RECORD
+0 79E 0 0130  0130              1558           CAX
+0 79F 0 A5F3  A 0 5F3           1559           ADD   X1            NO, COUNT
+0 7A0 0 7547  7 0 547           1560           STW   BYTEPNT
+0 7A1 0 0100  0100              1561           CLR                 ZERO ON THE LEFT
+0 7A2 0 5800  5 1 000 0         1562           LDB   *0            FETCH BYTE
+0 7A3 0 9798  9 0 798           1563           EXIT  GETBYTE
+0 7A4 0 2800  2 1 000
+                                1564           TRUE  LOADER=BASIC
+0 7A5 0 2046  2 0 046           1565   GETCARD JSX   STAT,LOADFIOT
+0 7A6 0 854F  854F
+                                1566           ENDC
+                                1567           FALS  LOADER=BASIC
+                                1584           ENDC
+0 7A7 0 8552  8 0 552           1585           LDW   LOADFIOT+3    GET STATUS
+0 7A8 0 0A1B  0A1 B             1586           SLL   11            MOVE TO SIGN
+0 7A9 0 0810  0810              1587           SAP
+0 7AA 0 16DF  1 0 6DF           1588           JMP   LDX2          MAKE EOF EXIT
+                                1589   *
+                                1590   *       CHECKSUM SEQUENCE
+                                1591   *
+0 7AB 0 8553  8 0 553           1592           LDW   LOADFIOT+4
+0 7AC 0 B5F3  B 0 5F3           1593           SUB   X1            IT'S LAST BYTE +1
+0 7AD 0 77C1  7 0 7C1           1594           STW   LASTBYTE
+0 7AE 0 0100  0100              1595           CLR
+0 7AF 0 954F  9 0 54F           1596           LDX   LOADFIOT      GET BUFFER
+0 7B0 0 0A31  0A3 1             1597           SLL D 1             DOUBLE
+0 7B1 0 5800  5 1 000 0         1598           LDB   *0            GET FIRST BYTE
+0 7B2 0 0401  04 01             1599           IXS   1             YES, GET TO NEXT BYTE
+0 7B3 0 FFFC  FFFC              1600   DM4     D     -4
+0 7B4 0 6547  6 0 547           1601           STX   BYTEPNT       SET POINTER
+0 7B5 0 0800  0800              1602           SAZ                 WAS THE BYTE ZERO
+0 7B6 0 17D0  1 0 7D0           1603           JMP   NBR           NO, THIS ISN'T A BINARY RECORD
+0 7B7 0 77CF  7 0 7CF           1604           STW   TEMP1         CLEAR SUM
+0 7B8 0 0140  0140              1605   CKSUM1  CXA
+0 7B9 0 F7C1  F 0 7C1           1606           CMW   LASTBYTE
+0 7BA 0 0840  0840              1607           SLS
+0 7BB 0 17C3  1 0 7C3           1608           JMP   TESTSUM
+0 7BC 0 0100  0100              1609   X100    CLR                 USED AS CONSTANT  X'100'
+0 7BD 0 5800  5 1 000 0         1610           LDB   *0
+0 7BE 0 A7CF  A 0 7CF           1611           ADD   TEMP1
+0 7BF 0 77CF  7 0 7CF           1612           STW   TEMP1
+0 7C0 0 0401  04 01             1613           IXS   1
+0 7C1 0 0000  0000              1614   LASTBYTE D    0
+0 7C2 0 17B8  1 0 7B8           1615           JMP   CKSUM1
+0 7C3 0 579E  5 0 3CF 0         1616   TESTSUM LDB   TEMP1         GET LEFT BYTE
+
+================================================================
+PAGE 22     INPUT ROUTINES - GETBYTE AND GETCARD
+
+0 7C4 0 A7CF  A 0 7CF        1617            ADD   TEMP1         FOLD SUM
+0 7C5 0 4800  4 1 000 0      1618            CMB   * 0           COMPARE
+0 7C6 0 0860  0860           1619            SEQ
+0 7C7 0 17D0  1 0 7D0        1620            JMP   CKSUMERR      NO
+0 7C8 0 854F  8 0 54F        1621            LDW   LOADFIOT      EXCHANGE BUFFER POINTER
+0 7C9 0 954C  9 0 54C        1622            LDX   OTHERBUF
+0 7CA 0 754C  7 0 54C        1623            STW   OTHERBUF
+0 7CB 0 654F  6 0 54F        1624            STX   LOADFIOT
+                             1625            TRUE  LOADER=DISK
+                             1630            ENDC
+0 7CC 0 2044  2 0 044        1631            JSX   DOIO,LOADFIOT
+0 7CD 0 854F  854F
+0 7CE 0 179A  1 0 79A        1632            JMP   GB1
+0 7CF 0 0000  0000           1633   TEMP1    D     0
+                             1634   *
+                             1635   *  NOT BINARY RECORD PROCESSOR
+                             1636   *
+                             1637            FALS  LOADER=BASIC
+                             1665            ENDC
+0 7D0 0 27D6  2 0 7D6        1666   CKSUMERR JSX   HERRM,'CK'
+0 7D1 0 C3CB  C3CB
+                             1667            TRUE  LOADER=BASIC
+        07D0  07D0           1668   NBR      EQU   CKSUMERR
+                             1669            ENDC
+        07D2  07D2           1670   CKS2     EQU   $
+                             1671            TRUE  LOADER=BASIC
+0 7D2 0 0007  0007           1672   D7       D     7             CONSTANT DOUBLES AS HALT
+0 7D3 0 2044  2 0 044        1673            JSX   DOIO,LOADFIOT RE-READ THE RECORD
+0 7D4 0 854F  854F
+0 7D5 0 17A5  1 0 7A5        1674            JMP   GETCARD
+                             1675            ENDC
+                             1676            FALS  LOADER=BASIC
+                             1700            ENDC
+                             1701            TRUE  LOADER=DISK
+                             1708            ENDC
+
+================================================================
+PAGE 23     ERROR MESSAGE PRINT
+
+                             1709   '  ERROR MESSAGE PRINT
+        07D6  07D6           1710   HERRM    EQU   $
+                             1711            TRUE  LOADER=BASIC
+0 7D6 0 854F  8 0 54F        1712            LDW   LOADFIOT
+0 7D7 0 0810  0810           1713            SAP                 IS IT STILL BUSY?
+0 7D8 0 17D6  1 0 7D6        1714            JMP   $-2           YES, WAIT TO FINISH
+0 7D9 0 8551  8 0 551        1715            LDW   LOADFIOT+2    GET UNIT NUMBER
+0 7DA 0 07D9  07 D9          1716            CLB   X'D9'         IS IT MOST LIKELY THE TTY
+0 7DB 0 0870  0870           1717            SNE                 UNIT 1D IS ULTRA UNLIKELY
+0 7DC 0 0008  0008           1718   D8       D     8             CONSTANT SERVES AS HALT
+                             1719            ENDC
+0 7DD 0 67E0  6 0 7E0        1720   ERRM     STX   MBUFA         POINTS TO BUFFER
+0 7DE 0 2044  2 0 044        1721            JSX   DOIO,PRINFIOT,0,X1
+0 7DF 0 0557  0557
+0 7E0 0 0000  0000
+0 7E1 0 85F3  85F3
+        07E0  07E0           1722   MBUFA    EQU   $-2
+0 7E2 0 2046  2 0 046        1723            JSX   STAT,PRINFIOT
+0 7E3 0 8557  8557
+0 7E4 0 97E0  9 0 7E0        1724            LDX   MBUFA         IT'S THE RETURN TOO
+0 7E5 0 2801  2 1 001        1725            JSX   * 1           RETURN
+                             1726            FALS  LOADER=BASIC
+                             1729            ENDC
+                             1730            TRUE  LOADER=BASIC
+
+================================================================
+PAGE 24     STANDARD FLAG TEST SUBROUTINE
+
+                             1731   '  STANDARD FLAG TEST SUBROUTINE
+                             1732   *       FLAGS ARE STORED  IN A WORD LABFLED FLAGWORD
+                             1733   *       FLAG TEST SUBROUTINE CALLING SEQUENCE
+                             1734   *
+                             1735   *       FLAG  X'OMMM'
+                             1736   *
+                             1737   *       O IS THE CODE FOR THE DESIRED OPERATION
+                             1738   *       MMM IS THE 12 BIT MASK WHICH SELECTS THE BITS
+                             1739   *       FUNCTION CODES
+                             1740   *       8    SET MASKED BITS
+                             1741   *       9    NO-OPERATION
+                             1742   *       A    RESET MASKED BITS
+                             1743   *       B    REVERSE MASKED BITS
+                             1744   *       C    NO-OPERATION
+                             1745   *       D    NO OPERATION
+                             1746   *       E    SKIP IF ALL MASKED BITS ARE TRUE
+                             1747   *       F    SKIP IF ALL MASKED BITS ARE FALSE
+                             1748   *
+0 7E6 0 77FC  7 0 7FC        1749   FLAG     STW   FLAGA         SAVE A
+0 7E7 0 8800  8 1 000        1750            LDW   * 0           GET OP CODE
+0 7E8 0 0A0C  0A0 C          1751            SRL   12            POSITION IT
+0 7E9 0 A7FA  A 0 7FA        1752            ADD   FLAGJMPI      COMPUTE JUMP
+0 7EA 0 77EC  7 0 7EC        1753            STW   FLAGJUMP      SET JUMP
+0 7EB 0 87FB  8 0 7FB        1754            LDW   FLAGWORD      GET FLAG
+0 7EC 0 17ED  1 0 7ED        1755   FLAGJUMP JMP   $+1           VARIABLE JUMP
+0 7ED 0 C800  C 1 000        1756            ORI   * 0           SET  (OP 0)
+0 7EE 0 17F1  1 0 7F1        1757            JMP   FLAGSTOR      OP 1 IS NO-OP
+0 7EF 0 C800  C 1 000        1758            ORI   * 0           SET,SO REV RESETS(OP 2)
+0 7F0 0 D800  D 1 000        1759            ORE   * 0           REVERSE (OP 3)
+0 7F1 0 77FB  7 0 7FB        1760   FLAGSTOR STW   FLAGWORD
+0 7F2 0 17F7  1 0 7F7        1761            JMP   NONSKIP
+0 7F3 0 D800  D 1 000        1762            ORE   * 0           REVERSE FOR ALL TRUE    (OP 6)
+0 7F4 0 E800  E 1 000        1763            AND   * 0           MASK FOR TEST ALL FALSE(OP 7)
+0 7F5 0 0A14  0A1 4          1764            SLL   4             MASK OP CODE AND SIGN BIT
+0 7F6 0 0800  0800           1765            SAZ                 TEST
+0 7F7 0 0501  05 01          1766   NONSKIP  DXS   1             NOT MET, NON-SKIP
+0 7F8 0 87FC  8 0 7FC        1767            LDW   FLAGA         RESTORE A
+0 7F9 0 1802  1 1 002        1768            JMP   * 2           RETURN
+0 7FA 0 17E5  1 0 7E5        1769   FLAGJMPI JMP   FLAGJUMP-7
+0 7FB 0 0000  0000           1770   FLAGWORD D     0
+0 7FC 0 0000  0000           1771   FLAGA    D     0
+
+================================================================
+PAGE 25     LOADER LINK POINTS
+
+                             1772   '  LOADER LINK POINTS
+0 7FD 0 15F8  1 0 5F8        1773            JMP   S.MAP
+0 7FE 0 15D8  1 0 5D8        1774            JMP   S.LLOAD
+                             1775            ORIG  X'7FF'
+0 7FF 0 15D0  1 0 5D0        1776            JMP   S.RLOAD
+                             1777            ENDC
+                             1778            FALS  LOADER=BASIC
+                             1783            ENDC
+        0800  0800           1784   ENDLOAD  EQU   $
+
+================================================================
+PAGE 26     SYMBOL TABLE
+
+RELOADD   SYMBOL TABLE                                                          08/9/68            PASS B      PAGE 26
+
+                                  1785  '  SYMBOL TABLE
+        0 7FF 0*******2047        1786           END   START
+
+                 0545  0545
+
+X-REF
+
+    0 68E 0  ABSO      0 661 0
+    0 5C8 0  ABUF1     0 63E 0
+    0 5C9 0  ABUF2     0 640 0
+    0 622 0  ADDR1     0 62C 0
+    0 773 0  ALLEX     0 766 0    0 772 0
+    0 754 0  ALLOCATE  0 6E7 0
+    0 545 0  BASE      0 685 0    0 689 0    0 6B1 0    0 6DA 0    0 6EA 0    0 6EC 0    0 746 0    0 77E 0
+    0000     BASIC     0 545 0    0 545 0    0 545 0    0 545 0    0 545 0    0 545 0    0 545 0    0 5CC 0
+                       0 5CD 0    0 5CD 0    0 5E0 0    0 5E0 0    0 5E8 0    0 5EF 0    0 5F3 0    0 5F5 0
+                       0 613 0    0 616 0    0 618 0    0 619 0    0 61A 0    0 639 0    0 671 0    0 690 0
+                       0 694 0    0 6B0 0    0 6B7 0    0 6CC 0    0 6CD 0    0 6E1 0    0 6EC 0    0 6EC 0
+                       0 6F9 0    0 6FC 0    0 6FD 0    0 712 0    0 714 0    0 745 0    0 74D 0    0 74D 0
+                       0 754 0    0 775 0    0 778 0    0 784 0    0 7A5 0    0 7A7 0    0 7D0 0    0 7D2 0
+                       0 7D2 0    0 7D6 0    0 7D6 0    0 7E6 0    0 7E6 0    1 000 0
+    0 546 0  BIAS      0 63D 0    0 6E9 0    0 721 0
+    0048     BKSP      0 545 0
+    0 5BF 0  BLBL
+    0 55F 0  BUF1      0 5C8 0
+    0 58E 0  BUF2      0 5C9 0
+    0 5BD 0  BUF3      0 5C3 0    0 60D 0    0 612 0    0 62A 0    0 62F 0
+    0 5C3 0  BUF3CT    0 630 0
+    0 5C2 0  BUF3END   0 5C3 0    0 60B 0    0 610 0    0 637 0
+    0 767 0  BYTEPAGE  0 75C 0
+    0 547 0  BYTEPNT   0 645 0    0 79A 0    0 7A0 0    0 7B4 0
+    0 6F9 0  CHEKLOW   0 6F7 0    0 6F9 0
+    0 7D0 0  CKSUMERR  0 7C7 0    0 7D2 0
+    0 7B8 0  CKSUM1    0 7C2 0
+    0 7D2 0  CKS2      0 7D2 0
+    0 671 0  DBLOCD    0 6EC 0
+    0 671 0  DBLOCF    0 663 0    0 6EC 0
+    0 6D2 0  DDS       0 6C7 0
+    0 548 0  DEF11     0 738 0    0 73F 0
+    0 549 0  DEF15     0 6A6 0    0 6CE 0    0 72B 0    0 735 0    0 73D 0    0 740 0
+    0 671 0  DFILL     0 662 0    0 6EC 0
+    0002     DISK      0 545 0    0 545 0    0 5E0 0    0 7CC 0    0 7D6 0
+    0 7B3 0  DM4       0 620 0
+    0044     DOIO      0 545 0    0 62D 0    0 64D 0    0 7CC 0    0 7D3 0    0 7DE 0
+    0074     DVEC      0 545 0
+    0 5F3 0  D1        0 5CA 0    0 5D2 0    0 6B7 0
+    0 5C4 0  D1024     0 5D0 0
+    0 5CD 0  D3072     0 760 0    0 771 0
+    0 7D2 0  D7        0 629 0
+    0 7DC 0  D8
+    0 6D6 0  END       0 66B 0
+    0054     ENDA      0 545 0    0 5D0 0
+    1 000 0  ENDLOAD   1 000 0
+    0054     ENTBASE   0 5D0 0    0 5D6 0    0 603 0    0 6FE 0
+
+================================================================
+PAGE 27     SYMBOL TABLE
+
+RELOADD   SYMBOL TABLE                                                          08/9/68            PASS B      PAGE 27
+
+    0 6F4 0  ENTLIMIT  0 5D7 0    0 606 0    0 6ED 0    0 6F6 0    0 700 0
+    0 54B 0  ENTPOINT  0 604 0    0 605 0    0 618 0    0 69B 0    0 6CA 0    0 6CD 0    0 70E 0
+    0 7DD 0  ERRM      0 5EB 0    0 5F1 0
+    0 54D 0  EXADDR    0 5E8 0    0 6DB 0
+    0 5E0 0  EXECUTE   0 5CB 0    0 5E0 0
+    0 5F6 0  EXRAY     0 5ED 0
+    0 692 0  EXTN      0 667 0
+    0 697 0  EXTN1     0 694 0
+    0 671 0  EXTN15    0 66C 0    0 6EC 0
+    0 6A3 0  EXTN2     0 69E 0
+    0 73C 0  FILLDEF   0 69F 0    0 6C9 0
+    0 6C6 0  FILSTRS   0 6C1 0
+    0 5DE 0  FINI      0 5DC 0
+    0 7E6 0  FLAG      0 5E0 0    0 5E2 0    0 5E5 0    0 5F9 0    0 5FF 0    0 61B 0    0 634 0    0 642 0
+                       0 649 0    0 6E1 0    0 6E4 0    0 75A 0
+    0 7FC 0  FLAGA     0 7E6 0    0 7F8 0
+    0 7FA 0  FLAGJMPI  0 7E9 0
+    0 7EC 0  FLAGJUMP  0 7EA 0    0 7FA 0
+    0 7F1 0  FLAGSTOR  0 7EE 0
+    0 7FB 0  FLAGWORD  0 7EB 0    0 7F1 0
+    0 5E8 0  FORCEX    0 5E8 0    0 5F5 0
+    0 79A 0  GB1       0 7CE 0
+    0 799 0  GETBYTE   0 64F 0    0 786 0    0 788 0    0 7A3 0
+    0 7A5 0  GETCARD   0 79D 0    0 7D5 0
+    0 78E 0  GETNAME   0 690 0    0 77A 0
+    0 779 0  GETVAL    0 692 0    0 6BF 0    0 782 0
+    0 785 0  GETWORD   0 677 0    0 6B0 0    0 6B6 0    0 6D6 0    0 6E6 0    0 77B 0    0 78B 0    0 78F 0
+                       0 791 0    0 793 0    0 794 0
+    0 5EE 0  GOEX      0 5EA 0
+    0 7D6 0  HERRM     0 671 0    0 775 0    0 7D0 0    0 7D6 0
+    0 671 0  IDERR     0 653 0    0 664 0    0 6EC 0    0 6EC 0    0 6EC 0    0 6EC 0
+    0 6B6 0  ILOC      0 669 0
+    0 6B7 0  ILOC1     0 6BE 0
+    0 760 0  ITFIT     0 759 0
+    0 65D 0  JMPTAB    0 657 0    0 65C 0
+    0 671 0  JTEND     0 651 0    0 671 0
+    0 665 0  JTSTART   0 651 0
+    0 7C1 0  LASTBYTE  0 646 0    0 79B 0    0 7AD 0    0 7B9 0
+    0 673 0  LDERR     0 777 0
+    0 6DF 0  LDX2      0 6DF 0    0 7AA 0
+    0 690 0  LIBR      0 666 0    0 6EC 0
+    0000     LOADER    0 545 0    0 545 0    0 545 0    0 545 0    0 545 0    0 545 0    0 545 0    0 545 0
+                       0 5CC 0    0 5CD 0    0 5CD 0    0 5E0 0    0 5E0 0    0 5E0 0    0 5E0 0    0 5E0 0
+                       0 5E8 0    0 5EF 0    0 5F3 0    0 5F5 0    0 613 0    0 616 0    0 618 0    0 619 0
+                       0 61A 0    0 639 0    0 671 0    0 690 0    0 691 0    0 692 0    0 694 0    0 6B0 0
+                       0 6B7 0    0 6CC 0    0 6CD 0    0 6E1 0    0 6E7 0    0 6EC 0    0 6EC 0    0 6F9 0
+                       0 6FC 0    0 6FD 0    0 712 0    0 714 0    0 745 0    0 74D 0    0 74D 0    0 754 0
+                       0 775 0    0 778 0    0 784 0    0 7A5 0    0 7A7 0    0 7CC 0    0 7D0 0    0 7D2 0
+                       0 7D2 0    0 7D6 0    0 7D6 0    0 7D6 0    0 7E6 0    0 7E6 0    1 000 0
+    0 6DC 0  LOADEXIT  0 6D9 0
+    0 54F 0  LOADFIOT  0 63F 0    0 64E 0    0 6DD 0    0 7A6 0    0 7A7 0    0 7AB 0    0 7AF 0    0 7C8 0
+                       0 7CB 0    0 7CD 0    0 7D4 0    0 7D6 0    0 7D9 0
+    0 5CB 0  LOCXC     0 5D4 0
+
+================================================================
+PAGE 28     SYMBOL TABLE
+
+RELOADD   SYMBOL TABLE                                                          08/9/68            PASS B      PAGE 28
+
+    0 5CC 0  LOWLOC    0 6F9 0
+    0 7E0 0  MBUFA     0 7DD 0    0 7E2 0    0 7E4 0
+    0 5CE 0  MEMMAP    0 5D1 0    0 5D3 0    0 756 0    0 75D 0    0 761 0    0 763 0    0 765 0    0 767 0
+                       0 76A 0    0 76E 0    0 770 0
+    0 5F1 0  MISSING   0 5E7 0
+    0 796 0  NAME      0 6D2 0    0 6D4 0    0 6EF 0    0 6F1 0    0 704 0    0 708 0    0 790 0    0 792 0
+    0002     NAMESIZE  0 545 0    0 5BD 0    0 611 0    0 613 0    0 613 0    0 613 0    0 62A 0    0 62A 0
+                       0 6EE 0    0 6F1 0    0 6F3 0    0 6F3 0    0 6F3 0    0 707 0    0 70B 0    0 70B 0
+                       0 70B 0    0 712 0    0 792 0    0 794 0    0 795 0    0 796 0
+    0 690 0  NBLK      0 66D 0    0 6EC 0
+    0 7D0 0  NBR       0 7B6 0    0 7D2 0
+    0 644 0  NEXTCARD
+    0 775 0  NOBLOK    0 6FB 0    0 754 0
+    0 775 0  NOFIT     0 754 0    0 75F 0    0 76D 0
+    0 7F7 0  NONSKIP   0 7F2 0
+    0 634 0  NOTDEF    0 61A 0
+    0 712 0  NOTENTRY  0 706 0    0 70A 0
+    0 715 0  NOTINENT  0 702 0
+    0 6BF 0  NTRY      0 66A 0
+    0 6C3 0  NTRY1     0 696 0
+    0 6C2 0  NTRY2     0 6D5 0
+    0 54C 0  OTHERBUF  0 641 0    0 7C9 0    0 7CA 0
+    0 751 0  POINTER   0 6E8 0    0 74E 0    0 752 0
+    0 557 0  PRINFIOT  0 602 0    0 62E 0    0 632 0    0 647 0    0 7DF 0    0 7E3 0
+    0 605 0  PRINLOOP  0 61D 0    0 633 0
+    0 5FE 0  PRINTENT  0 5E4 0    0 5FB 0
+    0 616 0  PRIN1
+    0 618 0  PRIN2
+    0 61E 0  PRIN3     0 639 0
+    0 64F 0  PROCTEXT  0 665 0    0 67D 0    0 691 0    0 69A 0    0 6A2 0    0 6AF 0    0 6B5 0    0 6B9 0
+                       0 6C5 0    0 6D1 0    0 6EB 0
+    0055     RBEG      0 545 0    0 5D5 0    0 5EE 0
+    002F     RCRDSIZE  0 545 0    0 54E 0    0 55F 0    0 58E 0
+    0 68B 0  RELB11    0 660 0
+    0 688 0  RELB16    0 65F 0
+    0 63B 0  RELOAD    0 5D8 0    0 673 0    0 6DF 0
+    0 745 0  RELO11    0 682 0    0 68C 0
+    0 681 0  RELW11    0 65D 0
+    0 684 0  RELW15    0 65E 0
+    0 682 0  REL11A    0 68D 0
+    0 686 0  REL15A    0 683 0    0 68F 0
+    0 685 0  REL15B    0 68A 0
+    0 680 0  REPCOUNT  0 659 0    0 67A 0    0 67E 0
+    0 67A 0  REPEAT    0 687 0
+    0 676 0  REPEATER  0 678 0    0 681 0    0 684 0    0 688 0    0 68B 0    0 68E 0
+    0 677 0  REPOUT    0 67F 0
+    0 711 0  RETSAVE   0 5FE 0    0 6EC 0    0 6FD 0    0 712 0    0 717 0    0 74D 0    0 754 0    0 78E 0
+    0 712 0  RETURN    0 70F 0    0 712 0    0 715 0
+    0 70F 0  RETURNER  0 608 0    0 6F8 0    0 73B 0    0 753 0    0 774 0    0 795 0
+    004E     RWND      0 545 0
+    0 5D8 0  S.LLOAD   0 5DF 0    0 7FE 0
+    0 5F8 0  S.MAP     0 5FC 0    0 7FD 0
+    0 5D0 0  S.RLOAD   0 7FF 0
+
+================================================================
+PAGE 29     SYMBOL TABLE
+
+RELOADD   SYMBOL TABLE                                                          08/9/68            PASS B      PAGE 29
+
+    001D     SECTINCR  0 545 0
+    0 6FD 0  SERCHENT  0 693 0    0 6C0 0
+    0 6E6 0  SIZCOM    0 6E3 0
+    0 6E1 0  SIZE      0 66E 0    0 6EC 0
+    0 6E4 0  SIZEB     0 670 0
+    0 6E1 0  SIZEW     0 66F 0    0 6EC 0
+    0 6B0 0  SMB       0 668 0
+    0 54A 0  SMBDEF    0 6A4 0    0 6AD 0    0 728 0    0 743 0
+    0 6FF 0  SRLOOP    0 714 0
+    0001     STANDARD  0 545 0    0 545 0    0 5E0 0    0 5E0 0    0 691 0    0 692 0    0 6E7 0
+    0 545 0  START     0 545 0    0 5CC 0    0 7FF 0
+    0046     STAT      0 545 0    0 631 0    0 6DC 0    0 7A5 0    0 7E2 0
+    0 74D 0  STORE     0 686 0    0 6B4 0    0 6BC 0
+    0 6EC 0  STORENT   0 6C4 0
+    0 6F5 0  STORENT1
+    0 717 0  STRING11  0 6A1 0    0 6A9 0    0 6CC 0
+    0058     STYP      0 545 0
+    0 71B 0  ST11A     0 72F 0
+    0 730 0  ST11B     0 727 0
+    0 729 0  ST11C     0 736 0    0 739 0
+    0 73A 0  ST11D     0 71F 0
+    0 737 0  ST11E     0 733 0
+    0 78D 0  TEMP      0 61F 0    0 622 0    0 624 0    0 697 0    0 6A0 0    0 6A7 0    0 6BA 0    0 6BD 0
+                       0 6C3 0    0 6C8 0    0 729 0    0 72C 0    0 77F 0    0 781 0    0 787 0    0 789 0
+                       0 78A 0
+    0 7CF 0  TEMP1     0 718 0    0 71B 0    0 724 0    0 745 0    0 749 0    0 762 0    0 773 0    0 7B7 0
+                       0 7BE 0    0 7BF 0    0 7C3 0    0 7C4 0
+    0 617 0  TEMP2     0 71A 0    0 720 0    0 748 0    0 74B 0    0 755 0    0 757 0    0 764 0    0 76B 0
+                       0 76F 0
+    0 545 0  TEMP3     0 545 0    0 6EC 0
+    0 7C3 0  TESTSUM   0 7BB 0
+    006E     TYPE      0 545 0
+    005A     ULIM      0 545 0
+    0 551 0  UNIT      0 64C 0
+    0 54E 0  WCT       0 550 0
+    0 70C 0  XB0       0 626 0
+    0 5DA 0  XF        0 625 0    0 658 0
+    0 5C7 0  XF800     0 6AC 0    0 725 0    0 74A 0
+    0040     XRAY      0 545 0    0 5DE 0    0 5F6 0
+    0 5F3 0  X1        0 5CA 0    0 79F 0    0 7AC 0    0 7E1 0
+    0 7BC 0  X100
+    0 5C6 0  X7FF      0 6A3 0    0 71C 0    0 71D 0    0 73E 0    0 747 0
+    0 614 0  X7FFF     0 61E 0    0 698 0    0 6D3 0    0 73C 0    0 780 0
+    0 72E 0  X7800     0 719 0
+    0 5C5 0  X80       0 6B3 0    0 742 0
+    0 5CA 0  X8000     0 6C2 0    0 6CF 0
+
+
+NO ERRORS
+
+CARDS  SYMBOLS    LITR  STACK
+1786  175   583   0     6

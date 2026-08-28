@@ -53,9 +53,9 @@ basic6809-test:
 ASM703      := ./asm703.py
 RAY703_ROMS := ../roms/703
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-test
+.PHONY: ray703 ray703-demo ray703-tape ray703-test ray703-listings ray703-verify
 
-ray703: ray703-demo ray703-tape
+ray703: ray703-demo ray703-tape ray703-listings
 
 ray703-demo: $(RAY703_ROMS)/demo.bin
 
@@ -71,6 +71,32 @@ ray703-tape: $(RAY703_ROMS)/tape.tape
 $(RAY703_ROMS)/tape.tape: 703/tape.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
 	$(ASM703) $< -o $(RAY703_ROMS)/tape.bin -t $@ -l 703/tape.lst
+
+# --- the transcribed period software -------------------------------------
+# X-RAY EXEC and the relocating loader, from the hand transcriptions of their
+# 1968 assembly listings in 703/listings. Every card that generated a word
+# printed its own absolute address beside it, so a listing already *is* a core
+# image and no assembler is on the path: xraylist.py --core writes one out.
+XRAYLIST    := python3 703/xraylist.py
+LISTINGS    := 703/listings
+
+ray703-listings: $(RAY703_ROMS)/xray.bin $(RAY703_ROMS)/loader.bin
+
+$(RAY703_ROMS)/xray.bin: $(LISTINGS)/390779_XRAY_listing.txt 703/xraylist.py
+	@mkdir -p $(RAY703_ROMS)
+	$(XRAYLIST) $< --core $@
+
+$(RAY703_ROMS)/loader.bin: $(LISTINGS)/390682C_RelocatingLoader_listing.txt 703/xraylist.py
+	@mkdir -p $(RAY703_ROMS)
+	$(XRAYLIST) $< --core $@
+
+# Re-assemble a transcript and diff it against the object code the 1968
+# assembler printed, word for word. This is the check the listing cannot do for
+# itself: the source text and the object column are independent readings of the
+# same card, and asm703.py saw neither. X-RAY does not assemble yet and says so.
+ray703-verify:
+	$(XRAYLIST) $(LISTINGS)/390682C_RelocatingLoader_listing.txt --verify
+	-$(XRAYLIST) $(LISTINGS)/390779_XRAY_listing.txt --verify
 
 ray703-test: ray703-demo
 	./run_ray703_demo_test.sh

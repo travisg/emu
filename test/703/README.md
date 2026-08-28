@@ -20,13 +20,57 @@ to-do list; the detail is in the documents it points at.
     xraylist.py         transcript -> source, object, core image; --check, --verify
     ../asm703.py        a SYM II assembler, enough of one to rebuild both decks
 
-**Only the master transcripts and the PDFs are durable.** Everything else
-regenerates, and the split/sync pair round-trips both masters byte-exactly,
-header included — verified, not assumed. Anything under `/storage/scratch` may
-be deleted freely.
+The **master transcripts are the source of everything** and live here:
 
-    ~/dropbox/tech_docs/computers/ray703/70x/390779_XRAY_listing.txt
-    ~/dropbox/tech_docs/computers/ray703/70x/390682C_RelocatingLoader_listing.txt
+    listings/390779_XRAY_listing.txt              X-RAY EXEC - BASIC
+    listings/390682C_RelocatingLoader_listing.txt Relocating Loader - Basic
+
+They are hand transcriptions of 1968 Raytheon program listings, made from the
+600 dpi scans in `~/dropbox/tech_docs/computers/ray703/70x/`, which is where
+the PDFs stay -- they are large and they are the only thing here that cannot be
+regenerated. Everything else can: the split/sync pair round-trips both masters
+byte-exactly, header included, and `xraylist.py` reads a master directly, so
+the per-page working files are scratch and may be deleted freely.
+
+## Running the period software
+
+    make -C test ray703-listings          # -> roms/703/xray.bin, loader.bin
+    ./target/debug/emu -s ray703 -r roms/703/xray.bin
+
+**Type a LINE FEED before every command and a RETURN after it.** That is
+Ctrl-J, then the directive, then Return. It is not a quirk of the emulator: the
+documentation says "all directives must be preceded by a line feed and followed
+by a carriage return", because the driver's record format opens each record on
+a line feed and closes it on a carriage return. Without the leading Ctrl-J
+X-RAY reads your characters and discards every one of them, which looks exactly
+like a machine that is ignoring you.
+
+    <Ctrl-J>D 0040,0050<Return>
+
+    0040  0080  1266  0080  1065  0080  1083  0080  101C
+    0048  2801  2801  2801  2801  2801  2801  2801  2801
+    0050  0080  11F3  2801  2801  03B9  0000  0080  12DF
+
+That is X-RAY's own system jump table, by the way -- `UNM` then a `JMP` per
+entry, and the relocating loader's opening equates name the same addresses.
+
+Things worth knowing at the console:
+
+- **Directives are two characters.** Dump is `D` plus its space, so `D 300,310`
+  is really `D␣` with one argument. `D 40 50` with a space instead of a comma
+  parses as something else entirely and prints one unexplained line.
+- **All arguments are hexadecimal**, leading zeroes optional, and only the last
+  four hex digits of an argument are used.
+- **A wrong directive gets you `??`** and X-RAY asks for another line.
+- **Ctrl-D exits** the emulator.
+- Output is paced by an interrupt per character, so a long dump takes a moment
+  to appear. Wait for it rather than assuming it hung.
+- The rest of the command set is documented in the **front matter of the PDF**
+  -- the thirty pages ahead of Appendix A, which are not transcribed. Read them
+  rather than guessing; that is where the comma came from.
+
+`roms/703/loader.bin` builds too, but it does not stand alone: it is written to
+call a resident X-RAY through the jump table at `44`/`46`. See item 2 below.
 
 ## Where things stand
 
@@ -43,7 +87,7 @@ Roughly in the order that unblocks the most.
 
 ### 1. Make X-RAY assemble, then verify it the way the loader was verified
 
-`xraylist.py <pagedir> --verify` reports that X-RAY does not assemble, and says
+`make -C test ray703-verify` reports that X-RAY does not assemble, and says
 why. Two repairs are needed, and both belong in the `--asm` path rather than
 the transcript — the transcript's job is fidelity, `--asm`'s is producing
 something that assembles:
