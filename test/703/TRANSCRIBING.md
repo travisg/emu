@@ -55,9 +55,23 @@ The listing prints, left to right:
             000C  000C      4     DUM     EQU   12
                             37    '
 
-- **ADDR** prints as a flanked address, `0 066 0`. The middle three hex digits
-  are the word address; the flanking digits are almost always `0`. Record it
-  as printed.
+- **ADDR** prints as a flanked address, `0 066 0`. Record it as printed. The
+  three fields are the instruction's own address decomposition: the middle
+  three hex digits are the **11-bit M field**, the leading digit the word page
+  above it, and the trailing digit the byte within the word (so a `BYTE` pair
+  prints `0 058 0` then `0 058 1`). That is the machine's own split — a 15-bit
+  word address is a 4-bit page and an 11-bit M field, which is why `PCR` is 15
+  bits and why `SML`/`SMU` exist at all.
+
+  The leading digit is almost always `0` only because these programs fit below
+  word `800`. **Exactly one place in either listing goes past it**, and it
+  discriminates between the two natural readings of the format: the relocating
+  loader's `ENDLOAD EQU $` assembles to `0800` on card 1784 and its
+  cross-reference row prints `1 000 0`. If the middle field were twelve bits
+  that would mean `1000`, not `800`, so the middle field is eleven bits and the
+  leading digit is the page. Its reference list corroborates: the deck's last
+  conditional cards sit past the final code word at location `800` and are
+  listed the same way.
 - **OBJ** is the assembled word, four hex digits.
 - **FIELDS** is the *same word* split into opcode / index bit / M field. On
   lines that are an `EQU` rather than an instruction, this column just repeats
@@ -299,11 +313,34 @@ PAGE NNN** with no offset — unlike X-RAY.
   **Ignore them** — they are the punched-card sequence field and the card
   number column already gives a running count. They are in the strip only
   because the page number sits beside them.
-- Card numbers run **1 to 1786**. The trailer on PAGE 29 reads
-  `CARDS 1786  SYMBOLS 175  583  LITR 0  STACK 6`.
+- Card numbers run 1 to 1786, but **they are not contiguous** — see below. The
+  trailer on PAGE 29 reads `CARDS 1786  SYMBOLS 175  583  LITR 0  STACK 6`,
+  above which is a `NO ERRORS` line.
+- **This printer slashes the letter `O` and leaves the digit `0` plain.** The
+  reverse of the usual convention, and the reverse of X-RAY's printer, where
+  the two differed only in width. So `O` against `0` needs no measurement here:
+  on PAGE 2 card 12, `DOIO`'s letters are filled shapes with a bar through them
+  while the `0`s in the object word `0044` beside them are open ovals.
+- **A period and a comma are the same low oval**, so `S.MAP` cannot be told
+  from `S,MAP` on the film. Settle it by the assembler, not the glyph: a comma
+  is the operand separator, so `EXIT S.MAP` could not carry one.
 - Conditional assembly is on `LOADER`, which is `BASIC` (0), `STANDARD` (1) or
-  `DISK` (2); this listing is `LOADER EQU BASIC`, so the standard and disk
-  sections print with no object code.
+  `DISK` (2); this listing is `LOADER EQU BASIC`.
+
+**Untaken conditional bodies are not printed at all** — and this is the biggest
+difference from X-RAY, which printed them in full without object code. Here the
+`TRUE`/`FALS` and its matching `ENDC` print and the body between them is
+absent, with its card numbers missing from the sequence: card 5 is
+`TRUE LOADER=STANDARD`, card 7 is its `ENDC`, and there is no card 6.
+
+So **a card-number gap is normal and is not a dropped line.** Page boundaries
+*are* contiguous, so that check still works, and the transcript reconciles
+against the trailer arithmetically: 873 cards printed, 912 suppressed across 53
+gaps, 1 lost with the unscanned PAGE 1, total 1786.
+
+It also means the source of the STANDARD and DISK loaders is not in this
+document — but everything that *is* printed was assembled, so every card has
+printed object to check a transcription against, which is not true of X-RAY.
 - Both `*` and `'` appear as comment-card markers, sometimes on adjacent cards.
 - The tail is a `SYMBOL TABLE` cross reference by PAGE 26, in the same shape as
   X-RAY's: value, name, then every referencing address.

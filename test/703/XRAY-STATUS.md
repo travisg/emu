@@ -207,9 +207,12 @@ lights, and characters read are printed".
 
 ## What is known to be left
 
-- **`NOP`** appears on page 31 (cards 1235, 1237) and is not in appendix B.
-  Both sit in untaken conditional code with no object printed, so its encoding
-  is undetermined — and irrelevant to this build.
+- ~~**`NOP`.**~~ Resolved, from another document. It appears on page 31 (cards
+  1235, 1237) and is not in appendix B, and both uses sit in untaken
+  conditional code with no object printed — so X-RAY alone could never settle
+  it. The relocating loader (DN 390682) uses it on its page 15 card 1074 *with
+  object code*: **`NOP` is `0900`**, which is `SRA 0`, a shift by zero. Still
+  irrelevant to this build, and the first thing a second listing paid for.
 - ~~**Character literals.**~~ Done. SYM II stores them with the 703's high bit
   set, and `asm703.py` now reproduces card 363 (`DATA 'XR','AY'` → `D8D2 C1D9`)
   exactly. The one-character case has no example in the listing; it is packed
