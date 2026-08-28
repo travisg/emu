@@ -54,6 +54,7 @@ Numbers are decimal, `0x1F`, `X'1F'` or `'A'`; expressions take + - * and
 parentheses, and `$` is the address of the word being assembled.
 """
 
+from collections import ChainMap
 import argparse
 import re
 import sys
@@ -111,7 +112,11 @@ DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'RES', 'EQU',
 # SXP is `IXS 0` and SXM is `DXS 0`: change the index by nothing and skip on
 # its sign. The literal forms are loop steps; under these names they are what
 # they are being used for, a test of the index.
-GEN_ALIAS = {'SXP': 0x0400, 'SXM': 0x0500}
+#
+# NOP is `SRA 0`, an arithmetic shift by nothing. X-RAY uses the mnemonic twice
+# but only inside conditionals it did not assemble, so no object was ever
+# printed beside it there; the relocating loader's card 1074 prints 0900.
+GEN_ALIAS = {'SXP': 0x0400, 'SXM': 0x0500, 'NOP': 0x0900}
 
 # Shift mnemonics that take a trailing D, L or R to name their double-length
 # and single-byte variants. Appendix B of the manual, and the listings, print
@@ -159,6 +164,10 @@ TEXT_ESCAPES = {'r': 0x0d, 'n': 0x0a, 't': 0x09, '0': 0x00, '\\': 0x5c, '"': 0x2
 # right justification is forced by `LLB`, whose literal is eight bits wide --
 # a blank-filled left justification could not be loaded by it at all.
 CHAR_HIGH_BIT = 0x80
+
+# Every identifier in an expression, used to decide whether an EQU inherits its
+# operand's location-ness.
+NAMES = re.compile(r'[A-Za-z][A-Za-z0-9_.]*')
 
 
 class AsmError(Exception):
@@ -315,6 +324,34 @@ LINE = re.compile(r'^(?P<label>\S+)?\s*(?:(?P<op>\S+)(?:\s+(?P<arg>.*?))?)?\s*$'
 RELATION = re.compile(r'^(?P<lhs>.+?)(?P<rel><=|>=|<>|=|<|>)(?P<rhs>.+)$')
 
 
+def prescan_equates(statements):
+    """Values for every EQU whose expression does not depend on where it sits.
+
+    Only conditional guards use this, and only as a fallback behind the symbols
+    pass 1 has actually placed. Equates inside a branch that turns out to be
+    untaken are collected too, which is harmless: nothing here reaches the code
+    generator, and a guard naming a symbol that only exists in the other half
+    of a choice would have no answer otherwise either.
+
+    `$` is refused rather than guessed at -- the location counter has no value
+    before pass 1 places anything.
+    """
+    values = {}
+    pending = [(lineno, label, arg) for lineno, label, op, arg, _ in statements
+               if op == 'EQU' and label and arg and '$' not in arg]
+    while pending:
+        rest = []
+        for lineno, label, arg in pending:
+            try:
+                values[label] = Expr(arg, values, None, lineno).value()
+            except (UndefinedSymbol, AsmError):
+                rest.append((lineno, label, arg))
+        if len(rest) == len(pending):
+            break       # the leftovers name something no equate defines
+        pending = rest
+    return values
+
+
 def condition(text, symbols, here, lineno):
     """Evaluate a TRUE/FALS guard.
 
@@ -413,6 +450,12 @@ def sizeof(lineno, op, arg):
         return None  # needs the decoded string; handled by the caller
     if op == 'RES':
         return None
+    if op == 'JSX':
+        # SYM II's monitor calling sequence lays the arguments down as inline
+        # words after the jump: `JSX DOIO,PRINFIOT,BUF3,BUF3CT` assembles to
+        # 2044 0557 05BD 85C3. A plain `JSX ADDR` is the one-operand case and
+        # still occupies one word.
+        return len(operand_list(arg)) if arg else 1
     return 1
 
 
@@ -422,7 +465,7 @@ def string_body(lineno, arg):
     return unescape(arg[1:-1], lineno)
 
 
-def encode(lineno, op, arg, symbols, here):
+def encode(lineno, op, arg, symbols, here, address_syms=None):
     """Assemble one instruction into a single word."""
 
     def value(text, limit=None):
@@ -438,11 +481,33 @@ def encode(lineno, op, arg, symbols, here):
         indexed = text.startswith('*')
         if indexed:
             text = text[1:]
-        scale = 1
         if text.startswith('/'):
             # the PTB listing's "STB /TEST": the byte address of a word label
-            text, scale = text[1:], 2
-        addr = value(text) * scale
+            addr = value(text[1:]) * 2
+        elif op in BYTE_REF:
+            # A byte instruction's operand is a byte address, and SYM II
+            # converts the symbols in it for you: the relocating loader writes
+            # `STB BUF3END+1` where BUF3END is the word 5C2, and the assembler
+            # emits byte B85 -- the symbol doubled, the constant added as a
+            # byte. `STB * BUF3+NAMESIZE+NAMESIZE+6` is the same rule with four
+            # terms and settles that it is per symbol rather than applied to
+            # the whole expression, which would have doubled the constants too.
+            # ...but only the symbols that are *addresses*. `STB * BUF3+
+            # NAMESIZE+NAMESIZE+6` doubles BUF3, a location, and leaves
+            # NAMESIZE, which is `EQU 2`, alone: byte B7A + 2 + 2 + 6 = B84,
+            # which is what the listing prints. SYM II is a relocating
+            # assembler and had to know the difference; so does this.
+            addrs = symbols if address_syms is None else address_syms
+            doubled = {name: v * 2 if name in addrs else v
+                       for name, v in symbols.items()}
+            addr = Expr(text, doubled, here * 2, lineno).value()
+        else:
+            addr = value(text)
+        # A byte address wraps within its byte page: the M field is eleven bits
+        # and EXR supplies the rest, so word 5C2 is byte B84 and reaches the
+        # instruction as 384. Word instructions have no such slack.
+        if op in BYTE_REF:
+            addr &= 0x7ff
         if not 0 <= addr <= 0x7ff:
             unit = 'byte' if op in BYTE_REF else 'word'
             raise AsmError(
@@ -502,17 +567,29 @@ def encode(lineno, op, arg, symbols, here):
 def assemble(path):
     statements = parse(path)
 
+    # The configuration equates a TRUE/FALS guard names do not have to come
+    # before it. X-RAY states its whole system description on its fifth page
+    # and never needs this, but the relocating loader tests `LOADER=STANDARD`
+    # on card 5 and equates `LOADER` on card 30 -- and the listing shows SYM II
+    # evaluating it correctly, which a single forward pass cannot do. So
+    # collect the location-independent equates first, and let a guard fall back
+    # on them. Everything else still resolves in order.
+    config = prescan_equates(statements)
+
     # Pass 1: place every statement and collect the labels.
     symbols = {}
     placed = []
     here = 0
-    # Stack of "are we assembling?" flags, one per open TRUE/FALS. Conditions
-    # are evaluated here in pass 1, which is why the configuration equates have
-    # to come before the code they configure -- as they do in the X-RAY
-    # listing, which states the whole system description on its fifth page.
+    # Stack of "are we assembling?" flags, one per open TRUE/FALS.
     cond = []
     # EQUs whose operand named something not yet defined; settled after the pass.
     deferred = []
+    # Which symbols name a location rather than a plain number. A byte
+    # instruction's operand is a byte address, and SYM II converts the
+    # locations in it while leaving the constants alone -- so the two have to
+    # be told apart. A label is a location; an EQU is one only if what it was
+    # equated to is.
+    address_syms = set()
     for lineno, label, op, arg, text in statements:
         if op in CONDITIONALS:
             if op == 'ENDC':
@@ -520,7 +597,7 @@ def assemble(path):
                     raise AsmError(lineno, 'ENDC without TRUE or FALS')
                 cond.pop()
             elif all(cond):
-                taken = condition(arg, symbols, here, lineno)
+                taken = condition(arg, ChainMap(symbols, config), here, lineno)
                 cond.append(taken if op == 'TRUE' else not taken)
             else:
                 # already inside skipped code: the guard is not evaluated at
@@ -540,6 +617,8 @@ def assemble(path):
         if op == 'EQU':
             if not label:
                 raise AsmError(lineno, 'EQU needs a label')
+            if '$' in (arg or '') or any(n in address_syms for n in NAMES.findall(arg or '')):
+                address_syms.add(label)
             try:
                 symbols[label] = Expr(arg or '', symbols, here, lineno).value()
             except UndefinedSymbol:
@@ -558,6 +637,7 @@ def assemble(path):
             # SUBR lays down a return slot and then the STX that fills it; the
             # name belongs to the STX, so that callers jump to code.
             symbols[label] = here + 1 if op == 'SUBR' else here
+            address_syms.add(label)
         if op in ('ORG', 'ORIG'):
             here = Expr(arg or '', symbols, here, lineno).value()
             placed.append((lineno, here, op, arg, text))
@@ -607,9 +687,17 @@ def assemble(path):
         elif op == 'SUBR':
             words = [0x0000, (MEMREF['STX'] << 12) | (addr & 0x07ff)]
         elif op == 'EXIT':
-            entry = Expr(arg or '', symbols, addr, lineno).value()
+            # `EXIT sym` returns through the subroutine's slot; `EXIT sym,n`
+            # returns n words further on, which is how a subroutine takes an
+            # error return -- the relocating loader's `EXIT RELOAD,1` emits
+            # 963A 2801, a JSX indexed by one rather than zero.
+            parts = operand_list(arg or '')
+            entry = Expr(parts[0], symbols, addr, lineno).value()
+            skip = Expr(parts[1], symbols, addr, lineno).value() if len(parts) > 1 else 0
+            if not 0 <= skip <= 0x7ff:
+                raise AsmError(lineno, f'EXIT return offset {skip} does not fit')
             words = [(MEMREF['LDX'] << 12) | ((entry - 1) & 0x07ff),
-                     (MEMREF['JSX'] << 12) | 0x0800]
+                     (MEMREF['JSX'] << 12) | 0x0800 | skip]
         elif op == 'BYTE':
             # Two bytes to a word, high half first, as everywhere else on this
             # machine. An odd count leaves the low half zero.
@@ -620,10 +708,24 @@ def assemble(path):
             words = [(vals[i] << 8) | vals[i + 1] for i in range(0, len(vals), 2)]
         elif op == 'RES':
             words = [0] * Expr(arg or '', symbols, addr, lineno).value()
+        elif op == 'JSX' and arg and len(operand_list(arg)) > 1:
+            parts = operand_list(arg)
+            words = [encode(lineno, op, parts[0], symbols, addr, address_syms)]
+            for i, part in enumerate(parts[1:], 1):
+                value = Expr(part, symbols, addr + i, lineno).value() & 0xffff
+                # The last argument carries bit 0 -- this machine's most
+                # significant -- to mark the end of the list. That is the
+                # assembler's doing, not the programmer's: `JSX STAT,LOADFIOT`
+                # emits 854F where LOADFIOT is 54F. X-RAY's I/O done area
+                # confirms it from the other side, masking the bit off with
+                # `AND X7FF` under the comment DO NOT TEST SIGN BIT.
+                if i == len(parts) - 1:
+                    value |= 0x8000
+                words.append(value)
         elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
             words = []
         else:
-            words = [encode(lineno, op, arg, symbols, addr)]
+            words = [encode(lineno, op, arg, symbols, addr, address_syms)]
 
         for i, w in enumerate(words):
             if addr + i in core:

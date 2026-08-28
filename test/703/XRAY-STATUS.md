@@ -222,7 +222,17 @@ lights, and characters read are printed".
   card 298 is `MAXP EQU ENDP-PEAT+12` and neither operand is defined until
   much further down the deck. `asm703.py` now defers an EQU it cannot evaluate
   and sweeps the leftovers to a fixpoint.
-- **The tail of the listing is a cross reference, not listing cards.** The code
+- ~~**The tail of the listing is a cross reference.**~~ Fixed, along with the
+  `*` comment cards and the END card's asterisk field. Of the four extractor
+  bugs listed here, only the four-digit-card-number one survives: cards 1126
+  and 1619 still parse their own card number as an object word. Note the
+  cross-reference fix was load-bearing in a way nobody noticed — X-RAY's core
+  image had nine words of cross-reference data written over real code at 267,
+  268, 270, 280, 354, 356, 357, 359 and 366. The program never executed them,
+  so nothing ever went wrong.
+
+  Original note: **the tail of the listing is a cross reference, not listing
+  cards.** The code
   ends at card 1862 on page 50; from there the pages print `X-REF` rows —
   name, value, and the addresses referencing it — under a page title that
   still says `SYMBOL TABLE`. `xraylist.py`'s `LINE` regex reads an all-digit
@@ -231,14 +241,16 @@ lights, and characters read are printed".
   are unaffected, which is why this stayed hidden. Skip everything after the
   `X-REF` line, or require a card number to follow an address/object field.
   Card 1862 itself prints `0 3B9 0*******930` with no source text, and the
-  asterisks block the address match, so it falls out of the chain too.
+  asterisks block the address match, so it falls out of the chain too. (Both
+  fixed; the surviving bug of the four is the next bullet.)
 - **A four-digit card number is also valid hex**, and `xraylist.py`'s `LINE`
   regex will take it for the object word when what follows can pass as a
   fields split. Card 1619, `ADD AP`, reports as missing for exactly that
   reason: `1619` becomes the object and `ADD   A` satisfies the generic
   alternative. No amount of faithful spacing avoids it — the regex has to
   anchor on the address/object columns rather than pattern-match them.
-- **`*` is a comment-card marker too**, not just `'`. The two are distinct
+- ~~**`*` is a comment-card marker too**~~ Fixed. Original note:
+  **`*` is a comment-card marker too**, not just `'`. The two are distinct
   glyphs on the page — `'` is a tall high tick, `*` a lobed star at mid-height
   — and both appear, sometimes on adjacent cards. `xraylist.py`'s `split_card`
   reads a leading `*` as a *label*, so those cards extract as nonsense source
