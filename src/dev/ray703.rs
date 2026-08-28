@@ -44,6 +44,25 @@
 //! program collects the character with a DIN inside the service routine --
 //! which is why the 703 is the first machine in this tree that needs a working
 //! interrupt path at all.
+//!
+//! Output works the same way, and the X-RAY executive listing (drawing 390779,
+//! transcribed as `test/703/390779_XRAY_listing.txt` on storage) shows the
+//! whole protocol, because it carries the teletype driver with it on its pages
+//! titled "INTERRUPT SERVICE AREA FOR TTY AND HSPT DRIVERS":
+//!
+//! * The setup routine hands the *first* character to the printer directly and
+//!   then returns to "WAIT FOR IRS" (card 749). Every character after that is
+//!   written from inside the service routine, which the driver reaches only by
+//!   being interrupted.
+//! * One interrupt line serves both directions. `IRH0`, X-RAY's level 0 stub,
+//!   is commented "FOR TY AND HSPT" (card 1360), and the driver's single entry
+//!   `TIRS` decides what happened by testing the sign of the operation word in
+//!   the caller's file table (`SAM  READ OR WRITE`, card 782) rather than by
+//!   asking the hardware.
+//!
+//! So a `DOT dev,E` has to raise the device's interrupt when the character has
+//! been printed. Nothing else advances a 703 driver's output loop, and without
+//! it X-RAY hangs in its I/O monitor's wait-for-completion loop forever.
 
 use crate::console::ConsoleEndpoint;
 use std::io;
@@ -53,12 +72,20 @@ use std::path::Path;
 pub const DEV_TTY: u8 = 0xe;
 pub const DEV_TAPE_READER: u8 = 0xd;
 
-/// DIO function codes. The read functions arm a device; function D collects
-/// the frame it captured.
+/// DIO function codes. The read functions arm a device; the collect functions
+/// take the frame it captured.
+///
+/// The collect code is the read code with bit 2 set, not a constant: X-RAY
+/// builds its collecting DIN by exclusive-oring the operation word it was
+/// opened with against `X84` (`X'8004'`, card 1521), which clears the sign bit
+/// that marks a read and flips exactly that bit of the function nibble. So
+/// function 9 collects with D and function B collects with F.
+const FN_DISCONNECT: u8 = 0x0;
 const FN_READER_START: u8 = 0x8;
 const FN_READ: u8 = 0x9;
 const FN_READ_KEYBOARD: u8 = 0xb;
 const FN_COLLECT: u8 = 0xd;
+const FN_COLLECT_KEYBOARD: u8 = 0xf;
 const FN_WRITE: u8 = 0xe;
 
 /// Console teletype, DIO device 14.
@@ -80,11 +107,19 @@ pub struct Tty703 {
     echo: bool,
     /// The captured frame, waiting for the program's DIN.
     frame: Option<u8>,
+    /// A character handed to the printer whose completion interrupt has not
+    /// been raised yet. The emulator has no clock -- `Emulator` counts
+    /// instructions, not cycles -- so "when the printer finishes" is the next
+    /// poll rather than the ten characters a second the Model 33 managed. No
+    /// program can tell: every output DOT in a real driver is issued from
+    /// inside the service routine, where the level is Active and the hardware
+    /// will not re-enter it however quickly the line pulses.
+    tx_pending: bool,
 }
 
 impl Tty703 {
     pub fn new(console: ConsoleEndpoint, level: u8) -> Self {
-        Tty703 { console, level, armed: false, echo: false, frame: None }
+        Tty703 { console, level, armed: false, echo: false, frame: None, tx_pending: false }
     }
 
     pub fn dot(&mut self, function: u8, val: u16) {
@@ -94,6 +129,7 @@ impl Tty703 {
                 // masking is what the MC6850 does too; nothing here tries to
                 // be clever about the NULs and RUBOUTs that pad a tape record.
                 self.console.put_char((val & 0x7f) as u8);
+                self.tx_pending = true;
             }
             FN_READ_KEYBOARD => {
                 self.armed = true;
@@ -103,42 +139,64 @@ impl Tty703 {
                 self.armed = true;
                 self.echo = false;
             }
-            // Anything else disconnects the input side. The driver does this
-            // between records; there is no separate stop function code.
+            // Function 0 is the disconnect. X-RAY's M.TDISC2 ("THIS ROUTINE
+            // WILL DISCONNECT THE DEVICE BEING USED") builds it by masking the
+            // function nibble out of the operation word with `X7F`, which is
+            // X'7FF0' (card 1517), and oring the DOT opcode back in. Anything
+            // else unrecognised lands here too; there is no other stop code.
+            FN_DISCONNECT => self.armed = false,
             _ => self.armed = false,
         }
     }
 
     pub fn din(&mut self, function: u8) -> u16 {
         match function {
-            // Taking the frame is also what re-arms the capture, so a service
-            // routine that forgets its DIN simply stops receiving.
-            FN_COLLECT => self.frame.take().unwrap_or(0) as u16,
+            // Taking the frame is what frees the device to capture the next
+            // one, so a service routine that forgets its DIN simply stops
+            // receiving.
+            FN_COLLECT | FN_COLLECT_KEYBOARD => self.frame.take().unwrap_or(0) as u16,
             _ => 0,
         }
     }
 
-    /// Capture at most one keystroke and report the interrupt level it should
-    /// pulse, as a bitmask. Nothing happens until the program has armed the
-    /// device, and nothing happens while a frame is still uncollected.
+    /// Finish any character the printer was working on, capture at most one
+    /// keystroke, and report the interrupt level they should pulse as a
+    /// bitmask. Nothing is captured until the program has armed the device,
+    /// and nothing is captured while a frame is still uncollected.
+    ///
+    /// Both halves are taken in the same call rather than returning on the
+    /// first. The teletype has one interrupt line, so a completion and a
+    /// keystroke in the same instruction do merge into a single interrupt --
+    /// but that merge belongs in the CPU's per-level latch, where the hardware
+    /// does it. Dropping the *capture* would lose a keystroke, which the
+    /// hardware does not do.
     pub fn poll(&mut self) -> u16 {
-        if !self.armed || self.frame.is_some() {
-            return 0;
+        let mut lines = 0;
+        if self.tx_pending {
+            self.tx_pending = false;
+            lines |= 1 << self.level;
         }
-        let Some(c) = self.console.try_next_char() else {
-            return 0;
-        };
-        // A terminal in raw mode sends CR for Return, but a pipe feeding the
-        // emulator a script sends LF; the guest only understands CR.
-        let c = if c == 0x0a { 0x0d } else { c };
-        if self.echo {
-            self.console.put_char(c);
-            if c == 0x0d {
-                self.console.put_char(0x0a);
+        if self.armed && self.frame.is_none() {
+            if let Some(c) = self.console.try_next_char() {
+                // A terminal in raw mode sends CR for Return, but a pipe
+                // feeding the emulator a script sends LF; the guest only
+                // understands CR.
+                let c = if c == 0x0a { 0x0d } else { c };
+                // Function B's echo is the Model 33 printing what its own
+                // keyboard sent, not the program writing; it raises no
+                // completion, and setting tx_pending here would hand the
+                // program an interrupt it never asked for.
+                if self.echo {
+                    self.console.put_char(c);
+                    if c == 0x0d {
+                        self.console.put_char(0x0a);
+                    }
+                }
+                self.frame = Some(c | 0x80);
+                lines |= 1 << self.level;
             }
         }
-        self.frame = Some(c | 0x80);
-        1 << self.level
+        lines
     }
 }
 
@@ -295,14 +353,18 @@ mod tests {
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'A' as u16);
     }
 
+    /// A `DOT dev,0` is how a 703 driver puts a device down between records;
+    /// any other unrecognised function does the same.
     #[test]
     fn a_non_read_function_disconnects_the_input() {
-        let mut tty = tty_with_input(b"AB");
-        tty.dot(FN_READ, 0);
-        assert_eq!(tty.poll(), 1);
-        tty.din(FN_COLLECT);
-        tty.dot(0x3, 0);
-        assert_eq!(tty.poll(), 0);
+        for stop in [FN_DISCONNECT, 0x3] {
+            let mut tty = tty_with_input(b"AB");
+            tty.dot(FN_READ, 0);
+            assert_eq!(tty.poll(), 1);
+            tty.din(FN_COLLECT);
+            tty.dot(stop, 0);
+            assert_eq!(tty.poll(), 0, "function {stop:#x} should have disconnected");
+        }
     }
 
     #[test]
@@ -314,7 +376,61 @@ mod tests {
             tty.dot(FN_WRITE, c);
         }
         assert_eq!(*out.0.lock().unwrap(), b"\r\nA ");
-        assert_eq!(tty.poll(), 0, "writing must not arm the input side");
+    }
+
+    /// The completion interrupt is the whole output protocol: a driver writes
+    /// one character and does nothing more until the printer says it is done.
+    #[test]
+    fn a_write_raises_one_completion_interrupt() {
+        let (mut tty, _out) = tty_capturing(b"");
+        tty.dot(FN_WRITE, 0xc1);
+        assert_eq!(tty.poll(), 1, "the printer finished the character");
+        assert_eq!(tty.poll(), 0, "and says so exactly once");
+    }
+
+    #[test]
+    fn every_write_raises_its_own_completion() {
+        let (mut tty, _out) = tty_capturing(b"");
+        for _ in 0..3 {
+            tty.dot(FN_WRITE, 0xc1);
+            assert_eq!(tty.poll(), 1);
+            assert_eq!(tty.poll(), 0);
+        }
+    }
+
+    /// Writing must not arm the input side -- a completion interrupt is not an
+    /// invitation to read the keyboard.
+    #[test]
+    fn a_write_leaves_the_keyboard_disconnected() {
+        let mut tty = tty_with_input(b"A");
+        tty.dot(FN_WRITE, 0xc1);
+        assert_eq!(tty.poll(), 1, "the completion, and nothing else");
+        assert_eq!(tty.poll(), 0);
+        tty.dot(FN_READ, 0);
+        assert_eq!(tty.poll(), 1, "the keystroke was queued, not swallowed");
+        assert_eq!(tty.din(FN_COLLECT), 0xc1);
+    }
+
+    /// One line, two causes. The device reports one level either way; merging
+    /// them is the CPU's per-level latch's job, and losing the keystroke on
+    /// the way is nobody's.
+    #[test]
+    fn a_completion_and_a_keystroke_share_the_line() {
+        let mut tty = tty_with_input(b"A");
+        tty.dot(FN_READ, 0);
+        tty.dot(FN_WRITE, 0xc2);
+        assert_eq!(tty.poll(), 1, "one level, however many causes");
+        assert_eq!(tty.din(FN_COLLECT), 0xc1, "the keystroke was still captured");
+        assert_eq!(tty.poll(), 0, "and the completion is not raised twice");
+    }
+
+    /// Function B collects with F, not D -- see the FN_ constants above.
+    #[test]
+    fn the_keyboard_read_collects_with_its_own_function() {
+        let mut tty = tty_with_input(b"A");
+        tty.dot(FN_READ_KEYBOARD, 0);
+        assert_eq!(tty.poll(), 1);
+        assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0xc1);
     }
 
     /// Function B is the Model 33 keyboard, which prints what you type;
