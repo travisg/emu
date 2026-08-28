@@ -138,29 +138,53 @@ about the transcription than any static check: 890 hand-read words held
 together as a program across subroutine linkage, indexed returns and
 global-mode switching without once wandering into garbage.
 
-**Where it stops is the gap this file predicted.** It parks in `STAT`, the I/O
-monitor's wait-for-completion loop at `01C`:
+The machinery around it is all present and self-initialising: card 517
+(`STW 1`, inside `OPEN`) writes level 0's linkage word, and cards 1262–1264
+build an `ENB` at run time and stuff it into `1DD`, so nothing external has to
+set the interrupt system up. Nothing in the listing writes words 0–3
+statically, which is why the entry stub at word 0 is safe.
+
+## It answers
+
+Three emulator fixes later — none of them transcription work, all of them
+things only booting the executive could have found — X-RAY takes commands:
 
 ```
-01C STAT   MSK           inhibit interrupts
-01D        STX  M.SRET
-01E        LDX  *0       the FIOT address
-01F        LDW  *0       load BB -- the busy bit, which is SIGB, X'8000'
-020        SAP           not busy? skip
-021        JMP  M.SM1R   still busy
-02C M.SM1R LDX  M.SRET   "GO BACK AND TRY AGAIN"
-02D        UNM           "ALLOW IRS"
-02E        JMP  STAT
+$ ./target/debug/emu -s ray703 -r /tmp/xray.bin
+<line feed>D 40 50<return>
+
+0050  0080  11F3  2801  2801  03B9  0000  0080  12DF
 ```
 
-Only an I/O completion interrupt clears that bit, and `Tty703` finishes a
-`DOT` instantly and never raises one. So this is emulator work, not
-transcription work, and it is the next thing to do. Note the machinery around
-it is all present and self-initialising: card 517 (`STW 1`, inside `OPEN`)
-writes level 0's linkage word, and cards 1262–1264 build an `ENB` at run time
-and stuff it into `1DD`, so nothing external has to set the interrupt system
-up. Nothing in the listing writes words 0–3 statically, which is why the entry
-stub at word 0 is safe.
+which is the eight words at `050` byte-for-byte as they stand in the image.
+
+The three, in the order the trace found them:
+
+1. **The teletype had no output completion interrupt.** X-RAY parked in `STAT`,
+   the I/O monitor's wait-for-completion loop at `01C`, spinning on the FIOT
+   busy bit (`SIGB`, `X'8000'`) that only a completion clears. A `DOT dev,E`
+   now raises the device's interrupt when the character has been printed, which
+   is the entire output protocol on this machine: the setup routine hands the
+   printer one character and returns to "WAIT FOR IRS", and every character
+   after it is written from inside the service routine.
+2. **A collecting DIN starts the read.** With that fixed, X-RAY opened the
+   console, executed `DIN 14,15`, and waited forever for a keystroke the
+   teletype had never been told to listen for. There is no arming DOT anywhere
+   on its read path — the collecting DIN, built into `NSPEC` and executed under
+   the comment "SELECT THE DEVICE" (card 701), is the whole of it. Note also
+   that the collect code is the read code with bit 2 set, not a constant `D`:
+   the driver derives it by exclusive-oring `X84` (`X'8004'`, card 1521), so a
+   keyboard read opened with function B collects with **F**.
+3. **Raw mode never cleared `ICRNL`.** So a Return reached the guest as a line
+   feed. X-RAY's record format opens on a line feed and closes on a carriage
+   return, so it saw an endless run of openings and never completed a record.
+   The 703 teletype had been folding line feed back into carriage return, which
+   cancelled this out for a guest that only wanted one of them; both are gone.
+
+The interactive session is a Model 33 session, so it is typed like one: the
+LINE FEED key opens the record and RETURN closes it. The echo comes from the
+device, not from X-RAY — function B is the keyboard, which "the keyboard light
+lights, and characters read are printed".
 
 ## What is known to be left
 
@@ -210,10 +234,19 @@ stub at word 0 is safe.
   `--asm` path, not in the transcript and not in `asm703.py`: the transcript's
   job is fidelity, `--asm`'s job is producing something assemblable. A sweep
   of the 33 transcribed pages found this to be the only such card.
-- **Output-completion interrupts — now diagnosed, and the next thing to do.**
-  See "It runs" above. X-RAY reaches `STAT` and spins on a FIOT busy bit that
-  only an I/O completion interrupt clears; `Tty703` finishes a `DOT` instantly
-  and never raises one. Emulator work, not transcription work.
+- ~~**Output-completion interrupts.**~~ Done, along with the two other
+  emulator-side gaps booting it exposed. See "It answers" above.
+- **How far the executive actually goes is unmeasured.** `D` works. The rest of
+  the command set — the pages are titled TRANSFER, PUNCH, `S.HXCORR`, `UNPK`,
+  `S.FILL` — has not been tried, and a wrong word in a routine nothing has
+  executed is still a wrong word. Driving each command in turn is now the
+  cheapest check the transcription has, and a better one than any static pass:
+  262 distinct words execute during a single `D`, against 195 for the boot
+  alone.
+- **A status DIN (`DIN dev,0`) is not implemented.** The driver's shared
+  interrupt path reads one and tests bit 7 for "IR OR NO" (cards 766–770),
+  which pins that one bit and nothing else about the layout, so nothing was
+  invented. It is only assembled when `ISHARE=YES`, and this build has it off.
 
 ## Readings still open
 
