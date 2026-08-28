@@ -44,14 +44,19 @@
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
 
-; Point the transmitter at the banner and start it.  MSK is not decoration:
-; SEND is not re-entrant, and without the inhibit the completion interrupt from
-; its own DOT would arrive before it had returned.  Every other call to SEND
-; comes from inside the service routine, where level 0 is Active and the
-; hardware will not re-enter it.  Nothing is lost by inhibiting either -- a
-; masked interrupt is held and taken at the UNM, whereas a signal to a level
-; that is merely disabled is dropped, so ENB has to come first.
+; Connect the keyboard, point the transmitter at the banner, and start it.
+; Function 9 does not echo -- the service routine below does that, so that what
+; appears on the terminal is what the guest produced.
+;
+; MSK is not decoration: SEND is not re-entrant, and without the inhibit the
+; completion interrupt from its own DOT would arrive before it had returned.
+; Every other call to SEND comes from inside the service routine, where level 0
+; is Active and the hardware will not re-enter it.  Nothing is lost by
+; inhibiting either -- a masked interrupt is held and taken at the UNM, whereas
+; a signal to a level that is merely disabled is dropped, so ENB has to come
+; first.
 START           MSK
+                DOT     14,9
                 LDW     BANADR
                 STW     OUTP
                 LDW     BANEND
@@ -81,36 +86,35 @@ SEND            STX     SRET
                 LDX     SRET
                 JMP     *0
 
-; The buffer is empty.  Mark the transmitter idle and connect the keyboard;
-; from here the next interrupt is a keystroke.  Function 9 does not echo -- the
-; service routine below does that, so that what appears on the terminal is what
-; the guest produced.
+; The buffer is empty; mark the transmitter idle.  From here the next interrupt
+; is a keystroke.
 SDONE           CLR
                 STW     OUTP
-                DOT     14,9
                 LDX     SRET
                 JMP     *0
 
 ; ------------------------------------------------------- level 0 service
 ; The teletype has one interrupt line for both directions, so the routine has
-; to work out which one this was.  It never has to guess: the keyboard stays
-; disconnected for as long as a transmission is in progress, so a non-zero
-; output pointer means a printer completion and nothing else.  The period
-; driver settles the same question the same way, by looking at what it started
-; rather than by asking the hardware.
+; to work out which one this was.  It decides the way the period driver decides:
+; by looking at what it started rather than by asking the hardware.  A non-zero
+; output pointer means a character is still being printed, so the interrupt is
+; that character's completion.
 SERV            STW     SAVEA
                 STX     SAVEX
                 LDW     OUTP
                 SAZ                     ; transmitter idle?
                 JMP     TXNEXT          ; no: the printer wants the next one
 
-; A character arrived.  Disconnect the keyboard before collecting it: the
-; device holds a captured frame until it is collected and will not take another
-; while it is held, so those two instructions together are atomic, and the echo
-; below runs with only one possible source of interrupts.
-                DOT     14,0            ; function 0 disconnects the device
-                DIN     14,13           ; collect the frame the teletype read
-                AND     M7BIT           ; the 703 carries the eighth bit set
+; Nothing is printing, so a keystroke should be waiting.  It need not be: one
+; interrupt line means a completion and a keystroke arriving together are a
+; single interrupt, and the tail of TXNEXT below collects the character that
+; merge would otherwise strand.  So a DIN that comes back empty is not an
+; error, it is the other half of that arrangement.
+RX              DIN     14,13           ; collect the frame, and ask for another
+                SAZ
+                JMP     RXHAVE
+                JMP     EXIT
+RXHAVE          AND     M7BIT           ; the 703 carries the eighth bit set
 
                 CLB     X'2E'           ; '.' -- stop the machine
                 SNE
@@ -119,6 +123,9 @@ SERV            STW     SAVEA
                 CLB     X'0D'           ; carriage return?
                 SNE
                 JMP     RXCR
+                CLB     X'0A'           ; a line feed counts as one too, so a
+                SNE                     ; script piped in with newline endings
+                JMP     RXCR            ; reads the same as a typed Return
 
                 CLB     X'61'           ; below 'a'?
                 SLS
@@ -152,7 +159,17 @@ RXCR            LDX     ECHOA
                 STW     OUTE
 
 TXNEXT          JSX     SEND
-                LDW     SAVEA
+; If that finished the record it left the output pointer zero.  A character can
+; have arrived while the last one was printing; its interrupt merged with the
+; completion, so nothing will interrupt again on its behalf and it would sit in
+; the teletype forever.  Go and look.  RX cannot loop back here more than once:
+; whatever it finds it starts printing, which makes the pointer non-zero again.
+                LDW     OUTP
+                SAZ
+                JMP     EXIT
+                JMP     RX
+
+EXIT            LDW     SAVEA
                 LDX     SAVEX
                 INR     0
 

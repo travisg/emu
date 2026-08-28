@@ -98,9 +98,10 @@ pub struct Tty703 {
     console: ConsoleEndpoint,
     /// Which interrupt level this device signals.
     level: u8,
-    /// Set by a read function, cleared by anything else. An unarmed teletype
-    /// must not drain the keystroke channel, or characters typed before the
-    /// program asks for them would vanish instead of queueing.
+    /// Set by a read function or by a collecting DIN, cleared by anything
+    /// else. An unarmed teletype must not drain the keystroke channel, or
+    /// characters typed before the program asks for them would vanish instead
+    /// of queueing.
     armed: bool,
     /// A real Model 33 prints what you type; function 9 selects the tape
     /// reader instead and "characters read are not typed".
@@ -151,10 +152,27 @@ impl Tty703 {
 
     pub fn din(&mut self, function: u8) -> u16 {
         match function {
-            // Taking the frame is what frees the device to capture the next
-            // one, so a service routine that forgets its DIN simply stops
+            // A collecting DIN hands over the frame *and asks for the next
+            // one*, so a service routine that forgets its DIN simply stops
             // receiving.
-            FN_COLLECT | FN_COLLECT_KEYBOARD => self.frame.take().unwrap_or(0) as u16,
+            //
+            // The asking is not decoration. X-RAY starts a console read by
+            // executing this instruction and nothing else: its setup routine
+            // builds the collecting DIN into the cell `NSPEC` and executes it
+            // under the comment "SELECT THE DEVICE" (card 701), and there is
+            // no arming DOT anywhere on the read path. Booting the real
+            // executive is what settled it -- with the DIN inert, X-RAY opens
+            // the console, selects it, and waits forever for a keystroke the
+            // teletype was never told to listen for.
+            //
+            // Which of the two collect codes arrived also says which half of
+            // the Model 33 is being read, so it sets the echo the same way the
+            // arming DOTs do.
+            FN_COLLECT | FN_COLLECT_KEYBOARD => {
+                self.armed = true;
+                self.echo = function == FN_COLLECT_KEYBOARD;
+                self.frame.take().unwrap_or(0) as u16
+            }
             _ => 0,
         }
     }
@@ -178,10 +196,14 @@ impl Tty703 {
         }
         if self.armed && self.frame.is_none() {
             if let Some(c) = self.console.try_next_char() {
-                // A terminal in raw mode sends CR for Return, but a pipe
-                // feeding the emulator a script sends LF; the guest only
-                // understands CR.
-                let c = if c == 0x0a { 0x0d } else { c };
+                // Carriage return and line feed reach the guest as themselves.
+                // A Model 33 has a key for each and the software tells them
+                // apart: X-RAY's driver opens every record on a line feed
+                // (8A) and closes it on a carriage return (8D), so folding one
+                // into the other -- which this did, to be kind to a script
+                // piped in with newline endings -- makes the executive
+                // unreachable. A program that wants to be kind can do the
+                // folding itself; the demo does.
                 // Function B's echo is the Model 33 printing what its own
                 // keyboard sent, not the program writing; it raises no
                 // completion, and setting tx_pending here would hand the
@@ -242,6 +264,9 @@ impl TapeReader703 {
         self.running = matches!(function, FN_READER_START | FN_READ);
     }
 
+    /// Unlike the teletype's, this DIN does not start anything. `running` is a
+    /// motor -- "the RUN/LOAD switch is part of the tape guide mechanism" --
+    /// and a read of the frame register does not thread tape.
     pub fn din(&mut self, function: u8) -> u16 {
         match function {
             FN_COLLECT => self.frame.take().unwrap_or(0) as u16,
@@ -323,14 +348,18 @@ mod tests {
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'z' as u16);
     }
 
-    /// The guest speaks in carriage returns; a script piped into the emulator
-    /// speaks in line feeds.
+    /// Carriage return and line feed are different keys on a Model 33 and
+    /// different characters to the software that reads it -- X-RAY's record
+    /// format opens on one and closes on the other -- so neither is folded
+    /// into the other on the way in.
     #[test]
-    fn linefeed_arrives_as_a_carriage_return() {
-        let mut tty = tty_with_input(b"\n");
+    fn carriage_return_and_line_feed_stay_distinct() {
+        let mut tty = tty_with_input(b"\r\n");
         tty.dot(FN_READ, 0);
         tty.poll();
         assert_eq!(tty.din(FN_COLLECT), 0x8d);
+        tty.poll();
+        assert_eq!(tty.din(FN_COLLECT), 0x8a);
     }
 
     #[test]
@@ -433,14 +462,39 @@ mod tests {
         assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0xc1);
     }
 
+    /// X-RAY never issues an arming DOT on its read path -- the collecting DIN
+    /// is the whole of "SELECT THE DEVICE" -- so a DIN has to start a read on
+    /// a teletype nothing else has spoken to.
+    #[test]
+    fn a_collecting_din_starts_the_read() {
+        let mut tty = tty_with_input(b"A");
+        assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0, "nothing captured yet");
+        assert_eq!(tty.poll(), 1, "but the device is now listening");
+        assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0xc1);
+    }
+
+    /// The collect function says which half of the Model 33 is being read, and
+    /// only its keyboard prints what it sends.
+    #[test]
+    fn the_collect_function_sets_the_echo() {
+        let (mut tty, out) = tty_capturing(b"AB");
+        tty.din(FN_COLLECT_KEYBOARD);
+        tty.poll();
+        assert_eq!(*out.0.lock().unwrap(), b"A");
+        tty.din(FN_COLLECT);
+        tty.poll();
+        assert_eq!(*out.0.lock().unwrap(), b"A", "function D does not type");
+    }
+
     /// Function B is the Model 33 keyboard, which prints what you type;
     /// function 9 is its tape reader, whose "characters read are not typed".
     #[test]
     fn only_the_keyboard_function_echoes() {
-        let (mut tty, out) = tty_capturing(b"A\n");
+        let (mut tty, out) = tty_capturing(b"A\r");
         tty.dot(FN_READ_KEYBOARD, 0);
         tty.poll();
-        tty.din(FN_COLLECT);
+        // function B's own collect code, which keeps the echo on
+        tty.din(FN_COLLECT_KEYBOARD);
         tty.poll();
         assert_eq!(*out.0.lock().unwrap(), b"A\r\n", "a bare CR needs the LF added");
 
