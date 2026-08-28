@@ -29,6 +29,7 @@ the source card. This pulls the three useful things back out of it.
 
     --asm FILE    the source cards alone, as something asm703.py can assemble
     --obj FILE    the printed object code, as "addr word" lines
+    --core FILE   the same, as a flat core image the emulator can run
     --check       verify the listing against itself and report
 
 `--check` is the reason the transcript keeps redundant columns. Three separate
@@ -482,11 +483,49 @@ def fix_references(cards):
     return len(edits)
 
 
+# X-RAY is entered at word X'40'. The 703 starts at word 0, which is level 0's
+# saved-PC slot -- so a JMP there is live exactly until the first interrupt,
+# which is long after control has left it. The demo image does the same thing.
+CORE_ENTRY = 0x040
+JMP_TO_ENTRY = 0x1000 | CORE_ENTRY
+
+
+def emit_core(cards, out):
+    """Write a flat big-endian core image straight from the printed object.
+
+    No assembler is involved: every card that generated a word printed its own
+    absolute address next to it, so the listing already *is* a core image.
+    That sidesteps the whole SYM II question -- the undocumented directives,
+    the forward EQUs, the one card whose hex constant lost its closing quote,
+    and the unscanned first card -- none of which can affect a word whose
+    address and contents were both printed.
+    """
+    core = {}
+    for c in cards:
+        if c.addr is None:
+            continue
+        if c.obj is not None:
+            core[c.addr] = c.obj
+            core.update(dict(c.extra))
+        elif c.bytes:
+            word = 0
+            for pos, value in c.bytes:
+                word |= value << (8 if pos == 0 else 0)
+            core[c.addr] = word
+    core.setdefault(0, JMP_TO_ENTRY)
+    image = bytearray()
+    for word in range(max(core) + 1):
+        image += core.get(word, 0).to_bytes(2, 'big')
+    out.write(image)
+    return len(core)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('transcript', help='a page-NNN.txt file, or a directory of them')
     ap.add_argument('--asm', help='write the source cards here')
     ap.add_argument('--obj', help='write "addr word" lines here')
+    ap.add_argument('--core', help='write a flat big-endian core image, runnable as -s ray703 -r')
     ap.add_argument('--check', action='store_true', help='report on consistency')
     ap.add_argument('--fix-references', action='store_true',
                     help="correct address fields that disagree with their symbol")
@@ -508,11 +547,15 @@ def main():
     if args.obj:
         with open(args.obj, 'w', encoding='utf-8') as f:
             emit_obj(cards, f)
+    if args.core:
+        with open(args.core, 'wb') as f:
+            n = emit_core(cards, f)
+        print(f'{args.core}: {n} words')
     if args.fix_references:
         fix_references(cards)
         return 0
 
-    if args.check or not (args.asm or args.obj):
+    if args.check or not (args.asm or args.obj or args.core):
         check(cards, problems)
     return 0
 

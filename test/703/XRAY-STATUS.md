@@ -96,6 +96,61 @@ files with nothing to misparse in between. In order:
    against the printed table.
 3. **Then the word diff.**
 
+## It runs
+
+X-RAY loads and executes. The assembler is not on the path to that: every card
+that generated a word printed its own absolute address beside it, so the
+listing already *is* a core image, and `xraylist.py --core` writes one
+directly. That sidesteps every open SYM II question at once — the undocumented
+directives, the forward EQUs, the card whose hex constant lost its closing
+quote, the unscanned first card — none of which can affect a word whose
+address and contents were both printed.
+
+```bash
+python3 xraylist.py <pagedir> --core /tmp/xray.bin
+./target/debug/emu -s ray703 -r /tmp/xray.bin -l 3000000 -t /tmp/xray.trace
+```
+
+891 words at `018`–`3B9` (four gaps, all `RES` buffers, the largest the 28
+words of `S.BUFF` at `335`). The first instructions are exactly right:
+
+```
+PC=0000  JMP 040          the entry stub, in level 0's saved-PC slot
+PC=0040  SMB XRAY
+PC=0266  JSX OPEN,...     card 1567
+PC=0065  OPEN             IX=0267 return link, ST=0080 global forced by JSX
+```
+
+Three million instructions, 195 distinct words executed, no `HLT` and no
+`BadOpcode` — either would have exited early. That is worth more as evidence
+about the transcription than any static check: 890 hand-read words held
+together as a program across subroutine linkage, indexed returns and
+global-mode switching without once wandering into garbage.
+
+**Where it stops is the gap this file predicted.** It parks in `STAT`, the I/O
+monitor's wait-for-completion loop at `01C`:
+
+```
+01C STAT   MSK           inhibit interrupts
+01D        STX  M.SRET
+01E        LDX  *0       the FIOT address
+01F        LDW  *0       load BB -- the busy bit, which is SIGB, X'8000'
+020        SAP           not busy? skip
+021        JMP  M.SM1R   still busy
+02C M.SM1R LDX  M.SRET   "GO BACK AND TRY AGAIN"
+02D        UNM           "ALLOW IRS"
+02E        JMP  STAT
+```
+
+Only an I/O completion interrupt clears that bit, and `Tty703` finishes a
+`DOT` instantly and never raises one. So this is emulator work, not
+transcription work, and it is the next thing to do. Note the machinery around
+it is all present and self-initialising: card 517 (`STW 1`, inside `OPEN`)
+writes level 0's linkage word, and cards 1262–1264 build an `ENB` at run time
+and stuff it into `1DD`, so nothing external has to set the interrupt system
+up. Nothing in the listing writes words 0–3 statically, which is why the entry
+stub at word 0 is safe.
+
 ## What is known to be left
 
 - **`NOP`** appears on page 31 (cards 1235, 1237) and is not in appendix B.
