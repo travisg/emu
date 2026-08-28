@@ -19,6 +19,10 @@ outdir=$2
 mkdir -p "$outdir"
 
 awk -v outdir="$outdir" '
+    # Everything before the first rule is the header block, which
+    # sync-transcript.sh needs back as a file of its own. Writing it out is
+    # what makes the round trip two-way and the master genuinely sufficient.
+    BEGIN           { out = outdir "/header.txt" }
     # A rule line opens a page; the PAGE line right after it names the number.
     /^=+$/          { rule = $0; pending = 1; next }
     pending && /^PAGE[ \t]+[0-9]+/ {
@@ -30,16 +34,15 @@ awk -v outdir="$outdir" '
         pages++
         next
     }
-    # A rule with no PAGE after it is the header block above page 2; drop it,
-    # sync-transcript.sh puts the header back from its own file.
     pending         { pending = 0 }
     out             { print > out }
     END             { printf "%d pages\n", pages }
 ' "$master"
 
 # sync-transcript.sh separates pages with a blank line, which lands at the tail
-# of the page above. Drop trailing blanks so the round trip is exact.
-for f in "$outdir"/page-*.txt; do
+# of the page above -- and of the header. Drop trailing blanks from all of them
+# so the round trip is exact.
+for f in "$outdir"/header.txt "$outdir"/page-*.txt; do
     printf '%s\n' "$(< "$f")" > "$f.tmp" && mv "$f.tmp" "$f"
 done
 

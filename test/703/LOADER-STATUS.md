@@ -131,7 +131,30 @@ Those repairs belong in the `--asm` path too and have not been written.
 
 ## What is known to be left
 
-- **The literal hex constants have not been verified.** The 2.7:1 band strips
+- ~~**The literal hex constants have not been verified.**~~ Done. They are the
+  one place where the source operand and the object word are the same reading,
+  so neither the listing's redundancy nor re-assembly can catch an `8` read as
+  a `B`. There turned out to be exactly **seven** of them, and each was settled
+  at native resolution against a certified glyph on the same page or an
+  adjacent line:
+
+  | card | addr | reading | settled by |
+  |---|---|---|---|
+  | 14 | — | `X'48'` | `BKSP`'s own `B` on the same line |
+  | 19 | — | `X'58'` | `RBEG` and `BKSP` two lines up, plus the jump-table run |
+  | 121 | 5C5 | `X'80'` | `ABUF1`/`ABUF2` three lines down |
+  | 123 | 5C7 | `X'F800'` | same block |
+  | 127 | 5CA | `X'8000'` | same block |
+  | 468 | 627 | `X'B9'` | `3B84` three lines down carries both, and `ORI XB0` is the line above |
+  | 1066 | 70C | `X'B0'` | native resolution, plus the cross reference's sort order |
+
+  So the loader transcript has no unverified words left. The generic form of
+  this check — enumerate the cards where source and object are one reading, and
+  look only at those — is what makes it cheap; it is a handful of cards, not a
+  sweep.
+
+  Original note, kept because the reasoning is the reusable part:
+  **the literal hex constants have not been verified.** The 2.7:1 band strips
   invert `8` and `B`, and they do it in *every* column at once, so neither the
   FIELDS-recomposes-to-OBJ check nor a future re-assembly can catch it. Three
   instances were caught during transcription, each by a check other than the

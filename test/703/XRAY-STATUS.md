@@ -282,6 +282,27 @@ lights, and characters read are printed".
   which pins that one bit and nothing else about the layout, so nothing was
   invented. It is only assembled when `ISHARE=YES`, and this build has it off.
 
+## The cards no automated check can reach
+
+A literal hex constant is the one place where the source operand and the object
+word are the same reading, so neither the listing's own redundancy nor a future
+re-assembly can catch an `8` read as a `B`. Enumerating them is cheap — there
+are **fifteen** in X-RAY — and most are already corroborated from outside the
+film:
+
+| cards | reading | corroborated by |
+|---|---|---|
+| 689, 691, 804, 807, 838, 938 | `X'8A'`, `X'87'`, `X'8D'` | the driver's record format names these outright: L/F is 8A, BELL 87, C/R 8D |
+| 1520, 1521, 1522 | `X'8000'`, `X'8004'`, `X'8100'` | the DOT/DIN construction arithmetic: `03E9 ^ 8100 = 82E9`, `^ 8004 = 02ED`, and `SIGB` is the sign bit throughout |
+| 398 | `X'B0'` | settled earlier at native resolution; `B0` is `'0'` with the high bit, which is what a hex output routine needs |
+| 1510 | `X'B'` | `N8 DATA 8` prints two rows above it in the same column |
+| 1583 | `X'BFBF'` | `BF` is `?` with the high bit, so `QMES` is the **`??`** the documentation says X-RAY types at an illegal directive |
+
+That leaves **three** resting on the film alone: card 496 (`X'000B'`), card
+1515 (`X'800'`, in a run of `X'204'`, `X'300'`, `X'30E'`, `X'400'`) and card
+1755 (`X'87FF'`, where `87` is BELL). Each is strongly implied by its
+neighbours; none has been read against a certified glyph.
+
 ## Readings still open
 
 None of these can affect the running image: the first three generate no object
