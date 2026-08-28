@@ -181,6 +181,54 @@ first. Transcribe both as printed.
 **`SXP`** assembles to `0400`, which is `IXS 0` -- increment the index by
 nothing and skip if it is positive. Treat it as a real mnemonic.
 
+## Settling a glyph for good
+
+The band strips are a 2.7:1 downsample. They are fine for reading and wrong for
+deciding: on page 12 the strip shows `UNM` as `0080` and card 398 as `00B0`,
+which is both of them backwards. When a single character actually matters, go
+to native resolution and compare it against a *known* instance of each
+candidate from the same page. The procedure, which settled `SIGB`, `XB0`,
+`RTIK` and the `O`/`0` question:
+
+```bash
+convert pg-0NN.png -rotate 90 rot.png          # the images are landscape-on-portrait
+
+# find the text rows: one ink profile down the page, runs of dark = rows
+convert rot.png -crop 4500x4400+560+150 +repage -resize 1x4400! -depth 8 txt:- |
+    awk -F'[,:) (]+' 'NR>1{print $2+150, $4}' > prof.txt
+# then group runs of value < 252; rows are ~76 px apart, first at y~550
+
+convert rot.png -crop 58x76+X+Y +repage query.png     # the glyph in question
+convert rot.png -crop 58x76+X2+Y2 +repage known.png   # a certain one, same page
+convert known.png query.png +append -filter point -resize 700% cmp.png
+```
+
+`-filter point` matters: any smoothing invents detail that is not on the film.
+
+What the glyphs actually look like at that magnification:
+
+- **`8`** — two stacked bowls, symmetric, the left side pinched at the waist.
+- **`B`** — a straight full-height left stem, both bowls opening off it to the
+  right. The stem is the tell, not the counters.
+- **`R`** — one closed bowl on top and **two splayed legs** below.
+- **`O` vs `0`** — same shape, different width: letter **36 px**, digit **29
+  px**. Measure it: `convert ... +repage -trim info:` prints the bounding box.
+
+Anchors are free and you should always grab one. A card number is decimal, so
+its digits are certain: card 398's own `8` is the reference for the `8` in its
+object word four columns to the left. `UNM` is `00B0` by definition, so any
+page with an `UNM` on it carries a certified `B`. `ORI` and `ORE` carry a
+certified `R`.
+
+**But an isolated glyph is never the last word.** The printer drops strokes
+intermittently — the same drum printed a clean `B` on one card and, a few pages
+away, a `B` so eroded it is indistinguishable from the `R` beside it. Card 906
+reads `SIGR` at any magnification and is `SIGB`; the cross reference proves it,
+because it holds one `SIG` row whose reference list includes that very card's
+address, and the assembly trailer says `NO ERRORS`. Where object code or the
+cross reference can adjudicate, they outrank the film. Use the film to settle
+what nothing else can reach, and flag what neither can.
+
 ## Symbol spellings
 
 Two agents have already disagreed about a symbol (`SIGB` against `SIGR`, both

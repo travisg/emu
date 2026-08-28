@@ -24,13 +24,20 @@ X-RAY is entered at word `X'40'`. Its code runs from about `018` to about
 | survey notes | `~/dropbox/.../70x/390779_XRAY_TRANSCRIPTION_NOTES.md` |
 | per-page working files | a scratch directory, one `page-NNN.txt` per listing page |
 
-The per-page files are the working state; the master transcript is rebuilt
-from them with `sync-transcript.sh` and is the durable artifact. Page images
-are regenerable at any time:
+**Only two things here are durable: the master transcript and the PDF.**
+Everything else is regenerable and lives under a scratch path that will not
+survive the session that made it. Nothing is lost when it goes:
 
 ```bash
-./scanstrip.sh extract <pdf> 29 83 <scratchdir>     # listing page N -> pg-(N-1).png
+./split-transcript.sh <master.txt> <pagedir>       # working files back from the master
+./sync-transcript.sh  <pagedir> <header.txt> <master.txt>   # and forward again
+./scanstrip.sh extract <pdf> 29 83 <scratchdir>    # listing page N -> pg-(N-1).png
 ```
+
+The split/sync pair round-trips exactly — verified by rebuilding the page files
+from the master and diffing, and by rebuilding the same core image from them.
+The per-page split exists only so several transcribing agents can each own one
+file without fighting over a single one.
 
 ## The tools
 
@@ -40,9 +47,13 @@ are regenerable at any time:
 - **`TRANSCRIBING.md`** — the brief handed to each transcribing agent. It has
   accumulated everything earlier agents had to discover the hard way, and is
   the first thing to read before transcribing any of these listings.
-- **`xraylist.py`** — takes the transcript apart into source (`--asm`) and
-  object code (`--obj`), and checks it (`--check`, `--fix-references`).
-- **`asm703.py`** — now speaks enough SYM II to reassemble the result.
+- **`xraylist.py`** — takes the transcript apart into source (`--asm`), object
+  code (`--obj`), or a runnable core image (`--core`), and checks it
+  (`--check`, `--fix-references`).
+- **`asm703.py`** — now speaks enough SYM II to reassemble the result;
+  `--map` emits the same `addr word` shape as `--obj` for diffing.
+- **`split-transcript.sh` / `sync-transcript.sh`** — the two directions between
+  the master transcript and the per-page working files.
 
 ## Progress
 
@@ -199,11 +210,35 @@ stub at word 0 is safe.
   `--asm` path, not in the transcript and not in `asm703.py`: the transcript's
   job is fidelity, `--asm`'s job is producing something assemblable. A sweep
   of the 33 transcribed pages found this to be the only such card.
-- **Output-completion interrupts.** `Tty703` completes a `DOT` instantly and
-  never interrupts. The listing has a dedicated output-driver interrupt
-  service area, so the real driver may well wait for a signal that never
-  comes. This is the likeliest thing to need emulator work, and the plan is to
-  hit it and diagnose it rather than guess now.
+- **Output-completion interrupts — now diagnosed, and the next thing to do.**
+  See "It runs" above. X-RAY reaches `STAT` and spins on a FIOT busy bit that
+  only an I/O completion interrupt clears; `Tty703` finishes a `DOT` instantly
+  and never raises one. Emulator work, not transcription work.
+
+## Readings still open
+
+None of these can affect the running image: the first three generate no object
+code, and the fourth is a comment.
+
+- **`SIGR`, page 30 cards 1193 and 1207.** Flagged in the file. The glyph reads
+  `R` and matches a certain `R` on the same line, but the only symbol in the
+  whole assembly is `SIGB`, and these sit in untaken conditional code where the
+  assembler never resolved them — so no authority outside the glyph exists.
+  Probably `SIGB` under the dropout described below.
+- **`S.XPNU` (`39C`).** The final glyph is the printer's broken-top form; `U`
+  and `0` are not separable there, and `S.XPN0` fits the film equally well.
+  `S.XPND` is excluded — a `D` carries a full top bar and this has none.
+- **`NTRY DUMP`, card 1704.** Flagged. Almost certainly `ENTRY` with the `E`
+  dropped by the keypunch, but it is transcribed as printed.
+- **`S.LLIB` / `S.LLIR`, card 1565.** Appears only inside a comment card, so it
+  is not a symbol and the cross reference cannot settle it.
+- **`NOP`** — see above; untaken code, encoding undetermined, irrelevant here.
+
+And one caution about method, learned the expensive way: **neither the code
+pages nor the cross reference is systematically right.** `RTIK` and the `XB0`
+constant were settled *by* the cross reference against the code pages;
+`M.TIRR` was settled by the code page against the cross reference. Each is an
+independent witness, not an authority.
 
 ## Recurring failure mode, worth knowing before touching this again
 
