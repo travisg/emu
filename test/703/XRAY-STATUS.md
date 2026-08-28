@@ -151,12 +151,31 @@ things only booting the executive could have found — X-RAY takes commands:
 
 ```
 $ ./target/debug/emu -s ray703 -r /tmp/xray.bin
-<line feed>D 40 50<return>
+<line feed>D 0300,0310<return>
 
-0050  0080  11F3  2801  2801  03B9  0000  0080  12DF
+0300  7B4F  8332  7B50  803E  7B51  82FC  A242  72FC
+0308  0403  12FA  2083  8321  201C  8321  832B  B248
+0310  0810  1317  732B  832A  A248  732A  12F4  92E7
 ```
 
-which is the eight words at `050` byte-for-byte as they stand in the image.
+byte-for-byte as those words stand in the image, in the format and to the
+inclusive end address the document's own worked example uses.
+
+**The command syntax is documented, and not in the part of the PDF that was
+transcribed.** The transcript covers Appendix A, the assembly listing; the
+thirty pages of front matter ahead of it are the user documentation, and they
+give each directive's input format. `DUMP` is `D NNNN,XXXX` — a *comma*
+between the addresses, both inclusive, output on the system logical list unit
+as an address `A` followed by the contents of `A` through `A+7`, and "a
+complete line is always output". Reading it first would have saved an
+afternoon: `D 40 50`, with a space, parses as something else entirely and
+prints one unexplained line. Later commands should be driven from those pages,
+not guessed at.
+
+A dump of any length takes real time to appear, because every character of it
+crosses the DIO channel on its own interrupt. Wait for the last line rather
+than sleeping — closing stdin early truncates the output and looks exactly
+like a dropped record.
 
 The three, in the order the trace found them:
 

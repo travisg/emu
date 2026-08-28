@@ -115,6 +115,13 @@ pub struct Tty703 {
     /// program can tell: every output DOT in a real driver is issued from
     /// inside the service routine, where the level is Active and the hardware
     /// will not re-enter it however quickly the line pulses.
+    ///
+    /// It is a flag rather than a count, so two writes with no poll between
+    /// them yield one completion and a driver waiting on the second would
+    /// hang. Nothing does: a 703 driver writes one character per service entry
+    /// and the entry cannot recur until it returns. If that ever stops being
+    /// true, make this a counter -- the failure is silent, which is the worst
+    /// kind here.
     tx_pending: bool,
 }
 
