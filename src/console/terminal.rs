@@ -52,6 +52,13 @@ impl RawMode {
             // no input processing, and pass the control characters through to
             // the guest rather than acting on them
             t.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG);
+            // ...including the character mapping, which is not part of ICANON
+            // and was being left on. ICRNL in particular means a Return
+            // reaches the guest as a line feed, so a guest that tells the two
+            // apart cannot be driven at all: X-RAY's teletype driver opens
+            // every record on a line feed and closes it on a carriage return,
+            // and with this left set it sees an endless run of openings.
+            t.c_iflag &= !(libc::ICRNL | libc::INLCR | libc::IGNCR | libc::ISTRIP | libc::IXON);
             t.c_cc[libc::VINTR] = 0;
             t.c_cc[libc::VQUIT] = 0;
             t.c_cc[libc::VSUSP] = 0;
