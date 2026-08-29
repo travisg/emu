@@ -45,7 +45,7 @@
 //! horizontal spans, text from a 5x7 font embedded below -- so there are no
 //! textures, image files or font dependencies.
 
-use super::{ConsoleFrontend, Display, PanelState, Selector};
+use super::{ConsoleFrontend, Display, LampSnapshot, PanelState, Selector};
 use crate::console::terminal::TerminalFrontend;
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod};
@@ -106,6 +106,57 @@ fn lamp_x(i: i32) -> i32 {
     LAMPS_X + i * LAMP_PITCH + (i / 4) * GROUP_GAP
 }
 
+/// One incandescent bulb's thermal state. The lamps are driven by bits that
+/// flip thousands of times per frame, and what a filament shows for that is
+/// its duty cycle, arrived at with a lag: it heats faster than it cools.
+/// The constants are per 16 ms frame and tuned by eye, not physics.
+#[derive(Copy, Clone, Default)]
+struct LampFilter {
+    brightness: f32,
+}
+
+impl LampFilter {
+    const K_HEAT: f32 = 0.6;
+    const K_COOL: f32 = 0.25;
+
+    fn update(&mut self, duty: f32) -> f32 {
+        let duty = duty.clamp(0.0, 1.0);
+        let k = if duty > self.brightness { Self::K_HEAT } else { Self::K_COOL };
+        self.brightness += (duty - self.brightness) * k;
+        self.brightness
+    }
+}
+
+/// Per-indicator duty cycles between two snapshots of one lamp source.
+/// While the machine is halted no cycles accrue, and the point-sampled
+/// register value stands in -- full on or off, which is what a static
+/// register looks like on a real panel.
+fn duties(now: &LampSnapshot, prev: &LampSnapshot, halted_value: u16) -> [f32; 16] {
+    let dc = now.cycles.wrapping_sub(prev.cycles);
+    let mut out = [0.0f32; 16];
+    for (i, out) in out.iter_mut().enumerate() {
+        *out = if dc == 0 {
+            (halted_value >> (15 - i) & 1) as f32
+        } else {
+            now.bits[i].wrapping_sub(prev.bits[i]) as f32 / dc as f32
+        };
+    }
+    out
+}
+
+/// Lamp face color for a brightness: unlit brown up to full amber, through
+/// a square root so mid duties read brighter than linear -- nearer how the
+/// eye sees a filament.
+fn lamp_color(brightness: f32) -> Color {
+    let t = brightness.clamp(0.0, 1.0).sqrt();
+    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+    Color::RGB(
+        mix(LAMP_UNLIT.r, LAMP_LIT.r),
+        mix(LAMP_UNLIT.g, LAMP_LIT.g),
+        mix(LAMP_UNLIT.b, LAMP_LIT.b),
+    )
+}
+
 fn toggle_x(i: i32) -> i32 {
     lamp_x(8 + i)
 }
@@ -121,6 +172,16 @@ pub struct Panel703Frontend {
     tx: Sender<u8>,
     panel: PanelState,
     selector: Selector,
+    /// Last frame's accumulator snapshots, one per lamp source (PC + the
+    /// six selector positions), so turning the knob always has a fresh
+    /// delta to diff against.
+    prev_pc: LampSnapshot,
+    prev_sel: [LampSnapshot; 6],
+    /// One filter per *physical bulb*: the SELECTED DISPLAY row is sixteen
+    /// real lamps switched between registers by the rotary, so their
+    /// thermal state carries across a selector change.
+    pc_filters: [LampFilter; 16],
+    sd_filters: [LampFilter; 16],
     sdl: sdl2::Sdl,
     canvas: Canvas<Window>,
 }
@@ -141,7 +202,17 @@ impl Panel703Frontend {
         // MB is the boot-procedure position ("turn the display selector to
         // MB before following the operating procedure" -- the PTB drawing),
         // and it is also the busiest lamp row on an idle machine.
-        Ok(Panel703Frontend { tx, panel, selector: Selector::Mb, sdl, canvas })
+        Ok(Panel703Frontend {
+            tx,
+            panel,
+            selector: Selector::Mb,
+            prev_pc: LampSnapshot::default(),
+            prev_sel: [LampSnapshot::default(); 6],
+            pc_filters: [LampFilter::default(); 16],
+            sd_filters: [LampFilter::default(); 16],
+            sdl,
+            canvas,
+        })
     }
 
     fn cycle_selector(&mut self, dir: i32) {
@@ -201,15 +272,15 @@ impl Panel703Frontend {
         self.text_centered(cx, y, 2, label, PANEL_INK);
     }
 
-    /// One row of lamps lighting `value`, most significant bit at indicator
-    /// 0 as everywhere on this machine. `first` skips leading indicators:
-    /// the PROGRAM COUNTER row starts at 1 because the PCR is 15 bits.
-    fn lamp_row(&mut self, y: i32, value: u16, first: i32) {
+    /// One row of lamps at the given brightnesses, indicator 0 (the MSB, as
+    /// everywhere on this machine) leftmost. `first` skips leading
+    /// indicators: the PROGRAM COUNTER row starts at 1 because the PCR is
+    /// 15 bits.
+    fn lamp_row(&mut self, y: i32, brightness: &[f32; 16], first: i32) {
         for i in first..16 {
             let x = lamp_x(i);
-            let lit = value >> (15 - i) & 1 != 0;
             self.circle(x, y, LAMP_R + 3, LAMP_BEZEL);
-            self.circle(x, y, LAMP_R, if lit { LAMP_LIT } else { LAMP_UNLIT });
+            self.circle(x, y, LAMP_R, lamp_color(brightness[i as usize]));
             let label = i.to_string();
             self.text_centered(x, y - LAMP_R - 15, 1, &label, PANEL_INK);
         }
@@ -253,17 +324,45 @@ impl Panel703Frontend {
         self.circle(px, py, 4, Color::RGB(0xe8, 0xe8, 0xe8));
     }
 
+    /// Advance the lamp filters one frame from fresh accumulator snapshots
+    /// and return the two rows' brightnesses. Separated from render() so
+    /// the filter pipeline is testable without a canvas.
+    fn update_lamps(&mut self) -> ([f32; 16], [f32; 16]) {
+        let now_pc = self.panel.snapshot_pc();
+        let pc_duty = duties(&now_pc, &self.prev_pc, self.panel.program_counter());
+        self.prev_pc = now_pc;
+
+        // snapshot all six sources so the one behind the knob always has a
+        // one-frame-old baseline the moment it is selected
+        let mut now_sel = [LampSnapshot::default(); 6];
+        for (i, s) in SELECTOR_ORDER.iter().enumerate() {
+            now_sel[i] = self.panel.snapshot(*s);
+        }
+        let si = self.selector as usize;
+        let sd_duty =
+            duties(&now_sel[si], &self.prev_sel[si], self.panel.selected(self.selector));
+        self.prev_sel = now_sel;
+
+        let mut pc = [0.0f32; 16];
+        let mut sd = [0.0f32; 16];
+        for i in 0..16 {
+            pc[i] = self.pc_filters[i].update(pc_duty[i]);
+            sd[i] = self.sd_filters[i].update(sd_duty[i]);
+        }
+        (pc, sd)
+    }
+
     fn render(&mut self) {
+        let (pc, sd) = self.update_lamps();
+
         self.canvas.set_draw_color(PANEL_BG);
         self.canvas.clear();
 
         self.caption(PC_CAPTION_Y, "PROGRAM COUNTER");
-        let pcr = self.panel.program_counter();
-        self.lamp_row(PC_LAMPS_Y, pcr, 1);
+        self.lamp_row(PC_LAMPS_Y, &pc, 1);
 
         self.caption(SD_CAPTION_Y, "SELECTED DISPLAY");
-        let sd = self.panel.selected(self.selector);
-        self.lamp_row(SD_LAMPS_Y, sd, 0);
+        self.lamp_row(SD_LAMPS_Y, &sd, 0);
 
         self.draw_toggles();
         self.draw_selector();
@@ -422,4 +521,53 @@ fn glyph(c: char) -> Option<[u8; 7]> {
         '-' => [0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00],
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The filament heats faster than it cools: a step up gets closer to
+    /// its target in one frame than a step down does.
+    #[test]
+    fn lamp_filter_heats_faster_than_it_cools() {
+        let mut heating = LampFilter::default();
+        let rise = heating.update(1.0);
+        let mut cooling = LampFilter { brightness: 1.0 };
+        let fall = 1.0 - cooling.update(0.0);
+        assert!(rise > fall, "rise {rise} should beat fall {fall}");
+    }
+
+    #[test]
+    fn lamp_filter_converges_and_clamps() {
+        let mut f = LampFilter::default();
+        for _ in 0..40 {
+            f.update(0.3);
+        }
+        assert!((f.brightness - 0.3).abs() < 0.01);
+        for _ in 0..40 {
+            f.update(7.0); // out-of-range duty clamps to 1
+        }
+        assert!(f.brightness <= 1.0 && f.brightness > 0.99);
+    }
+
+    /// Halted (no cycles accrued) falls back to the point-sample value;
+    /// running divides on-cycles by total cycles per indicator.
+    #[test]
+    fn duties_divide_deltas_and_fall_back_when_halted() {
+        let prev = LampSnapshot { bits: [0; 16], cycles: 100 };
+        let mut now = LampSnapshot { bits: [0; 16], cycles: 200 };
+        now.bits[0] = 100; // indicator 0 lit the whole interval
+        now.bits[15] = 25; // indicator 15 lit a quarter of it
+        let d = duties(&now, &prev, 0);
+        assert_eq!(d[0], 1.0);
+        assert_eq!(d[15], 0.25);
+        assert_eq!(d[7], 0.0);
+
+        // no cycles: the 0x8001 point sample lights indicators 0 and 15
+        let d = duties(&prev, &prev, 0x8001);
+        assert_eq!(d[0], 1.0);
+        assert_eq!(d[15], 1.0);
+        assert_eq!(d[1], 0.0);
+    }
 }
