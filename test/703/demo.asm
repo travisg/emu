@@ -30,9 +30,20 @@
 ; else, so the service routine saves the accumulator and the index register
 ; itself, the way X-RAY's own level 0 stub does.
 ;
-; The whole program lives in word page 0, so the extension register is always
-; zero and local and global addressing are the same thing here.  A program
-; that crossed a 2048-word page would need SML/SMU, and would care.
+; The code lives in word page 0, but the banner, the echo buffer and a record
+; counter live out at word X'2100' -- past the 4K-word mark -- so the demo
+; exercises the addressing a bigger program would.  The byte instructions
+; never notice: an indexed byte reference adds the 16-bit index register to
+; its base (1-3.3.2), which spans all of core in one instruction, so pointing
+; the buffer cells at high byte addresses is the whole change.  The direct
+; word references to the counter are the part that has to work at it: a word
+; address is only the top four bits of EXR over an 11-bit M field (1-3.3.1),
+; so each one selects its page with SMB first and writes the M field as an
+; explicit offset from the page base.  EXR reloads from the program counter
+; after every memory reference (1-3), so an SMB governs exactly one
+; reference; an interrupt cannot split the pair, because the entry sequence
+; saves the machine status -- EXR included -- after the SMB has set it, and
+; INR restores it (3-3).
 
 ; ---------------------------------------------------------------- level 0
                 ORG     0
@@ -158,6 +169,17 @@ RXCR            LDX     ECHOA
                 LDW     ECHOA2
                 STW     OUTE
 
+; Count the record, in a word that lives out in page 4.  Each reference picks
+; its page with SMB and gives the 11-bit M field as an offset from the page
+; base -- the assembler refuses a bare high address, because the machine
+; cannot encode one.  The ADD between them needs nothing: EXR has already
+; reloaded to this code's own page (1-3), which is where ONE lives.
+                SMB     NECHO
+                LDW     NECHO-HIBASE
+                ADD     ONE
+                SMB     NECHO
+                STW     NECHO-HIBASE
+
 TXNEXT          JSX     SEND
 ; If that finished the record it left the output pointer zero.  A character can
 ; have arrived while the last one was printing; its interrupt merged with the
@@ -180,7 +202,6 @@ OUTE            WORD    0               ; one past the last
 SRET            WORD    0               ; SEND's return link
 SAVEA           WORD    0               ; the interrupted program's registers
 SAVEX           WORD    0
-ECHOB           WORD    0               ; up to two characters of echo
 ONE             WORD    1
 M7BIT           WORD    X'007F'
 UPMASK          WORD    X'FFDF'
@@ -188,11 +209,22 @@ UPMASK          WORD    X'FFDF'
 ; Byte addresses of the two buffers.  There is no load-immediate on this
 ; machine wider than LLB's eight bits, so a sixteen bit constant is a cell like
 ; any other, and the byte instructions reach it through the index register.
+; The buffers themselves are out in page 4; a byte address is sixteen bits, so
+; these cells carry the full distance and the byte instructions never know.
 ECHOA           WORD    ECHOB*2
 ECHOA1          WORD    ECHOB*2+1
 ECHOA2          WORD    ECHOB*2+2
 BANADR          WORD    BANNER*2
 BANEND          WORD    BANSTOP*2
 
+; ------------------------------------------------------------ high memory
+; Word page 4 (bytes X'4200' up).  The assembler pads the gap with zeros, so
+; the image grows to about 8K words of mostly nothing -- which is the point:
+; a machine bought with more than 4K of core should have something living in
+; it.  Select MA on the panel and the lamps flick up here on every keystroke.
+HIBASE          EQU     X'2000'         ; word base of the page pair SMB selects
+                ORG     X'2100'
+NECHO           WORD    0               ; records echoed since power-on
+ECHOB           WORD    0               ; up to two characters of echo
 BANNER          TEXT    "RAYTHEON 703 READY\r\n"
 BANSTOP         EQU     $
