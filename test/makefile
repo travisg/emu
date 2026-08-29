@@ -40,7 +40,7 @@ clean:
 	rm -f t6809.rel t6809.lst t6809.rst t6809.ihx
 	rm -f test.rel test.lst test.rst test.ihx
 	rm -f rom.rel rom.lst rom.rst rom.ihx rom.bin rom.h
-	rm -f 703/demo.lst
+	rm -f 703/demo.lst 703/basic.lst
 
 basic6809-test:
 	./run_basic6809_lang_test.sh
@@ -53,15 +53,23 @@ basic6809-test:
 ASM703      := ./asm703.py
 RAY703_ROMS := ../roms/703
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-test ray703-listings ray703-verify
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-test ray703-basic-test ray703-listings ray703-verify
 
-ray703: ray703-demo ray703-tape ray703-listings
+ray703: ray703-demo ray703-tape ray703-basic ray703-listings
 
 ray703-demo: $(RAY703_ROMS)/demo.bin
 
 $(RAY703_ROMS)/demo.bin: 703/demo.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
 	$(ASM703) $< -o $@ -l 703/demo.lst
+
+# Tiny BASIC, the largest guest in the tree and the reason the emulator has
+# hardware multiply/divide.
+ray703-basic: $(RAY703_ROMS)/basic.bin
+
+$(RAY703_ROMS)/basic.bin: 703/basic.asm $(ASM703)
+	@mkdir -p $(RAY703_ROMS)
+	$(ASM703) $< -o $@ -l 703/basic.lst
 
 # tape.asm is punched rather than loaded: the .tape is what the ray703-ptb
 # subsystem feeds through the paper tape reader. The .bin beside it is only a
@@ -100,3 +108,6 @@ ray703-verify:
 
 ray703-test: ray703-demo
 	./run_ray703_demo_test.sh
+
+ray703-basic-test: ray703-basic
+	./run_ray703_basic_test.sh
