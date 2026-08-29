@@ -111,7 +111,11 @@ const CLEAR_R: i32 = 8;
 
 const PANEL_BG: Color = Color::RGB(0xd6, 0xd2, 0xc9);
 const PANEL_INK: Color = Color::RGB(0x22, 0x22, 0x22);
-const LAMP_LIT: Color = Color::RGB(0xff, 0xb4, 0x3c);
+/// Full drive is a near-white amber -- a filament at temperature, not the
+/// orange of a half-lit one (that lives in `lamp_color`'s ember stop).
+const LAMP_LIT: Color = Color::RGB(0xff, 0xd6, 0x82);
+/// The glow a bright bulb throws past its bezel, drawn with alpha.
+const LAMP_GLOW: Color = Color::RGB(0xff, 0xb0, 0x50);
 const LAMP_UNLIT: Color = Color::RGB(0x54, 0x42, 0x2a);
 const LAMP_BEZEL: Color = Color::RGB(0x3a, 0x3a, 0x3a);
 
@@ -163,17 +167,23 @@ fn duties(now: &LampSnapshot, prev: &LampSnapshot, halted_value: u16) -> [f32; 1
     out
 }
 
-/// Lamp face color for a brightness: unlit brown up to full amber, through
-/// a square root so mid duties read brighter than linear -- nearer how the
-/// eye sees a filament.
-fn lamp_color(brightness: f32) -> Color {
-    let t = brightness.clamp(0.0, 1.0).sqrt();
-    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
-    Color::RGB(
-        mix(LAMP_UNLIT.r, LAMP_LIT.r),
-        mix(LAMP_UNLIT.g, LAMP_LIT.g),
-        mix(LAMP_UNLIT.b, LAMP_LIT.b),
-    )
+/// Perceived brightness for a duty cycle. A PWM'd filament's light output
+/// runs superlinear in duty (roughly phi ~ D^1.7 -- temperature tracks
+/// duty, radiance runs away with temperature) and the eye compresses
+/// that by roughly a square root, so perceived ~ sqrt(D^1.7) ~ D^0.85.
+fn perceived(brightness: f32) -> f32 {
+    brightness.clamp(0.0, 1.0).powf(0.85)
+}
+
+/// Lamp face color for a perceived brightness. Two segments, because a
+/// filament changes color as it brightens: cold brown through dim ember
+/// orange to a near-white amber at full drive.
+fn lamp_color(t: f32) -> Color {
+    const EMBER: Color = Color::RGB(0xc8, 0x5e, 0x14);
+    let mix = |a: u8, b: u8, f: f32| (a as f32 + (b as f32 - a as f32) * f) as u8;
+    let (lo, hi, f) =
+        if t < 0.5 { (LAMP_UNLIT, EMBER, t * 2.0) } else { (EMBER, LAMP_LIT, (t - 0.5) * 2.0) };
+    Color::RGB(mix(lo.r, hi.r, f), mix(lo.g, hi.g, f), mix(lo.b, hi.b, f))
 }
 
 fn toggle_x(i: i32) -> i32 {
@@ -220,7 +230,9 @@ impl Panel703Frontend {
             .position_centered()
             .build()
             .map_err(|e| e.to_string())?;
-        let canvas = window.into_canvas().accelerated().build().map_err(|e| e.to_string())?;
+        let mut canvas = window.into_canvas().accelerated().build().map_err(|e| e.to_string())?;
+        // the lamp glow halos draw with alpha
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         // MB is the boot-procedure position ("turn the display selector to
         // MB before following the operating procedure" -- the PTB drawing),
         // and it is also the busiest lamp row on an idle machine.
@@ -302,8 +314,16 @@ impl Panel703Frontend {
     fn lamp_row(&mut self, y: i32, brightness: &[f32; 16], first: i32) {
         for i in first..16 {
             let x = lamp_x(i);
+            let t = perceived(brightness[i as usize]);
+            // a bright bulb glows past its bezel; alpha needs the canvas
+            // blend mode set in new()
+            if t > 0.25 {
+                let alpha = (90.0 * (t - 0.25) / 0.75) as u8;
+                let glow = Color::RGBA(LAMP_GLOW.r, LAMP_GLOW.g, LAMP_GLOW.b, alpha);
+                self.circle(x, y, LAMP_R + 7, glow);
+            }
             self.circle(x, y, LAMP_R + 3, LAMP_BEZEL);
-            self.circle(x, y, LAMP_R, lamp_color(brightness[i as usize]));
+            self.circle(x, y, LAMP_R, lamp_color(t));
             let label = i.to_string();
             self.text_centered(x, y - LAMP_R - 15, 1, &label, PANEL_INK);
         }
@@ -658,6 +678,17 @@ mod tests {
         let mut cooling = LampFilter { brightness: 1.0 };
         let fall = 1.0 - cooling.update(0.0);
         assert!(rise > fall, "rise {rise} should beat fall {fall}");
+    }
+
+    /// The perceptual transfer is D^0.85: pinned at the endpoints, above
+    /// linear in the middle, and clamped.
+    #[test]
+    fn perceived_brightness_follows_the_power_law() {
+        assert_eq!(perceived(0.0), 0.0);
+        assert_eq!(perceived(1.0), 1.0);
+        assert!((perceived(0.5) - 0.5f32.powf(0.85)).abs() < 1e-6);
+        assert!(perceived(0.5) > 0.5);
+        assert_eq!(perceived(7.0), 1.0);
     }
 
     #[test]
