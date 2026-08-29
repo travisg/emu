@@ -129,10 +129,20 @@ fn lamp_x(i: i32) -> i32 {
     LAMPS_X + i * LAMP_PITCH + (i / 4) * GROUP_GAP
 }
 
-/// One incandescent bulb's thermal state. The lamps are driven by bits that
-/// flip thousands of times per frame, and what a filament shows for that is
-/// its duty cycle, arrived at with a lag: it heats faster than it cools.
-/// The constants are per 16 ms frame and tuned by eye, not physics.
+/// One incandescent bulb's thermal state. That they *are* incandescent is
+/// documented, not assumed: the 704 technical manual (July 1970, same
+/// panel design) says 6-volt power "is used solely to light indicator
+/// lamps on the front panel assembly" with drivers switching the lamps'
+/// return lines (section 4-745), and the SELECTED DISPLAY drivers ground
+/// those returns straight from register outputs (4-76) -- DC-driven
+/// filaments flickering at logic speed, no neon anywhere (the machine has
+/// no high-voltage rail at all, 4-749). A 6V panel bulb of the era has a
+/// thermal time constant in the tens of milliseconds.
+///
+/// The lamps are driven by bits that flip thousands of times per frame,
+/// and what a filament shows for that is its duty cycle, arrived at with
+/// a lag: it heats faster than it cools. The constants are per 16 ms
+/// frame and tuned by eye within that regime.
 #[derive(Copy, Clone, Default)]
 struct LampFilter {
     brightness: f32,
