@@ -25,7 +25,10 @@
 //!
 //! Not a port of anything -- the C++ tree never had this machine. It is a
 //! fully populated 703: 32K words of core, a console teletype and a high speed
-//! paper tape reader on the DIO channel.
+//! paper tape reader on the DIO channel, and a 74601 disc controller whose
+//! four drive bays mount whatever `ray703-disc{0..3}.img` files the current
+//! directory holds (the Kaypro floppy convention: a file that is not there is
+//! a drive that was never installed).
 //!
 //! The 703 has no ROM at all. An operator keyed a bootstrap in from the front
 //! panel and fed the machine an absolute paper tape; there was nothing in core
@@ -37,9 +40,16 @@
 //! * `ray703-ptb` keys in the real thing instead -- the eleven words of the
 //!   PTB bootstrap (drawing 390364) -- and treats `-r` as the paper tape to
 //!   feed it, so a period absolute tape loads the period way.
+//! * `ray703-load` presses the LOAD button on the disc controller (706 UM
+//!   Table 5-30): `-r` is reinterpreted as the disc image for unit 0, and the
+//!   button's fixed sequence reads its sector 0, track 0 into words 0-46.
+//!   The button lives on the controller cabinet, not on the figure 5-1 front
+//!   panel this tree draws, so like PTB's preset index register it is an
+//!   operator action a subsystem stands in for rather than a switch to click.
 
 use crate::bus::{Bus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
+use crate::dev::disc74601::{Disc74601, DEV_DISC};
 use crate::dev::memory::Memory;
 use crate::dev::ray703::{TapeReader703, Tty703, DEV_TAPE_READER, DEV_TTY};
 use crate::rom;
@@ -90,18 +100,27 @@ pub struct Ray703 {
     core: Memory,
     tty: Tty703,
     reader: TapeReader703,
+    disc: Disc74601,
 }
 
 impl Ray703 {
     pub fn new(rom_path: &Path, console: ConsoleEndpoint, subsystem: &str) -> io::Result<Self> {
-        // Both devices signal level 0, which is what PTB and every driver
-        // listing assume. They cannot be confused for each other because a
-        // device stays silent until the program arms it, and a program only
-        // ever arms the one it is reading from.
+        // The character devices signal level 0, which is what PTB and every
+        // driver listing assume. They cannot be confused for each other
+        // because a device stays silent until the program arms it, and a
+        // program only ever arms the one it is reading from.
+        //
+        // The disc gets level 1. X-RAY leaves every channel number to the
+        // per-installation system description ('DSKI EQU NUMBER, cards
+        // 77-81), so there is no canonical assignment to copy; a level of its
+        // own above the 10-cps teletype's is the only sane priority for a DMA
+        // device (`ready_level` scans 15 down to 0), and it makes this the
+        // first machine here with two live interrupt levels.
         let mut sys = Ray703 {
             core: Memory::new(CORE_BYTES),
             tty: Tty703::new(console, 0),
             reader: TapeReader703::new(0),
+            disc: Disc74601::new(1),
         };
 
         match subsystem {
@@ -129,12 +148,33 @@ impl Ray703 {
                      HALT and RESET and key in a start address."
                 );
             }
+            "load" => {
+                // The LOAD button (Table 5-30) with `-r` as the boot disc.
+                // Unlike the silent probe for the working directory's images,
+                // a disc the user named on the command line has to be there
+                // -- the tape reader's rule, for the same reason: pressing
+                // LOAD over an empty drive bay looks like a hung machine.
+                if !sys.disc.load_image(0, rom_path) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "could not mount '{}' as the boot disc (missing, unreadable, \
+                             or not exactly 770,048 bytes)",
+                            rom_path.display()
+                        ),
+                    ));
+                }
+                sys.disc.press_load(&mut sys.core);
+                println!(
+                    "703: LOAD pressed; disc 0's sector 0, track 0 is in words 0-46."
+                );
+            }
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
                     format!(
-                        "unknown ray703 subsystem '{other}'; try 'ray703' or 'ray703-ptb' \
-                         (add '-panel' for the front panel window)"
+                        "unknown ray703 subsystem '{other}'; try 'ray703', 'ray703-ptb' \
+                         or 'ray703-load' (add '-panel' for the front panel window)"
                     ),
                 ));
             }
@@ -143,11 +183,19 @@ impl Ray703 {
         Ok(sys)
     }
 
-    /// `--fast-io`: run the teletype at host speed instead of ten characters
-    /// a second. The tape reader already free-runs, so there is nothing else
-    /// on this machine to speed up.
+    /// `--fast-io`: run the teletype and the disc at host speed instead of
+    /// ten characters a second and half a revolution per transfer. The tape
+    /// reader already free-runs.
     pub fn set_fast_io(&mut self) {
         self.tty.set_fast_io();
+        self.disc.set_fast_io();
+    }
+
+    /// Try to mount a disc image on one of the controller's four units.
+    /// Policy -- which paths, and that a missing one is fine -- lives in the
+    /// factory, the way the registry hands the Kaypro its floppy path.
+    pub fn mount_disc(&mut self, unit: usize, path: &Path) -> bool {
+        self.disc.load_image(unit, path)
     }
 
     /// The index register PTB needs preloaded, or `None` for a plain boot.
@@ -176,6 +224,7 @@ impl Bus for Ray703 {
         match device {
             DEV_TTY => self.tty.din(function),
             DEV_TAPE_READER => self.reader.din(function),
+            DEV_DISC => self.disc.din(function),
             _ => 0,
         }
     }
@@ -185,15 +234,21 @@ impl Bus for Ray703 {
         match device {
             DEV_TTY => self.tty.dot(function, val),
             DEV_TAPE_READER => self.reader.dot(function, val),
+            DEV_DISC => self.disc.dot(function, val),
             _ => {}
         }
     }
 
-    /// Both devices get the same elapsed cycle count, which is how they share
-    /// one clock without sharing any state: the teletype spends it running its
-    /// character at ten a second, the reader ignores it.
+    /// Every device gets the same elapsed cycle count, which is how they
+    /// share one clock without sharing any state: the teletype spends it
+    /// running its character at ten a second, the reader ignores it, and the
+    /// disc counts down its transfer in flight. The disc alone is handed the
+    /// core -- it is the machine's one DMA device, and this poll is the one
+    /// place the memory and the devices meet.
     fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
-        self.tty.poll(elapsed_cycles) | self.reader.poll(elapsed_cycles)
+        self.tty.poll(elapsed_cycles)
+            | self.reader.poll(elapsed_cycles)
+            | self.disc.poll(elapsed_cycles, &mut self.core)
     }
 }
 
@@ -301,6 +356,67 @@ mod tests {
         let origin = (PTB_LOAD_ORIGIN * 2) as u32;
         for (i, b) in payload.iter().enumerate() {
             assert_eq!(sys.read8(origin + i as u32), *b, "payload byte {i}");
+        }
+    }
+
+    /// The LOAD button's whole fixed sequence (Table 5-30): sector 0, track 0
+    /// of disc 0 lands in words 0-46, and only that -- word 47 of the image
+    /// is deliberately non-zero to pin the one-sector cutoff.
+    #[test]
+    fn the_load_subsystem_boots_from_the_disc_image() {
+        let mut image = vec![0u8; crate::dev::disc74601::IMAGE_BYTES];
+        image[0..2].copy_from_slice(&0x1040u16.to_be_bytes()); // JMP X'40'
+        image[92..94].copy_from_slice(&0xbeefu16.to_be_bytes()); // word 46, last loaded
+        image[94..96].copy_from_slice(&0xdeadu16.to_be_bytes()); // word 47, sector 1: not loaded
+        let path = scratch_file("bootdisc", &image);
+        let mut sys = machine("load", &path).unwrap();
+        assert_eq!(sys.read16(0, Endian::Big), 0x1040);
+        assert_eq!(sys.read16(46 * 2, Endian::Big), 0xbeef);
+        assert_eq!(sys.read16(47 * 2, Endian::Big), 0, "LOAD reads one sector exactly");
+    }
+
+    #[test]
+    fn the_load_subsystem_needs_a_real_disc_image() {
+        assert!(machine("load", Path::new("/nonexistent/boot.img")).is_err());
+        let short = scratch_file("shortdisc", &[0u8; 512]);
+        assert!(machine("load", &short).is_err(), "a wrong-size image is refused");
+    }
+
+    #[test]
+    fn the_disc_answers_on_dio_device_1() {
+        let rom = scratch_file("disc-dio", &[0x01, 0x00]);
+        let mut sys = machine("", &rom).unwrap();
+        // With no image in the working directory the controller is present
+        // but the drive is not: DIN 1,0 reads not-ready, where an absent
+        // *device* would read zero -- which as a status word means ready.
+        assert_eq!(sys.io_read16(0x10), 0x8000);
+        // and disc DOTs disturb neither character device
+        sys.io_write16(0x11, 0x0100);
+        assert_eq!(sys.poll_interrupt_lines(0), 0);
+    }
+
+    /// The DMA seam end to end: a transfer commanded over the DIO reaches
+    /// core through `poll_interrupt_lines`, and completes on the disc's own
+    /// level 1 rather than the character devices' level 0.
+    #[test]
+    fn a_disc_transfer_reaches_core_through_the_bus() {
+        let rom = scratch_file("disc-dma", &[0x01, 0x00]);
+        let mut sys = machine("", &rom).unwrap();
+        sys.disc.mount_blank(0);
+        for i in 0..10u16 {
+            sys.write16(0x200 + i as u32 * 2, 0x5000 + i, Endian::Big);
+        }
+        // write words 0x100.. to track 4 sector 2, then read them back higher
+        sys.io_write16(0x11, 0x0100);
+        sys.io_write16(0x12, (4 << 10) | 2);
+        sys.io_write16(0x14, 10);
+        assert_eq!(sys.poll_interrupt_lines(u32::MAX), 1 << 1, "completion pulses level 1");
+        sys.io_write16(0x11, 0x0300);
+        sys.io_write16(0x12, (4 << 10) | 2);
+        sys.io_write16(0x16, 10);
+        assert_eq!(sys.poll_interrupt_lines(u32::MAX), 1 << 1);
+        for i in 0..10u16 {
+            assert_eq!(sys.read16(0x600 + i as u32 * 2, Endian::Big), 0x5000 + i, "word {i}");
         }
     }
 }

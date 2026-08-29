@@ -15,5 +15,6 @@ doit
 .claude/settings.local.json
 /target
 /mbasic-games.img
+/ray703-disc*.img
 __pycache__/
 *.pyc

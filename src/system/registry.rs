@@ -153,6 +153,17 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
     if opts.fast_io {
         bus.set_fast_io();
     }
+    // The disc images mount like the Kaypro's floppy: fixed CWD-relative
+    // names, non-fatal, gitignored. A file that simply is not there is a
+    // drive that was never installed, and stays silent. The load subsystem
+    // has already put `-r` in unit 0, and the boot disc the user named
+    // outranks whatever the working directory holds.
+    for unit in 0..crate::dev::disc74601::DISC_UNITS {
+        if sub == "load" && unit == 0 {
+            continue;
+        }
+        bus.mount_disc(unit, Path::new(&format!("ray703-disc{unit}.img")));
+    }
 
     Ok(Machine {
         cpu: Box::new(cpu),

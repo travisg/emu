@@ -40,7 +40,7 @@ clean:
 	rm -f t6809.rel t6809.lst t6809.rst t6809.ihx
 	rm -f test.rel test.lst test.rst test.ihx
 	rm -f rom.rel rom.lst rom.rst rom.ihx rom.bin rom.h
-	rm -f 703/demo.lst 703/basic.lst
+	rm -f 703/demo.lst 703/basic.lst 703/disc.lst 703/boot.lst
 
 basic6809-test:
 	./run_basic6809_lang_test.sh
@@ -53,15 +53,33 @@ basic6809-test:
 ASM703      := ./asm703.py
 RAY703_ROMS := ../roms/703
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-test ray703-basic-test ray703-listings ray703-verify
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-listings ray703-verify
 
-ray703: ray703-demo ray703-tape ray703-basic ray703-listings
+ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-listings
 
 ray703-demo: $(RAY703_ROMS)/demo.bin
 
 $(RAY703_ROMS)/demo.bin: 703/demo.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
 	$(ASM703) $< -o $@ -l 703/demo.lst
+
+# Exercises the 74601 disc: write, read back, verify, report on the teletype.
+ray703-disc: $(RAY703_ROMS)/disc.bin
+
+$(RAY703_ROMS)/disc.bin: 703/disc.asm $(ASM703)
+	@mkdir -p $(RAY703_ROMS)
+	$(ASM703) $< -o $@ -l 703/disc.lst
+
+# The boot sector for the disc controller's LOAD button. It must fit in the
+# one sector the button reads -- 47 words, 94 bytes -- so the build enforces it.
+ray703-boot: $(RAY703_ROMS)/boot.bin
+
+$(RAY703_ROMS)/boot.bin: 703/boot.asm $(ASM703)
+	@mkdir -p $(RAY703_ROMS)
+	$(ASM703) $< -o $@ -l 703/boot.lst
+	@size=$$(wc -c < $@); if [ $$size -gt 94 ]; then \
+		echo "error: boot.bin is $$size bytes; the LOAD button reads one 94-byte sector"; \
+		rm -f $@; exit 1; fi
 
 # Tiny BASIC, the largest guest in the tree and the reason the emulator has
 # hardware multiply/divide.
@@ -111,3 +129,9 @@ ray703-test: ray703-demo
 
 ray703-basic-test: ray703-basic
 	./run_ray703_basic_test.sh
+
+ray703-disc-test: ray703-disc
+	./run_ray703_disc_test.sh
+
+ray703-boot-test: ray703-boot
+	./run_ray703_boot_test.sh
