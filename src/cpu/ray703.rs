@@ -240,6 +240,17 @@ impl Cpu703 {
         self.panel.as_ref().is_some_and(|p| p.sense(n))
     }
 
+    /// End-of-step panel bookkeeping: publish the point samples, then charge
+    /// this step's cycles to the lamp on-time accumulators. Both of step()'s
+    /// return paths come through here -- the interrupt entry included, or
+    /// interrupt-heavy programs would undercount their lamps.
+    fn publish_step(&self) {
+        self.publish_panel();
+        if let Some(p) = &self.panel {
+            p.accumulate(self.cycles);
+        }
+    }
+
     fn set_status(&mut self, s: u16) {
         self.exr = ((s & ST_EXR_MASK) >> ST_EXR_SHIFT) as u8;
         self.neg = s & ST_NEG != 0;
@@ -760,7 +771,7 @@ impl Cpu for Cpu703 {
             // The entry is a step of its own, so the PC and SEQ lamps move;
             // the instruction register keeps its old contents, matching a
             // sequence that fetched nothing.
-            self.publish_panel();
+            self.publish_step();
             return StepResult::Ok;
         }
 
@@ -778,7 +789,7 @@ impl Cpu for Cpu703 {
         } else {
             self.exec_memory(bus, insn)
         };
-        self.publish_panel();
+        self.publish_step();
         result
     }
 
@@ -1664,6 +1675,36 @@ mod tests {
         }
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(cpu.pcr, 0x42, "SSE reads the J2 line, not the toggles");
+    }
+
+    /// The lamp accumulators charge each step's cycle count to the bits the
+    /// step left set, so a steadily lit bit reads the full total.
+    #[test]
+    fn lamp_accumulators_charge_per_instruction_cycles() {
+        use crate::console::{PanelState, Selector};
+        // LLB 0xff, then JMP back to it: two 1-cycle instructions
+        let (mut cpu, mut bus) = boot(&[0x06ff, 0x1040]);
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+        run_steps(&mut cpu, &mut bus, 10);
+        let ac = panel.snapshot(Selector::Ac);
+        assert_eq!(ac.cycles, 10);
+        assert_eq!(ac.bits[8], 10, "ACR low byte is set from the first step's end");
+        assert_eq!(ac.bits[0], 0);
+    }
+
+    /// The interrupt-entry step is published and accumulated too.
+    #[test]
+    fn interrupt_entry_charges_its_cycles_to_the_lamps() {
+        use crate::console::PanelState;
+        let (mut cpu, mut bus) = boot(&[0x0028]); // ENB 8, 1 cycle
+        bus.load(8 * 4 * 2 + 2, &[0x00, 0x50]);
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+        run_steps(&mut cpu, &mut bus, 1);
+        bus.int_lines = 1 << 8;
+        cpu.step(&mut bus); // entry sequence, 3 cycles
+        assert_eq!(panel.snapshot_pc().cycles, 4);
     }
 
     // -- cycle counts ------------------------------------------------------

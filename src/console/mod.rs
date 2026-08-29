@@ -38,7 +38,7 @@
 //! merely avoided.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
@@ -190,6 +190,25 @@ struct PanelInner {
     /// *false* position (5-4), so all-clear preserves the no-panel
     /// behaviour of every sense skip skipping.
     sense: AtomicU8,
+
+    /// Lamp on-time accumulators, for rendering the lamps as incandescent
+    /// bulbs rather than point samples: for each lamp source (PC row plus
+    /// the six selector positions, indexed by [`PanelState::accumulate`]'s
+    /// convention) and each indicator, the number of clock cycles that bit
+    /// has spent set; and the total cycles accumulated. All monotonic --
+    /// the frontend diffs snapshots rather than resetting anything, so
+    /// there is no read-modify-write race across the thread boundary.
+    on: [[AtomicU64; 16]; 7],
+    on_cycles: AtomicU64,
+}
+
+/// One frame's view of a lamp source: the per-indicator on-cycle counters
+/// and the total cycles, both monotonic since power-on. Duty over an
+/// interval is the ratio of the deltas of two snapshots.
+#[derive(Copy, Clone, Default)]
+pub struct LampSnapshot {
+    pub bits: [u64; 16],
+    pub cycles: u64,
 }
 
 impl PanelState {
@@ -218,6 +237,60 @@ impl PanelState {
     /// The position of SENSE toggle `n` (0-3): true = up.
     pub fn sense(&self, n: u8) -> bool {
         self.0.sense.load(Ordering::Relaxed) & (1 << n) != 0
+    }
+
+    /// Charge `cycles` of on-time to every currently lit bit of every lamp
+    /// source, reading the point-sample cells the core just published.
+    /// Called once per executed step, *never* from a switch actuation --
+    /// advancing the cycle total while halted would break the frontend's
+    /// halted detection (delta cycles == 0 over a frame).
+    ///
+    /// Source indices: 0 = the PC row, 1.. = the six selector positions in
+    /// `Selector` order. Cost is one relaxed fetch_add per *set* bit per
+    /// step; if that ever matters it can batch in core-local counters and
+    /// flush every N steps behind this same signature.
+    pub fn accumulate(&self, cycles: u32) {
+        let c = cycles as u64;
+        if c == 0 {
+            return;
+        }
+        let sources = [
+            self.program_counter(),
+            self.selected(Selector::Ms),
+            self.selected(Selector::In),
+            self.selected(Selector::Ma),
+            self.selected(Selector::Mb),
+            self.selected(Selector::Ix),
+            self.selected(Selector::Ac),
+        ];
+        for (src, &value) in sources.iter().enumerate() {
+            let mut bits = value;
+            while bits != 0 {
+                // indicator number: bit 0 is the MSB, as everywhere here
+                let i = bits.leading_zeros() as usize;
+                self.0.on[src][i].fetch_add(c, Ordering::Relaxed);
+                bits &= !(0x8000 >> i);
+            }
+        }
+        self.0.on_cycles.fetch_add(c, Ordering::Relaxed);
+    }
+
+    fn snapshot_source(&self, src: usize) -> LampSnapshot {
+        let mut s = LampSnapshot { bits: [0; 16], cycles: self.0.on_cycles.load(Ordering::Relaxed) };
+        for (i, ctr) in self.0.on[src].iter().enumerate() {
+            s.bits[i] = ctr.load(Ordering::Relaxed);
+        }
+        s
+    }
+
+    /// Frontend-side: the PC row's accumulators.
+    pub fn snapshot_pc(&self) -> LampSnapshot {
+        self.snapshot_source(0)
+    }
+
+    /// Frontend-side: one selector position's accumulators.
+    pub fn snapshot(&self, sel: Selector) -> LampSnapshot {
+        self.snapshot_source(1 + sel as usize)
     }
 
     // -- the frontend side -------------------------------------------------
@@ -257,4 +330,54 @@ pub enum Display {
     },
     /// The 703's lights-and-switches front panel.
     Panel703 { title: &'static str, panel: PanelState },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accumulate_charges_only_set_bits() {
+        let p = PanelState::new();
+        p.set_registers(0x8001, 0xffff, 0x0000, 0x0000);
+        p.accumulate(5);
+        let pc = p.snapshot_pc();
+        assert_eq!(pc.cycles, 5);
+        assert_eq!(pc.bits[0], 5, "indicator 0 is the MSB");
+        assert_eq!(pc.bits[15], 5);
+        assert_eq!(pc.bits[1], 0);
+        let ac = p.snapshot(Selector::Ac);
+        assert!(ac.bits.iter().all(|&b| b == 5));
+        let ix = p.snapshot(Selector::Ix);
+        assert!(ix.bits.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn accumulate_halves_for_alternating_values() {
+        let p = PanelState::new();
+        for i in 0..10 {
+            p.set_registers(0, if i % 2 == 0 { 0x8000 } else { 0x0001 }, 0, 0);
+            p.accumulate(3);
+        }
+        let ac = p.snapshot(Selector::Ac);
+        assert_eq!(ac.cycles, 30);
+        assert_eq!(ac.bits[0], 15);
+        assert_eq!(ac.bits[15], 15);
+        assert_eq!(ac.bits[7], 0);
+    }
+
+    /// Zero cycles accrue nothing, and the IN position charges the opcode
+    /// byte at indicators 0-7 exactly as it displays there.
+    #[test]
+    fn accumulate_places_the_instruction_register_at_the_top() {
+        let p = PanelState::new();
+        p.set_instruction(0x81);
+        p.accumulate(0);
+        assert_eq!(p.snapshot(Selector::In).cycles, 0);
+        p.accumulate(2);
+        let s = p.snapshot(Selector::In);
+        assert_eq!(s.bits[0], 2);
+        assert_eq!(s.bits[7], 2);
+        assert_eq!(s.bits[8], 0);
+    }
 }
