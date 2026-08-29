@@ -104,7 +104,7 @@ fn rust_trace(hex_path: &Path, instructions: usize) -> String {
     let (_tx, rx) = std::sync::mpsc::channel();
     let endpoint = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
     let desc = registry::find("6809").unwrap();
-    let machine = (desc.factory)(hex_path, endpoint, "").expect("failed to build system09");
+    let machine = (desc.factory)(hex_path, endpoint, "", &registry::MachineOpts::default()).expect("failed to build system09");
 
     let mut emu = Emulator::new(machine.cpu, machine.bus, Arc::new(AtomicBool::new(false)));
     emu.set_cycle_limit(Some(instructions as i64 + 1));
@@ -485,7 +485,7 @@ fn bad_opcode_halts() {
     let (_tx, rx) = std::sync::mpsc::channel();
     let endpoint = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
     let desc = registry::find("6809").unwrap();
-    let machine = (desc.factory)(&hex_path, endpoint, "").unwrap();
+    let machine = (desc.factory)(&hex_path, endpoint, "", &registry::MachineOpts::default()).unwrap();
     std::fs::remove_file(&hex_path).ok();
 
     let mut cpu = machine.cpu;

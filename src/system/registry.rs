@@ -52,8 +52,19 @@ pub struct Machine {
     pub panel_control: Option<std::sync::mpsc::Receiver<crate::console::PanelCommand>>,
 }
 
+/// Build-time options that apply across systems. Every factory receives
+/// them; a machine honors what is meaningful for it and ignores the rest,
+/// so a flag like `--fast-io` needs no per-system plumbing in `main.rs`.
+#[derive(Clone, Copy, Default)]
+pub struct MachineOpts {
+    /// Devices complete I/O instantly instead of at their period rates.
+    /// Meaningful only on machines that model device timing at all --
+    /// currently the 703's teletype; everywhere else it is already true.
+    pub fast_io: bool,
+}
+
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
-type FactoryFn = fn(&Path, ConsoleEndpoint, &str) -> io::Result<Machine>;
+type FactoryFn = fn(&Path, ConsoleEndpoint, &str, &MachineOpts) -> io::Result<Machine>;
 
 pub struct SystemDescriptor {
     pub name: &'static str,
@@ -66,7 +77,7 @@ pub struct SystemDescriptor {
     pub clock_hz: Option<u64>,
 }
 
-fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
+fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6800::Cpu6800::new()),
         bus: Box::new(altair680::Altair680::new(rom, console)?),
@@ -76,7 +87,7 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Resu
     })
 }
 
-fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
+fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
     Ok(Machine {
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
         bus: Box::new(rc2014::Rc2014::new(rom, console)?),
@@ -86,7 +97,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<
     })
 }
 
-fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Machine> {
+fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6809::Cpu6809::new()),
         bus: Box::new(sys09::System09::new(rom, console, sub)?),
@@ -96,7 +107,7 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Ma
     })
 }
 
-fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Machine> {
+fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
     // The subsystem is a set of tokens: "panel" opens the front panel
     // window, "ptb" keys in the bootstrap, in either order. Strip "panel"
     // here and hand the rest to the machine, which knows nothing about
@@ -138,16 +149,21 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<M
         throttle_hz = Some(crate::cpu::ray703::CLOCK_HZ);
     }
 
+    let mut bus = ray703::Ray703::new(rom, console, sub)?;
+    if opts.fast_io {
+        bus.set_fast_io();
+    }
+
     Ok(Machine {
         cpu: Box::new(cpu),
-        bus: Box::new(ray703::Ray703::new(rom, console, sub)?),
+        bus: Box::new(bus),
         display,
         throttle_hz,
         panel_control,
     })
 }
 
-fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
+fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
     let (bus, display) = kaypro::Kaypro::new(
         rom,
         Path::new(kaypro::VIDEO_ROM),
@@ -259,7 +275,7 @@ mod tests {
         std::fs::write(&rom, [0x10u8, 0x40]).unwrap(); // JMP 0x40
         let (_tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-        let m = build_ray703(&rom, console, sub);
+        let m = build_ray703(&rom, console, sub, &MachineOpts::default());
         std::fs::remove_dir_all(&dir).ok();
         m
     }
@@ -289,6 +305,33 @@ mod tests {
         assert!(m.display.is_none());
         assert_eq!(m.throttle_hz, None);
         assert!(m.panel_control.is_none());
+    }
+
+    /// `--fast-io` reaches the teletype through the factory. The probe is
+    /// the second keystroke: the first rides the device's standing credit
+    /// either way, but the second is available on the very next poll only
+    /// when the pacing is off.
+    #[test]
+    fn fast_io_reaches_the_teletype() {
+        for (fast_io, second_key) in [(true, 1u16), (false, 0u16)] {
+            let dir = std::env::temp_dir()
+                .join(format!("emu-registry-fastio-{fast_io}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let rom = dir.join("image.bin");
+            std::fs::write(&rom, [0x10u8, 0x40]).unwrap(); // JMP 0x40
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(b'A').unwrap();
+            tx.send(b'B').unwrap();
+            let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+            let opts = MachineOpts { fast_io };
+            let mut m = build_ray703(&rom, console, "", &opts).unwrap();
+            std::fs::remove_dir_all(&dir).ok();
+
+            m.bus.io_write16(0xe9, 0); // DOT 14,9: connect the keyboard
+            assert_eq!(m.bus.poll_interrupt_lines(0), 1, "the first key is free either way");
+            m.bus.io_read16(0xed); // DIN 14,D: collect it
+            assert_eq!(m.bus.poll_interrupt_lines(0), second_key, "fast_io={fast_io}");
+        }
     }
 
     #[test]

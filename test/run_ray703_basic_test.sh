@@ -52,10 +52,39 @@ wait_count() {
     return 1
 }
 
+# Wait for the printer to stop.  The teletype is paced at its real ten
+# characters a second, so a prompt reaches the log a character at a time and
+# the last character of it lands while the guest is still inside the spin
+# that waits for the line to drain -- typing on the strength of the text
+# alone gets in ahead of the T.GETL that primes the line buffer, and those
+# keystrokes are dropped exactly as the guest documents. What invites typing
+# is not the prompt appearing but the silence after it, which is the cue the
+# operator had too: the printer stopped moving.
+# Two consecutive samples rather than one: a single quiet interval could be
+# the host descheduling us mid-line rather than the guest being done.
+wait_quiet() {
+    local last='' size tries=0 stable=0
+    while (( tries < 100 )); do
+        size=$(wc -c < "$LOG_FILE")
+        if [[ "$size" == "$last" ]]; then
+            (( stable += 1 ))
+            (( stable >= 2 )) && return 0
+        else
+            stable=0
+        fi
+        last="$size"
+        sleep 0.15
+        (( tries += 1 ))
+    done
+    echo "error: the guest never stopped printing (see $LOG_FILE)" >&2
+    return 1
+}
+
 # Type one line, after waiting for the Nth READY that invites it.
 type_at_ready() {
     local nth="$1" line="$2"
     wait_count 'READY' "$nth" || return 1
+    wait_quiet || return 1
     printf '%s\r' "$line" >&3
 }
 
@@ -87,11 +116,17 @@ run_session() {
     type_at_ready 10 '110 RETURN'
     type_at_ready 11 'RUN'
     wait_count '? ' 1 || return 1       # INPUT's prompt
+    wait_quiet || return 1
     printf '%s\r' '-6' >&3
     type_at_ready 12 'LIST'
     wait_count '20 @(I)=I\*I' 2 || return 1   # once typed, once listed
     type_at_ready 13 'PRINT 6*7;"OK"'
     type_at_ready 14 'BYE'
+    # Wait for the halt before the caller closes the pipe. Four characters
+    # take four tenths of a second to reach a teletype, and the ctrl-d that
+    # closing it looks like would shut the machine down with BYE still on
+    # its way in.
+    wait_count 'stopping, Halted' 1 || return 1
     return 0
 }
 run_session || FAILED=1

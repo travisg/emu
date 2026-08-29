@@ -864,7 +864,15 @@ impl Cpu for Cpu703 {
         // Latch whatever pulsed since the last instruction. A signal to a
         // Disabled level "is ignored" (3-1) rather than remembered; one to a
         // level that is already Active or Waiting just re-arms the same latch.
-        let pulses = bus.poll_interrupt_lines();
+        //
+        // The devices are paced by the cycle count handed over here, and what
+        // is in `self.cycles` at this point is the *previous* step's, because
+        // this instruction has not been decoded yet. That lag is one
+        // instruction -- single-digit microseconds against a teletype's 100
+        // milliseconds -- and it costs nothing to be exactly one behind
+        // forever, where reordering the poll to after the instruction would
+        // cost an interrupt its position between two instructions.
+        let pulses = bus.poll_interrupt_lines(self.cycles);
         if pulses != 0 {
             for (level, l) in self.levels.iter_mut().enumerate() {
                 if pulses & (1 << level) != 0 && l.enabled {
@@ -2204,5 +2212,23 @@ mod tests {
         cpu.step(&mut bus);
         assert_eq!(cpu.pcr, 0x50, "should have entered the level 8 routine");
         assert_eq!(cpu.last_step_cycles(), 3);
+    }
+
+    /// Machine time reaches the bus, because it is the only clock the devices
+    /// on it have: a teletype at ten characters a second counts these cycles.
+    /// The poll runs before the instruction is decoded, so what it reports is
+    /// the previous step's count and the total lags by exactly one step --
+    /// pinned here so it stays exactly one and does not quietly become none.
+    #[test]
+    fn the_bus_is_told_how_many_cycles_the_machine_spent() {
+        // LDW (2 cycles), STB (3), INR 0 (3)
+        let (mut cpu, mut bus) = boot(&[0x8040, 0x3080, 0x0010]);
+        assert_eq!(bus.polled_cycles, 0);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(bus.polled_cycles, 0, "the first poll has no previous step to report");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(bus.polled_cycles, 2, "the LDW");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(bus.polled_cycles, 2 + 3, "and the STB");
     }
 }

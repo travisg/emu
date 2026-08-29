@@ -52,10 +52,16 @@ struct Args {
     limit: Option<i64>,
     trace: Option<PathBuf>,
     throttle: ThrottleArg,
+    /// `--fast-io`: devices complete instantly instead of at period rates.
+    /// A different axis from `--throttle`, which paces the machine against
+    /// the wall clock; this decides whether device models charge machine
+    /// time at all, so the two compose (a real-time CPU with an instant
+    /// terminal is the useful panel combination).
+    fast_io: bool,
 }
 
 fn usage(argv0: &str) {
-    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]]");
+    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--fast-io]");
     eprintln!();
     eprintln!("valid systems:");
     for s in registry::SYSTEMS {
@@ -70,6 +76,7 @@ fn usage(argv0: &str) {
     eprintln!("note: cpu is currently selected by system; --cpu is accepted but ignored.");
     eprintln!("note: --trace writes one line of cpu state per instruction to tracefile.");
     eprintln!("note: --throttle paces the cpu to its real clock rate (shown above), or to an explicit rate in Hz.");
+    eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
 }
 
 /// Mirrors the C++ `getopt_long` handling, including `--cpu` being accepted
@@ -85,6 +92,7 @@ fn parse_args() -> Result<Args, ()> {
         limit: None,
         trace: None,
         throttle: ThrottleArg::Off,
+        fast_io: false,
     };
 
     let mut i = 1;
@@ -147,6 +155,10 @@ fn parse_args() -> Result<Args, ()> {
                     }
                 }
             }
+            "--fast-io" => {
+                println!("devices will complete i/o instantly");
+                args.fast_io = true;
+            }
             _ => {
                 eprintln!("unknown option '{arg}'");
                 usage(&argv0);
@@ -181,7 +193,8 @@ fn main() -> ExitCode {
 
     // Build the machine object
     let (_, subsystem) = registry::split_name(&args.system);
-    let machine = match (desc.factory)(&rom, endpoint, subsystem) {
+    let opts = registry::MachineOpts { fast_io: args.fast_io };
+    let machine = match (desc.factory)(&rom, endpoint, subsystem, &opts) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error initializing system: {e}");

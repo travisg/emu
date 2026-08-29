@@ -577,7 +577,7 @@ fn real_monitor_rom_boot_matches() {
     let (_tx, rx) = std::sync::mpsc::channel();
     let endpoint = emu::console::ConsoleEndpoint::new(rx, Box::new(Vec::new()));
     let desc = emu::system::registry::find("altair680").unwrap();
-    let machine = (desc.factory)(rom_path, endpoint, "").expect("failed to build altair680");
+    let machine = (desc.factory)(rom_path, endpoint, "", &emu::system::registry::MachineOpts::default()).expect("failed to build altair680");
 
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut emu = emu::emulator::Emulator::new(machine.cpu, machine.bus, shutdown);

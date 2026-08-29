@@ -48,6 +48,10 @@ pub(crate) struct TestBus {
     /// Pending interrupt-level pulses, consumed by the next
     /// `poll_interrupt_lines`. A test sets this to inject a signal.
     pub int_lines: u16,
+    /// Running total of the cycle counts handed to `poll_interrupt_lines`, so
+    /// a test can check that a core reports the machine time its devices are
+    /// paced by.
+    pub polled_cycles: u64,
     /// Address to count reads of. Some operations read their operand more than
     /// once, which is invisible in the result but observable on a device
     /// register -- see the 6800 `asr` fallthrough.
@@ -64,6 +68,7 @@ impl TestBus {
             ports16: [0; 256],
             io16_writes: Vec::new(),
             int_lines: 0,
+            polled_cycles: 0,
             watch: None,
             watch_reads: 0,
         }
@@ -111,7 +116,8 @@ impl Bus for TestBus {
         self.ports16[port as usize] = val;
     }
 
-    fn poll_interrupt_lines(&mut self) -> u16 {
+    fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
+        self.polled_cycles += elapsed_cycles as u64;
         std::mem::take(&mut self.int_lines)
     }
 }

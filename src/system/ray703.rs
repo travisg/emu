@@ -143,6 +143,13 @@ impl Ray703 {
         Ok(sys)
     }
 
+    /// `--fast-io`: run the teletype at host speed instead of ten characters
+    /// a second. The tape reader already free-runs, so there is nothing else
+    /// on this machine to speed up.
+    pub fn set_fast_io(&mut self) {
+        self.tty.set_fast_io();
+    }
+
     /// The index register PTB needs preloaded, or `None` for a plain boot.
     ///
     /// The front panel set this by hand; with no panel, the machine hands it
@@ -182,8 +189,11 @@ impl Bus for Ray703 {
         }
     }
 
-    fn poll_interrupt_lines(&mut self) -> u16 {
-        self.tty.poll() | self.reader.poll()
+    /// Both devices get the same elapsed cycle count, which is how they share
+    /// one clock without sharing any state: the teletype spends it running its
+    /// character at ten a second, the reader ignores it.
+    fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
+        self.tty.poll(elapsed_cycles) | self.reader.poll(elapsed_cycles)
     }
 }
 
@@ -261,7 +271,7 @@ mod tests {
         let mut sys = machine("", &rom).unwrap();
         // arming the tape reader (DOT 13,9) must not arm the teletype
         sys.io_write16(0xd9, 0);
-        assert_eq!(sys.poll_interrupt_lines(), 0, "no tape is mounted");
+        assert_eq!(sys.poll_interrupt_lines(0), 0, "no tape is mounted");
         // and an absent device reads back zero rather than panicking
         assert_eq!(sys.io_read16(0x1d), 0);
     }

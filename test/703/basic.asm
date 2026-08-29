@@ -36,7 +36,10 @@
 ;  - Keys typed while the previous line is still being processed are
 ;    dropped (Ctrl-C excepted), as they were on the iron; anything driving
 ;    this program from a script must pace its typing on the guest's own
-;    output, the way run_ray703_basic_test.sh does.
+;    output, the way run_ray703_basic_test.sh does.  The prompt appearing
+;    is not the cue -- the teletype prints at ten characters a second, so
+;    the last character of READY lands a tenth of a second before T.GETL
+;    opens the line buffer.  The cue is the printer going quiet.
 ;
 ; Memory map (everything below word X'4000', so byte pointers stay positive
 ; under this machine's signed-only compares):
@@ -76,25 +79,38 @@ W.ARRAY         EQU     X'3000'         ; @(0..1023)
 ; Connect the keyboard (function 9: no device echo, the service routine
 ; echoes so the terminal shows what the guest produced), set global
 ; addressing for the life of the program, clear the driver's state, and
-; start the banner.  The MSK around the first SEND is load-bearing: SEND is
+; print the banner.  The MSK around the first SEND is load-bearing: SEND is
 ; not re-entrant and its own completion interrupt would arrive before it
 ; returned (demo.asm says this at length).  ENB must precede UNM: a masked
-; interrupt is held where a disabled level's signal is dropped.
+; interrupt is held where a disabled level's signal is dropped.  T.PUTW
+; does both, and -- the reason it is used here rather than a bare SEND --
+; waits for the banner to drain: the printer takes a second and a half over
+; seventeen characters at ten a second, and B.COLD's first PRINT would
+; otherwise reclaim the output window after the first one and the machine
+; would come up saying "R".  (It did, until the teletype was paced.)
 START           MSK
                 DOT     14,9
                 SGM
                 CLR
                 STW     T.OUTP
-                STW     T.LNRDY
                 STW     T.BRK
                 STW     T.COL
+                LDW     K.ONE           ; a line is "already waiting", so a
+                STW     T.LNRDY         ; key struck during the banner is
+                                        ; dropped by the service routine
+                                        ; instead of being stored through the
+                                        ; T.INPP that only T.GETL primes --
+                                        ; which is byte address zero here, the
+                                        ; level 0 program counter save.  The
+                                        ; first T.GETL primes the pointer and
+                                        ; clears this, in that order, and the
+                                        ; gate is shut again for every line
+                                        ; after it.
                 ENB     0
                 LDW     K.BANE
-                STW     T.OUTE
+                STW     T.PWEND
                 LDW     K.BANA
-                STW     T.OUTP
-                JSX     T.SEND
-                UNM
+                JSX     T.PUTW
                 SMB     B.COLD
                 JMP     B.COLD
 
@@ -138,9 +154,26 @@ T.SDONE         CLR                     ; buffer empty; transmitter idle
 ; The wait is the period shape -- X-RAY starts an I/O and spins on its
 ; status word -- and it is what makes PRINT simple: each piece of a line is
 ; handed over whole and the completion interrupts drain it.
+;
+; It waits for the printer to fall idle before seizing the window, because
+; the service routine echoes through the same two cells and its echo takes
+; a tenth of a second to print like anything else.  The commonest case is
+; the one that ends every line: T.RXEOL starts the carriage return and line
+; feed echoing and sets T.LNRDY in the same breath, so the mainline is let
+; out of T.GETL with two characters still to go.  Seizing the window under
+; them truncates the echo and hands the printer a second character while
+; it is still working on the first -- what a real teletype's one-word
+; buffer made of that is anyone's guess, and this program does not find
+; out.  The test-and-seize is under MSK because the echo it is testing
+; for is started by an interrupt.
 T.PUTW          SUBR
-                MSK                     ; no interrupt between the pointer
-                STW     T.OUTP          ; stores and SEND's own DOT
+                STW     T.PWSAV         ; ACR is the window's start address
+T.PWIDL         MSK                     ; no interrupt between the test and
+                LDW     T.OUTP          ; the seize, nor between the pointer
+                SAZ                     ; stores and SEND's own DOT
+                JMP     T.PWBSY
+                LDW     T.PWSAV
+                STW     T.OUTP
                 LDW     T.PWEND
                 STW     T.OUTE
                 JSX     T.SEND
@@ -149,6 +182,8 @@ T.PWSP          LDW     T.OUTP          ; spin until the window drains;
                 SAZ                     ; level 0 is live, so this is the
                 JMP     T.PWSP          ; machine's normal I/O wait
                 EXIT    T.PUTW
+T.PWBSY         UNM                     ; still printing: let the completion
+                JMP     T.PWIDL         ; in and look again
 
 ; T.PUTC: print the single character in ACR bits 8-15.
 T.PUTC          SUBR
@@ -337,6 +372,8 @@ T.LNRDY         WORD    0               ; a complete line is waiting
 T.BRK           WORD    0               ; Ctrl-C was seen
 T.COL           WORD    0               ; print column, for the comma zones
 T.PWEND         WORD    0               ; T.PUTW's end-of-window argument
+T.PWSAV         WORD    0               ; ...and its start, held across the
+                                        ; wait for the printer to fall idle
 T.EB            WORD    0               ; the echo character lives here
 T.CB            WORD    0               ; T.PUTC's character lives here
 

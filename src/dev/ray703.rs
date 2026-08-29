@@ -63,14 +63,39 @@
 //! So a `DOT dev,E` has to raise the device's interrupt when the character has
 //! been printed. Nothing else advances a 703 driver's output loop, and without
 //! it X-RAY hangs in its I/O monitor's wait-for-completion loop forever.
+//!
+//! "When the character has been printed" is a tenth of a second later, because
+//! the console is a Model 33 running at ten characters a second. The teletype
+//! is paced to that rate in *machine* time -- it is handed the clock cycles the
+//! CPU spent, and counts them -- rather than off a wall clock, which is what
+//! makes `--throttle` come out right: throttling paces cycles against real
+//! seconds for the whole machine at once, so under `--throttle` the printer
+//! runs at ten characters a second of real time, and unthrottled it runs at ten
+//! characters per 57,142 emulated cycles, however fast the host gets through
+//! them. The guest sees period-correct timing either way, which is the part a
+//! program can actually observe.
 
 use crate::console::ConsoleEndpoint;
+use crate::cpu::ray703::CLOCK_HZ;
 use std::io;
 use std::path::Path;
 
 /// DIO device codes (392292, "Individual Devices").
 pub const DEV_TTY: u8 = 0xe;
 pub const DEV_TAPE_READER: u8 = 0xd;
+
+/// Characters a second for the Model 33 on the console. The driver listing
+/// (392292, "Individual Devices") says it outright: "the standard Teletype
+/// Model 33/35 (Automatic Send-Receive) runs at up to ten characters per
+/// second". That is the 110-baud line with eleven bits to the character --
+/// start, eight data, two stop -- which comes to exactly ten.
+const TTY_CHARS_PER_SEC: u64 = 10;
+
+/// The same rate as a count of 703 clock cycles, which is the only time base
+/// a device on this bus has -- see `Bus::poll_interrupt_lines`. 571429/10
+/// truncates to 57,142 cycles, 99.9985 ms at the 1.75 us cycle: a tenth of a
+/// second to far better than a 1968 teletype's motor held it.
+const TTY_CHAR_CYCLES: u32 = (CLOCK_HZ / TTY_CHARS_PER_SEC) as u32;
 
 /// DIO function codes. The read functions arm a device; the collect functions
 /// take the frame it captured.
@@ -108,26 +133,57 @@ pub struct Tty703 {
     echo: bool,
     /// The captured frame, waiting for the program's DIN.
     frame: Option<u8>,
-    /// A character handed to the printer whose completion interrupt has not
-    /// been raised yet. The emulator has no clock -- `Emulator` counts
-    /// instructions, not cycles -- so "when the printer finishes" is the next
-    /// poll rather than the ten characters a second the Model 33 managed. No
-    /// program can tell: every output DOT in a real driver is issued from
-    /// inside the service routine, where the level is Active and the hardware
-    /// will not re-enter it however quickly the line pulses.
-    ///
-    /// It is a flag rather than a count, so two writes with no poll between
-    /// them yield one completion and a driver waiting on the second would
-    /// hang. Nothing does: a 703 driver writes one character per service entry
-    /// and the entry cannot recur until it returns. If that ever stops being
-    /// true, make this a counter -- the failure is silent, which is the worst
-    /// kind here.
-    tx_pending: bool,
+    /// Completion interrupts the printer still owes, one per character it was
+    /// handed. A counter and not a flag: with a character taking a tenth of a
+    /// second, a second `DOT dev,E` arriving before the first has finished is
+    /// reachable in a way it was not when a character completed on the next
+    /// instruction, and a lost completion hangs a driver silently. Characters
+    /// queue at the line rate rather than overwriting each other; nothing says
+    /// what a 703 teletype did with a write on top of a busy printer, and no
+    /// real driver issues one, so the choice only decides how a broken driver
+    /// fails -- late output rather than a wait that never ends.
+    tx_owed: u32,
+    /// Cycles left in the character currently being printed. Meaningless
+    /// unless `tx_owed` is nonzero.
+    tx_remaining: u32,
+    /// Cycles banked toward the next character the keyboard may deliver,
+    /// saturating at one character time. The saturation is the point: the
+    /// budget goes on accumulating while the device is unarmed or holding an
+    /// uncollected frame, and without a ceiling a machine that sat in its wait
+    /// loop for a second would then take ten queued keystrokes back to back at
+    /// no rate at all -- which is exactly the case that matters, a line typed
+    /// at a prompt. One character's credit means the first keystroke after an
+    /// idle is instant and the second still waits its turn.
+    rx_credit: u32,
+    /// Cycles per character, normally [`TTY_CHAR_CYCLES`]. Zero -- set by
+    /// `set_fast_io`, behind the `--fast-io` flag -- collapses every wait
+    /// above to "on the next poll", which is exactly the model this device
+    /// had before it was paced: completions still arrive one per poll and
+    /// keystrokes still queue behind an uncollected frame, only the time
+    /// is gone.
+    char_cycles: u32,
 }
 
 impl Tty703 {
     pub fn new(console: ConsoleEndpoint, level: u8) -> Self {
-        Tty703 { console, level, armed: false, echo: false, frame: None, tx_pending: false }
+        Tty703 {
+            console,
+            level,
+            armed: false,
+            echo: false,
+            frame: None,
+            tx_owed: 0,
+            tx_remaining: 0,
+            // A machine that has just been started has not kept the operator
+            // waiting, so the first character in is free.
+            rx_credit: TTY_CHAR_CYCLES,
+            char_cycles: TTY_CHAR_CYCLES,
+        }
+    }
+
+    /// Run at host speed instead of ten characters a second (`--fast-io`).
+    pub fn set_fast_io(&mut self) {
+        self.char_cycles = 0;
     }
 
     pub fn dot(&mut self, function: u8, val: u16) {
@@ -137,7 +193,21 @@ impl Tty703 {
                 // masking is what the MC6850 does too; nothing here tries to
                 // be clever about the NULs and RUBOUTs that pad a tape record.
                 self.console.put_char((val & 0x7f) as u8);
-                self.tx_pending = true;
+                // The character appears on the terminal now and the printer
+                // reports it finished a character time later. Printing it at
+                // the completion instead would be just as defensible -- a
+                // Model 33 is hammering the type box across that tenth of a
+                // second either way -- but this way the pacing shows up as the
+                // gap *after* each character, so a program that writes one
+                // character and stops has already printed it.
+                //
+                // Only an idle printer starts a fresh character time; a write
+                // that lands on a busy one queues behind it, so completions
+                // stay a character apart however fast the program writes.
+                if self.tx_owed == 0 {
+                    self.tx_remaining = self.char_cycles;
+                }
+                self.tx_owed = self.tx_owed.saturating_add(1);
             }
             FN_READ_KEYBOARD => {
                 self.armed = true;
@@ -184,10 +254,18 @@ impl Tty703 {
         }
     }
 
-    /// Finish any character the printer was working on, capture at most one
-    /// keystroke, and report the interrupt level they should pulse as a
-    /// bitmask. Nothing is captured until the program has armed the device,
-    /// and nothing is captured while a frame is still uncollected.
+    /// Advance the device by `elapsed` clock cycles: finish a character the
+    /// printer has now had time for, capture at most one keystroke, and report
+    /// the interrupt level they should pulse as a bitmask. Nothing is captured
+    /// until the program has armed the device, and nothing is captured while a
+    /// frame is still uncollected.
+    ///
+    /// Both directions run at ten characters a second, and each keeps its own
+    /// clock. Sharing one would say that printing a character delays the next
+    /// keystroke, and neither the manual nor the driver listing says anything
+    /// of the sort -- an ASR-33's send and receive halves are separate
+    /// distributors on a full duplex line, and the program is what serializes
+    /// them by never reading and writing at once.
     ///
     /// Both halves are taken in the same call rather than returning on the
     /// first. The teletype has one interrupt line, so a completion and a
@@ -195,14 +273,27 @@ impl Tty703 {
     /// but that merge belongs in the CPU's per-level latch, where the hardware
     /// does it. Dropping the *capture* would lose a keystroke, which the
     /// hardware does not do.
-    pub fn poll(&mut self) -> u16 {
+    pub fn poll(&mut self, elapsed: u32) -> u16 {
         let mut lines = 0;
-        if self.tx_pending {
-            self.tx_pending = false;
-            lines |= 1 << self.level;
+        if self.tx_owed > 0 {
+            self.tx_remaining = self.tx_remaining.saturating_sub(elapsed);
+            if self.tx_remaining == 0 {
+                self.tx_owed -= 1;
+                // Whatever is still queued starts its own character time now.
+                self.tx_remaining = if self.tx_owed > 0 { self.char_cycles } else { 0 };
+                lines |= 1 << self.level;
+            }
         }
-        if self.armed && self.frame.is_none() {
+        // Credit accrues whether or not anyone is listening -- the operator
+        // was typing at a machine that had not asked yet -- but never past one
+        // character, so a burst cannot be delivered as a burst.
+        self.rx_credit = self.rx_credit.saturating_add(elapsed).min(self.char_cycles);
+        if self.armed && self.frame.is_none() && self.rx_credit >= self.char_cycles {
             if let Some(c) = self.console.try_next_char() {
+                // The credit is spent only when a character actually arrives,
+                // so a device that is armed with nobody typing keeps its
+                // standing credit and the next keystroke is not made to wait.
+                self.rx_credit = 0;
                 // Carriage return and line feed reach the guest as themselves.
                 // A Model 33 has a key for each and the software tells them
                 // apart: X-RAY's driver opens every record on a line feed
@@ -213,8 +304,11 @@ impl Tty703 {
                 // folding itself; the demo does.
                 // Function B's echo is the Model 33 printing what its own
                 // keyboard sent, not the program writing; it raises no
-                // completion, and setting tx_pending here would hand the
-                // program an interrupt it never asked for.
+                // completion, and owing one here would hand the program an
+                // interrupt it never asked for. It costs no printer time here
+                // either -- the keyboard's own rate already spaces it, and
+                // charging it again would let a typist block a program's
+                // output, which on a full duplex machine they cannot.
                 if self.echo {
                     self.console.put_char(c);
                     if c == 0x0d {
@@ -284,7 +378,16 @@ impl TapeReader703 {
     /// Advance the tape by one frame and report the level to pulse. Running
     /// off the end simply stops interrupting, which is what an operator sees
     /// when the tape runs out of the reader.
-    pub fn poll(&mut self) -> u16 {
+    ///
+    /// Deliberately *not* paced to the reader's 300 frames a second, though
+    /// `elapsed` is here for the day it should be. Two reasons. Nothing
+    /// watches a tape go by -- the reader has no output, so its rate decides
+    /// only how long a load takes, where the teletype's rate is the whole
+    /// character-by-character texture of using the machine. And pacing it
+    /// would cost 1,905 cycles a frame -- over three minutes a frame under the
+    /// `ray703-panel-ptb --throttle 10` slow-motion demo, which would replace
+    /// a tape load one can watch with one that never visibly finishes.
+    pub fn poll(&mut self, _elapsed: u32) -> u16 {
         if !self.running || self.frame.is_some() || self.pos >= self.frames.len() {
             return 0;
         }
@@ -338,10 +441,10 @@ mod tests {
     #[test]
     fn an_unarmed_teletype_does_not_touch_the_keyboard() {
         let mut tty = tty_with_input(b"A");
-        assert_eq!(tty.poll(), 0);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0);
         // the keystroke is still queued, not swallowed
         tty.dot(FN_READ_KEYBOARD, 0);
-        assert_eq!(tty.poll(), 1);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
         assert_eq!(tty.din(FN_COLLECT), 0xc1);
     }
 
@@ -349,9 +452,9 @@ mod tests {
     fn received_characters_carry_the_high_bit() {
         let mut tty = tty_with_input(b"Az");
         tty.dot(FN_READ, 0);
-        assert_eq!(tty.poll(), 1);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'A' as u16);
-        assert_eq!(tty.poll(), 1);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'z' as u16);
     }
 
@@ -363,9 +466,9 @@ mod tests {
     fn carriage_return_and_line_feed_stay_distinct() {
         let mut tty = tty_with_input(b"\r\n");
         tty.dot(FN_READ, 0);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         assert_eq!(tty.din(FN_COLLECT), 0x8d);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         assert_eq!(tty.din(FN_COLLECT), 0x8a);
     }
 
@@ -373,10 +476,10 @@ mod tests {
     fn a_frame_is_held_until_it_is_collected() {
         let mut tty = tty_with_input(b"AB");
         tty.dot(FN_READ, 0);
-        assert_eq!(tty.poll(), 1);
-        assert_eq!(tty.poll(), 0, "the second character waits for the first DIN");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "the second character waits for the first DIN");
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'A' as u16);
-        assert_eq!(tty.poll(), 1);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'B' as u16);
     }
 
@@ -384,7 +487,7 @@ mod tests {
     fn only_the_collect_function_returns_the_frame() {
         let mut tty = tty_with_input(b"A");
         tty.dot(FN_READ, 0);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         assert_eq!(tty.din(0x0), 0);
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'A' as u16);
     }
@@ -396,10 +499,10 @@ mod tests {
         for stop in [FN_DISCONNECT, 0x3] {
             let mut tty = tty_with_input(b"AB");
             tty.dot(FN_READ, 0);
-            assert_eq!(tty.poll(), 1);
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
             tty.din(FN_COLLECT);
             tty.dot(stop, 0);
-            assert_eq!(tty.poll(), 0, "function {stop:#x} should have disconnected");
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "function {stop:#x} should have disconnected");
         }
     }
 
@@ -420,8 +523,8 @@ mod tests {
     fn a_write_raises_one_completion_interrupt() {
         let (mut tty, _out) = tty_capturing(b"");
         tty.dot(FN_WRITE, 0xc1);
-        assert_eq!(tty.poll(), 1, "the printer finished the character");
-        assert_eq!(tty.poll(), 0, "and says so exactly once");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1, "the printer finished the character");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "and says so exactly once");
     }
 
     #[test]
@@ -429,9 +532,111 @@ mod tests {
         let (mut tty, _out) = tty_capturing(b"");
         for _ in 0..3 {
             tty.dot(FN_WRITE, 0xc1);
-            assert_eq!(tty.poll(), 1);
-            assert_eq!(tty.poll(), 0);
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0);
         }
+    }
+
+    /// The completion is a tenth of a second away, not the next instruction:
+    /// the printer is a Model 33 at ten characters a second, and the whole
+    /// point of pacing it is that the driver's wait loop actually waits.
+    #[test]
+    fn a_character_takes_a_full_character_time_to_print() {
+        let (mut tty, _out) = tty_capturing(b"");
+        tty.dot(FN_WRITE, 0xc1);
+        // a plausible instruction's worth of cycles, many times over
+        for _ in 0..1000 {
+            assert_eq!(tty.poll(7), 0, "the printer is still printing");
+        }
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES - 7000), 1, "and finishes on the cycle it is due");
+    }
+
+    /// A driver that writes ahead of the printer gets a completion for every
+    /// character, a character time apart -- the counter in `tx_owed` rather
+    /// than a flag, which would have dropped one and hung the second wait.
+    #[test]
+    fn writes_that_overrun_the_printer_each_get_their_completion() {
+        let (mut tty, out) = tty_capturing(b"");
+        tty.dot(FN_WRITE, 0xc1);
+        tty.dot(FN_WRITE, 0xc2);
+        assert_eq!(*out.0.lock().unwrap(), b"AB", "both characters went out");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1, "the first character finished");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES - 1), 0, "the second is still a character behind");
+        assert_eq!(tty.poll(1), 1, "and then it too finished");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "with nothing else owed");
+    }
+
+    /// The keyboard sends at the same ten characters a second, so a line
+    /// arriving all at once from a pipe is handed to the guest a character at
+    /// a time, the way a typist -- or the 33's own tape reader -- delivered it.
+    #[test]
+    fn keystrokes_arrive_no_faster_than_the_keyboard_sends() {
+        let mut tty = tty_with_input(b"AB");
+        tty.dot(FN_READ, 0);
+        assert_eq!(tty.poll(0), 1, "the first keystroke is not made to wait");
+        assert_eq!(tty.din(FN_COLLECT), 0xc1);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES - 1), 0, "the second is still on its way");
+        assert_eq!(tty.poll(1), 1);
+        assert_eq!(tty.din(FN_COLLECT), 0xc2);
+    }
+
+    /// The receive credit saturates at one character. Without that ceiling a
+    /// program that sat in its wait loop for a second would bank a second's
+    /// worth of cycles and then take ten queued keystrokes back to back at no
+    /// rate at all -- which is exactly the case that matters, a line typed at
+    /// a prompt while the guest was busy. The failure would be silent: the
+    /// feature would look like it was working right up to the moment it was
+    /// needed.
+    #[test]
+    fn a_long_idle_does_not_bank_a_burst_of_keystrokes() {
+        let mut tty = tty_with_input(b"AB");
+        // ten characters' worth of machine time with the device unarmed
+        for _ in 0..10 {
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0);
+        }
+        tty.dot(FN_READ, 0);
+        assert_eq!(tty.poll(0), 1, "one character of standing credit, and no more");
+        assert_eq!(tty.din(FN_COLLECT), 0xc1);
+        assert_eq!(tty.poll(0), 0, "the rest of the line still arrives at ten a second");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(tty.din(FN_COLLECT), 0xc2);
+    }
+
+    /// `--fast-io` returns the device to its pre-pacing model: everything
+    /// completes on the very next poll with no machine time charged, while
+    /// the protocol -- one completion per write, frames held until
+    /// collected -- stays exactly as it is paced.
+    #[test]
+    fn fast_io_charges_no_machine_time() {
+        let (mut tty, _out) = tty_capturing(b"");
+        tty.set_fast_io();
+        tty.dot(FN_WRITE, 0xc1);
+        assert_eq!(tty.poll(0), 1, "the completion needs no character time");
+        assert_eq!(tty.poll(0), 0, "but still arrives exactly once");
+
+        let mut tty = tty_with_input(b"AB");
+        tty.set_fast_io();
+        tty.dot(FN_READ, 0);
+        assert_eq!(tty.poll(0), 1);
+        assert_eq!(tty.din(FN_COLLECT), 0xc1);
+        assert_eq!(tty.poll(0), 1, "the second keystroke does not wait its turn");
+        assert_eq!(tty.din(FN_COLLECT), 0xc2);
+    }
+
+    /// Waiting on the guest does not cost the operator anything: a device that
+    /// is armed with nobody typing keeps its credit, so the first keystroke
+    /// after a wait is instant rather than a tenth of a second late.
+    #[test]
+    fn an_armed_but_silent_keyboard_keeps_its_credit() {
+        let (tx, rx) = mpsc::channel();
+        let mut tty = Tty703::new(ConsoleEndpoint::new(rx, Box::new(Vec::new())), 0);
+        tty.dot(FN_READ, 0);
+        for _ in 0..5 {
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "nobody is typing");
+        }
+        tx.send(b'A').unwrap();
+        assert_eq!(tty.poll(0), 1, "and the keystroke is taken the moment it arrives");
+        assert_eq!(tty.din(FN_COLLECT), 0xc1);
     }
 
     /// Writing must not arm the input side -- a completion interrupt is not an
@@ -440,10 +645,10 @@ mod tests {
     fn a_write_leaves_the_keyboard_disconnected() {
         let mut tty = tty_with_input(b"A");
         tty.dot(FN_WRITE, 0xc1);
-        assert_eq!(tty.poll(), 1, "the completion, and nothing else");
-        assert_eq!(tty.poll(), 0);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1, "the completion, and nothing else");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0);
         tty.dot(FN_READ, 0);
-        assert_eq!(tty.poll(), 1, "the keystroke was queued, not swallowed");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1, "the keystroke was queued, not swallowed");
         assert_eq!(tty.din(FN_COLLECT), 0xc1);
     }
 
@@ -455,9 +660,9 @@ mod tests {
         let mut tty = tty_with_input(b"A");
         tty.dot(FN_READ, 0);
         tty.dot(FN_WRITE, 0xc2);
-        assert_eq!(tty.poll(), 1, "one level, however many causes");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1, "one level, however many causes");
         assert_eq!(tty.din(FN_COLLECT), 0xc1, "the keystroke was still captured");
-        assert_eq!(tty.poll(), 0, "and the completion is not raised twice");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "and the completion is not raised twice");
     }
 
     /// Function B collects with F, not D -- see the FN_ constants above.
@@ -465,7 +670,7 @@ mod tests {
     fn the_keyboard_read_collects_with_its_own_function() {
         let mut tty = tty_with_input(b"A");
         tty.dot(FN_READ_KEYBOARD, 0);
-        assert_eq!(tty.poll(), 1);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
         assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0xc1);
     }
 
@@ -476,7 +681,7 @@ mod tests {
     fn a_collecting_din_starts_the_read() {
         let mut tty = tty_with_input(b"A");
         assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0, "nothing captured yet");
-        assert_eq!(tty.poll(), 1, "but the device is now listening");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1, "but the device is now listening");
         assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0xc1);
     }
 
@@ -486,10 +691,10 @@ mod tests {
     fn the_collect_function_sets_the_echo() {
         let (mut tty, out) = tty_capturing(b"AB");
         tty.din(FN_COLLECT_KEYBOARD);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         assert_eq!(*out.0.lock().unwrap(), b"A");
         tty.din(FN_COLLECT);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         assert_eq!(*out.0.lock().unwrap(), b"A", "function D does not type");
     }
 
@@ -499,15 +704,15 @@ mod tests {
     fn only_the_keyboard_function_echoes() {
         let (mut tty, out) = tty_capturing(b"A\r");
         tty.dot(FN_READ_KEYBOARD, 0);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         // function B's own collect code, which keeps the echo on
         tty.din(FN_COLLECT_KEYBOARD);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         assert_eq!(*out.0.lock().unwrap(), b"A\r\n", "a bare CR needs the LF added");
 
         let (mut tty, out) = tty_capturing(b"A");
         tty.dot(FN_READ, 0);
-        tty.poll();
+        tty.poll(TTY_CHAR_CYCLES);
         assert!(out.0.lock().unwrap().is_empty());
     }
 
@@ -515,11 +720,11 @@ mod tests {
     fn a_tape_reader_needs_starting() {
         let mut reader = TapeReader703::new(0);
         reader.load_tape(vec![0x01, 0x02]);
-        assert_eq!(reader.poll(), 0);
+        assert_eq!(reader.poll(0), 0);
         reader.dot(FN_READ, 0);
-        assert_eq!(reader.poll(), 1);
+        assert_eq!(reader.poll(0), 1);
         assert_eq!(reader.din(FN_COLLECT), 0x01);
-        assert_eq!(reader.poll(), 1);
+        assert_eq!(reader.poll(0), 1);
         assert_eq!(reader.din(FN_COLLECT), 0x02);
     }
 
@@ -528,9 +733,9 @@ mod tests {
         let mut reader = TapeReader703::new(3);
         reader.load_tape(vec![0xff]);
         reader.dot(FN_READER_START, 0);
-        assert_eq!(reader.poll(), 1 << 3, "the level is configurable");
+        assert_eq!(reader.poll(0), 1 << 3, "the level is configurable");
         reader.din(FN_COLLECT);
-        assert_eq!(reader.poll(), 0);
+        assert_eq!(reader.poll(0), 0);
         assert_eq!(reader.din(FN_COLLECT), 0);
     }
 
@@ -538,6 +743,6 @@ mod tests {
     fn an_empty_tape_never_interrupts() {
         let mut reader = TapeReader703::new(0);
         reader.dot(FN_READ, 0);
-        assert_eq!(reader.poll(), 0);
+        assert_eq!(reader.poll(0), 0);
     }
 }

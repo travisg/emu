@@ -153,7 +153,14 @@ pub trait Bus {
     /// than remembered, so "still asserted?" is not a question the machine can
     /// answer. And this takes `&mut self` because polling genuinely mutates --
     /// the console device drains `ConsoleEndpoint::try_next_char` here.
-    fn poll_interrupt_lines(&mut self) -> u16 {
+    ///
+    /// `elapsed_cycles` is how many clock cycles the machine ran since the last
+    /// call, which is the only time base a device on this bus gets: nothing
+    /// here reads a wall clock, so a device that takes time -- a teletype at
+    /// ten characters a second -- counts the machine's cycles instead. Virtual
+    /// time is the right base rather than an expedient one, because
+    /// `--throttle` turns it into real time for the whole machine at once.
+    fn poll_interrupt_lines(&mut self, _elapsed_cycles: u32) -> u16 {
         0
     }
 }
