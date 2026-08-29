@@ -239,6 +239,20 @@ impl PanelState {
         self.0.sense.load(Ordering::Relaxed) & (1 << n) != 0
     }
 
+    /// Flip one bit of the memory buffer by indicator number (0 = MSB).
+    /// The MBR lives here rather than in the core: the program's memory
+    /// traffic and the operator's keying share it, exactly as they shared
+    /// the real register. Only the CPU thread calls this.
+    pub fn toggle_mbr_bit(&self, indicator: u8) {
+        self.0.mbr.fetch_xor(0x8000 >> (indicator & 15), Ordering::Relaxed);
+    }
+
+    /// CPU-thread side: replace the memory buffer (the display CLEAR, and
+    /// DISPLAY's read-back).
+    pub fn set_mbr(&self, v: u16) {
+        self.0.mbr.store(v, Ordering::Relaxed);
+    }
+
     /// Charge `cycles` of on-time to every currently lit bit of every lamp
     /// source, reading the point-sample cells the core just published.
     /// Called once per executed step, *never* from a switch actuation --

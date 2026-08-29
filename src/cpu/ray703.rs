@@ -56,7 +56,7 @@ use crate::bus::{Bus, Endian};
 // The one cpu -> console dependency in the tree, the same direction the
 // kaypro bus takes for `VideoBuffer`: the panel handle is defined next to
 // the frontend machinery that renders it, and the core just stores into it.
-use crate::console::PanelState;
+use crate::console::{PanelCommand, PanelState, Selector};
 use std::io::Write;
 
 /// Words 0..64 are the sixteen four-word interrupt blocks (3-1), so this is
@@ -795,6 +795,58 @@ impl Cpu for Cpu703 {
 
     fn last_step_cycles(&self) -> u32 {
         self.cycles
+    }
+
+    /// The panel's data-entry path (section 5). Runs on the CPU thread
+    /// between instructions, halted or not -- the PROGRAM COUNTER row is
+    /// "always active for both entry and display" (5-1), and keying the
+    /// others while running is the operator's own lookout, as it was.
+    /// Ends by republishing the point samples so the lamps update while
+    /// halted; deliberately no accumulate -- switch actuations are not
+    /// machine time.
+    fn panel_command(&mut self, bus: &mut dyn Bus, cmd: &PanelCommand) {
+        let Some(panel) = self.panel.clone() else { return };
+        match cmd {
+            // Indicator numbers count from the left, 0 the MSB; the PCR
+            // mask drops indicator 0, which the row does not have.
+            PanelCommand::TogglePcBit(i) => {
+                self.pcr = (self.pcr ^ (0x8000 >> (i & 15))) & 0x7fff;
+            }
+            PanelCommand::ClearPc => self.pcr = 0,
+            PanelCommand::ToggleSelectedBit(sel, i) => match sel {
+                Selector::Mb => panel.toggle_mbr_bit(*i),
+                Selector::Ix => self.ixr ^= 0x8000 >> (i & 15),
+                Selector::Ac => self.acr ^= 0x8000 >> (i & 15),
+                // MS, IN and MA are "active for display only" (5-2)
+                _ => {}
+            },
+            PanelCommand::ClearSelected(sel) => match sel {
+                Selector::Mb => panel.set_mbr(0),
+                Selector::Ix => self.ixr = 0,
+                Selector::Ac => self.acr = 0,
+                _ => {}
+            },
+            // ENTER "enters the contents of Memory Buffer Register (MBR)
+            // into the memory location specified by the 15-bit Program
+            // Counter Register (PCR) and increments the PCR by one count"
+            // (5-3). write_word lights the MA/MB lamps on the way.
+            PanelCommand::Enter => {
+                let mbr = panel.selected(Selector::Mb);
+                self.write_word(bus, self.pcr, mbr);
+                self.pcr = self.pcr.wrapping_add(1) & 0x7fff;
+            }
+            // DISPLAY "fetches data from the memory location specified by
+            // the Program Counter Register (PCR) and enters the data into
+            // the Memory Buffer Register (MBR)", incrementing the PCR
+            // (5-3). read_word's publish is what loads the MBR.
+            PanelCommand::Display => {
+                let _ = self.read_word(bus, self.pcr);
+                self.pcr = self.pcr.wrapping_add(1) & 0x7fff;
+            }
+            // the run-state switches are the run loop's, never sent here
+            _ => {}
+        }
+        self.publish_panel();
     }
 
     fn dump(&self) {
@@ -1705,6 +1757,103 @@ mod tests {
         bus.int_lines = 1 << 8;
         cpu.step(&mut bus); // entry sequence, 3 cycles
         assert_eq!(panel.snapshot_pc().cycles, 4);
+    }
+
+    /// Panel entry: PC and register bit toggles land where the indicator
+    /// numbering says (0 = MSB), clears clear, display-only positions
+    /// ignore entry.
+    #[test]
+    fn panel_entry_toggles_and_clears_registers() {
+        use crate::console::{PanelCommand as Pc, PanelState, Selector};
+        let (mut cpu, mut bus) = boot(&[0x0000]);
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+
+        cpu.panel_command(&mut bus, &Pc::ClearPc);
+        cpu.panel_command(&mut bus, &Pc::TogglePcBit(15));
+        cpu.panel_command(&mut bus, &Pc::TogglePcBit(1));
+        assert_eq!(cpu.pcr, 0x4001);
+        assert_eq!(panel.program_counter(), cpu.pcr, "entry republishes the lamps");
+        cpu.panel_command(&mut bus, &Pc::ClearPc);
+        assert_eq!(cpu.pcr, 0);
+
+        cpu.panel_command(&mut bus, &Pc::ToggleSelectedBit(Selector::Ac, 0));
+        assert_eq!(cpu.acr, 0x8000);
+        cpu.panel_command(&mut bus, &Pc::ToggleSelectedBit(Selector::Ix, 15));
+        assert_eq!(cpu.ixr, 0x0001);
+        cpu.panel_command(&mut bus, &Pc::ClearSelected(Selector::Ac, ));
+        assert_eq!(cpu.acr, 0);
+
+        // MS, IN, MA are display-only (5-2): entry there changes nothing
+        let (acr, ixr, pcr) = (cpu.acr, cpu.ixr, cpu.pcr);
+        for sel in [Selector::Ms, Selector::In, Selector::Ma] {
+            cpu.panel_command(&mut bus, &Pc::ToggleSelectedBit(sel, 0));
+            cpu.panel_command(&mut bus, &Pc::ClearSelected(sel));
+        }
+        assert_eq!((cpu.acr, cpu.ixr, cpu.pcr), (acr, ixr, pcr));
+    }
+
+    /// ENTER and DISPLAY walk memory through the PCR, 15-bit increment
+    /// included (5-3).
+    #[test]
+    fn panel_enter_and_display_walk_memory() {
+        use crate::console::{PanelCommand as Pc, PanelState, Selector};
+        let (mut cpu, mut bus) = boot(&[0x1111, 0x2222]);
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+
+        // DISPLAY from word 0x40: MBR loads it, PCR steps
+        cpu.pcr = 0x40;
+        cpu.panel_command(&mut bus, &Pc::Display);
+        assert_eq!(panel.selected(Selector::Mb), 0x1111);
+        assert_eq!(cpu.pcr, 0x41);
+
+        // key a fresh word and ENTER it over the second one
+        cpu.panel_command(&mut bus, &Pc::ClearSelected(Selector::Mb));
+        cpu.panel_command(&mut bus, &Pc::ToggleSelectedBit(Selector::Mb, 0));
+        cpu.panel_command(&mut bus, &Pc::ToggleSelectedBit(Selector::Mb, 15));
+        cpu.panel_command(&mut bus, &Pc::Enter);
+        assert_eq!(word(&mut bus, 0x41), 0x8001);
+        assert_eq!(cpu.pcr, 0x42);
+
+        // the increment wraps within 15 bits
+        cpu.pcr = 0x7fff;
+        cpu.panel_command(&mut bus, &Pc::Display);
+        assert_eq!(cpu.pcr, 0);
+    }
+
+    /// The whole 1968 ritual, headless: RESET, key a program in through
+    /// MB and ENTER, key the PC back to its start, and run it.
+    #[test]
+    fn panel_keying_ritual_loads_a_runnable_program() {
+        use crate::console::{PanelCommand as Pc, PanelState, Selector};
+        let (mut cpu, mut bus) = boot(&[]);
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+        cpu.reset(&mut bus);
+
+        let key_word = |cpu: &mut Cpu703, bus: &mut TestBus, w: u16| {
+            cpu.panel_command(bus, &Pc::ClearSelected(Selector::Mb));
+            for i in 0..16 {
+                if w & (0x8000 >> i) != 0 {
+                    cpu.panel_command(bus, &Pc::ToggleSelectedBit(Selector::Mb, i));
+                }
+            }
+            cpu.panel_command(bus, &Pc::Enter);
+        };
+
+        // PCR to word 0x40 (indicator 9), then LLB 0x55 and HLT
+        cpu.panel_command(&mut bus, &Pc::TogglePcBit(9));
+        assert_eq!(cpu.pcr, 0x40);
+        key_word(&mut cpu, &mut bus, 0x0655);
+        key_word(&mut cpu, &mut bus, 0x0000);
+
+        // PC back to the start, and run
+        cpu.panel_command(&mut bus, &Pc::ClearPc);
+        cpu.panel_command(&mut bus, &Pc::TogglePcBit(9));
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.acr & 0x00ff, 0x0055, "the keyed LLB executed");
+        assert_eq!(cpu.step(&mut bus), StepResult::Halted, "the keyed HLT executed");
     }
 
     // -- cycle counts ------------------------------------------------------
