@@ -82,24 +82,22 @@ pub struct SdlFrontend {
 
 impl SdlFrontend {
     pub fn new(tx: Sender<u8>, display: Display) -> Result<Self, String> {
+        // main.rs routes each Display variant to its own frontend; this one
+        // renders character cells and nothing else.
+        let Display::CharCell { title, video, font_rom } = display else {
+            return Err("SdlFrontend needs a character-cell display".to_string());
+        };
         let sdl = sdl2::init()?;
         let video_subsystem = sdl.video()?;
         let window = video_subsystem
-            .window(display.title, WINDOW_W, WINDOW_H)
+            .window(title, WINDOW_W, WINDOW_H)
             .position_centered()
             .build()
             .map_err(|e| e.to_string())?;
         let canvas = window.into_canvas().accelerated().build().map_err(|e| e.to_string())?;
         video_subsystem.text_input().start();
 
-        Ok(SdlFrontend {
-            tx,
-            video: display.video,
-            font_rom: display.font_rom,
-            sdl,
-            video_subsystem,
-            canvas,
-        })
+        Ok(SdlFrontend { tx, video, font_rom, sdl, video_subsystem, canvas })
     }
 
     /// Build the font atlas from the character generator rom.

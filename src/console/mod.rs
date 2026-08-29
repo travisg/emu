@@ -242,12 +242,18 @@ impl PanelState {
     }
 }
 
-/// What a machine hands the frontend when it has a screen. Built by the
-/// machine factory alongside the bus; the main thread turns it into an
-/// [`sdl::SdlFrontend`].
-pub struct Display {
-    pub title: &'static str,
-    pub video: VideoBuffer,
-    /// The character generator rom, 8 bytes per glyph, 256 glyphs.
-    pub font_rom: Vec<u8>,
+/// What a machine hands the frontend when it has something to show. Built
+/// by the machine factory alongside the bus; the variant tells the main
+/// thread which frontend to build, so frontend selection stays out of the
+/// system names.
+pub enum Display {
+    /// A character-mode screen rendered by [`sdl::SdlFrontend`].
+    CharCell {
+        title: &'static str,
+        video: VideoBuffer,
+        /// The character generator rom, 8 bytes per glyph, 256 glyphs.
+        font_rom: Vec<u8>,
+    },
+    /// The 703's lights-and-switches front panel.
+    Panel703 { title: &'static str, panel: PanelState },
 }

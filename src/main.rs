@@ -188,17 +188,24 @@ fn main() -> ExitCode {
         }
     };
 
-    // The frontend is chosen by whether the machine has a screen, not by its
-    // name. Build it before the cpu thread starts so an SDL failure is a
+    // The frontend is chosen by what the machine returned to display, not by
+    // its name. Build it before the cpu thread starts so an SDL failure is a
     // clean exit rather than a spawned thread with nowhere to go.
     let mut frontend: Box<dyn ConsoleFrontend> = match machine.display {
-        Some(display) => match SdlFrontend::new(tx, display) {
-            Ok(f) => Box::new(f),
-            Err(e) => {
-                eprintln!("error initializing SDL: {e}");
-                return ExitCode::FAILURE;
+        Some(display @ emu::console::Display::CharCell { .. }) => {
+            match SdlFrontend::new(tx, display) {
+                Ok(f) => Box::new(f),
+                Err(e) => {
+                    eprintln!("error initializing SDL: {e}");
+                    return ExitCode::FAILURE;
+                }
             }
-        },
+        }
+        Some(emu::console::Display::Panel703 { .. }) => {
+            // no factory builds this yet; the panel frontend is next
+            eprintln!("error: no frontend for the 703 panel yet");
+            return ExitCode::FAILURE;
+        }
         None => Box::new(TerminalFrontend::new(tx)),
     };
 

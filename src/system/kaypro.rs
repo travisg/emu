@@ -115,7 +115,7 @@ impl Kaypro {
         fdc.load_image(floppy_path);
 
         let video = VideoBuffer::new(VIDEO_RAM_SIZE);
-        let display = Display { title: WINDOW_TITLE, video: video.clone(), font_rom };
+        let display = Display::CharCell { title: WINDOW_TITLE, video: video.clone(), font_rom };
 
         let sys = Kaypro {
             ram: Memory::new(RAM_SIZE),
@@ -322,26 +322,32 @@ mod tests {
     fn video_writes_land_in_the_shared_buffer_and_dirty_it() {
         let fx = Fixture::new("video");
         let (mut sys, display) = fx.build();
-        assert!(!display.video.take_dirty());
+        let Display::CharCell { video, .. } = display else {
+            panic!("kaypro builds a char-cell display");
+        };
+        assert!(!video.take_dirty());
         sys.write8(0x3000 + 128 * 2 + 5, b'K');
-        assert!(display.video.take_dirty());
-        assert_eq!(display.video.read(128 * 2 + 5), b'K');
+        assert!(video.take_dirty());
+        assert_eq!(video.read(128 * 2 + 5), b'K');
         assert_eq!(sys.read8(0x3000 + 128 * 2 + 5), b'K');
         // the top of the video window is the last video byte, not ram
         sys.write8(0x3fff, 0x42);
-        assert_eq!(display.video.read(0xfff), 0x42);
+        assert_eq!(video.read(0xfff), 0x42);
         // and the byte past it is plain ram
         sys.write8(0x4000, 0x43);
-        assert_eq!(display.video.read(0), 0x00);
+        assert_eq!(video.read(0), 0x00);
     }
 
     #[test]
     fn display_carries_the_font_rom() {
         let fx = Fixture::new("font");
         let (_, display) = fx.build();
-        assert_eq!(display.font_rom.len(), VIDEO_ROM_SIZE);
-        assert!(display.font_rom.iter().all(|&b| b == 0xaa));
-        assert_eq!(display.title, WINDOW_TITLE);
+        let Display::CharCell { title, font_rom, .. } = display else {
+            panic!("kaypro builds a char-cell display");
+        };
+        assert_eq!(font_rom.len(), VIDEO_ROM_SIZE);
+        assert!(font_rom.iter().all(|&b| b == 0xaa));
+        assert_eq!(title, WINDOW_TITLE);
     }
 
     #[test]
