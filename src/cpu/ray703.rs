@@ -543,9 +543,15 @@ impl Cpu703 {
             }
             0x8 => return self.exec_skip(f1),
             0x9 | 0xa => return self.shift(fn_field, f1, f2 as u32),
-            // The 703 could be ordered with multiply/divide hardware (section
-            // 6), but appendix B lists no opcodes for it and the manual never
-            // gives an encoding, so there is nothing to implement.
+            // The optional multiply/divide hardware (section 6). Appendix B
+            // never lists it -- the option was a plug-in card, and the
+            // appendix indexes the base machine's 74 instructions -- but the
+            // section 6 format diagrams give the encodings outright: first
+            // word 0B0F (MPY) or 0C0F (DIV), second word a 15-bit address.
+            // This machine has the option installed, like the full 32KW of
+            // core. Every other encoding in classes B-F stays unassigned.
+            0xb if literal == 0x0f => return self.mpy(bus),
+            0xc if literal == 0x0f => return self.div(bus),
             _ => return StepResult::BadOpcode,
         }
         StepResult::Ok
@@ -684,12 +690,112 @@ impl Cpu703 {
         StepResult::Ok
     }
 
+    // -- optional multiply/divide (section 6) ------------------------------
+
+    /// Fetch the second word of a two-word MPY/DIV and resolve the operand.
+    ///
+    /// "The second location defines a 15-bit address which contains the
+    /// multiplicand for a multiply or the divisor for a divide. The 15-bit
+    /// address allows either instruction to reference any location in memory
+    /// without using the index register." (6-1) -- so no EXR page base and no
+    /// indexing, unlike every other memory operand on this machine. Bit 0 of
+    /// the word is hatched out in both format diagrams and carries nothing.
+    ///
+    /// Section 6 says nothing about EXR, but these are memory reference
+    /// instructions in the 1-3 sense, so both exec paths end with the same
+    /// EXR reload as every other memory reference -- leaving it stale would
+    /// make MPY/DIV the only way to carry a page selection *past* an
+    /// instruction, which nothing else on the machine can do.
+    fn mpy_div_operand(&mut self, bus: &mut dyn Bus) -> u16 {
+        let addr = self.read_word(bus, self.pcr) & 0x7fff;
+        self.pcr = self.pcr.wrapping_add(1) & 0x7fff;
+        self.read_word(bus, addr)
+    }
+
+    /// MPY, first word 0B0F (6-2): ACR (multiplier) times the addressed word,
+    /// both 16-bit two's complement.
+    ///
+    /// "Execution of the multiply instruction produces a 31-bit algebraic
+    /// product in the index register and the accumulator. The most
+    /// significant 16 bits of the product reside in the index register. The
+    /// least significant 15 bits of the product reside in bits 1-15 of the
+    /// accumulator. The most significant bit of the accumulator is set to the
+    /// most significant bit of the index register." (6-2)
+    ///
+    /// "No overflow can result from the multiply instruction" (6-2), X'8000'
+    /// squared included -- there the +2^30 product aliases to a negative in
+    /// the 31-bit format and the flag still stays off. The 704 and 706
+    /// versions of the option set OVF for exactly that case (704 technical
+    /// manual 4-291, 706 users manual 2-1.10), and the 1968 *software*
+    /// multiply (BLG, DN 390663) documents the flag too, but 6-2's sentence
+    /// is unambiguous and this is a 703.
+    fn mpy(&mut self, bus: &mut dyn Bus) -> StepResult {
+        // "an execution time of 12.25 to 17.5 microseconds" (6-2) is 7 to 10
+        // cycles; the manual never says what picks the point in the range.
+        // The 706's per-ones formula -- 6 1/5 + N(1-15)/5 + 2 N(0)/5 cycles
+        // rounded up, N counting the one bits of the multiplier (706 users
+        // manual 2-1.10) -- spans exactly 7 to 10, so use it.
+        let n = (self.acr & 0x7fff).count_ones() + 2 * (self.acr >> 15) as u32;
+        self.cycles = (35 + n) / 5;
+
+        let m = self.mpy_div_operand(bus);
+        let product = (self.acr as i16 as i32) * (m as i16 as i32);
+        self.ixr = (product >> 15) as u16;
+        self.acr = (product as u16 & 0x7fff) | (self.ixr & 0x8000);
+        self.reload_exr();
+        StepResult::Ok
+    }
+
+    /// DIV, first word 0C0F (6-3): the 31-bit dividend in IXR (high 16) and
+    /// ACR bits 1-15 -- "the most significant bit of the accumulator has no
+    /// effect on the divide instruction" -- over the addressed 16-bit
+    /// divisor. Quotient to ACR, remainder to IXR, and "the sign of the
+    /// remainder is the same as that of the dividend" (6-3), which is also
+    /// what Rust's truncating `/` and `%` produce.
+    ///
+    /// "An overflow condition exists when the quotient is greater than 16
+    /// bits. The overflow indicator is turned ON and the dividend contained
+    /// in the index register and the accumulator remains unchanged, except
+    /// the most significant bit of the accumulator is set to the most
+    /// significant bit of the index register." (6-3) The manual never gives
+    /// the pretest a divider would actually run; the 706 does -- overflow
+    /// when |divisor| <= |IXR| (706 users manual 2-1.10) -- and that is
+    /// implemented here as a magnitude test on the dividend's high half.
+    /// Read literally, signed |IXR| would flag every small negative dividend
+    /// (-5 has IXR = FFFF), which no divider that divides magnitudes does.
+    /// One real edge stays: a quotient of exactly -2^15 is representable but
+    /// still trips the pretest, on this reading and on the 706's alike.
+    fn div(&mut self, bus: &mut dyn Bus) -> StepResult {
+        // "an execution time of 24.5 microseconds" (6-3): 14 cycles flat --
+        // not the 706's 10-11, the two machines' dividers genuinely differed.
+        self.cycles = 14;
+
+        let m = self.mpy_div_operand(bus);
+        let divisor = m as i16;
+        let dividend = ((self.ixr as i16 as i32) << 15) | (self.acr & 0x7fff) as i32;
+
+        if divisor == 0 || dividend.unsigned_abs() >> 15 >= divisor.unsigned_abs() as u32 {
+            self.acr = (self.acr & 0x7fff) | (self.ixr & 0x8000);
+            self.ovf = true;
+            // "The execution time of the divide instruction for this
+            // condition is 8.75 microseconds" (6-3): 5 cycles.
+            self.cycles = 5;
+        } else {
+            self.acr = (dividend / divisor as i32) as u16;
+            self.ixr = (dividend % divisor as i32) as u16;
+        }
+        self.reload_exr();
+        StepResult::Ok
+    }
+
     /// Clock cycles one instruction takes, from the opcode index (appendix B,
     /// transcribed in `Raytheon703refMan_isa.txt` section 8): JMP 1, STB 3,
     /// every other memory reference 2; INR 3, DIN/DOT/IXS/DXS 2, all other
     /// generics 1. Decoded from the word alone, independent of what the
     /// instruction then does -- appendix B gives one figure per opcode, with
-    /// no data-dependent cases.
+    /// no data-dependent cases. The optional MPY/DIV are the exception:
+    /// appendix B omits them and section 6 prices them by their data, so
+    /// `mpy` and `div` overwrite whatever this returns.
     fn insn_cycles(insn: u16) -> u32 {
         match insn >> 12 {
             0x0 => {
@@ -704,7 +810,9 @@ impl Cpu703 {
                     // linear interpolation is a guess pinned only at the
                     // printed bounds: count 0 is 2 cycles, count 15 is 5.
                     0x9 | 0xa => 2 + (insn & 0x0f) as u32 / 5,
-                    // unassigned encodings stop the run as BadOpcode anyway
+                    // MPY/DIV land here too: their exec paths set the real,
+                    // data-dependent figure. Everything else in B-F stops
+                    // the run as BadOpcode anyway.
                     _ => 1,
                 }
             }
@@ -1398,10 +1506,10 @@ mod tests {
     }
 
     /// Everything appendix B leaves out reports a bad opcode rather than
-    /// quietly doing nothing. That includes the optional multiply/divide
-    /// hardware described in section 6, which the appendix gives no encoding
-    /// for, and the tail of the arithmetic shift class -- 090 to 093 are
-    /// assigned and 094 upwards are not.
+    /// quietly doing nothing: the tail of the arithmetic shift class -- 090
+    /// to 093 are assigned and 094 upwards are not -- and all of classes B-F
+    /// except the exact MPY/DIV words that section 6 diagrams. The near
+    /// misses matter most: the option decodes 0B0F and 0C0F, nothing else.
     #[test]
     fn unassigned_generics_are_bad_opcodes() {
         for insn in [
@@ -1409,8 +1517,13 @@ mod tests {
             0x09f0,    // ...and the top of that class
             0x0150,    // past CXA, the last register generic
             0x00c0,    // past UNM, the last control generic
-            0x0b00,    // no generic class B at all
-            0x0f00,    // ...or F
+            0x0b00,    // class B holds only MPY = 0B0F...
+            0x0b0e,    // ...its F2 is "always the number 15"
+            0x0b1f,    // ...and its F1 is always 0 (0B8F is the 704's indexed
+            0x0b8f,    //    MPY; the 703 manual says no indexing, 6-1)
+            0x0c00,    // same for DIV in class C
+            0x0c8f,
+            0x0f00,    // class F has nothing at all
         ] {
             let (mut cpu, mut bus) = boot(&[insn]);
             assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode, "insn {insn:04x}");
@@ -1437,6 +1550,8 @@ mod tests {
         for f1 in 0x0..=0x3 {
             assigned.push(0x0900 | (f1 << 4)); // arithmetic shifts
         }
+        assigned.push(0x0b0f); // MPY (section 6; the address word reads as 0)
+        assigned.push(0x0c0f); // DIV overflows on divisor 0, but executes
 
         for insn in assigned {
             let (mut cpu, mut bus) = boot(&[insn]);
@@ -1444,6 +1559,180 @@ mod tests {
                 if insn == 0x0000 { StepResult::Halted } else { StepResult::Ok };
             assert_eq!(cpu.step(&mut bus), expected, "insn {insn:04x}");
         }
+    }
+
+    // -- optional multiply/divide (section 6) ------------------------------
+
+    /// The 706 users manual's worked MPY example (2-1.10), transplanted: the
+    /// 703's own section 6 diagrams the same encoding but prints no vector.
+    /// X'4000' times X'0040' is 2^20: IXR gets the product's high 16 bits,
+    /// ACR its low 15, and the PC steps over both instruction words.
+    #[test]
+    fn mpy_matches_the_manuals_worked_example() {
+        let (mut cpu, mut bus) = boot_at(0x100, &[0x0b0f, 0x0200]);
+        cpu.acr = 0x4000;
+        bus.load(0x200 << 1, &0x0040u16.to_be_bytes());
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.ixr, 0x0020);
+        assert_eq!(cpu.acr, 0x0000);
+        assert_eq!(cpu.pcr, 0x102, "two-word instruction");
+        assert!(!cpu.ovf);
+    }
+
+    /// "The most significant bit of the accumulator is set to the most
+    /// significant bit of the index register" (6-2): a negative product reads
+    /// back as its own low 16 bits even though ACR only holds 15 of them.
+    #[test]
+    fn mpy_duplicates_the_product_sign_into_acr0() {
+        let (mut cpu, mut bus) = boot(&[0x0b0f, 0x0200]);
+        cpu.acr = 0xfffd; // -3
+        bus.load(0x200 << 1, &0x0005u16.to_be_bytes());
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.ixr, 0xffff, "-15 >> 15");
+        assert_eq!(cpu.acr, 0xfff1, "low 15 bits of -15, sign duplicated");
+    }
+
+    /// "No overflow can result from the multiply instruction" (6-2), even for
+    /// X'8000' squared where the +2^30 product aliases to a negative in the
+    /// 31-bit format. The 704/706 option and the 1968 software multiply all
+    /// flag that case; the 703's manual says the flag stays off.
+    #[test]
+    fn mpy_never_sets_overflow() {
+        let (mut cpu, mut bus) = boot(&[0x0b0f, 0x0200]);
+        cpu.acr = 0x8000;
+        bus.load(0x200 << 1, &0x8000u16.to_be_bytes());
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!((cpu.ixr, cpu.acr), (0x8000, 0x8000));
+        assert!(!cpu.ovf, "6-2 is unambiguous, unlike the 704/706");
+    }
+
+    /// MPY prices itself by the ones in the multiplier (12.25 to 17.5 us,
+    /// 6-2; the split follows the 706's per-ones formula, which spans the
+    /// same 7 to 10 cycles).
+    #[test]
+    fn mpy_cycles_follow_the_ones_in_the_multiplier() {
+        let (mut cpu, mut bus) = boot(&[0x0b0f, 0x0200]);
+        cpu.acr = 0; // no ones: the 12.25us floor
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.last_step_cycles(), 7);
+
+        let (mut cpu, mut bus) = boot(&[0x0b0f, 0x0200]);
+        cpu.acr = 0xffff; // all ones: the 17.5us ceiling
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.last_step_cycles(), 10);
+    }
+
+    /// The second word is a flat 15-bit address: no EXR page base, no
+    /// indexing, and its bit 0 (the MSB) is hatched out of the format
+    /// diagram, so X'FFFF' addresses the very top word of core.
+    #[test]
+    fn mpy_operand_address_is_flat_15_bits() {
+        let (mut cpu, mut bus) = boot(&[0x0b0f, 0xffff]);
+        cpu.acr = 2;
+        cpu.ixr = 0xaaaa; // must not participate in the addressing
+        bus.load(0x7fff << 1, &0x0003u16.to_be_bytes());
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!((cpu.ixr, cpu.acr), (0, 6));
+    }
+
+    /// MPY/DIV reference memory, so EXR reloads to the next instruction's
+    /// byte page afterward, exactly like every other memory reference.
+    #[test]
+    fn mpy_reloads_exr_like_a_memory_reference() {
+        let (mut cpu, mut bus) = boot_at(0x0c00, &[0x0b0f, 0x0200]);
+        cpu.exr = 0x1f;
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.exr, 3, "byte page of the next instruction at 0xc02");
+    }
+
+    /// The 706 users manual's worked DIV example (2-1.10): the 31-bit
+    /// dividend IXR:ACR(1-15) = 1:0 is +32768; over 2 it leaves the quotient
+    /// X'4000' in ACR and no remainder in IXR.
+    #[test]
+    fn div_matches_the_manuals_worked_example() {
+        let (mut cpu, mut bus) = boot_at(0x100, &[0x0c0f, 0x0200]);
+        cpu.ixr = 0x0001;
+        cpu.acr = 0x0000;
+        bus.load(0x200 << 1, &0x0002u16.to_be_bytes());
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.acr, 0x4000);
+        assert_eq!(cpu.ixr, 0x0000);
+        assert_eq!(cpu.pcr, 0x102, "two-word instruction");
+        assert!(!cpu.ovf);
+        assert_eq!(cpu.last_step_cycles(), 14, "24.5us, the 703's figure");
+    }
+
+    /// "The sign of the remainder is the same as that of the dividend" (6-3),
+    /// and "the most significant bit of the accumulator has no effect": -5
+    /// over 2 is quotient -2 remainder -1, whatever ACR bit 0 held.
+    #[test]
+    fn div_remainder_keeps_the_dividends_sign() {
+        let (mut cpu, mut bus) = boot(&[0x0c0f, 0x0200]);
+        cpu.ixr = 0xffff; // -5 in the 31-bit format...
+        cpu.acr = 0xfffb; // ...with the no-effect bit deliberately set
+        bus.load(0x200 << 1, &0x0002u16.to_be_bytes());
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.acr as i16, -2);
+        assert_eq!(cpu.ixr as i16, -1);
+    }
+
+    /// The overflow pretest reads the *magnitude* of the dividend's high
+    /// half. A small negative dividend sign-extends to IXR = X'FFFF', which
+    /// a literal signed |IXR| reading would flag; dividing it by 1 must
+    /// simply return it.
+    #[test]
+    fn div_of_a_small_negative_dividend_does_not_overflow() {
+        let (mut cpu, mut bus) = boot(&[0x0c0f, 0x0200]);
+        cpu.ixr = 0xffff;
+        cpu.acr = 0x7ffb; // -5
+        bus.load(0x200 << 1, &0x0001u16.to_be_bytes());
+
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.acr as i16, -5);
+        assert_eq!(cpu.ixr, 0, "no remainder");
+        assert!(!cpu.ovf);
+    }
+
+    /// "The overflow indicator is turned ON and the dividend contained in the
+    /// index register and the accumulator remains unchanged, except the most
+    /// significant bit of the accumulator is set to the most significant bit
+    /// of the index register" (6-3), in 8.75us -- for a divisor of zero and
+    /// for a quotient that cannot fit 16 bits alike.
+    #[test]
+    fn div_overflow_leaves_the_dividend_and_flags() {
+        // divisor zero; IXR's clear sign bit lands in ACR bit 0
+        let (mut cpu, mut bus) = boot(&[0x0c0f, 0x0200]);
+        cpu.ixr = 0x0001;
+        cpu.acr = 0xa345;
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!((cpu.ixr, cpu.acr), (0x0001, 0x2345));
+        assert!(cpu.ovf);
+        assert_eq!(cpu.last_step_cycles(), 5, "8.75us early-out");
+
+        // quotient too big: +65536 over 2 would be +32768
+        let (mut cpu, mut bus) = boot(&[0x0c0f, 0x0200]);
+        cpu.ixr = 0x0002;
+        cpu.acr = 0x0000;
+        bus.load(0x200 << 1, &0x0002u16.to_be_bytes());
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!((cpu.ixr, cpu.acr), (0x0002, 0x0000));
+        assert!(cpu.ovf);
+
+        // a negative high half copies a set sign bit into ACR bit 0
+        let (mut cpu, mut bus) = boot(&[0x0c0f, 0x0200]);
+        cpu.ixr = 0x8002;
+        cpu.acr = 0x0000;
+        bus.load(0x200 << 1, &0x0002u16.to_be_bytes());
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!((cpu.ixr, cpu.acr), (0x8002, 0x8000));
+        assert!(cpu.ovf);
     }
 
     // -- interrupts --------------------------------------------------------
