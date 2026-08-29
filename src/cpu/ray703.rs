@@ -59,6 +59,10 @@ use std::io::Write;
 /// also the lowest word a program can safely occupy if it uses level 15.
 const INT_BLOCK_WORDS: u16 = 4;
 
+/// "1.75 usec cycle time" (1-1), i.e. 4/7 MHz. A u64 in Hz is 0.75 ppm off
+/// the exact fraction, far inside the tolerance of any 1967 crystal.
+pub const CLOCK_HZ: u64 = 571_429;
+
 /// Bits of the machine status word saved and restored by the interrupt
 /// sequence. The manual (3-3) says the status is "the contents of the
 /// extension register, the comparison indicators, and the memory addressing
@@ -108,6 +112,9 @@ pub struct Cpu703 {
     levels: [Level; 16],
     /// MSK/UNM. Inhibits entry to any level; conditions stay pending (2-7).
     inhibit: bool,
+
+    /// Clock cycles the last `step()` consumed, for `last_step_cycles`.
+    cycles: u32,
 }
 
 impl Default for Cpu703 {
@@ -129,6 +136,7 @@ impl Cpu703 {
             global: false,
             levels: [Level::default(); 16],
             inhibit: false,
+            cycles: 0,
         }
     }
 
@@ -594,6 +602,36 @@ impl Cpu703 {
         StepResult::Ok
     }
 
+    /// Clock cycles one instruction takes, from the opcode index (appendix B,
+    /// transcribed in `Raytheon703refMan_isa.txt` section 8): JMP 1, STB 3,
+    /// every other memory reference 2; INR 3, DIN/DOT/IXS/DXS 2, all other
+    /// generics 1. Decoded from the word alone, independent of what the
+    /// instruction then does -- appendix B gives one figure per opcode, with
+    /// no data-dependent cases.
+    fn insn_cycles(insn: u16) -> u32 {
+        match insn >> 12 {
+            0x0 => {
+                let fn_field = (insn >> 8) & 0x0f;
+                let f1 = (insn >> 4) & 0x0f;
+                match fn_field {
+                    0x0 if f1 == 0x1 => 3, // INR
+                    0x0 | 0x1 | 0x6 | 0x7 | 0x8 => 1, // controls, register ops, LLB/CLB, skips
+                    0x2..=0x5 => 2, // DIN/DOT/IXS/DXS
+                    // Shifts print as "2-5" for counts 0-15 and appendix B
+                    // never says how the count splits the range, so this
+                    // linear interpolation is a guess pinned only at the
+                    // printed bounds: count 0 is 2 cycles, count 15 is 5.
+                    0x9 | 0xa => 2 + (insn & 0x0f) as u32 / 5,
+                    // unassigned encodings stop the run as BadOpcode anyway
+                    _ => 1,
+                }
+            }
+            0x1 => 1, // JMP
+            0x3 => 3, // STB
+            _ => 2,   // every other memory reference
+        }
+    }
+
     /// Apply a shift to one half of ACR. `left` picks the manual's "left
     /// byte", bits 0-7, which is the high half.
     fn byte_shift(&mut self, left: bool, f: impl Fn(u8) -> u8) {
@@ -644,17 +682,26 @@ impl Cpu for Cpu703 {
         // did, and keeps the trace readable.
         if let Some(level) = self.ready_level() {
             self.enter_interrupt(bus, level);
+            // Appendix B gives no figure for the entry sequence. It does the
+            // mirror image of INR's three memory accesses (save PC and
+            // status, read the linkage), and INR is 3 cycles, so call it 3.
+            self.cycles = 3;
             return StepResult::Ok;
         }
 
         let insn = self.read_word(bus, self.pcr);
         self.pcr = self.pcr.wrapping_add(1) & 0x7fff;
+        self.cycles = Self::insn_cycles(insn);
 
         if insn >> 12 == 0 {
             self.exec_generic(bus, insn)
         } else {
             self.exec_memory(bus, insn)
         }
+    }
+
+    fn last_step_cycles(&self) -> u32 {
+        self.cycles
     }
 
     fn dump(&self) {
@@ -1459,5 +1506,44 @@ mod tests {
                 "payload byte {i} should have landed at the program origin"
             );
         }
+    }
+
+    // -- cycle counts ------------------------------------------------------
+
+    /// Spot checks against appendix B's opcode index: one representative per
+    /// distinct figure, plus the shift interpolation's pinned endpoints.
+    #[test]
+    fn cycle_counts_match_appendix_b() {
+        for (insn, cycles) in [
+            (0x1040u16, 1), // JMP: the only 1-cycle memory reference
+            (0x8040, 2),    // LDW
+            (0x3080, 3),    // STB: the only 3-cycle instruction
+            (0x0010, 3),    // INR 0
+            (0x0000, 1),    // HLT
+            (0x0100, 1),    // CLR
+            (0x02e9, 2),    // DIN 14,9
+            (0x0401, 2),    // IXS 1
+            (0x0610, 1),    // LLB
+            (0x0800, 1),    // SAZ
+            (0x0a40, 2),    // SRC 0: shift lower bound
+            (0x0a4f, 5),    // SRC 15: shift upper bound
+        ] {
+            let (mut cpu, mut bus) = boot(&[insn, insn]);
+            cpu.step(&mut bus);
+            assert_eq!(cpu.last_step_cycles(), cycles, "insn {insn:04x}");
+        }
+    }
+
+    /// The interrupt entry sequence is a step of its own and reports the
+    /// 3-cycle estimate documented at its site.
+    #[test]
+    fn interrupt_entry_reports_three_cycles() {
+        let (mut cpu, mut bus) = boot(&[0x0028]); // ENB 8
+        bus.load(8 * 4 * 2 + 2, &[0x00, 0x50]); // level 8 linkage -> word 0x50
+        run_steps(&mut cpu, &mut bus, 1);
+        bus.int_lines = 1 << 8;
+        cpu.step(&mut bus);
+        assert_eq!(cpu.pcr, 0x50, "should have entered the level 8 routine");
+        assert_eq!(cpu.last_step_cycles(), 3);
     }
 }

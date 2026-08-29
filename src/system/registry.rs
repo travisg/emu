@@ -147,7 +147,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         cpu: "703",
         default_rom: ray703::DEFAULT_ROM,
         factory: build_ray703,
-        clock_hz: None,
+        clock_hz: Some(crate::cpu::ray703::CLOCK_HZ),
     },
     SystemDescriptor {
         name: "rc2014",
