@@ -53,6 +53,10 @@
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
+// The one cpu -> console dependency in the tree, the same direction the
+// kaypro bus takes for `VideoBuffer`: the panel handle is defined next to
+// the frontend machinery that renders it, and the core just stores into it.
+use crate::console::PanelState;
 use std::io::Write;
 
 /// Words 0..64 are the sixteen four-word interrupt blocks (3-1), so this is
@@ -115,6 +119,14 @@ pub struct Cpu703 {
 
     /// Clock cycles the last `step()` consumed, for `last_step_cycles`.
     cycles: u32,
+
+    /// The front panel, when this machine has one. Registers are published
+    /// into it after every step, and the sense skips read its SENSE toggles.
+    /// Held by the core rather than reached through the `Bus` because that
+    /// is what it was physically: panel switches and the J2 sense line wire
+    /// straight into the processor, not onto the DIO channel -- the same
+    /// reasoning that put `set_index` here.
+    panel: Option<PanelState>,
 }
 
 impl Default for Cpu703 {
@@ -137,7 +149,15 @@ impl Cpu703 {
             levels: [Level::default(); 16],
             inhibit: false,
             cycles: 0,
+            panel: None,
         }
+    }
+
+    /// Attach the front panel. Like `set_index`, this is the factory
+    /// standing in for the machine room: the panel was not optional on a
+    /// real 703, but a headless emulator run has no use for the stores.
+    pub fn attach_panel(&mut self, panel: PanelState) {
+        self.panel = Some(panel);
     }
 
     /// Preset the index register, which on real hardware was done from the
@@ -151,11 +171,33 @@ impl Cpu703 {
     // -- memory ------------------------------------------------------------
 
     fn read_word(&self, bus: &mut dyn Bus, waddr: u16) -> u16 {
-        bus.read16(((waddr & 0x7fff) as u32) << 1, Endian::Big)
+        let val = bus.read16(((waddr & 0x7fff) as u32) << 1, Endian::Big);
+        if let Some(p) = &self.panel {
+            // Every word through here transits the real machine's MA and MB
+            // registers, instruction fetches included, and the panel's MA/MB
+            // positions show whatever went through last (5-2). MA is a byte
+            // address: memory is 32K words, so 16 bits span it (1-3.3.2).
+            p.set_memory((waddr & 0x7fff) << 1, val);
+        }
+        val
     }
 
     fn write_word(&self, bus: &mut dyn Bus, waddr: u16, val: u16) {
         bus.write16(((waddr & 0x7fff) as u32) << 1, val, Endian::Big);
+        if let Some(p) = &self.panel {
+            p.set_memory((waddr & 0x7fff) << 1, val);
+        }
+    }
+
+    /// Panel MA/MB for the byte instructions, which go to the bus as bytes.
+    /// Real hardware pulled the whole word through MB; reading the other
+    /// half here just for the lamps would add a bus access that `TestBus`'s
+    /// re-read watch (and any device with read side effects) would see, so
+    /// MB shows the byte in its low half instead. Documented approximation.
+    fn panel_byte_access(&self, ea: u16, byte: u8) {
+        if let Some(p) = &self.panel {
+            p.set_memory(ea, byte as u16);
+        }
     }
 
     // -- status word -------------------------------------------------------
@@ -175,6 +217,27 @@ impl Cpu703 {
             s |= ST_GLB;
         }
         s
+    }
+
+    /// Publish the lamp registers after a step. The MS position's word is
+    /// the saved machine status word with the sequence register in the low
+    /// nibble -- which is figure 5-1's MS layout exactly: EXR in indicators
+    /// 0-4 is `ST_EXR_SHIFT`, ADFNEG at 5 is `ST_NEG`, and so on. The status
+    /// layout this file took from rustheon turns out to be the panel's own.
+    ///
+    /// The sequence register is the active level's number; the manual never
+    /// says what it shows when no level is active, so base level shows 0.
+    fn publish_panel(&self) {
+        if let Some(p) = &self.panel {
+            let seq = (0..16).rev().find(|&l| self.levels[l].active).unwrap_or(0);
+            p.set_registers(self.pcr, self.acr, self.ixr, self.status() | seq as u16);
+        }
+    }
+
+    /// The position of SENSE toggle `n`, false when there is no panel --
+    /// which preserves the pre-panel behaviour of every sense skip skipping.
+    fn sense_switch(&self, n: u8) -> bool {
+        self.panel.as_ref().is_some_and(|p| p.sense(n))
     }
 
     fn set_status(&mut self, s: u16) {
@@ -348,12 +411,15 @@ impl Cpu703 {
             0x3 => {
                 let ea = self.byte_ea(insn);
                 bus.write8(ea as u32, self.acr as u8);
+                self.panel_byte_access(ea, self.acr as u8);
             }
             0x4 => {
                 // CMB: bytes are signed 8-bit (2-5)
                 let ea = self.byte_ea(insn);
                 let a = self.acr as u8 as i8 as i32;
-                let b = bus.read8(ea as u32) as i8 as i32;
+                let b = bus.read8(ea as u32);
+                self.panel_byte_access(ea, b);
+                let b = b as i8 as i32;
                 self.set_compare(a - b < 0, a == b);
             }
             0x5 => {
@@ -361,6 +427,7 @@ impl Cpu703 {
                 // anything not named is untouched, so no extension happens.
                 let ea = self.byte_ea(insn);
                 let b = bus.read8(ea as u32);
+                self.panel_byte_access(ea, b);
                 self.acr = (self.acr & 0xff00) | b as u16;
             }
             0x6 => {
@@ -521,11 +588,15 @@ impl Cpu703 {
                 self.ovf = false;
                 no_overflow
             }
-            // SSE and the four sense switches read the front panel and the
-            // EXSENS line on connector J2. There is no front panel here, so
-            // they are all wired false -- and every one of these skips when
-            // its input is *false*, so they always skip.
-            0xb..=0xf => true,
+            // SSE reads the EXSENS line on connector J2. Nothing drives it
+            // here, so it reads false -- and the skip takes the *false*
+            // position, so SSE always skips.
+            0xb => true,
+            // SS0-SS3 read the front panel's SENSE toggles, "operator
+            // setable and program testable", skipping on the down = false
+            // position (5-4). With no panel attached they read false and
+            // always skip, exactly as before the panel existed.
+            0xc..=0xf => !self.sense_switch((f1 - 0xc) as u8),
             _ => return StepResult::BadOpcode,
         };
         self.skip_if(cond);
@@ -686,18 +757,29 @@ impl Cpu for Cpu703 {
             // mirror image of INR's three memory accesses (save PC and
             // status, read the linkage), and INR is 3 cycles, so call it 3.
             self.cycles = 3;
+            // The entry is a step of its own, so the PC and SEQ lamps move;
+            // the instruction register keeps its old contents, matching a
+            // sequence that fetched nothing.
+            self.publish_panel();
             return StepResult::Ok;
         }
 
         let insn = self.read_word(bus, self.pcr);
         self.pcr = self.pcr.wrapping_add(1) & 0x7fff;
         self.cycles = Self::insn_cycles(insn);
+        if let Some(p) = &self.panel {
+            // 5-2 puts "the Instruction register in 0-7 of the SELECTED
+            // DISPLAY indicators": the opcode byte.
+            p.set_instruction((insn >> 8) as u8);
+        }
 
-        if insn >> 12 == 0 {
+        let result = if insn >> 12 == 0 {
             self.exec_generic(bus, insn)
         } else {
             self.exec_memory(bus, insn)
-        }
+        };
+        self.publish_panel();
+        result
     }
 
     fn last_step_cycles(&self) -> u32 {
@@ -1506,6 +1588,82 @@ mod tests {
                 "payload byte {i} should have landed at the program origin"
             );
         }
+    }
+
+    // -- front panel -------------------------------------------------------
+
+    /// The lamp registers reflect the machine after every step.
+    #[test]
+    fn panel_publishes_registers_after_each_step() {
+        use crate::console::{PanelState, Selector};
+        // LLB 0x21 / CAX / LLB 0x33
+        let (mut cpu, mut bus) = boot(&[0x0621, 0x0130, 0x0633]);
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(panel.program_counter(), 0x42);
+        assert_eq!(panel.selected(Selector::Ac), 0x0021);
+        assert_eq!(panel.selected(Selector::Ix), 0x0021);
+        // the CAX fetch was the last word through the memory buffer
+        assert_eq!(panel.selected(Selector::Ma), 0x41 << 1);
+        assert_eq!(panel.selected(Selector::Mb), 0x0130);
+        // IN shows the opcode byte in indicators 0-7, i.e. the high half
+        assert_eq!(panel.selected(Selector::In), 0x0100);
+
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(panel.selected(Selector::Ac), 0x0033);
+    }
+
+    /// The MS position is the saved-status layout with the sequence register
+    /// in indicators 12-15: take a level 5 interrupt with flags set and read
+    /// the lamps.
+    #[test]
+    fn panel_ms_word_is_status_plus_sequence() {
+        use crate::console::{PanelState, Selector};
+        let (mut cpu, mut bus) = boot(&[0x0025]); // ENB 5
+        bus.load(5 * 4 * 2 + 2, &[0x00, 0x50]); // level 5 linkage -> word 0x50
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+        cpu.eql = true;
+        cpu.global = true;
+
+        run_steps(&mut cpu, &mut bus, 1);
+        // base level: EXR follows the PC's byte page, SEQ shows 0
+        assert_eq!(panel.selected(Selector::Ms), cpu.status());
+
+        bus.int_lines = 1 << 5;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pcr, 0x50, "should have entered the level 5 routine");
+        assert_eq!(panel.program_counter(), 0x50);
+        assert_eq!(panel.selected(Selector::Ms), cpu.status() | 5);
+        assert_ne!(panel.selected(Selector::Ms) & ST_EQL, 0);
+    }
+
+    /// A SENSE toggle in the up (true) position defeats its skip -- they
+    /// take the false position (5-4) -- while SSE keeps skipping: nothing
+    /// drives the external line, panel or no panel.
+    #[test]
+    fn sense_switch_up_defeats_the_skip() {
+        use crate::console::PanelState;
+        for switch in 0..4u8 {
+            let insn = 0x08c0 + ((switch as u16) << 4);
+            let (mut cpu, mut bus) = boot(&[insn]);
+            let panel = PanelState::new();
+            cpu.attach_panel(panel.clone());
+            panel.toggle_sense(switch);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.pcr, 0x41, "SS{switch} must not skip with its toggle up");
+        }
+
+        let (mut cpu, mut bus) = boot(&[0x08b0]); // SSE
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+        for n in 0..4 {
+            panel.toggle_sense(n);
+        }
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pcr, 0x42, "SSE reads the J2 line, not the toggles");
     }
 
     // -- cycle counts ------------------------------------------------------
