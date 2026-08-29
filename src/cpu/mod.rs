@@ -59,6 +59,17 @@ pub trait Cpu {
     /// Execute exactly one instruction.
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult;
 
+    /// Clock cycles consumed by the most recent `step()`.
+    ///
+    /// 0 means this core does not count cycles, which renders throttling
+    /// inert (the run loop warns once and runs uncapped). Cores that do
+    /// count keep the tally internal and override this; nothing about it
+    /// may influence `trace_line()` -- the ported cores' trace output is
+    /// oracle-locked.
+    fn last_step_cycles(&self) -> u32 {
+        0
+    }
+
     /// Human-readable register dump, for debugging.
     fn dump(&self);
 

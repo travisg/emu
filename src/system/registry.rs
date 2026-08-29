@@ -42,6 +42,10 @@ pub struct Machine {
     /// `None` for terminal-only machines, which use the console's serial
     /// output instead.
     pub display: Option<Display>,
+    /// A machine that wants real time by default sets its clock rate here
+    /// (a live front panel is meaningless uncapped); `None` runs flat out.
+    /// `--throttle` on the command line overrides either way.
+    pub throttle_hz: Option<u64>,
 }
 
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
@@ -52,6 +56,10 @@ pub struct SystemDescriptor {
     pub cpu: &'static str,
     pub default_rom: &'static str,
     pub factory: FactoryFn,
+    /// The real machine's clock rate, used by a bare `--throttle`. `None`
+    /// until the rate is verified *and* the core reports cycle counts --
+    /// throttling a core that reports none is an announced no-op.
+    pub clock_hz: Option<u64>,
 }
 
 fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<Machine> {
@@ -59,6 +67,7 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Resu
         cpu: Box::new(crate::cpu::m6800::Cpu6800::new()),
         bus: Box::new(altair680::Altair680::new(rom, console)?),
         display: None,
+        throttle_hz: None,
     })
 }
 
@@ -67,6 +76,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
         bus: Box::new(rc2014::Rc2014::new(rom, console)?),
         display: None,
+        throttle_hz: None,
     })
 }
 
@@ -75,6 +85,7 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Ma
         cpu: Box::new(crate::cpu::m6809::Cpu6809::new()),
         bus: Box::new(sys09::System09::new(rom, console, sub)?),
         display: None,
+        throttle_hz: None,
     })
 }
 
@@ -90,6 +101,7 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<M
         cpu: Box::new(cpu),
         bus: Box::new(ray703::Ray703::new(rom, console, sub)?),
         display: None,
+        throttle_hz: None,
     })
 }
 
@@ -104,6 +116,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
         bus: Box::new(bus),
         display: Some(display),
+        throttle_hz: None,
     })
 }
 
@@ -113,30 +126,35 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         cpu: "6809",
         default_rom: sys09::DEFAULT_ROM,
         factory: build_sys09,
+        clock_hz: None,
     },
     SystemDescriptor {
         name: "altair680",
         cpu: "6800",
         default_rom: altair680::DEFAULT_ROM,
         factory: build_altair680,
+        clock_hz: None,
     },
     SystemDescriptor {
         name: "kaypro",
         cpu: "z80",
         default_rom: kaypro::DEFAULT_ROM,
         factory: build_kaypro,
+        clock_hz: None,
     },
     SystemDescriptor {
         name: "ray703",
         cpu: "703",
         default_rom: ray703::DEFAULT_ROM,
         factory: build_ray703,
+        clock_hz: None,
     },
     SystemDescriptor {
         name: "rc2014",
         cpu: "z80",
         default_rom: rc2014::DEFAULT_ROM,
         factory: build_rc2014,
+        clock_hz: None,
     },
 ];
 
@@ -184,6 +202,8 @@ mod tests {
             assert!(!s.cpu.is_empty());
             assert!(!s.default_rom.is_empty());
             assert!(find(s.name).is_some(), "{} is not findable", s.name);
+            // a zero rate would make a bare --throttle divide by zero
+            assert_ne!(s.clock_hz, Some(0), "{} has a zero clock rate", s.name);
         }
     }
 }
