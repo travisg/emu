@@ -742,7 +742,14 @@ impl Cpu for Cpu703 {
         // in the manual says RESET clears them, and PTB's operating procedure
         // is explicit that the operator sets the index register *after*
         // pressing RESET -- so clearing it here would wipe out this machine's
-        // stand-in for that step. See `set_index`.
+        // stand-in for that step. See `set_index`. (5-3 calls RESET "the
+        // master reset switch that resets all registers"; deliberately not
+        // taken literally, for the same PTB reason.)
+
+        // A reset arrives halted, so nothing will republish the lamps until
+        // the next step or keying -- without this, the panel's RESET button
+        // looks like it did nothing.
+        self.publish_panel();
     }
 
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
@@ -1820,6 +1827,21 @@ mod tests {
         cpu.pcr = 0x7fff;
         cpu.panel_command(&mut bus, &Pc::Display);
         assert_eq!(cpu.pcr, 0);
+    }
+
+    /// RESET republishes the lamps. The panel's RESET button arrives while
+    /// halted, when nothing else will publish until the next step -- so a
+    /// reset that skips it looks like a button that does nothing.
+    #[test]
+    fn reset_republishes_the_panel() {
+        use crate::console::PanelState;
+        let (mut cpu, mut bus) = boot(&[0x0621]); // LLB 0x21
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(panel.program_counter(), 0x41);
+        cpu.reset(&mut bus);
+        assert_eq!(panel.program_counter(), 0, "the PC lamps must show the reset");
     }
 
     /// The whole 1968 ritual, headless: RESET, key a program in through
