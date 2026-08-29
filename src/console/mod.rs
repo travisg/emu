@@ -39,7 +39,7 @@
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 pub mod panel703;
@@ -379,8 +379,9 @@ pub enum Display {
         /// The character generator rom, 8 bytes per glyph, 256 glyphs.
         font_rom: Vec<u8>,
     },
-    /// The 703's lights-and-switches front panel.
-    Panel703 { title: &'static str, panel: PanelState },
+    /// The 703's lights-and-switches front panel. `control` carries the
+    /// switch actuations to the run loop on the CPU thread.
+    Panel703 { title: &'static str, panel: PanelState, control: Sender<PanelCommand> },
 }
 
 #[cfg(test)]

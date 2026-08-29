@@ -46,6 +46,10 @@ pub struct Machine {
     /// (a live front panel is meaningless uncapped); `None` runs flat out.
     /// `--throttle` on the command line overrides either way.
     pub throttle_hz: Option<u64>,
+    /// The receiving end of a front panel's command channel, for
+    /// `Emulator::set_panel_control`; its presence is also what makes HLT
+    /// halt to the panel instead of exiting.
+    pub panel_control: Option<std::sync::mpsc::Receiver<crate::console::PanelCommand>>,
 }
 
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
@@ -68,6 +72,7 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Resu
         bus: Box::new(altair680::Altair680::new(rom, console)?),
         display: None,
         throttle_hz: None,
+        panel_control: None,
     })
 }
 
@@ -77,6 +82,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<
         bus: Box::new(rc2014::Rc2014::new(rom, console)?),
         display: None,
         throttle_hz: None,
+        panel_control: None,
     })
 }
 
@@ -86,6 +92,7 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Ma
         bus: Box::new(sys09::System09::new(rom, console, sub)?),
         display: None,
         throttle_hz: None,
+        panel_control: None,
     })
 }
 
@@ -117,10 +124,14 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<M
 
     let mut display = None;
     let mut throttle_hz = None;
+    let mut panel_control = None;
     if panel {
         let state = crate::console::PanelState::new();
         cpu.attach_panel(state.clone());
-        display = Some(Display::Panel703 { title: "Raytheon 703", panel: state });
+        // switch actuations flow frontend -> run loop over this channel
+        let (ctl_tx, ctl_rx) = std::sync::mpsc::channel();
+        display = Some(Display::Panel703 { title: "Raytheon 703", panel: state, control: ctl_tx });
+        panel_control = Some(ctl_rx);
         // A live panel is meaningless uncapped -- the lamps would be a
         // uniform blur -- so panel machines default to real time. --throttle
         // on the command line still overrides.
@@ -132,6 +143,7 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<M
         bus: Box::new(ray703::Ray703::new(rom, console, sub)?),
         display,
         throttle_hz,
+        panel_control,
     })
 }
 
@@ -147,6 +159,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str) -> io::Result<
         bus: Box::new(bus),
         display: Some(display),
         throttle_hz: None,
+        panel_control: None,
     })
 }
 
@@ -254,12 +267,19 @@ mod tests {
     #[test]
     fn the_panel_subsystem_attaches_a_panel_display() {
         let m = build_703("panel").unwrap();
-        assert!(matches!(m.display, Some(Display::Panel703 { .. })));
         assert_eq!(m.throttle_hz, Some(crate::cpu::ray703::CLOCK_HZ));
+        // the display's sender delivers to the machine's receiver
+        let Some(Display::Panel703 { control, .. }) = m.display else {
+            panic!("panel display expected");
+        };
+        control.send(crate::console::PanelCommand::Run).unwrap();
+        let rx = m.panel_control.expect("panel machines carry the control channel");
+        assert_eq!(rx.try_recv().unwrap(), crate::console::PanelCommand::Run);
         // ...and the tokens compose with ptb in either order
         for sub in ["panel-ptb", "ptb-panel"] {
             let m = build_703(sub).unwrap();
             assert!(matches!(m.display, Some(Display::Panel703 { .. })), "{sub}");
+            assert!(m.panel_control.is_some(), "{sub}");
         }
     }
 
@@ -268,6 +288,7 @@ mod tests {
         let m = build_703("").unwrap();
         assert!(m.display.is_none());
         assert_eq!(m.throttle_hz, None);
+        assert!(m.panel_control.is_none());
     }
 
     #[test]

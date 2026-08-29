@@ -232,9 +232,11 @@ fn main() -> ExitCode {
         ThrottleArg::Off => machine.throttle_hz,
     };
 
+    let has_panel = machine.panel_control.is_some();
     let mut emu = Emulator::new(machine.cpu, machine.bus, Arc::clone(&shutdown));
     emu.set_cycle_limit(args.limit);
     emu.set_throttle(throttle_hz);
+    emu.set_panel_control(machine.panel_control);
     if let Some(path) = args.trace {
         match std::fs::File::create(&path) {
             Ok(f) => emu.set_trace(Some(Box::new(BufWriter::new(f)))),
@@ -245,6 +247,10 @@ fn main() -> ExitCode {
         }
     }
     emu.reset();
+    if has_panel {
+        // the machine starts halted, as a real one did at power-on
+        println!("halted at the front panel; press RUN to start");
+    }
 
     // The whole emulator moves onto the cpu thread; only the shutdown flag and
     // the keystroke channel cross the boundary.

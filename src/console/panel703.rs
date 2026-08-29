@@ -26,12 +26,15 @@
 //!
 //! Two rows of round lamp-indicators -- the PROGRAM COUNTER row, always
 //! live, and the SELECTED DISPLAY row behind the six-position DISPLAY
-//! SELECTOR rotary -- plus the four SENSE toggles. The lamps sample the
-//! [`PanelState`] the core publishes after every step; the selector knob is
-//! state of this frontend alone, which is what lets it be "changed while
-//! the program is running" (5-2). The rest of the real panel (RUN, HALT,
-//! RESET, SINGLE STEP/COMMAND, the CLEAR and ENTER data-entry path) is not
-//! here yet.
+//! SELECTOR rotary -- rendered as incandescent bulbs from the duty-cycle
+//! accumulators the core feeds; the switches: RUN, HALT, RESET, SINGLE
+//! STEP/COMMAND, the two CLEARs, ENTER/DISPLAY, the SENSE toggles, and
+//! the lamps themselves, which are switch-indicators -- clicking one keys
+//! that bit. Switch actuations go to the run loop as [`PanelCommand`]s;
+//! the selector knob is state of this frontend alone, which is what lets
+//! it be "changed while the program is running" (5-2).
+//!
+//! The machine starts halted, as a real one did at power-on: press RUN.
 //!
 //! The teletype stays on the terminal: this frontend spawns the ordinary
 //! [`TerminalFrontend`] on a second thread to pump stdin, and guest output
@@ -45,7 +48,7 @@
 //! horizontal spans, text from a 5x7 font embedded below -- so there are no
 //! textures, image files or font dependencies.
 
-use super::{ConsoleFrontend, Display, LampSnapshot, PanelState, Selector};
+use super::{ConsoleFrontend, Display, LampSnapshot, PanelCommand, PanelState, Selector};
 use crate::console::terminal::TerminalFrontend;
 use sdl2::event::Event;
 use sdl2::keyboard::{Keycode, Mod};
@@ -89,6 +92,22 @@ const KNOB_R: i32 = 32;
 /// SENSE toggles sit under lamps 8-11, as in figure 5-1.
 const TOGGLE_W: u32 = 18;
 const TOGGLE_H: u32 = 36;
+
+/// The momentary buttons in the control row, left of the SENSE toggles,
+/// in figure 5-1's order: center x and label. SINGLE STEP is drawn as the
+/// figure has it but wired to the same one-instruction step as SINGLE
+/// COMMAND -- the real switch stepped sub-instruction phases (5-4) this
+/// emulator does not model, and its RUN/SINGLE COMMAND inhibit mode goes
+/// with them. A documented divergence.
+const BUTTONS: [(i32, &str); 5] =
+    [(84, "RESET"), (172, "HALT"), (256, "RUN"), (352, "SINGLE STEP"), (472, "SINGLE COMMAND")];
+const BUTTON_R: i32 = 11;
+/// ENTER and DISPLAY, switch-indicators lit when MB is selected (5-3).
+const ENTER_X: i32 = 800;
+const DISPLAY_X: i32 = 902;
+/// The CLEAR button at the head of each lamp row (5-1, 5-3).
+const CLEAR_X: i32 = 26;
+const CLEAR_R: i32 = 8;
 
 const PANEL_BG: Color = Color::RGB(0xd6, 0xd2, 0xc9);
 const PANEL_INK: Color = Color::RGB(0x22, 0x22, 0x22);
@@ -171,6 +190,9 @@ fn selector_angle(i: usize) -> f32 {
 pub struct Panel703Frontend {
     tx: Sender<u8>,
     panel: PanelState,
+    /// Switch actuations to the run loop. Send errors are ignored
+    /// throughout: a dead CPU thread means shutdown is already in flight.
+    control: Sender<PanelCommand>,
     selector: Selector,
     /// Last frame's accumulator snapshots, one per lamp source (PC + the
     /// six selector positions), so turning the knob always has a fresh
@@ -188,7 +210,7 @@ pub struct Panel703Frontend {
 
 impl Panel703Frontend {
     pub fn new(tx: Sender<u8>, display: Display) -> Result<Self, String> {
-        let Display::Panel703 { title, panel } = display else {
+        let Display::Panel703 { title, panel, control } = display else {
             return Err("Panel703Frontend needs a 703 panel display".to_string());
         };
         let sdl = sdl2::init()?;
@@ -205,6 +227,7 @@ impl Panel703Frontend {
         Ok(Panel703Frontend {
             tx,
             panel,
+            control,
             selector: Selector::Mb,
             prev_pc: LampSnapshot::default(),
             prev_sel: [LampSnapshot::default(); 6],
@@ -286,8 +309,44 @@ impl Panel703Frontend {
         }
     }
 
+    fn draw_buttons(&mut self) {
+        for (x, label) in BUTTONS {
+            self.circle(x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
+            // HALT's button is the dark one in figure 5-1
+            let face = if label == "HALT" {
+                Color::RGB(0x20, 0x20, 0x20)
+            } else {
+                Color::RGB(0x8a, 0x8a, 0x84)
+            };
+            self.circle(x, CONTROLS_Y, BUTTON_R, face);
+            self.text_centered(x, CONTROLS_Y - BUTTON_R - 20, 1, label, PANEL_INK);
+        }
+
+        // ENTER and DISPLAY are switch-indicators, illuminated when the
+        // selector sits on MB (5-3) -- the position their workflow serves.
+        let lit = self.selector == Selector::Mb;
+        for (x, label) in [(ENTER_X, "ENTER"), (DISPLAY_X, "DISPLAY")] {
+            self.circle(x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
+            self.circle(x, CONTROLS_Y, BUTTON_R, if lit { LAMP_LIT } else { LAMP_UNLIT });
+            self.text_centered(x, CONTROLS_Y - BUTTON_R - 20, 1, label, PANEL_INK);
+        }
+
+        // one CLEAR at the head of each lamp row
+        for y in [PC_LAMPS_Y, SD_LAMPS_Y] {
+            self.circle(CLEAR_X, y, CLEAR_R + 2, LAMP_BEZEL);
+            self.circle(CLEAR_X, y, CLEAR_R, Color::RGB(0x8a, 0x8a, 0x84));
+            self.text_centered(CLEAR_X, y - LAMP_R - 15, 1, "CLEAR", PANEL_INK);
+        }
+    }
+
     fn draw_toggles(&mut self) {
-        self.caption(CONTROLS_Y - 34, "SENSE");
+        // a local caption over just the four toggles -- the full-width rule
+        // would run through the button labels sharing this row
+        let cx = (toggle_x(0) + toggle_x(3)) / 2;
+        self.text_centered(cx, CONTROLS_Y - TOGGLE_H as i32 / 2 - 34, 1, "SENSE", PANEL_INK);
+        self.canvas.set_draw_color(PANEL_INK);
+        let _ = self.canvas.fill_rect(Rect::new(toggle_x(0) - 12, CONTROLS_Y - TOGGLE_H as i32 / 2 - 31, (cx - 22 - toggle_x(0) + 12) as u32, 1));
+        let _ = self.canvas.fill_rect(Rect::new(cx + 22, CONTROLS_Y - TOGGLE_H as i32 / 2 - 31, (toggle_x(3) + 12 - cx - 22) as u32, 1));
         for i in 0..4 {
             let x = toggle_x(i);
             let up = self.panel.sense(i as u8);
@@ -364,6 +423,7 @@ impl Panel703Frontend {
         self.caption(SD_CAPTION_Y, "SELECTED DISPLAY");
         self.lamp_row(SD_LAMPS_Y, &sd, 0);
 
+        self.draw_buttons();
         self.draw_toggles();
         self.draw_selector();
 
@@ -382,6 +442,68 @@ impl Panel703Frontend {
     // -- input -------------------------------------------------------------
 
     fn click(&mut self, x: i32, y: i32, button: MouseButton) {
+        let hit_circle = |cx: i32, cy: i32, r: i32| {
+            let (dx, dy) = (x - cx, y - cy);
+            dx * dx + dy * dy <= r * r
+        };
+
+        // the momentary buttons
+        for (i, (bx, _)) in BUTTONS.iter().enumerate() {
+            if hit_circle(*bx, CONTROLS_Y, BUTTON_R + 4) {
+                let cmd = match i {
+                    0 => PanelCommand::Reset,
+                    1 => PanelCommand::Halt,
+                    2 => PanelCommand::Run,
+                    // SINGLE STEP and SINGLE COMMAND both step once here
+                    _ => PanelCommand::SingleCommand,
+                };
+                let _ = self.control.send(cmd);
+                return;
+            }
+        }
+
+        // ENTER and DISPLAY, only in the MB workflow they illuminate for
+        if self.selector == Selector::Mb {
+            if hit_circle(ENTER_X, CONTROLS_Y, BUTTON_R + 4) {
+                let _ = self.control.send(PanelCommand::Enter);
+                return;
+            }
+            if hit_circle(DISPLAY_X, CONTROLS_Y, BUTTON_R + 4) {
+                let _ = self.control.send(PanelCommand::Display);
+                return;
+            }
+        }
+
+        // the CLEAR at the head of each row; the display CLEAR reaches
+        // only the writable positions (5-3)
+        if hit_circle(CLEAR_X, PC_LAMPS_Y, CLEAR_R + 5) {
+            let _ = self.control.send(PanelCommand::ClearPc);
+            return;
+        }
+        if hit_circle(CLEAR_X, SD_LAMPS_Y, CLEAR_R + 5) {
+            if matches!(self.selector, Selector::Mb | Selector::Ix | Selector::Ac) {
+                let _ = self.control.send(PanelCommand::ClearSelected(self.selector));
+            }
+            return;
+        }
+
+        // the lamps are switch-indicators: clicking one keys that bit.
+        // The PC row has no indicator 0, and SELECTED DISPLAY entry
+        // reaches only MB, IX and AC (5-2).
+        for i in 0..16i32 {
+            if i >= 1 && hit_circle(lamp_x(i), PC_LAMPS_Y, LAMP_R + 3) {
+                let _ = self.control.send(PanelCommand::TogglePcBit(i as u8));
+                return;
+            }
+            if hit_circle(lamp_x(i), SD_LAMPS_Y, LAMP_R + 3) {
+                if matches!(self.selector, Selector::Mb | Selector::Ix | Selector::Ac) {
+                    let _ =
+                        self.control.send(PanelCommand::ToggleSelectedBit(self.selector, i as u8));
+                }
+                return;
+            }
+        }
+
         // a SENSE toggle flips
         for i in 0..4 {
             let dx = x - toggle_x(i);
