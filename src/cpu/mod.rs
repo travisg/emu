@@ -70,6 +70,13 @@ pub trait Cpu {
         0
     }
 
+    /// Apply one front panel data-entry actuation (a register bit toggle,
+    /// a clear, an ENTER/DISPLAY memory access). Only a core with a
+    /// physical panel overrides this; the run-state switches (RUN, HALT,
+    /// SINGLE COMMAND, RESET) are the run loop's business and never
+    /// arrive here.
+    fn panel_command(&mut self, _bus: &mut dyn Bus, _cmd: &crate::console::PanelCommand) {}
+
     /// Human-readable register dump, for debugging.
     fn dump(&self);
 

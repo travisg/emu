@@ -316,6 +316,43 @@ impl PanelState {
     }
 }
 
+/// One actuation of a front panel control, sent from the panel window to
+/// the run loop on the CPU thread. The run-state switches (`Run`, `Halt`,
+/// `SingleCommand`, `Reset`) are handled by the `Emulator` itself; the
+/// data-entry commands are forwarded to the core's `panel_command`.
+///
+/// Bit arguments carry the manual's *indicator number*: 0-15 counted from
+/// the left, indicator 0 the most significant bit, exactly as the lamps
+/// are drawn. The core translates to its own shift arithmetic.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum PanelCommand {
+    /// RUN "initiates a program process" (5-4).
+    Run,
+    /// HALT "halts the program being executed at the completion of the
+    /// current instruction" (5-4).
+    Halt,
+    /// SINGLE COMMAND: "each actuation of the switch executes one
+    /// instruction ... then halts" (5-3).
+    SingleCommand,
+    /// RESET, "the master reset switch" (5-3).
+    Reset,
+    /// One PROGRAM COUNTER switch-indicator, "always active for both entry
+    /// and display" (5-1) -- honoured while running, too.
+    TogglePcBit(u8),
+    /// The PROGRAM COUNTER CLEAR switch (5-1).
+    ClearPc,
+    /// One SELECTED DISPLAY switch-indicator. Entry reaches only the MB,
+    /// IX and AC positions; the rest are display-only (5-2).
+    ToggleSelectedBit(Selector, u8),
+    /// The display CLEAR switch, which "clears the register associated
+    /// with DISPLAY SELECTOR positions MB, IX, or AC" (5-3).
+    ClearSelected(Selector),
+    /// ENTER: the MBR into memory at the PCR, which then increments (5-3).
+    Enter,
+    /// DISPLAY: memory at the PCR into the MBR, PCR increments (5-3).
+    Display,
+}
+
 /// What a machine hands the frontend when it has something to show. Built
 /// by the machine factory alongside the bus; the variant tells the main
 /// thread which frontend to build, so frontend selection stays out of the
