@@ -90,6 +90,23 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Ma
 }
 
 fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Machine> {
+    // The subsystem is a set of tokens: "panel" opens the front panel
+    // window, "ptb" keys in the bootstrap, in either order. Strip "panel"
+    // here and hand the rest to the machine, which knows nothing about
+    // displays.
+    let mut tokens: Vec<&str> = sub.split('-').filter(|t| !t.is_empty()).collect();
+    let panel = tokens.iter().position(|&t| t == "panel").map(|i| tokens.remove(i)).is_some();
+    let sub = match tokens.as_slice() {
+        [] => "",
+        [one] => *one,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!("unknown ray703 subsystem '{sub}'"),
+            ))
+        }
+    };
+
     let mut cpu = crate::cpu::ray703::Cpu703::new();
     // The one thing the 703 needs that the other machines don't: an operator
     // at the front panel. PTB is keyed in with the index register preset to
@@ -97,11 +114,24 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<M
     if let Some(ixr) = ray703::Ray703::ptb_index(sub) {
         cpu.set_index(ixr);
     }
+
+    let mut display = None;
+    let mut throttle_hz = None;
+    if panel {
+        let state = crate::console::PanelState::new();
+        cpu.attach_panel(state.clone());
+        display = Some(Display::Panel703 { title: "Raytheon 703", panel: state });
+        // A live panel is meaningless uncapped -- the lamps would be a
+        // uniform blur -- so panel machines default to real time. --throttle
+        // on the command line still overrides.
+        throttle_hz = Some(crate::cpu::ray703::CLOCK_HZ);
+    }
+
     Ok(Machine {
         cpu: Box::new(cpu),
         bus: Box::new(ray703::Ray703::new(rom, console, sub)?),
-        display: None,
-        throttle_hz: None,
+        display,
+        throttle_hz,
     })
 }
 
@@ -205,5 +235,45 @@ mod tests {
             // a zero rate would make a bare --throttle divide by zero
             assert_ne!(s.clock_hz, Some(0), "{} has a zero clock rate", s.name);
         }
+    }
+
+    /// Build a ray703 machine for one subsystem string. Uses the demo image
+    /// only as bytes to load, via a temp file, so no ROM symlink is needed.
+    fn build_703(sub: &str) -> io::Result<Machine> {
+        let dir = std::env::temp_dir().join(format!("emu-registry-{sub}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom = dir.join("image.bin");
+        std::fs::write(&rom, [0x10u8, 0x40]).unwrap(); // JMP 0x40
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+        let m = build_ray703(&rom, console, sub);
+        std::fs::remove_dir_all(&dir).ok();
+        m
+    }
+
+    #[test]
+    fn the_panel_subsystem_attaches_a_panel_display() {
+        let m = build_703("panel").unwrap();
+        assert!(matches!(m.display, Some(Display::Panel703 { .. })));
+        assert_eq!(m.throttle_hz, Some(crate::cpu::ray703::CLOCK_HZ));
+        // ...and the tokens compose with ptb in either order
+        for sub in ["panel-ptb", "ptb-panel"] {
+            let m = build_703(sub).unwrap();
+            assert!(matches!(m.display, Some(Display::Panel703 { .. })), "{sub}");
+        }
+    }
+
+    #[test]
+    fn plain_ray703_is_headless_and_unthrottled() {
+        let m = build_703("").unwrap();
+        assert!(m.display.is_none());
+        assert_eq!(m.throttle_hz, None);
+    }
+
+    #[test]
+    fn junk_703_subsystem_tokens_are_rejected() {
+        assert!(build_703("panel-bogus").is_err());
+        assert!(build_703("panel-ptb-panel").is_err());
+        assert!(build_703("bogus").is_err());
     }
 }

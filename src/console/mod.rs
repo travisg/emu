@@ -42,6 +42,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+pub mod panel703;
 pub mod sdl;
 pub mod terminal;
 

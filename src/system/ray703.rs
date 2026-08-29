@@ -132,7 +132,10 @@ impl Ray703 {
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::Unsupported,
-                    format!("unknown ray703 subsystem '{other}'; try 'ray703' or 'ray703-ptb'"),
+                    format!(
+                        "unknown ray703 subsystem '{other}'; try 'ray703' or 'ray703-ptb' \
+                         (add '-panel' for the front panel window)"
+                    ),
                 ));
             }
         }

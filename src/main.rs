@@ -24,6 +24,7 @@
 //! Entry point: parse args, build the machine, run the CPU on its own thread
 //! while the console frontend owns the main thread.
 
+use emu::console::panel703::Panel703Frontend;
 use emu::console::sdl::SdlFrontend;
 use emu::console::terminal::TerminalFrontend;
 use emu::console::{ConsoleEndpoint, ConsoleFrontend};
@@ -201,10 +202,14 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some(emu::console::Display::Panel703 { .. }) => {
-            // no factory builds this yet; the panel frontend is next
-            eprintln!("error: no frontend for the 703 panel yet");
-            return ExitCode::FAILURE;
+        Some(display @ emu::console::Display::Panel703 { .. }) => {
+            match Panel703Frontend::new(tx, display) {
+                Ok(f) => Box::new(f),
+                Err(e) => {
+                    eprintln!("error initializing SDL: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
         }
         None => Box::new(TerminalFrontend::new(tx)),
     };
