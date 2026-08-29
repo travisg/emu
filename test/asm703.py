@@ -88,6 +88,14 @@ SELECT_BASE = 'SMB'
 GEN_LITERAL = {'IXS': 0x0400, 'DXS': 0x0500, 'LLB': 0x0600, 'CLB': 0x0700}
 GEN_DIO = {'DIN': 0x0200, 'DOT': 0x0300}
 
+# The optional multiply/divide hardware: the machine's only two-word
+# instructions. Section 6 of the reference manual diagrams the encodings even
+# though appendix B never lists the option -- a fixed first word, then a flat
+# 15-bit word address that "allows either instruction to reference any
+# location in memory without using the index register" (6-1). So no EXR page,
+# no indexing, and none of the M-field checks that apply everywhere else.
+GEN_TWOWORD = {'MPY': 0x0b0f, 'DIV': 0x0c0f}
+
 SKIPS = ['SAZ', 'SAP', 'SAM', 'SAO', 'SLS', 'SXE', 'SEQ', 'SNE',
          'SGR', 'SLE', 'SNO', 'SSE', 'SS0', 'SS1', 'SS2', 'SS3']
 GEN_SKIP = {name: 0x0800 | (i << 4) for i, name in enumerate(SKIPS)}
@@ -173,10 +181,27 @@ NAMES = re.compile(r'[A-Za-z][A-Za-z0-9_.]*')
 class AsmError(Exception):
     def __init__(self, lineno, message):
         super().__init__(f'line {lineno}: {message}')
+        self.lineno = lineno
 
 
 class UndefinedSymbol(AsmError):
     """Raised on its own so that EQU can retry a forward reference."""
+
+
+class AsmErrorList(AsmError):
+    """Every error a run collected, raised once at the end so the first bad
+    card does not hide the rest of a long file's problems.
+
+    A subclass of AsmError so existing `except asm703.AsmError` callers keep
+    working -- str() joins the individual messages. Carries the partial
+    listing and symbol table so main() can still write the -l file, which is
+    where a pile of errors actually gets read.
+    """
+    def __init__(self, errors, listing, symbols):
+        self.errors = errors
+        self.listing = listing
+        self.symbols = symbols
+        Exception.__init__(self, '\n'.join(str(e) for e in errors))
 
 
 def char_literal(lineno, body):
@@ -441,6 +466,8 @@ def sizeof(lineno, op, arg):
         return 0
     if op in SUBR_MACROS or op == 'EXCH':
         return 2
+    if op in GEN_TWOWORD:
+        return 2  # opcode word, then the 15-bit address word
     if op in ('WORD', 'DATA', 'D'):
         return len(operand_list(arg))
     if op == 'BYTE':
@@ -465,8 +492,15 @@ def string_body(lineno, arg):
     return unescape(arg[1:-1], lineno)
 
 
-def encode(lineno, op, arg, symbols, here, address_syms=None):
-    """Assemble one instruction into a single word."""
+def encode(lineno, op, arg, symbols, here, address_syms=None,
+           prev_selects_page=False):
+    """Assemble one instruction into a single word.
+
+    `prev_selects_page` says the statement emitted immediately before this one
+    was SML/SMU/SMB, whose page selection governs exactly this instruction's
+    memory reference -- which is what licenses a direct operand outside the
+    instruction's own page.
+    """
 
     def value(text, limit=None):
         v = Expr(text, symbols, here, lineno).value()
@@ -503,17 +537,42 @@ def encode(lineno, op, arg, symbols, here, address_syms=None):
             addr = Expr(text, doubled, here * 2, lineno).value()
         else:
             addr = value(text)
-        # A byte address wraps within its byte page: the M field is eleven bits
-        # and EXR supplies the rest, so word 5C2 is byte B84 and reaches the
-        # instruction as 384. Word instructions have no such slack.
-        if op in BYTE_REF:
+        # An indexed operand's M is a bare base or displacement under IXR, not
+        # a paged address, so it keeps the old rules: byte bases wrap within
+        # the eleven-bit field -- the relocating loader writes `STB * BUF3+...`
+        # with the full byte address B84 and SYM II emits 384 -- and word bases
+        # must simply fit.
+        #
+        # A *direct* operand is a paged address: the hardware reads M under
+        # EXR, and EXR tracks the executing instruction's page unless the
+        # immediately preceding instruction selected another. So a direct
+        # operand in the instruction's own page emits its low eleven bits
+        # (what SYM II printed for the loader's own-page byte references), one
+        # in a different page rides on a preceding SML/SMU/SMB, and anything
+        # else would silently reference the wrong page at run time -- which
+        # was assembled without complaint before this check existed, for
+        # operands that happened to fit the field.
+        unit = 'byte' if op in BYTE_REF else 'word'
+        if indexed:
+            if op in BYTE_REF:
+                addr &= 0x7ff
+            if not 0 <= addr <= 0x7ff:
+                raise AsmError(
+                    lineno,
+                    f'indexed {unit} base {addr:#x} is outside the 11-bit M field')
+        else:
+            if addr < 0:
+                raise AsmError(lineno, f'{unit} address {addr} is negative')
+            ipage = here >> 10 if op in BYTE_REF else here >> 11
+            tpage = addr >> 11
+            if tpage != ipage and not prev_selects_page:
+                raise AsmError(
+                    lineno,
+                    f'{unit} address {addr:#x} is in {unit} page {tpage} and this '
+                    f'instruction runs in {unit} page {ipage}, so the reference '
+                    f'would land in the wrong page -- put SMB in front, or go '
+                    f'through the index register')
             addr &= 0x7ff
-        if not 0 <= addr <= 0x7ff:
-            unit = 'byte' if op in BYTE_REF else 'word'
-            raise AsmError(
-                lineno,
-                f'{unit} address {addr:#x} is outside the 11-bit M field; '
-                f'the 703 reaches the rest of core through EXR (SML/SMU)')
         return (MEMREF[op] << 12) | (0x0800 if indexed else 0) | addr
 
     if op in GEN_ALIAS:
@@ -580,6 +639,9 @@ def assemble(path):
     symbols = {}
     placed = []
     here = 0
+    # Errors from both passes, reported together at the end: on a long file
+    # the first bad card should not hide the rest.
+    errors = []
     # Stack of "are we assembling?" flags, one per open TRUE/FALS.
     cond = []
     # EQUs whose operand named something not yet defined; settled after the pass.
@@ -591,75 +653,89 @@ def assemble(path):
     # equated to is.
     address_syms = set()
     for lineno, label, op, arg, text in statements:
-        if op in CONDITIONALS:
-            if op == 'ENDC':
-                if not cond:
-                    raise AsmError(lineno, 'ENDC without TRUE or FALS')
-                cond.pop()
-            elif all(cond):
-                taken = condition(arg, ChainMap(symbols, config), here, lineno)
-                cond.append(taken if op == 'TRUE' else not taken)
-            else:
-                # already inside skipped code: the guard is not evaluated at
-                # all, since the symbols it names may never have been defined
-                cond.append(False)
-            placed.append((lineno, here, op, arg, text))
-            continue
-        if not all(cond):
-            # Skipped code places nothing and defines nothing, not even its
-            # labels -- otherwise a label in the untaken half of a choice would
-            # collide with the one in the taken half.
-            placed.append((lineno, here, None, arg, text))
-            continue
-        if op == 'END':
-            placed.append((lineno, here, op, arg, text))
-            break
-        if op == 'EQU':
-            if not label:
-                raise AsmError(lineno, 'EQU needs a label')
-            if '$' in (arg or '') or any(n in address_syms for n in NAMES.findall(arg or '')):
+        try:
+            if op in CONDITIONALS:
+                if op == 'ENDC':
+                    if not cond:
+                        raise AsmError(lineno, 'ENDC without TRUE or FALS')
+                    cond.pop()
+                elif all(cond):
+                    taken = condition(arg, ChainMap(symbols, config), here, lineno)
+                    cond.append(taken if op == 'TRUE' else not taken)
+                else:
+                    # already inside skipped code: the guard is not evaluated at
+                    # all, since the symbols it names may never have been defined
+                    cond.append(False)
+                placed.append((lineno, here, op, arg, text))
+                continue
+            if not all(cond):
+                # Skipped code places nothing and defines nothing, not even its
+                # labels -- otherwise a label in the untaken half of a choice would
+                # collide with the one in the taken half.
+                placed.append((lineno, here, None, arg, text))
+                continue
+            if op == 'END':
+                placed.append((lineno, here, op, arg, text))
+                break
+            if op == 'EQU':
+                if not label:
+                    raise AsmError(lineno, 'EQU needs a label')
+                if '$' in (arg or '') or any(n in address_syms for n in NAMES.findall(arg or '')):
+                    address_syms.add(label)
+                try:
+                    symbols[label] = Expr(arg or '', symbols, here, lineno).value()
+                except UndefinedSymbol:
+                    # SYM II allowed an EQU to name a symbol defined further down
+                    # the deck -- the X-RAY listing's card 298 is
+                    # `MAXP EQU ENDP-PEAT+12`, and both of those are defined much
+                    # later. Set it aside and settle it once the pass has seen
+                    # every label. An EQU that some *later* EQU depends on still
+                    # resolves, because the leftovers are iterated to a fixpoint.
+                    deferred.append((lineno, label, arg, here))
+                placed.append((lineno, here, op, arg, text))
+                continue
+            if label:
+                if label in symbols:
+                    raise AsmError(lineno, f'{label!r} is defined twice')
+                # SUBR lays down a return slot and then the STX that fills it; the
+                # name belongs to the STX, so that callers jump to code.
+                symbols[label] = here + 1 if op == 'SUBR' else here
                 address_syms.add(label)
+            if op in ('ORG', 'ORIG'):
+                here = Expr(arg or '', symbols, here, lineno).value()
+                placed.append((lineno, here, op, arg, text))
+                continue
+            placed.append((lineno, here, op, arg, text))
+            if op == 'TEXT':
+                body = string_body(lineno, arg)
+                if len(body) % 2:
+                    raise AsmError(
+                        lineno,
+                        f'TEXT is {len(body)} bytes; a word is two bytes, so pad it '
+                        f'to an even length rather than let the assembler guess')
+                here += len(body) // 2
+            elif op == 'RES':
+                here += Expr(arg or '', symbols, here, lineno).value()
+            else:
+                here += sizeof(lineno, op, arg)
+        except AsmError as e:
+            errors.append(e)
+            # Neutralize the statement so pass 2 does not report it a second
+            # time, then advance by its best-guess size so every later address
+            # -- and so every later error message -- stays right.
+            if placed and placed[-1][0] == lineno:
+                placed[-1] = (lineno, placed[-1][1], None, arg, text)
+            else:
+                placed.append((lineno, here, None, arg, text))
             try:
-                symbols[label] = Expr(arg or '', symbols, here, lineno).value()
-            except UndefinedSymbol:
-                # SYM II allowed an EQU to name a symbol defined further down
-                # the deck -- the X-RAY listing's card 298 is
-                # `MAXP EQU ENDP-PEAT+12`, and both of those are defined much
-                # later. Set it aside and settle it once the pass has seen
-                # every label. An EQU that some *later* EQU depends on still
-                # resolves, because the leftovers are iterated to a fixpoint.
-                deferred.append((lineno, label, arg, here))
-            placed.append((lineno, here, op, arg, text))
-            continue
-        if label:
-            if label in symbols:
-                raise AsmError(lineno, f'{label!r} is defined twice')
-            # SUBR lays down a return slot and then the STX that fills it; the
-            # name belongs to the STX, so that callers jump to code.
-            symbols[label] = here + 1 if op == 'SUBR' else here
-            address_syms.add(label)
-        if op in ('ORG', 'ORIG'):
-            here = Expr(arg or '', symbols, here, lineno).value()
-            placed.append((lineno, here, op, arg, text))
-            continue
-        placed.append((lineno, here, op, arg, text))
-        if op == 'TEXT':
-            body = string_body(lineno, arg)
-            if len(body) % 2:
-                raise AsmError(
-                    lineno,
-                    f'TEXT is {len(body)} bytes; a word is two bytes, so pad it '
-                    f'to an even length rather than let the assembler guess')
-            here += len(body) // 2
-        elif op == 'RES':
-            here += Expr(arg or '', symbols, here, lineno).value()
-        else:
-            here += sizeof(lineno, op, arg)
+                here += sizeof(lineno, op, arg) or 0
+            except (AsmError, TypeError):
+                here += 1
 
     # Settle the deferred EQUs. Each sweep that resolves anything may unblock
     # another, so sweep until one achieves nothing: either they are all done or
-    # what is left is a genuine undefined symbol (or a cycle), and reporting
-    # the first of those is more useful than reporting how many there were.
+    # what is left is a genuine undefined symbol (or a cycle), and every one of
+    # those is worth reporting.
     while deferred:
         rest = []
         for lineno, label, arg, at in deferred:
@@ -668,71 +744,106 @@ def assemble(path):
             except UndefinedSymbol as err:
                 rest.append((lineno, label, arg, at, err))
         if len(rest) == len(deferred):
-            raise rest[0][4]
+            errors.extend(item[4] for item in rest)
+            break
         deferred = [item[:4] for item in rest]
 
     # Pass 2: emit.
     core = {}
     listing = []
+    # Whether the statement emitted immediately before this one was
+    # SML/SMU/SMB, whose page selection licenses the next direct reference to
+    # leave its own page. Statements that emit nothing (EQU, ORG, comments)
+    # are invisible to the hardware and leave the flag alone.
+    prev_selects = False
     for lineno, addr, op, arg, text in placed:
         words = []
-        if op in ('WORD', 'DATA', 'D'):
-            for part in operand_list(arg):
-                words.append(Expr(part, symbols, addr + len(words), lineno).value() & 0xffff)
-        elif op == 'TEXT':
-            body = string_body(lineno, arg)
-            words = [(body[i] << 8) | body[i + 1] for i in range(0, len(body), 2)]
-        elif op == 'EXCH':
-            words = [EXCH_WORD, EXCH_WORD]
-        elif op == 'SUBR':
-            words = [0x0000, (MEMREF['STX'] << 12) | (addr & 0x07ff)]
-        elif op == 'EXIT':
-            # `EXIT sym` returns through the subroutine's slot; `EXIT sym,n`
-            # returns n words further on, which is how a subroutine takes an
-            # error return -- the relocating loader's `EXIT RELOAD,1` emits
-            # 963A 2801, a JSX indexed by one rather than zero.
-            parts = operand_list(arg or '')
-            entry = Expr(parts[0], symbols, addr, lineno).value()
-            skip = Expr(parts[1], symbols, addr, lineno).value() if len(parts) > 1 else 0
-            if not 0 <= skip <= 0x7ff:
-                raise AsmError(lineno, f'EXIT return offset {skip} does not fit')
-            words = [(MEMREF['LDX'] << 12) | ((entry - 1) & 0x07ff),
-                     (MEMREF['JSX'] << 12) | 0x0800 | skip]
-        elif op == 'BYTE':
-            # Two bytes to a word, high half first, as everywhere else on this
-            # machine. An odd count leaves the low half zero.
-            vals = [Expr(part, symbols, addr, lineno).value() & 0xff
-                    for part in operand_list(arg)]
-            if len(vals) % 2:
-                vals.append(0)
-            words = [(vals[i] << 8) | vals[i + 1] for i in range(0, len(vals), 2)]
-        elif op == 'RES':
-            words = [0] * Expr(arg or '', symbols, addr, lineno).value()
-        elif op == 'JSX' and arg and len(operand_list(arg)) > 1:
-            parts = operand_list(arg)
-            words = [encode(lineno, op, parts[0], symbols, addr, address_syms)]
-            for i, part in enumerate(parts[1:], 1):
-                value = Expr(part, symbols, addr + i, lineno).value() & 0xffff
-                # The last argument carries bit 0 -- this machine's most
-                # significant -- to mark the end of the list. That is the
-                # assembler's doing, not the programmer's: `JSX STAT,LOADFIOT`
-                # emits 854F where LOADFIOT is 54F. X-RAY's I/O done area
-                # confirms it from the other side, masking the bit off with
-                # `AND X7FF` under the comment DO NOT TEST SIGN BIT.
-                if i == len(parts) - 1:
-                    value |= 0x8000
-                words.append(value)
-        elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
-            words = []
-        else:
-            words = [encode(lineno, op, arg, symbols, addr, address_syms)]
+        try:
+            if op in ('WORD', 'DATA', 'D'):
+                for part in operand_list(arg):
+                    words.append(Expr(part, symbols, addr + len(words), lineno).value() & 0xffff)
+            elif op == 'TEXT':
+                body = string_body(lineno, arg)
+                words = [(body[i] << 8) | body[i + 1] for i in range(0, len(body), 2)]
+            elif op == 'EXCH':
+                words = [EXCH_WORD, EXCH_WORD]
+            elif op == 'SUBR':
+                words = [0x0000, (MEMREF['STX'] << 12) | (addr & 0x07ff)]
+            elif op == 'EXIT':
+                # `EXIT sym` returns through the subroutine's slot; `EXIT sym,n`
+                # returns n words further on, which is how a subroutine takes an
+                # error return -- the relocating loader's `EXIT RELOAD,1` emits
+                # 963A 2801, a JSX indexed by one rather than zero.
+                parts = operand_list(arg or '')
+                entry = Expr(parts[0], symbols, addr, lineno).value()
+                skip = Expr(parts[1], symbols, addr, lineno).value() if len(parts) > 1 else 0
+                if not 0 <= skip <= 0x7ff:
+                    raise AsmError(lineno, f'EXIT return offset {skip} does not fit')
+                words = [(MEMREF['LDX'] << 12) | ((entry - 1) & 0x07ff),
+                         (MEMREF['JSX'] << 12) | 0x0800 | skip]
+            elif op == 'BYTE':
+                # Two bytes to a word, high half first, as everywhere else on this
+                # machine. An odd count leaves the low half zero.
+                vals = [Expr(part, symbols, addr, lineno).value() & 0xff
+                        for part in operand_list(arg)]
+                if len(vals) % 2:
+                    vals.append(0)
+                words = [(vals[i] << 8) | vals[i + 1] for i in range(0, len(vals), 2)]
+            elif op == 'RES':
+                words = [0] * Expr(arg or '', symbols, addr, lineno).value()
+            elif op == 'JSX' and arg and len(operand_list(arg)) > 1:
+                parts = operand_list(arg)
+                words = [encode(lineno, op, parts[0], symbols, addr, address_syms,
+                                prev_selects_page=prev_selects)]
+                for i, part in enumerate(parts[1:], 1):
+                    value = Expr(part, symbols, addr + i, lineno).value() & 0xffff
+                    # The last argument carries bit 0 -- this machine's most
+                    # significant -- to mark the end of the list. That is the
+                    # assembler's doing, not the programmer's: `JSX STAT,LOADFIOT`
+                    # emits 854F where LOADFIOT is 54F. X-RAY's I/O done area
+                    # confirms it from the other side, masking the bit off with
+                    # `AND X7FF` under the comment DO NOT TEST SIGN BIT.
+                    if i == len(parts) - 1:
+                        value |= 0x8000
+                    words.append(value)
+            elif op in GEN_TWOWORD:
+                # MPY/DIV: the fixed opcode word, then the operand as a flat
+                # 15-bit word address (section 6). No page arithmetic, no
+                # SMB, and no indexed form -- the second word already reaches
+                # all of core.
+                if arg is None:
+                    raise AsmError(lineno, f'{op} needs an address')
+                if arg.strip().startswith('*'):
+                    raise AsmError(
+                        lineno,
+                        f'{op} has no indexed form; its second word is a flat '
+                        f'15-bit address that already reaches all of core')
+                operand = Expr(arg, symbols, addr + 1, lineno).value()
+                if not 0 <= operand <= 0x7fff:
+                    raise AsmError(
+                        lineno, f'{op} operand {operand:#x} is not a 15-bit word address')
+                words = [GEN_TWOWORD[op], operand]
+            elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
+                words = []
+            else:
+                words = [encode(lineno, op, arg, symbols, addr, address_syms,
+                                prev_selects_page=prev_selects)]
 
-        for i, w in enumerate(words):
-            if addr + i in core:
-                raise AsmError(lineno, f'word {addr + i:#x} is assembled twice')
-            core[addr + i] = w
+            for i, w in enumerate(words):
+                if addr + i in core:
+                    raise AsmError(lineno, f'word {addr + i:#x} is assembled twice')
+                core[addr + i] = w
+        except AsmError as e:
+            errors.append(e)
+            words = []
+        if words:
+            prev_selects = op in ('SML', 'SMU', SELECT_BASE)
         listing.append((addr, words, text))
 
+    if errors:
+        # Both passes contribute, so put the report back in source order.
+        errors.sort(key=lambda e: getattr(e, 'lineno', 0))
+        raise AsmErrorList(errors, listing, symbols)
     if not core:
         raise AsmError(0, 'nothing was assembled')
 
@@ -761,6 +872,18 @@ def punch_tape(image, origin):
     return bytes([0x00] * 8 + [0xff] * 12) + image[origin * 2:]
 
 
+def write_listing(path, listing, symbols):
+    with open(path, 'w', encoding='utf-8') as f:
+        for addr, words, text in listing:
+            if words:
+                f.write(f'{addr:04X}  {" ".join(f"{w:04X}" for w in words[:4]):<20}{text}\n')
+            else:
+                f.write(f'{"":4}  {"":<20}{text}\n')
+        f.write('\nsymbols:\n')
+        for name in sorted(symbols):
+            f.write(f'  {name:<10} {symbols[name] & 0xffff:04X}\n')
+
+
 def main():
     ap = argparse.ArgumentParser(description='Raytheon 703 assembler')
     ap.add_argument('source')
@@ -781,6 +904,17 @@ def main():
 
     try:
         image, listing, symbols, core = assemble(args.source)
+    except AsmErrorList as e:
+        for err in e.errors:
+            print(f'{args.source}: {err}', file=sys.stderr)
+        n = len(e.errors)
+        print(f'{args.source}: {n} error{"s" if n != 1 else ""}, no image written',
+              file=sys.stderr)
+        # The listing is where a pile of errors actually gets read, so write
+        # it even though there is nothing to load.
+        if args.listing:
+            write_listing(args.listing, e.listing, e.symbols)
+        return 1
     except AsmError as e:
         print(f'{args.source}: {e}', file=sys.stderr)
         return 1
@@ -804,15 +938,7 @@ def main():
                 f.write(f'{addr:04X} {core[addr] & 0xffff:04X}\n')
 
     if args.listing:
-        with open(args.listing, 'w', encoding='utf-8') as f:
-            for addr, words, text in listing:
-                if words:
-                    f.write(f'{addr:04X}  {" ".join(f"{w:04X}" for w in words[:4]):<20}{text}\n')
-                else:
-                    f.write(f'{"":4}  {"":<20}{text}\n')
-            f.write('\nsymbols:\n')
-            for name in sorted(symbols):
-                f.write(f'  {name:<10} {symbols[name] & 0xffff:04X}\n')
+        write_listing(args.listing, listing, symbols)
 
     print(f'{args.source}: {len(image) // 2} words -> {args.output}')
     return 0
