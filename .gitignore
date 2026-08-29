@@ -16,3 +16,4 @@ doit
 /target
 /mbasic-games.img
 __pycache__/
+*.pyc
