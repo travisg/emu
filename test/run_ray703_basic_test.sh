@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# A guest that dies early leaves the input pipe with no reader, and the next
+# keystroke would then kill this script outright. Take the error instead, so
+# a broken run reaches the checks at the bottom and reports what it found.
+trap '' PIPE
+
 # End-to-end test for Tiny BASIC on the Raytheon 703: boot the image, type a
 # program at the READY prompt, RUN it, answer its INPUT, and check the log
 # for output only the guest could have produced -- which exercises the
@@ -11,6 +16,11 @@ set -euo pipefail
 # drops keys typed while it is still processing the previous line, exactly
 # as a busy 1968 machine dropped what a Model 33 fed it, so pacing on
 # output is part of driving it correctly.
+#
+# The session then does the one thing that is not typing at a prompt: it
+# hammers the keyboard while a program runs. That interrupts the
+# interpreter out in word page 1 or 2, which is the only way to reach the
+# service routine's first memory reference in a page other than its own.
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
@@ -121,7 +131,24 @@ run_session() {
     type_at_ready 12 'LIST'
     wait_count '20 @(I)=I\*I' 2 || return 1   # once typed, once listed
     type_at_ready 13 'PRINT 6*7;"OK"'
-    type_at_ready 14 'BYE'
+
+    # Keys struck while a program runs. Each one interrupts the interpreter
+    # wherever it happens to be -- pages 1 and 2, running a program -- and
+    # the service routine's first store resolves in that page unless it
+    # leads with SMB, landing on live code instead of on T.SAVEA. Ctrl-C
+    # then breaks back to READY and the evaluator has to still work.
+    type_at_ready 14 'NEW'
+    type_at_ready 15 '10 GOTO 10'
+    type_at_ready 16 'RUN'
+    wait_quiet || return 1
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        printf 'X' >&3
+        sleep 0.15                      # the keyboard delivers ten a second
+    done
+    printf '\003' >&3                   # ctrl-c, which the driver flags
+    wait_count 'BREAK AT 10' 1 || return 1
+    type_at_ready 17 'PRINT 8*9;"KB"'
+    type_at_ready 18 'BYE'
     # Wait for the halt before the caller closes the pipe. Four characters
     # take four tenths of a second to reach a teletype, and the ctrl-d that
     # closing it looks like would shut the machine down with BYE still on
@@ -141,6 +168,7 @@ if [[ "$FAILED" == 0 ]] \
     && grep -q 'RNDOK' "$LOG_FILE" \
     && grep -q -- 'GOT-6 -5' "$LOG_FILE" \
     && grep -q '42OK' "$LOG_FILE" \
+    && grep -q '72KB' "$LOG_FILE" \
     && grep -q 'stopping, Halted' "$LOG_FILE"; then
     echo "PASS: ray703 basic test ($EMU_BIN)"
     exit 0

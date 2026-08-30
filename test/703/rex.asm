@@ -39,14 +39,17 @@
 ; stated, and nothing else in the listing may care:
 ;
 ; * THE DEFER CHECK.  SCHED switches only when the saved PC at word 8 lies
-;   outside [ISRBEG, ISREND), the contiguous block holding SCHED, SERV and
-;   KICK.  A tick that lands inside that range preempted the level 0
+;   outside [ISRBEG, ISREND), the contiguous block holding SCHED, SERV,
+;   KICK, PICK and SWTCH.  The range is the code in which a tick must not
+;   start a switch.  A tick landing in the driver preempted the level 0
 ;   service (or its entry), and the level 2 block then holds the service
 ;   routine's frame, not a task's: switching on it would strand SERV's
-;   INR 0 and park half a driver in a TCB.  Deferring costs at most one
-;   tick.  The classification is exact because tasks execute that range
-;   only under MSK -- a masked tick is held pending and fires after the
-;   UNM, by which time the saved PC is back in task code.
+;   INR 0 and park half a driver in a TCB.  A tick landing on SWTCH's one
+;   unmasked instruction finds a switch already staged and half made.
+;   Both want the same answer -- return, and leave it to a later tick --
+;   and deferring costs at most one tick.  Tasks execute the rest of the
+;   range only under MSK, so no other saved program counter can fall
+;   inside it.
 ;
 ; * THE SMB LEAD.  The entry sequence does not reload EXR, so a service
 ;   routine's first memory reference resolves in the page of whatever it
@@ -82,15 +85,19 @@
 ;   letter tasks' mailboxes empty and the printer idle, nothing of theirs
 ;   can chase the down-message.
 ;
-; * SLEEP IS SPIN PLUS STATE, because the machine has no instruction with
-;   which to yield.  A task stores its delay and marks itself SLEEPING in
-;   one masked window, then spins reading its own state; the scheduler
-;   passes over a sleeping task, counts its delay down on every tick, and
-;   marks it runnable again at zero, whereupon the spin falls through.  The
-;   cost is the fraction of a tick the task spins before the first tick
-;   takes the processor away -- the price of having nowhere to yield to.
-;   The spin must live OUTSIDE [ISRBEG, ISREND): a task whose spin the
-;   defer check mistook for the driver would never be switched away from.
+; * SLEEP IS A STATE, A DELAY AND A SWITCH.  A task stores its delay and
+;   marks itself SLEEPING in one masked window and calls SWTCH, which
+;   gives the processor to somebody else there and then instead of
+;   leaving the task to spin out the rest of the tick.  The scheduler
+;   passes over a sleeping task, counts its delay down on every tick and
+;   marks it runnable again at zero; SWTCH returns when the task is next
+;   picked, so the sleep is simply how long the call takes.
+;
+; * SWTCH IS FOR TASKS.  A service routine that called it would rewrite
+;   CURX and walk away from its own INR, leaving its level Active for
+;   good -- and a level that never returns holds off every level at or
+;   below it, which is the whole interrupt system, silently.  Service
+;   routines run to their INR and leave the scheduling to the tick.
 ;
 ; * THE IDLE TASK is what runs when every task is asleep, and the reason
 ;   the scheduler's scan can always finish.  It is a branch to self, which
@@ -122,7 +129,7 @@
 ;
 ;   ./target/debug/emu -s ray703 -r roms/703/rex.bin --fast-io
 
-; ---------------------------------------------------------------- levels 0-2
+; ---------------------------------------------------------------- levels 0-3
                 ORG     0
                 JMP     START           ; word 0: clobbered by the PCR save
                 WORD    SERV            ; level 0 linkage address
@@ -133,9 +140,15 @@
                 WORD    SCHED           ; level 2 linkage address
                 WORD    0               ; word 10: level 2 machine status save
                 WORD    0
+                WORD    0               ; word 12: SWTCH stages a program
+                WORD    0               ; counter and a status here and
+                WORD    0               ; loads them with INR 3 -- see the
+                WORD    0               ; header. Level 3 is never enabled.
 
 L2PC            EQU     8               ; the level 2 block words SCHED edits:
 L2ST            EQU     10              ; rewriting them before INR 2 is the switch
+L3PC            EQU     12              ; and the level 3 words SWTCH edits,
+L3ST            EQU     14              ; for the same reason, before INR 3
 
 ; A task control block: the four words of context the hardware and the
 ; switch move between them, then the two the scheduler runs on.
@@ -158,13 +171,13 @@ NLETT           EQU     3               ; of which the first three print letters
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
 
-; Connect the keyboard and the clock, then *become* task A: TCB slot 0 is
-; left blank and the first tick fills it with whatever A was doing.  ENB
+; Connect the keyboard and the clock, then *become* the shell: its block
+; is left blank and the first tick fills it in.  ENB
 ; before UNM because a masked signal is held where a disabled one is
 ; dropped; ENB 2 before the arming DOT so not even the first tick can be
 ; dropped -- it is 9,523 cycles out, held by the mask until the UNM.  A
 ; tick that lands on the two instructions after the UNM parks this tail in
-; TCB slot 0, which is exactly right.
+; the shell's block, which is exactly right.
 START           MSK
                 SGM                     ; flat addressing, everywhere, always
                 DOT     14,11           ; connect the keyboard; function 11
@@ -253,33 +266,7 @@ SCSW            LDX     CURX            ; IXR = the current task's block
                 LDW     L2ST
                 STW     *TCBT+T.MST
 
-; Round robin over the tasks that can run, starting past the one just
-; parked.  A task that is asleep is simply skipped; if none of them can
-; run the idle task always can, which is what makes this scan terminate.
-                LDW     CURX
-                STW     SCIX
-                LDW     KNTASK
-                STW     SCTRY
-SCSCN           LDW     SCIX
-                ADD     KTCBW
-                CMW     KTIDLE
-                SLS
-                CLR                     ; past the last block: wrap
-                STW     SCIX
-                CAX
-                LDW     *TCBT+T.STA
-                SAZ                     ; runnable?
-                JMP     SCNRD
-                JMP     SCPIK
-SCNRD           LDW     SCTRY
-                SUB     K1
-                STW     SCTRY
-                SAZ                     ; any candidate left to look at?
-                JMP     SCSCN
-                LDW     KTIDLE          ; every task is asleep: go idle
-                STW     SCIX
-SCPIK           LDW     SCIX
-                STW     CURX
+                JSX     PICK
                 LDX     CURX
                 LDW     *TCBT+T.PCR
                 STW     L2PC            ; incoming PC and status go into the
@@ -418,6 +405,88 @@ KHIT            LDW     KCAND
                 DOT     14,14           ; teletype, write the character
 KDONE           EXIT    KICK
 
+; Round robin over the tasks that can run, starting past the one running
+; now, and leave the choice in CURX.  A task that is asleep, waiting or
+; stopped is simply skipped; if none of them can run the idle task always
+; can, which is what makes this scan terminate.  Shared by the tick and by
+; SWTCH, which cannot overlap: a task inside SWTCH holds the mask, and a
+; tick that lands in its one unmasked instruction defers before it gets
+; here.
+PICK            SUBR
+                LDW     CURX
+                STW     SCIX
+                LDW     KNTASK
+                STW     SCTRY
+PKSCN           LDW     SCIX
+                ADD     KTCBW
+                CMW     KTIDLE
+                SLS
+                CLR                     ; past the last block: wrap
+                STW     SCIX
+                CAX
+                LDW     *TCBT+T.STA
+                SAZ                     ; runnable?
+                JMP     PKNRD
+                JMP     PKPIK
+PKNRD           LDW     SCTRY
+                SUB     K1
+                STW     SCTRY
+                SAZ                     ; any candidate left to look at?
+                JMP     PKSCN
+                LDW     KTIDLE          ; nobody can run: go idle
+                STW     SCIX
+PKPIK           LDW     SCIX
+                STW     CURX
+                EXIT    PICK
+
+; Give the processor up now instead of waiting for the tick to take it.
+; Called with JSX from task context only -- see the header -- and it does
+; not return to its caller the way a subroutine does: it returns when the
+; scheduler next picks this task, which is what makes it the whole of a
+; sleep or a wait.
+;
+; The staging is the point.  A switch cannot be built in level 2's own
+; block: the tick's entry sequence writes the program counter and status
+; there before any instruction of the scheduler runs, so a tick landing in
+; the window below would overwrite the context being loaded, and INR 2
+; would then return here forever.  Level 3's block is untouched by a level
+; 2 entry, level 3 is never enabled, and INR asks nothing of a level
+; except that it name a block -- so INR 3 is simply this machine's one
+; instruction for loading a program counter and a status word together.
+;
+; A tick may land on the UNM, which is why this routine sits inside the
+; deferred range: the tick defers, returns here, and the INR 3 below then
+; loads the context that was staged before the mask came off.  Nothing
+; that the tick's bookkeeping touches is read after that UNM.
+SWTCH           MSK
+                STX     SWRET           ; where the caller resumes
+                STW     SWACR           ; and what it had in the accumulator
+                LDX     CURX
+                LDW     SWACR
+                STW     *TCBT+T.ACR
+                LDW     SWRET
+                STW     *TCBT+T.PCR
+                STW     *TCBT+T.IXR     ; resumed through EXIT, which wants
+                                        ; the link in the index register
+                AND     KPGMSK          ; the status it resumes with: the page
+                SLL     1               ; that address lies in, and global.
+                ORI     KGLB            ; The indicators are not carried -- a
+                STW     *TCBT+T.MST     ; task yields of its own accord, never
+                                        ; between a compare and its skip, and
+                                        ; an overflow does not survive a yield
+                JSX     PICK
+                LDX     CURX
+                LDW     *TCBT+T.PCR
+                STW     L3PC
+                LDW     *TCBT+T.MST
+                STW     L3ST
+                LDW     *TCBT+T.IXR
+                STW     SWIXR
+                LDW     *TCBT+T.ACR
+                LDX     SWIXR
+                UNM
+                INR     3
+
 ISREND          EQU     $
 
 ; ---------------------------------------------------------------- kernel data
@@ -439,8 +508,11 @@ BGATE           WORD    0               ; set by the shell when the banner is ou
 CURX            WORD    TCBW*3          ; the current task's block offset: the
                                         ; kernel becomes the shell, so it
                                         ; starts on the shell's own block
-SCIX            WORD    0               ; SCHED's walk over the blocks
+SCIX            WORD    0               ; PICK's walk over the blocks
 SCTRY           WORD    0               ; candidates left in the scan
+SWRET           WORD    0               ; SWTCH's caller: where it resumes...
+SWACR           WORD    0               ; ...what it had in the accumulator
+SWIXR           WORD    0               ; ...and the index the next task wants
 TICKS           WORD    0               ; ticks into the current second...
 SECS            WORD    0               ; ...and seconds since REX came up
 SCHR            WORD    0               ; SERV's character scratch
@@ -461,6 +533,8 @@ KSLP            WORD    S.SLP
 KTCBW           WORD    TCBW
 KNTASK          WORD    NTASK
 KTIDLE          WORD    TIDLE
+KPGMSK          WORD    X'7C00'         ; the page bits of a word address, which
+KGLB            WORD    X'0080'         ; doubled are a status word's EXR field
 KISRB           WORD    ISRBEG
 KISRE           WORD    ISREND
 
@@ -515,13 +589,9 @@ AWAIT           SMB     MBCH0
                 JMP     AWAIT
 
 ; Sleep ANAPN ticks: store the delay and the state in one masked window,
-; so the tick cannot read half of it, then spin on the state until the
-; scheduler marks this task runnable again.  The spin burns whatever is
-; left of the current tick -- there is no instruction with which to give
-; the processor back -- and nothing after that, because a sleeping task is
-; passed over by the scan.  It sits here in the task's own page, outside
-; the range the scheduler defers on, or the tick could never take the
-; processor away from it.
+; so the tick cannot read half of it, and hand the processor straight on.
+; SWTCH returns when the scheduler next picks this task, which the scan
+; will not do until the tick counts the delay down to nothing.
                 MSK
                 LDW     ANAPN
                 SMB     A.DLY
@@ -529,12 +599,9 @@ AWAIT           SMB     MBCH0
                 LDW     AKSLP
                 SMB     A.STA
                 STW     A.STA
-                UNM
-ANAPW           SMB     A.STA
-                LDW     A.STA
-                SAZ                     ; awake again?
-                JMP     ANAPW
-                JMP     ARUN
+                SMB     SWTCH
+                JSX     SWTCH           ; and the processor goes elsewhere
+                JMP     ARUN          ; now, not at the next tick
 AQUIT           UNM
 APARK           JMP     APARK           ; parked; a legal idle, levels live
 
@@ -572,8 +639,7 @@ BWAIT           SMB     MBCH1
                 SAZ                     ; cleared by SERV when printed
                 JMP     BWAIT
 
-; Sleep BNAPN ticks; see task A's ANAP for what the two cells mean and why
-; the spin has to sit out here in the task's own page.
+; Sleep BNAPN ticks; task A above says what the two cells mean.
                 MSK
                 LDW     BNAPN
                 SMB     B.DLY
@@ -581,12 +647,9 @@ BWAIT           SMB     MBCH1
                 LDW     BKSLP
                 SMB     B.STA
                 STW     B.STA
-                UNM
-BNAPW           SMB     B.STA
-                LDW     B.STA
-                SAZ                     ; awake again?
-                JMP     BNAPW
-                JMP     BRUN
+                SMB     SWTCH
+                JSX     SWTCH           ; and the processor goes elsewhere
+                JMP     BRUN          ; now, not at the next tick
 BQUIT           UNM
 BPARK           JMP     BPARK           ; parked; a legal idle, levels live
 
@@ -627,12 +690,9 @@ CWAIT           SMB     MBCH2
                 LDW     CKSLP
                 SMB     C.STA
                 STW     C.STA
-                UNM
-CNAPW           SMB     C.STA
-                LDW     C.STA
-                SAZ                     ; awake again?
-                JMP     CNAPW
-                JMP     CRUN
+                SMB     SWTCH
+                JSX     SWTCH           ; and the processor goes elsewhere
+                JMP     CRUN          ; now, not at the next tick
 CQUIT           UNM
 CPARK           JMP     CPARK
 
@@ -1071,7 +1131,7 @@ SHDL2           LDW     SHV
                 JSX     SHPRT
                 EXIT    SHDEC
 
-; Sleep SHKNAP ticks; the letter tasks' ANAP says how this works.
+; Sleep SHKNAP ticks; the letter tasks say how this works.
 SHNAP           SUBR
                 MSK
                 LDW     SHKNAP
@@ -1080,11 +1140,8 @@ SHNAP           SUBR
                 LDW     SHKSLP
                 SMB     SH.STA
                 STW     SH.STA
-                UNM
-SHNAPW          SMB     SH.STA
-                LDW     SH.STA
-                SAZ                     ; awake again?
-                JMP     SHNAPW
+                SMB     SWTCH
+                JSX     SWTCH
                 EXIT    SHNAP
 
 ; ---------------------------------------------------------------- shell data

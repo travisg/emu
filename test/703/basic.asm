@@ -264,7 +264,16 @@ P.GTDN          EXIT    P.GET
 ; the period driver decides: a non-zero output pointer means a character is
 ; still printing and this is its completion.  Only the hardware's PC and
 ; status are saved automatically; ACR and IXR are this routine's problem.
-T.SERV          STW     T.SAVEA
+;
+; The SMB in front of the first store is not decoration.  The interrupt
+; entry sequence saves EXR but does not reload it (3-3), so the routine's
+; first memory reference resolves in the page of whatever it interrupted --
+; and the interpreter runs in pages 1 and 2, where word T.SAVEA is live
+; code.  Only that first reference needs it: the store reloads EXR from the
+; program counter the way every memory reference does, and the rest of the
+; routine addresses page 0 by itself.
+T.SERV          SMB     T.SAVEA
+                STW     T.SAVEA
                 STX     T.SAVEX
                 LDW     T.OUTP
                 SAZ                     ; transmitter idle?
