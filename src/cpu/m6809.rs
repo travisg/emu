@@ -33,9 +33,12 @@
 //!   - stack pushes pre-decrement (the 6800 post-decrements)
 //!   - `shared_memwrite` sets N/Z *after* the write, from the written value
 //!   - `cmp` on a byte sets H as well
-//!   - `asr` has no fallthrough bug here
+//!   - `asr` never had the 6800's fallthrough bug
 //!
-//! Preserved bug-for-bug through the port; see the 6800 core's note.
+//! Preserved bug-for-bug through the port; see the 6800 core's note. The one
+//! bug repaired since is `SUB`/`SBC`'s overflow flag, which the C++'s
+//! negate-and-add left inverted for nearly every operand -- see the comment at
+//! `Op::Sub`.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -904,12 +907,21 @@ impl Cpu for Cpu6809 {
                 self.put_reg(op.target, r as u16);
             }
 
+            // Subtract in 32 bits and let the borrow fall out of bit 8/16,
+            // which is what `Op::Cmp` below already did.
+            //
+            // The C++ negated the operand and *added* instead. Carry survived
+            // that, but V did not: `set_v1`/`set_v2` are
+            // `a ^ b ^ r ^ (r >> 1)`, so `b` contributes its own bit 7, and a
+            // 32-bit negation sets every bit above 7 for any non-zero operand.
+            // V came out inverted for *almost every* subtraction on this core
+            // -- 65,024 of the 65,536 byte operand pairs, at either carry.
+            // Checked exhaustively against V = A7·!M7·!R7 + !A7·M7·R7 at both
+            // widths.
             Op::Sub | Op::Sbc => {
-                // negate-and-add, as the C++ does; carry is derived from the
-                // sum rather than modelled as a borrow
                 let a = self.get_reg(op.target) as u32;
-                let b = (arg as u32).wrapping_neg();
-                let mut r = a.wrapping_add(b);
+                let b = arg as u32;
+                let mut r = a.wrapping_sub(b);
                 if op.op == Op::Sbc && self.cc_set(CC_C) {
                     r = r.wrapping_sub(1);
                 }
@@ -1444,4 +1456,76 @@ mod tests {
         let (mut cpu, mut bus) = boot(&[0x01]);
         assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
     }
+
+    /// SUB/SBC set N, Z, V and C exactly as the datasheet's
+    /// `V = A7·!M7·!R7 + !A7·M7·R7` and "C set on borrow" say, over every
+    /// operand pair and both carry inputs.
+    ///
+    /// This core had it far worse than the 6800: `set_v1` is
+    /// `a ^ b ^ r ^ (r >> 1)`, so the negated operand contributes its own
+    /// bit 7, and V came out inverted for 65,024 of the 65,536 operand pairs
+    /// -- every subtraction of a non-zero byte. `Op::Cmp` was always right,
+    /// because it never negated; SUB now works the same way.
+    #[test]
+    fn sub_and_sbc_flags_match_the_datasheet_for_every_operand() {
+        for m in 0..=0xffu8 {
+            for a in 0..=0xffu8 {
+                for carry_in in [false, true] {
+                    // orcc/andcc the carry ; lda #a ; suba #m (or sbca #m)
+                    let prog = [
+                        if carry_in { 0x1a } else { 0x1c }, // orcc / andcc
+                        if carry_in { 0x01 } else { 0xfe },
+                        0x86, a,
+                        if carry_in { 0x82 } else { 0x80 }, // sbca / suba
+                        m,
+                    ];
+                    let (mut cpu, mut bus) = boot(&prog);
+                    run_steps(&mut cpu, &mut bus, 3);
+
+                    let wide = a as i32 - m as i32 - i32::from(carry_in);
+                    let expect = wide as u8;
+                    let (a7, m7, r7) = (a >> 7, m >> 7, expect >> 7);
+                    let v = (a7 & !m7 & !r7) | (!a7 & m7 & r7);
+
+                    let ctx = format!("a={a:#04x} m={m:#04x} c={carry_in}");
+                    assert_eq!(cpu.a, expect, "{ctx}: result");
+                    assert_eq!(cpu.cc_set(CC_N), expect & 0x80 != 0, "{ctx}: N");
+                    assert_eq!(cpu.cc_set(CC_Z), expect == 0, "{ctx}: Z");
+                    assert_eq!(cpu.cc_set(CC_V), v & 1 != 0, "{ctx}: V");
+                    assert_eq!(cpu.cc_set(CC_C), wide < 0, "{ctx}: C");
+                }
+            }
+        }
+    }
+
+    /// The 16-bit form (`subd`) had the same inverted V, from `set_v2`.
+    #[test]
+    fn subd_flags_match_the_datasheet() {
+        for (a, m) in [
+            (0x0000u16, 0x0001u16), (0x8000, 0x0001), (0x7fff, 0xffff),
+            (0x1234, 0x1234), (0xffff, 0x8000), (0x8000, 0x8000),
+            (0x0000, 0x0000), (0x4000, 0xc000),
+        ] {
+            // ldd #a ; subd #m
+            let prog = [
+                0xcc, (a >> 8) as u8, a as u8,
+                0x83, (m >> 8) as u8, m as u8,
+            ];
+            let (mut cpu, mut bus) = boot(&prog);
+            run_steps(&mut cpu, &mut bus, 2);
+
+            let wide = a as i32 - m as i32;
+            let expect = wide as u16;
+            let (a15, m15, r15) = (a >> 15, m >> 15, expect >> 15);
+            let v = (a15 & !m15 & !r15) | (!a15 & m15 & r15);
+
+            let ctx = format!("d={a:#06x} m={m:#06x}");
+            assert_eq!(cpu.get_reg(Reg::D), expect, "{ctx}: result");
+            assert_eq!(cpu.cc_set(CC_N), expect & 0x8000 != 0, "{ctx}: N");
+            assert_eq!(cpu.cc_set(CC_Z), expect == 0, "{ctx}: Z");
+            assert_eq!(cpu.cc_set(CC_V), v & 1 != 0, "{ctx}: V");
+            assert_eq!(cpu.cc_set(CC_C), wide < 0, "{ctx}: C");
+        }
+    }
+
 }

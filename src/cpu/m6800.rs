@@ -30,9 +30,10 @@
 //! Behaviour was preserved bug-for-bug through the port, so where this core is
 //! knowingly wrong about a real 6800 it is called out in a comment and pinned
 //! by a named test; those divergences are decisions, not accidents, so read the
-//! comment before "fixing" one. The C++'s `ASR`-falls-into-`LSR` was the
-//! largest of them and was repaired in August 2026, once there was no second
-//! tree to stay byte-identical with.
+//! comment before "fixing" one. Two were repaired in August 2026, once there
+//! was no second tree to stay byte-identical with: `ASR` falling into `LSR`,
+//! and `SUB`/`SBC`'s overflow flag, which the C++'s negate-and-add inverted
+//! for an operand of exactly 0x80.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -726,14 +727,21 @@ impl Cpu for Cpu6800 {
                 self.put_reg(op.target, r as u16);
             }
 
+            // Subtract in 32 bits and let the borrow fall out of bit 8, which
+            // is what `Op::Cmp` below already did.
+            //
+            // The C++ instead negated the operand and *added* -- carrying an
+            // "XXX make sure carry is okay" comment about it. The carry was in
+            // fact fine, but V was not: `set_v1` reads bit 8 of `a ^ b ^ r`,
+            // and negating in 32 bits sets every bit above 7 of `b`, which
+            // poisons that term whenever the operand is exactly 0x80. `subb
+            // #$80` reported the opposite of the right overflow for all 256
+            // values of the accumulator. Checked exhaustively against
+            // V = A7·!M7·!R7 + !A7·M7·R7 over every (a, m, carry).
             Op::Sub | Op::Sbc => {
-                // The C++ negates the operand and adds, then derives carry
-                // from bit 8 of that sum -- not the same as a borrow. Preserved
-                // deliberately; the C++ carries an "XXX make sure carry is
-                // okay" comment here.
                 let a = self.get_reg(op.target) as u32;
-                let b = (arg as u32).wrapping_neg();
-                let mut r = a.wrapping_add(b);
+                let b = arg as u32;
+                let mut r = a.wrapping_sub(b);
                 if op.op == Op::Sbc && self.cc_set(CC_C) {
                     r = r.wrapping_sub(1);
                 }
@@ -743,8 +751,8 @@ impl Cpu for Cpu6800 {
 
             Op::SubAccum => {
                 let a = self.get_reg(Reg::A) as u32;
-                let b = (self.get_reg(Reg::B) as u32).wrapping_neg();
-                let r = a.wrapping_add(b);
+                let b = self.get_reg(Reg::B) as u32;
+                let r = a.wrapping_sub(b);
                 self.set_nzvc1(a, b, r);
                 self.put_reg(op.target, r as u16);
             }
@@ -1166,6 +1174,69 @@ mod tests {
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(bus.watch_reads, 1);
         assert_eq!(bus.mem[0x0100], 0x40);
+    }
+
+    /// SUB/SBC set N, Z, V and C exactly as the datasheet's
+    /// `V = A7·!M7·!R7 + !A7·M7·R7` and "C set on borrow" say, over every
+    /// operand pair and both carry inputs.
+    ///
+    /// The C++ negated the operand and added instead, and `set_v1` reads bit 8
+    /// of `a ^ b ^ m` -- which a 32-bit negation sets for any non-zero operand.
+    /// V came out inverted for the whole of `suba #$80`. This exhaustive check
+    /// is what keeps that from coming back.
+    #[test]
+    fn sub_and_sbc_flags_match_the_datasheet_for_every_operand() {
+        for m in 0..=0xffu8 {
+            for a in 0..=0xffu8 {
+                for carry_in in [false, true] {
+                    // sec/clc ; lda #a ; suba #m  (or sbca #m)
+                    let opcode = if carry_in { 0x82 } else { 0x80 }; // sbca / suba
+                    let prog = [
+                        if carry_in { 0x0d } else { 0x0c }, // sec / clc
+                        0x86, a,
+                        opcode, m,
+                    ];
+                    let (mut cpu, mut bus) = boot(&prog);
+                    run_steps(&mut cpu, &mut bus, 3);
+
+                    let borrow = u8::from(carry_in);
+                    let wide = a as i32 - m as i32 - borrow as i32;
+                    let expect = wide as u8;
+                    let (a7, m7, r7) = (a >> 7, m >> 7, expect >> 7);
+                    let v = (a7 & !m7 & !r7) | (!a7 & m7 & r7);
+
+                    let ctx = format!("a={a:#04x} m={m:#04x} c={carry_in}");
+                    assert_eq!(cpu.a, expect, "{ctx}: result");
+                    assert_eq!(cpu.cc_set(CC_N), expect & 0x80 != 0, "{ctx}: N");
+                    assert_eq!(cpu.cc_set(CC_Z), expect == 0, "{ctx}: Z");
+                    assert_eq!(cpu.cc_set(CC_V), v & 1 != 0, "{ctx}: V");
+                    assert_eq!(cpu.cc_set(CC_C), wide < 0, "{ctx}: C");
+                }
+            }
+        }
+    }
+
+    /// `sba` (A - B) is the same arithmetic without an operand fetch, and had
+    /// the same inverted V at B = 0x80.
+    #[test]
+    fn sba_flags_match_the_datasheet_for_every_operand() {
+        for b in 0..=0xffu8 {
+            for a in 0..=0xffu8 {
+                // lda #a ; ldb #b ; sba
+                let (mut cpu, mut bus) = boot(&[0x86, a, 0xc6, b, 0x10]);
+                run_steps(&mut cpu, &mut bus, 3);
+
+                let wide = a as i32 - b as i32;
+                let expect = wide as u8;
+                let (a7, b7, r7) = (a >> 7, b >> 7, expect >> 7);
+                let v = (a7 & !b7 & !r7) | (!a7 & b7 & r7);
+
+                let ctx = format!("a={a:#04x} b={b:#04x}");
+                assert_eq!(cpu.a, expect, "{ctx}: result");
+                assert_eq!(cpu.cc_set(CC_V), v & 1 != 0, "{ctx}: V");
+                assert_eq!(cpu.cc_set(CC_C), wide < 0, "{ctx}: C");
+            }
+        }
     }
 
     #[test]
