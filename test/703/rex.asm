@@ -11,6 +11,10 @@
 ; of keystrokes and runs a command:
 ;
 ;   HELP or ?    the command list
+;
+; The letter tasks come up stopped; START sets them going.  The commands:
+;
+;   HELP or ?    the command list
 ;   STAT         every task's state, and how long each sleeper has left
 ;   UPTIME, UP   seconds since the executive came up
 ;   STOP  [A-C]  suspend a letter task, or all three
@@ -728,8 +732,8 @@ IDLE            JMP     IDLE
 
 ; ---------------------------------------------------------------- task A
 ; A letter task, and the model for the two below it: print a letter and
-; sleep, forever.  It is born stopped and the shell releases it once the
-; banner is out.  The masked window is the whole protocol -- SHUTREQ read
+; sleep, forever.  It is born stopped, and runs when the shell's START
+; says so.  The masked window is the whole protocol -- SHUTREQ read
 ; and the character deposited with SERV locked out, so a deposit can
 ; never follow an observed shutdown.
                 ORG     X'800'
@@ -884,21 +888,20 @@ CKWAI           WORD    S.WAI
 CNAPN           WORD    60              ; a second
 
 ; ---------------------------------------------------------------- the shell
-; Task 3.  Prints the banner, starts the letter tasks, and then reads a
-; line and runs it, forever.  Everything it prints goes
+; Task 3.  Prints the banner and then reads a line and runs it, forever.
+; It is the only task running when the machine comes up.  Everything it prints goes
 ; through its own mailbox one character at a time like any other task's
 ; letter, so a command's output and the background letters interleave on
 ; the printer exactly as two users' output did.
                 ORG     X'2000'
 
-; The letter tasks are born stopped so that nothing of theirs lands in
-; the banner; releasing them is exactly what START with no argument does,
-; so it is done by falling into that, which goes on to the prompt.
+; The letter tasks are born stopped, and stay that way until somebody
+; asks for them: an executive with nothing running is a better place to
+; start looking around than one already talking to itself.
 SHELL           LDW     SHMBAN
                 JSX     SHMSG
-                CLR
-                STW     SHNST
-                JMP     SHSALL
+                LDW     SHMHNT
+                JSX     SHMSG
 
 SHLOOP          LDW     SHMPRM
                 JSX     SHMSG
@@ -1437,6 +1440,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    0,0,0
 
 SHMBAN          WORD    SHBAN
+SHMHNT          WORD    SHHNT
 SHMPRM          WORD    SHPRM
 SHMWHT          WORD    SHWHT
 SHMHL1          WORD    SHHL1
@@ -1447,6 +1451,7 @@ SHMDWN          WORD    SHDWN
 SHMNOT          WORD    SHNOT
 
 SHBAN           WORD    SHBANT*2,SHBANE*2
+SHHNT           WORD    SHHNTT*2,SHHNTE*2
 SHPRM           WORD    SHPRMT*2,SHPRME*2
 SHWHT           WORD    SHWHTT*2,SHWHTE*2
 SHHL1           WORD    SHHL1T*2,SHHL1E*2
@@ -1458,6 +1463,8 @@ SHNOT           WORD    SHNOTT*2,SHNOTE*2
 
 SHBANT          TEXT    "REX 703 UP\r\n"
 SHBANE          EQU     $
+SHHNTT          TEXT    "TYPE HELP, OR START FOR THE LETTER TASKS\r\n"
+SHHNTE          EQU     $
 SHPRMT          TEXT    "REX>  "
 SHPRME          EQU     $
 SHWHTT          TEXT    "WHAT\r\n"

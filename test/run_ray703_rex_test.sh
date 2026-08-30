@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end test for REX, the preemptive executive: boot it, watch the three
-# letter tasks run in the background -- which is the scheduler, the line
-# clock, the context switch, the sleep machinery and the mailbox teletype
-# driver all working at once -- then drive its shell through the commands and
-# shut the machine down with HALT.
+# End-to-end test for REX, the preemptive executive: boot it, start the three
+# letter tasks from its shell and watch them run -- which is the scheduler,
+# the line clock, the context switch, the sleep machinery and the mailbox
+# teletype driver all working at once -- then drive the rest of the commands
+# and shut the machine down with HALT. The letter tasks come up stopped, so
+# nothing prints until this asks it to.
 #
 # Two firsts for a 703 harness, both deliberate:
 #
@@ -100,18 +101,18 @@ wait_quiet() {
 
 PROMPT='REX> '
 
-# Set once the letter tasks have been seen running on their own, before a
-# single command has been typed.
+# Set once the letter tasks have been seen running, after START and before
+# anything else is typed, which is the only window in which counting their
+# letters means anything.
 BACKGROUND_RAN=0
 
-# Everything printed so far. This is only a count of what the tasks
-# printed while nothing has been typed yet: the shell's own output says
-# STAT, START and COMMANDS, and the terminal echoes every command back, so
-# once the session starts these letters stop meaning anything. The verdict
-# below therefore remembers what this said at the one moment it was true
-# rather than asking again at the end.
+# What the letter tasks have printed since START set them going. The line
+# carrying the echo of START is dropped, and what follows it until the next
+# command is typed is prompts and letters -- neither the prompt nor the STOP
+# that ends the window contains an A, a B or a C, so nothing here counts the
+# shell's own text as though a task had printed it.
 background() {
-    sed -n '/REX 703 UP/,$p' "$LOG_FILE"
+    sed -n '/START/,$p' "$LOG_FILE" | tail -n +2
 }
 
 # True once every letter task has run several times and the printer has
@@ -158,7 +159,12 @@ exec 3>"$FIFO"
 # A timeout anywhere here is not fatal on its own -- the checks at the end
 # report what actually reached the log, which says more than "timed out".
 if wait_for 'REX 703 UP'; then
-    # let the background tasks run a while, unprompted
+
+    # Nothing is running yet, so this one is quiet and exact.
+    wait_count "$PROMPT" 1 && wait_quiet && printf 'STAT\r' >&3
+
+    # Set the three of them going and let them run.
+    wait_count "$PROMPT" 2 && wait_quiet && printf 'START\r' >&3
     tries=0
     while (( tries < 300 )) && ! enough_output; do
         sleep 0.1
@@ -166,27 +172,21 @@ if wait_for 'REX 703 UP'; then
     done
     enough_output && BACKGROUND_RAN=1
 
-    # A first STAT with the tasks still running, which is the only thing
-    # that reaches the sleeping-task display -- a stopped task has no delay
-    # left to report. Nothing is matched against its output; the run would
-    # not get this far if the path were broken.
-    wait_count "$PROMPT" 1 && printf 'STAT\r' >&3
-
     # Then stop them: with the printer quiet, every command's output can be
     # matched exactly, and wait_quiet becomes usable for pacing.
-    wait_count "$PROMPT" 2 && printf 'STOP\r' >&3
+    wait_count "$PROMPT" 3 && printf 'STOP\r' >&3
 
-    wait_count "$PROMPT" 3 && wait_quiet && printf 'STAT\r' >&3
-    wait_count "$PROMPT" 4 && wait_quiet && printf 'HELP\r' >&3
-    wait_count "$PROMPT" 5 && wait_quiet && printf 'ECHO SHELL OUTPUT OK\r' >&3
-    wait_count "$PROMPT" 6 && wait_quiet && printf 'FROB\r' >&3
+    wait_count "$PROMPT" 4 && wait_quiet && printf 'STAT\r' >&3
+    wait_count "$PROMPT" 5 && wait_quiet && printf 'HELP\r' >&3
+    wait_count "$PROMPT" 6 && wait_quiet && printf 'ECHO SHELL OUTPUT OK\r' >&3
+    wait_count "$PROMPT" 7 && wait_quiet && printf 'FROB\r' >&3
 
     # One task back on its feet, and only that one.
-    wait_count "$PROMPT" 7 && wait_quiet && printf 'START B\r' >&3
+    wait_count "$PROMPT" 8 && wait_quiet && printf 'START B\r' >&3
     wait_for 'BBB' || true
 
-    wait_count "$PROMPT" 8 && printf 'STOP\r' >&3
-    wait_count "$PROMPT" 9 && wait_quiet && printf 'HALT\r' >&3
+    wait_count "$PROMPT" 9 && printf 'STOP\r' >&3
+    wait_count "$PROMPT" 10 && wait_quiet && printf 'HALT\r' >&3
     wait_for 'REX 703 DOWN' || true
     wait_for 'stopping, Halted' || true
 fi
