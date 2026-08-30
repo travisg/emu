@@ -6,8 +6,8 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 
 - **System09 (Motorola 6809)**: boots the 6809 BASIC ROM to a prompt on the terminal.
 - **MITS Altair 680 (Motorola 6800)**: boots the MITS monitor ROM on the terminal.
-- **RC2014 (Zilog Z80)**: runs the factory ROM image (see the note in `AGENTS.md` about its
-  serial port — the monitor boots but has never printed anything).
+- **RC2014 (Zilog Z80)**: boots the factory ROM image — Grant Searle's monitor into Microsoft
+  BASIC 4.7b — on the terminal, over an interrupt-driven serial port.
 - **Kaypro II (Zilog Z80)**: boots CP/M 2.2 from a floppy image into an SDL2 window, with a
   keyboard and a read-only floppy.
 
