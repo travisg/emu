@@ -16,8 +16,8 @@
 //! manual.
 //!
 //! Cross-checked against two emulators written by Darwin Geiselbrecht, who
-//! programmed these machines: `rustheon` (Rust) and `Raytheon` (Python), both
-//! MIT, at github.com/IslandSparky. Where the three disagree the manual wins --
+//! programmed these machines: `rustheon` (Rust, MIT) and `Raytheon` (Python),
+//! at github.com/IslandSparky. Where the three disagree the manual wins --
 //! rustheon decodes the register generics one slot high (CLR at 0x011 rather
 //! than 0x010), and the PTB paper-tape bootstrap listing, which encodes eight
 //! different instructions in eleven words, agrees with the manual.
