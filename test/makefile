@@ -41,10 +41,10 @@ basic6809-test:
 
 # --- Raytheon 703 ---------------------------------------------------------
 # The 703's own assembler (SYM II) survives only as scans, so the demo image is
-# built by asm703.py in this directory. The output goes straight to roms/703,
+# built by tools/asm703.py. The output goes straight to roms/703,
 # which is where the registry's default_rom points; roms is a symlink to
 # storage outside the repo, so nothing generated lands in git.
-ASM703      := ./asm703.py
+ASM703      := ../tools/asm703.py
 RAY703_ROMS := ../roms/703
 
 .PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-listings ray703-verify
@@ -97,16 +97,16 @@ $(RAY703_ROMS)/tape.tape: 703/tape.asm $(ASM703)
 # 1968 assembly listings in 703/listings. Every card that generated a word
 # printed its own absolute address beside it, so a listing already *is* a core
 # image and no assembler is on the path: xraylist.py --core writes one out.
-XRAYLIST    := python3 703/xraylist.py
+XRAYLIST    := python3 ../tools/xraylist.py
 LISTINGS    := 703/listings
 
 ray703-listings: $(RAY703_ROMS)/xray.bin $(RAY703_ROMS)/loader.bin
 
-$(RAY703_ROMS)/xray.bin: $(LISTINGS)/390779_XRAY_listing.txt 703/xraylist.py
+$(RAY703_ROMS)/xray.bin: $(LISTINGS)/390779_XRAY_listing.txt ../tools/xraylist.py
 	@mkdir -p $(RAY703_ROMS)
 	$(XRAYLIST) $< --core $@
 
-$(RAY703_ROMS)/loader.bin: $(LISTINGS)/390682C_RelocatingLoader_listing.txt 703/xraylist.py
+$(RAY703_ROMS)/loader.bin: $(LISTINGS)/390682C_RelocatingLoader_listing.txt ../tools/xraylist.py
 	@mkdir -p $(RAY703_ROMS)
 	$(XRAYLIST) $< --core $@
 

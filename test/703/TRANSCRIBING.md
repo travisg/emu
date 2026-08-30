@@ -14,7 +14,7 @@ listings" at the end. **Your prompt wins over the examples here.**
 ## Paths
 
     SCAN=<the directory holding pg-NNN.png, given to you in your prompt>
-    STRIP=/mnt/nas2/src/svn/emu/test/703/scanstrip.sh
+    STRIP=/mnt/nas2/src/svn/emu/tools/scanstrip.sh
 
 For X-RAY, listing PAGE N is `$SCAN/pg-MMM.png` where **MMM = N - 1**, zero
 padded to three digits: page 6 is `pg-005.png`, page 40 is `pg-039.png`. Other
@@ -301,7 +301,7 @@ through PAGE 29**. Extract from PDF page 22 and the numbering lines up: `$SCAN`
 holds `pg-000.png` (blank) through `pg-029.png`, and **`pg-NNN.png` is listing
 PAGE NNN** with no offset — unlike X-RAY.
 
-    ./scanstrip.sh extract <the pdf> 22 51 /storage/scratch/rl703
+    ../../tools/scanstrip.sh extract <the pdf> 22 51 /storage/scratch/rl703
 
 - **The print is clean.** This came off a well-inked printer, not the worn drum
   that printed X-RAY, and there is no stroke dropout. The `B`/`R`, `8`/`B` and

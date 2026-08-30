@@ -93,7 +93,7 @@ The 703's `--trace` format was never bound to anything external, and its regress
 
 **Running the period software.** `test/703/listings/` holds hand transcriptions of two 1968 Raytheon program listings — X-RAY EXEC (DN 390779) and the relocating loader (DN 390682C). `make -C test ray703-listings` turns them into core images in `roms/703/`, and `./target/debug/emu -s ray703 -r roms/703/xray.bin` boots X-RAY. **Type Ctrl-J before a command and Return after it**: X-RAY's records open on a line feed and close on a carriage return, and without the leading Ctrl-J it silently discards everything typed. `make -C test ray703-verify` re-assembles a transcript and diffs it against the object code the 1968 assembler printed — the loader matches on all 596 words; X-RAY does not assemble yet and says why. `test/703/README.md` is the index and the to-do list.
 
-`make -C test` rebuilds the 6809 test ROM sources — needs the ASxxxx toolchain (`as6809`, `aslink`) and `objcopy`; not required for normal development. `make -C test ray703` rebuilds the 703 demo and tape images with `test/asm703.py`, a small two-pass absolute assembler in stdlib python — the 703's own assembler (SYM II) exists only as scans.
+`make -C test` rebuilds the 6809 test ROM sources — needs the ASxxxx toolchain (`as6809`, `aslink`) and `objcopy`; not required for normal development. `make -C test ray703` rebuilds the 703 demo and tape images with `tools/asm703.py`, a small two-pass absolute assembler in stdlib python — the 703's own assembler (SYM II) exists only as scans.
 
 Beyond that, verification is manual: build, check `-h` output, boot a system, confirm Ctrl-D shuts down cleanly. For kaypro also confirm the window renders and window-close exits.
 

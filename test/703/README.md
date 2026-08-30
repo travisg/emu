@@ -14,11 +14,11 @@ to-do list; the detail is in the documents it points at.
 
 ## The tools
 
-    scanstrip.sh        cut a 600 dpi page into readable bands
-    split-transcript.sh master transcript -> per-page working files + header.txt
-    sync-transcript.sh  the per-page files back into the master
-    xraylist.py         transcript -> source, object, core image; --check, --verify
-    ../asm703.py        a SYM II assembler, enough of one to rebuild both decks
+    ../../tools/scanstrip.sh         cut a 600 dpi page into readable bands
+    ../../tools/split-transcript.sh  master transcript -> per-page files + header.txt
+    ../../tools/sync-transcript.sh   the per-page files back into the master
+    ../../tools/xraylist.py          transcript -> source, object, core image
+    ../../tools/asm703.py            a SYM II assembler, enough to rebuild both decks
 
 The **master transcripts are the source of everything** and live here:
 

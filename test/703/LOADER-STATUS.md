@@ -11,9 +11,9 @@ regenerable.
     ~/dropbox/tech_docs/computers/ray703/70x/390682C_RelocatingLoaderBasic_Nov1968.pdf
     test/703/listings/390682C_RelocatingLoader_listing.txt   <- canonical
 
-    ./scanstrip.sh extract <pdf> 22 51 <scandir>      # page images, 600 dpi
-    ./split-transcript.sh <master.txt> <pagedir>      # master -> per-page files
-    ./sync-transcript.sh  <pagedir> <header.txt> <master.txt> 28   # and back
+    ../../tools/scanstrip.sh extract <pdf> 22 51 <scandir>      # page images, 600 dpi
+    ../../tools/split-transcript.sh <master.txt> <pagedir>      # master -> per-page files
+    ../../tools/sync-transcript.sh <pagedir> <header.txt> <master.txt> 28   # and back
 
 `xraylist.py` reads the master directly, so the per-page split is only needed
 to hand pages to transcribing agents.
@@ -84,7 +84,7 @@ is the thing X-RAY's transcription never had.
 
 ## It assembles, and every word matches
 
-    python3 xraylist.py /storage/scratch/rl703/txt --verify
+    python3 ../../tools/xraylist.py /storage/scratch/rl703/txt --verify
     596 of 596 printed words compared, 0 mismatches
 
 This is the check the listing cannot do for itself. `--check` only reports
@@ -187,7 +187,7 @@ Those repairs belong in the `--asm` path too and have not been written.
 
 - ~~**`asm703.py` has never assembled a whole program.**~~ Done, and it agrees:
 
-      python3 xraylist.py <pagedir> --verify
+      python3 ../../tools/xraylist.py <pagedir> --verify
       596 of 596 printed words compared, 0 mismatches
 
   See "It assembles" below.

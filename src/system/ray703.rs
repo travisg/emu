@@ -91,7 +91,7 @@ const PTB: [u16; 11] = [
 /// origin. Word 0x100 is the first word above PTB and its interrupt block that
 /// is a round number.
 ///
-/// `test/asm703.py --tape-origin` has to agree with this, since a tape's
+/// `tools/asm703.py --tape-origin` has to agree with this, since a tape's
 /// contents are meaningless at any other address; it defaults to the same
 /// number and says so.
 const PTB_LOAD_ORIGIN: u16 = 0x0100;

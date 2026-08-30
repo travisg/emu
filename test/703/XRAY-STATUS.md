@@ -29,9 +29,9 @@ Everything else is regenerable and lives under a scratch path that will not
 survive the session that made it. Nothing is lost when it goes:
 
 ```bash
-./split-transcript.sh <master.txt> <pagedir>       # working files back from the master
-./sync-transcript.sh  <pagedir> <header.txt> <master.txt> 54   # and forward again
-./scanstrip.sh extract <pdf> 29 83 <scratchdir>    # listing page N -> pg-(N-1).png
+../../tools/split-transcript.sh <master.txt> <pagedir>       # working files back from the master
+../../tools/sync-transcript.sh <pagedir> <header.txt> <master.txt> 54   # and forward again
+../../tools/scanstrip.sh extract <pdf> 29 83 <scratchdir>    # listing page N -> pg-(N-1).png
 ```
 
 The split/sync pair round-trips exactly — verified by rebuilding the page files
@@ -118,7 +118,7 @@ quote, the unscanned first card — none of which can affect a word whose
 address and contents were both printed.
 
 ```bash
-python3 xraylist.py <pagedir> --core /tmp/xray.bin
+python3 ../../tools/xraylist.py <pagedir> --core /tmp/xray.bin
 ./target/debug/emu -s ray703 -r /tmp/xray.bin -l 3000000 -t /tmp/xray.trace
 ```
 
