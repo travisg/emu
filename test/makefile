@@ -48,10 +48,12 @@ basic6809-test:
 # built by tools/asm703.py. The output goes straight to roms/703, which is
 # where the registry's default_rom points; the contents of roms are gitignored,
 # so nothing generated lands in git.
-ASM703      := ../tools/asm703.py
-RAY703_ROMS := ../roms/703
+ASM703       := ../tools/asm703.py
+MKDISC703    := ../tools/mkdisc703.py
+RAY703_ROMS  := ../roms/703
+RAY703_DISKS := ../disks
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-listings ray703-verify
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
 
 ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-listings
 
@@ -121,6 +123,29 @@ $(RAY703_ROMS)/loader.bin: $(LISTINGS)/390682C_RelocatingLoader_listing.txt ../t
 ray703-verify:
 	$(XRAYLIST) $(LISTINGS)/390682C_RelocatingLoader_listing.txt --verify
 	-$(XRAYLIST) $(LISTINGS)/390779_XRAY_listing.txt --verify
+
+# --- disc images ----------------------------------------------------------
+# disks/ is gitignored like roms/, so the images a machine mounts are made
+# here rather than checked in.
+
+# A disc that boots: the boot sector in sector 0 of track 0, where the
+# controller's LOAD button reads it. Derived from boot.bin, so it is rebuilt
+# whenever that changes.
+#
+#   ./target/debug/emu -s ray703-load -r disks/ray703-boot.img
+#
+ray703-boot-disc: $(RAY703_DISKS)/ray703-boot.img
+
+$(RAY703_DISKS)/ray703-boot.img: $(RAY703_ROMS)/boot.bin $(MKDISC703)
+	@mkdir -p $(RAY703_DISKS)
+	$(MKDISC703) $@ --boot $< --force
+
+# A blank platter on unit 0, which is what the disc exerciser wants to write
+# to. Never overwritten: once a guest has written to a disc it is data, so
+# delete it by hand to start over.
+ray703-blank-disc:
+	@mkdir -p $(RAY703_DISKS)
+	$(MKDISC703) $(RAY703_DISKS)/ray703-disc0.img
 
 ray703-test: ray703-demo
 	./run_ray703_demo_test.sh

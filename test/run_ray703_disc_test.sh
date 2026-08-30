@@ -52,17 +52,15 @@ wait_for() {
 
 # The machine mounts disks/ray703-disc{0..3}.img under the current directory,
 # so the emulator runs in a scratch directory holding a fresh blank image --
-# exactly the platter size, all zeros. python3 makes the blank because
-# truncate(1) does not exist everywhere the tests run.
+# exactly the platter size, all zeros, which mkdisc703.py writes.
 WORK=$(mktemp -d)
 FIFO=$(mktemp -u)
 mkfifo "$FIFO"
 : > "$LOG_FILE"
 trap 'rm -f "$FIFO"; rm -rf "$WORK"' EXIT
 
-mkdir "$WORK/disks"
 DISC_IMG="$WORK/disks/ray703-disc0.img"
-python3 -c "open('$DISC_IMG', 'wb').truncate(770048)"
+"$ROOT_DIR/tools/mkdisc703.py" "$DISC_IMG"
 
 # The fifo is held open for the emulator's whole life -- closing it looks like
 # ctrl-d -- but nothing is ever typed: the guest runs to its HLT by itself.

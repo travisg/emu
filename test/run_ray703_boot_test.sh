@@ -54,18 +54,11 @@ mkfifo "$FIFO"
 : > "$LOG_FILE"
 trap 'rm -f "$FIFO"; rm -rf "$WORK"' EXIT
 
-# A platter-sized image with the boot program in sector 0 and nothing else --
-# the guard is real: the LOAD button reads one 94-byte sector, so a program
-# that outgrew it would boot truncated.
+# A platter-sized image with the boot program in sector 0 and nothing else.
+# mkdisc703.py enforces the one-sector budget: the LOAD button reads 94 bytes,
+# so a program that outgrew it would boot truncated.
 DISC_IMG="$WORK/boot-disc.img"
-python3 - "$BOOT_BIN" "$DISC_IMG" <<'EOF'
-import sys
-boot = open(sys.argv[1], 'rb').read()
-assert len(boot) <= 94, f'boot sector is {len(boot)} bytes; the LOAD button reads 94'
-image = bytearray(770048)
-image[:len(boot)] = boot
-open(sys.argv[2], 'wb').write(image)
-EOF
+"$ROOT_DIR/tools/mkdisc703.py" "$DISC_IMG" --boot "$BOOT_BIN"
 
 # The fifo is held open for the emulator's whole life -- closing it looks
 # like ctrl-d -- but nothing is typed: the guest boots, prints and halts.
