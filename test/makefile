@@ -41,9 +41,9 @@ basic6809-test:
 
 # --- Raytheon 703 ---------------------------------------------------------
 # The 703's own assembler (SYM II) survives only as scans, so the demo image is
-# built by tools/asm703.py. The output goes straight to roms/703,
-# which is where the registry's default_rom points; roms is a symlink to
-# storage outside the repo, so nothing generated lands in git.
+# built by tools/asm703.py. The output goes straight to roms/703, which is
+# where the registry's default_rom points; the contents of roms are gitignored,
+# so nothing generated lands in git.
 ASM703      := ../tools/asm703.py
 RAY703_ROMS := ../roms/703
 

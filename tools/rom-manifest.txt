@@ -1,0 +1,25 @@
+# ROM and disk images the emulator needs, none of which are in the repo.
+#
+# One entry per line: destination path, sha256, source URL ("-" if the image
+# has no public home and has to be supplied by hand). tools/fetch-roms.py
+# reads this file; it copies from the local archive named by $EMU_ROM_ARCHIVE
+# first, falls back to the URL, and verifies the hash either way.
+#
+# The 703 guests are not here -- they are built from source in this tree with
+# "make -C test ray703", which writes them to roms/703.
+
+# 6809 (System09): Grant Searle's build of Microsoft Extended BASIC.
+roms/6809/BASIC.HEX             6a282de5ac6ada90b50e35c72608e1306cd5caee7d80d872dfbd50a315c3775c  -
+
+# Kaypro II: the boot PROM and the character generator, dumped from the chips.
+roms/kaypro/kayproii_u47.bin    0f72f1cecb5a66f7d623156a69c0ea4036e47eb4df8e8fa165c0e95bd45067a0  -
+roms/kaypro/kayproii_u43.bin    cde431c9e506edf11261f7e7d52fd60b1a43fe2d9ea0d3e06f271d4cab4884fa  -
+
+# RC2014: the factory ROM, Grant Searle's monitor around Microsoft BASIC 4.7b.
+roms/rc2014/24886009.BIN        db0312ada33065281781fc9b0f6c85ac0f987265c11cd51afac8ac58244f7fd6  -
+
+# MITS Altair 680b: the PROM monitor.
+roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed239eed3af2b5ddd201  -
+
+# Kaypro floppy: CP/M 2.2 with MBASIC and games.
+disks/mbasic-games.img          e0d3fe74578b5914cdb8e36d028fb0e3ec70f434df3a710ea41ea1534304101b  -

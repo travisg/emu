@@ -27,7 +27,7 @@ Dependencies are deliberately few: `ihex` (Intel HEX), `libc` (termios/poll), `s
 
 ## Run
 
-Run from the repo root — default ROM paths are relative (`roms/...`), and `roms` is a symlink to storage outside the repo (ROM images are not tracked in git).
+Run from the repo root — default ROM paths are relative (`roms/...`). ROM images are not tracked in git: `tools/fetch-roms.py` puts the third-party ones in place from `tools/rom-manifest.txt`, and `make -C test ray703` builds the 703 guests.
 
 ```bash
 ./target/debug/emu -h                  # help: lists systems, cpus, default ROMs
@@ -70,7 +70,7 @@ cargo build                         # build first
 ./test/run_basic6809_lang_test.sh   # or EMU_BIN=./target/release/emu ./test/run_basic6809_lang_test.sh
 ```
 
-Requires the `roms` symlink to resolve, plus `script(1)` and `perl`.
+Requires `roms/6809/BASIC.HEX` to be in place (`tools/fetch-roms.py`), plus `script(1)` and `perl`.
 
 The 703 has the same shape of test: boot the demo image, type a line at it, and check the log for the upper-cased echo the guest produced and for a clean halt. It covers the core, the interrupt system, the DIO channel, the teletype and the frontend at once, because the demo's echo runs entirely out of a level 0 service routine.
 
@@ -79,7 +79,7 @@ make -C test ray703-test            # builds the image, then runs the test
 ./test/run_ray703_demo_test.sh      # if the image is already built
 ```
 
-Needs `script(1)` and python3. No period ROM image is involved — the demo is built from source in this tree — but the `roms` symlink still has to resolve, because that is where `make -C test ray703` writes the image and where the registry's `default_rom` looks for it. The test waits for the banner to appear in the live log rather than sleeping: the emulator only starts listening once it has put the terminal in raw mode, and anything typed before that is eaten by the line discipline, which looks exactly like a broken emulator.
+Needs `script(1)` and python3. No period ROM image is involved — the demo is built from source in this tree — and `roms/703` is where `make -C test ray703` writes it and where the registry's `default_rom` looks for it. The test waits for the banner to appear in the live log rather than sleeping: the emulator only starts listening once it has put the terminal in raw mode, and anything typed before that is eaten by the line discipline, which looks exactly like a broken emulator.
 
 The disc has its own end-to-end test on the same harness: `make -C test ray703-disc-test` boots `test/703/disc.asm` against a fresh blank image in a scratch directory, greps for its `DISC TEST PASS` and the clean halt, and then byte-checks the image file for the pattern the guest wrote — a 94-word span deliberately crossing a track boundary, driven over two live interrupt levels (teletype on 0, disc completion on 1). `make -C test ray703-boot-test` covers the LOAD button: it embeds the one-sector boot program in a fresh image, boots it with `ray703-load`, and greps for the guest's banner and halt.
 

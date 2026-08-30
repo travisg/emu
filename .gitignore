@@ -1,3 +1,4 @@
+# editor and tool litter
 *.swp
 *~
 tags
@@ -5,16 +6,29 @@ TAGS
 cscope.out
 local.mk
 doit
-*.ihx
-*.lst
-*.rel
-*.rst
-*.bin
-*.log
 .vscode
 .claude/settings.local.json
-/target
-/mbasic-games.img
-/ray703-disc*.img
 __pycache__/
 *.pyc
+
+# cargo
+/target
+
+# assembler outputs and end-to-end test logs in test/
+/test/*.ihx
+/test/*.rel
+/test/*.rst
+/test/*.lst
+/test/*.bin
+/test/*.log
+/test/703/*.lst
+
+# ROM and disk images are not tracked; see tools/rom-manifest.txt
+/roms/*
+!/roms/README.md
+
+# transitional: cwd-mounted images, removed when the code reads disks/
+/mbasic-games.img
+/ray703-disc*.img
+/disks/*
+!/disks/README.md

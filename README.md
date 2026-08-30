@@ -21,7 +21,9 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
   `/opt/homebrew`) need no configuration. Point `PKG_CONFIG_PATH` at the directory holding
   `sdl2.pc` if it's installed somewhere unusual
 - ROM images. They aren't in the repo; the emulator looks for them under `roms/` relative to the
-  current directory (`-h` lists the default path per system, `-r` overrides it)
+  current directory (`-h` lists the default path per system, `-r` overrides it). `tools/fetch-roms.py`
+  fetches the third-party images listed in `tools/rom-manifest.txt` and checks them against their
+  hashes; the Raytheon 703 guests need no fetching and are built with `make -C test ray703`
 
 ## Building
 
