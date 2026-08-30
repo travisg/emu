@@ -34,8 +34,16 @@
 //! the CPU thread reads it, which is what made the mutex in `753dd4b`
 //! necessary; here the latch is pulled from the channel on the CPU thread at
 //! the point of the read, so there is nothing to synchronize.
+//!
+//! The SIO raises IRQ while the latch is full, and it is the only device in
+//! the tree that drives `Bus::poll_interrupts` -- the C++ left a TODO where
+//! the raise would go and never filled it in. That mattered: the factory rom's
+//! console input is *entirely* interrupt-driven. Its mode-1 handler at $0038
+//! reads the data port into a 64-byte ring buffer at $8000 and RST 10h at
+//! $00b3 spins on the buffer's count, so a machine that never interrupts can
+//! never be typed at, however full the receive latch gets.
 
-use crate::bus::{Bus, MemoryDevice};
+use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
 use crate::dev::memory::Memory;
 use crate::rom;
@@ -58,6 +66,7 @@ const ROM_WINDOW: u16 = 0x2000;
 // SIO/A status bits
 const SIO_RX_AVAILABLE: u8 = 1 << 0;
 const SIO_INT_PENDING: u8 = 1 << 1;
+const SIO_TX_EMPTY: u8 = 1 << 2;
 
 pub struct Rc2014 {
     ram: Memory,
@@ -143,14 +152,22 @@ impl Bus for Rc2014 {
         match port & 0xff {
             // SIO/A control port: receive-available plus the interrupt
             // condition, which the guest polls because no interrupt is ever
-            // actually raised
+            // actually raised, and transmit-buffer-empty.
+            //
+            // TX-empty is unconditional: transmit here is a synchronous write
+            // to the console, so the buffer is always empty by the time the
+            // guest can look. `dev/mc6850` reports its `TDRE` the same way.
+            // The C++ never set this bit at all, which is why the factory
+            // rom's output routine at $0116 -- `in a,($80)` / `rrca` /
+            // `bit 1,a` / `jr z,-10` -- spun forever and the machine never
+            // printed anything.
             0x80 => {
                 self.poll_console();
+                let mut status = SIO_TX_EMPTY;
                 if self.sio_rx.is_some() {
-                    SIO_RX_AVAILABLE | SIO_INT_PENDING
-                } else {
-                    0
+                    status |= SIO_RX_AVAILABLE | SIO_INT_PENDING;
                 }
+                status
             }
             // SIO/A data port: the byte, and the latch clears
             0x81 => {
@@ -166,6 +183,14 @@ impl Bus for Rc2014 {
                 0xff
             }
         }
+    }
+
+    /// IRQ is asserted while the receive latch is full. Level-held, not a
+    /// pulse: the guest's handler clears it by reading the data port, which is
+    /// what a real SIO does too.
+    fn poll_interrupts(&mut self) -> IntStatus {
+        self.poll_console();
+        IntStatus { irq: self.sio_rx.is_some(), nmi: false, vector: 0 }
     }
 
     fn io_write8(&mut self, port: u16, val: u8) {
@@ -206,33 +231,47 @@ mod tests {
         (machine, tx)
     }
 
-    /// The RC2014's defining defect, and the reason its monitor has never
-    /// printed anything: port $80 reports receive-available and the interrupt
-    /// condition, and never bit 2, "transmit buffer empty". The factory rom's
-    /// output routine at $0116 polls exactly that bit, so it spins there
-    /// forever and never writes the data port.
+    /// Port $80 reports "transmit buffer empty" (bit 2) unconditionally,
+    /// alongside receive-available and the interrupt condition.
     ///
-    /// A real SIO/2 does report it -- `dev/mc6850`'s `TDRE` is the same idea
-    /// done right -- so this is a divergence from the hardware, deliberately
-    /// carried over from the C++ this was ported from. Fixing it is a one-line
-    /// change here; this test is what makes the change visible rather than
-    /// silent.
+    /// This was the machine's defining defect until August 2026: the C++ this
+    /// was ported from never set bit 2, and the factory rom's output routine
+    /// at $0116 polls exactly that bit, so the monitor initialised the SIO and
+    /// then spun there forever. The machine had never printed anything. A real
+    /// SIO/2 reports it, and `dev/mc6850`'s `TDRE` is the same idea; this test
+    /// is what keeps the bit from going away again.
     #[test]
-    fn the_sio_status_never_reports_transmit_empty() {
-        const TX_EMPTY: u8 = 1 << 2;
-
-        // latch empty
+    fn the_sio_status_always_reports_transmit_empty() {
+        // latch empty: nothing to receive, but the transmitter is ready
         let (mut sys, tx) = build("txempty");
-        assert_eq!(sys.io_read8(0x80), 0);
+        assert_eq!(sys.io_read8(0x80), SIO_TX_EMPTY);
 
-        // latch full: the two bits that *are* reported, and still not bit 2
+        // latch full: all three bits
         tx.send(b'q').unwrap();
-        let status = sys.io_read8(0x80);
-        assert_eq!(status, SIO_RX_AVAILABLE | SIO_INT_PENDING);
-        assert_eq!(status & TX_EMPTY, 0);
+        assert_eq!(sys.io_read8(0x80), SIO_RX_AVAILABLE | SIO_INT_PENDING | SIO_TX_EMPTY);
 
-        // and it stays clear across the read that drains the latch
+        // and it stays set across the read that drains the latch
         assert_eq!(sys.io_read8(0x81), b'q');
-        assert_eq!(sys.io_read8(0x80) & TX_EMPTY, 0);
+        assert_eq!(sys.io_read8(0x80), SIO_TX_EMPTY);
+    }
+
+    /// The other half of the same repair: a waiting character asserts IRQ,
+    /// and reading the data port drops it again. The factory rom's console
+    /// input path is nothing but its mode-1 handler, so without this the
+    /// machine prints its prompt and can never be typed at.
+    #[test]
+    fn a_waiting_character_asserts_irq_until_the_data_port_is_read() {
+        let (mut sys, tx) = build("irq");
+        assert!(!sys.poll_interrupts().irq);
+
+        tx.send(b'z').unwrap();
+        let ints = sys.poll_interrupts();
+        assert!(ints.irq);
+        assert!(!ints.nmi, "nothing here drives NMI");
+
+        // level-held: still asserted on the next poll, until the guest reads
+        assert!(sys.poll_interrupts().irq);
+        assert_eq!(sys.io_read8(0x81), b'z');
+        assert!(!sys.poll_interrupts().irq);
     }
 }

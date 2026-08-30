@@ -41,10 +41,13 @@ pub enum Endian {
 /// Interrupt lines as seen by the CPU. The lines live in the machine (which
 /// knows what's wired to them); how they're serviced lives in the CPU.
 ///
-/// Scaffolding for the ported cores: none of them ever had a working
-/// interrupt-injection path (the z80's `RaiseIRQ` was never called, NMI never
-/// read, IM0/IM2 stubs, and the 6800/6809 exception bitmasks never set beyond
-/// reset), so no ported machine exercises any of *this* struct.
+/// The C++ never had a working interrupt-injection path here (the z80's
+/// `RaiseIRQ` was never called, NMI never read, IM0/IM2 stubs, and the
+/// 6800/6809 exception bitmasks never set beyond reset). The RC2014 is the
+/// first machine to drive it: its SIO raises IRQ whenever a character is
+/// waiting, which is the only way the factory rom ever sees a keystroke.
+/// NMI is still never asserted, and the 6800/6809 machines still never
+/// interrupt.
 /// The Raytheon 703 does run interrupts for real, but its 16 prioritized levels
 /// don't fit an irq/nmi pair -- see `poll_interrupt_lines`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -138,7 +141,11 @@ pub trait Bus {
     }
 
     /// Interrupt lines currently asserted. Default: nothing is wired up.
-    fn poll_interrupts(&self) -> IntStatus {
+    ///
+    /// `&mut self` for the same reason `MemoryDevice::read_byte` takes it: a
+    /// machine may have to pull from its console to learn whether a receiver
+    /// has anything, and that pull mutates.
+    fn poll_interrupts(&mut self) -> IntStatus {
         IntStatus::NONE
     }
 

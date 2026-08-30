@@ -1497,10 +1497,11 @@ impl Cpu for CpuZ80 {
         self.prefix_fd = false;
         let mut used = PrefixUse::default();
 
-        // Interrupt entry. Shape only -- nothing in the tree asserts IRQ (the
-        // RC2014's SIO has a TODO where the raise would go), so unlike the rest
-        // of this file nothing exercises it. IM 0 and IM 2 fall back to IM 1's
-        // `rst 0x38`, as the C++ does.
+        // Interrupt entry. The RC2014's SIO drives this for real -- its
+        // console input is interrupt-driven and works no other way. IM 0 and
+        // IM 2 fall back to IM 1's `rst 0x38`, as the C++ does; no machine here
+        // selects either, and IM 2 would need a device-supplied vector on the
+        // bus that nothing offers.
         let ints = bus.poll_interrupts();
         let op = if ints.irq && self.iff1 {
             self.iff1 = false;
