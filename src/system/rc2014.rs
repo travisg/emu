@@ -36,12 +36,11 @@
 //! the point of the read, so there is nothing to synchronize.
 //!
 //! The SIO raises IRQ while the latch is full, and it is the only device in
-//! the tree that drives `Bus::poll_interrupts` -- the C++ left a TODO where
-//! the raise would go and never filled it in. That mattered: the factory rom's
-//! console input is *entirely* interrupt-driven. Its mode-1 handler at $0038
-//! reads the data port into a 64-byte ring buffer at $8000 and RST 10h at
-//! $00b3 spins on the buffer's count, so a machine that never interrupts can
-//! never be typed at, however full the receive latch gets.
+//! the tree that drives `Bus::poll_interrupts`. That is not decoration: the
+//! factory rom's console input is *entirely* interrupt-driven. Its mode-1
+//! handler at $0038 reads the data port into a 64-byte ring buffer at $8000
+//! and RST 10h at $00b3 spins on the buffer's count, so a machine that never
+//! interrupts can never be typed at, however full the receive latch gets.
 
 use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
@@ -150,17 +149,15 @@ impl Bus for Rc2014 {
 
     fn io_read8(&mut self, port: u16) -> u8 {
         match port & 0xff {
-            // SIO/A control port: receive-available plus the interrupt
-            // condition, which the guest polls because no interrupt is ever
-            // actually raised, and transmit-buffer-empty.
+            // SIO/A control port: receive-available, the interrupt condition,
+            // and transmit-buffer-empty.
             //
             // TX-empty is unconditional: transmit here is a synchronous write
             // to the console, so the buffer is always empty by the time the
             // guest can look. `dev/mc6850` reports its `TDRE` the same way.
-            // The C++ never set this bit at all, which is why the factory
-            // rom's output routine at $0116 -- `in a,($80)` / `rrca` /
-            // `bit 1,a` / `jr z,-10` -- spun forever and the machine never
-            // printed anything.
+            // The factory rom's output routine at $0116 -- `in a,($80)` /
+            // `rrca` / `bit 1,a` / `jr z,-10` -- polls exactly this bit and
+            // prints nothing without it.
             0x80 => {
                 self.poll_console();
                 let mut status = SIO_TX_EMPTY;
@@ -232,14 +229,9 @@ mod tests {
     }
 
     /// Port $80 reports "transmit buffer empty" (bit 2) unconditionally,
-    /// alongside receive-available and the interrupt condition.
-    ///
-    /// This was the machine's defining defect until August 2026: the C++ this
-    /// was ported from never set bit 2, and the factory rom's output routine
-    /// at $0116 polls exactly that bit, so the monitor initialised the SIO and
-    /// then spun there forever. The machine had never printed anything. A real
-    /// SIO/2 reports it, and `dev/mc6850`'s `TDRE` is the same idea; this test
-    /// is what keeps the bit from going away again.
+    /// alongside receive-available and the interrupt condition. The factory
+    /// rom's output routine at $0116 polls that bit and spins forever without
+    /// it, so the machine prints nothing at all if it goes missing.
     #[test]
     fn the_sio_status_always_reports_transmit_empty() {
         // latch empty: nothing to receive, but the transmitter is ready
@@ -255,10 +247,10 @@ mod tests {
         assert_eq!(sys.io_read8(0x80), SIO_TX_EMPTY);
     }
 
-    /// The other half of the same repair: a waiting character asserts IRQ,
-    /// and reading the data port drops it again. The factory rom's console
-    /// input path is nothing but its mode-1 handler, so without this the
-    /// machine prints its prompt and can never be typed at.
+    /// A waiting character asserts IRQ, and reading the data port drops it
+    /// again. The factory rom's console input path is nothing but its mode-1
+    /// handler, so without this the machine prints its prompt and can never be
+    /// typed at.
     #[test]
     fn a_waiting_character_asserts_irq_until_the_data_port_is_read() {
         let (mut sys, tx) = build("irq");

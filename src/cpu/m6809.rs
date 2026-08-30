@@ -33,12 +33,9 @@
 //!   - stack pushes pre-decrement (the 6800 post-decrements)
 //!   - `shared_memwrite` sets N/Z *after* the write, from the written value
 //!   - `cmp` on a byte sets H as well
-//!   - `asr` never had the 6800's fallthrough bug
+//!   - `asr` and `lsr` are separate operations, not one falling into the other
 //!
-//! Preserved bug-for-bug through the port; see the 6800 core's note. The one
-//! bug repaired since is `SUB`/`SBC`'s overflow flag, which the C++'s
-//! negate-and-add left inverted for nearly every operand -- see the comment at
-//! `Op::Sub`.
+//! Preserved bug-for-bug through the port; see the 6800 core's note.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -907,17 +904,10 @@ impl Cpu for Cpu6809 {
                 self.put_reg(op.target, r as u16);
             }
 
-            // Subtract in 32 bits and let the borrow fall out of bit 8/16,
-            // which is what `Op::Cmp` below already did.
-            //
-            // The C++ negated the operand and *added* instead. Carry survived
-            // that, but V did not: `set_v1`/`set_v2` are
-            // `a ^ b ^ r ^ (r >> 1)`, so `b` contributes its own bit 7, and a
-            // 32-bit negation sets every bit above 7 for any non-zero operand.
-            // V came out inverted for *almost every* subtraction on this core
-            // -- 65,024 of the 65,536 byte operand pairs, at either carry.
-            // Checked exhaustively against V = A7·!M7·!R7 + !A7·M7·R7 at both
-            // widths.
+            // Subtract in 32 bits and let the borrow fall out of bit 8/16, the
+            // same way `Op::Cmp` below does. The operand must reach
+            // `set_v1`/`set_v2` un-negated: those read `b`'s own bit 7/15, so
+            // an operand carrying set bits above the width inverts V.
             Op::Sub | Op::Sbc => {
                 let a = self.get_reg(op.target) as u32;
                 let b = arg as u32;
@@ -1461,11 +1451,9 @@ mod tests {
     /// `V = A7·!M7·!R7 + !A7·M7·R7` and "C set on borrow" say, over every
     /// operand pair and both carry inputs.
     ///
-    /// This core had it far worse than the 6800: `set_v1` is
-    /// `a ^ b ^ r ^ (r >> 1)`, so the negated operand contributes its own
-    /// bit 7, and V came out inverted for 65,024 of the 65,536 operand pairs
-    /// -- every subtraction of a non-zero byte. `Op::Cmp` was always right,
-    /// because it never negated; SUB now works the same way.
+    /// Exhaustive rather than spot-checked because this core's `set_v1` takes
+    /// the operand's own bit 7, so a formulation that perturbs the operand
+    /// gets V wrong for nearly the whole space while leaving N, Z and C right.
     #[test]
     fn sub_and_sbc_flags_match_the_datasheet_for_every_operand() {
         for m in 0..=0xffu8 {
@@ -1498,7 +1486,7 @@ mod tests {
         }
     }
 
-    /// The 16-bit form (`subd`) had the same inverted V, from `set_v2`.
+    /// `subd` is the same arithmetic a byte wider, through `set_v2`.
     #[test]
     fn subd_flags_match_the_datasheet() {
         for (a, m) in [

@@ -30,10 +30,7 @@
 //! Behaviour was preserved bug-for-bug through the port, so where this core is
 //! knowingly wrong about a real 6800 it is called out in a comment and pinned
 //! by a named test; those divergences are decisions, not accidents, so read the
-//! comment before "fixing" one. Two were repaired in August 2026, once there
-//! was no second tree to stay byte-identical with: `ASR` falling into `LSR`,
-//! and `SUB`/`SBC`'s overflow flag, which the C++'s negate-and-add inverted
-//! for an operand of exactly 0x80.
+//! comment before "fixing" one.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -727,17 +724,10 @@ impl Cpu for Cpu6800 {
                 self.put_reg(op.target, r as u16);
             }
 
-            // Subtract in 32 bits and let the borrow fall out of bit 8, which
-            // is what `Op::Cmp` below already did.
-            //
-            // The C++ instead negated the operand and *added* -- carrying an
-            // "XXX make sure carry is okay" comment about it. The carry was in
-            // fact fine, but V was not: `set_v1` reads bit 8 of `a ^ b ^ r`,
-            // and negating in 32 bits sets every bit above 7 of `b`, which
-            // poisons that term whenever the operand is exactly 0x80. `subb
-            // #$80` reported the opposite of the right overflow for all 256
-            // values of the accumulator. Checked exhaustively against
-            // V = A7·!M7·!R7 + !A7·M7·R7 over every (a, m, carry).
+            // Subtract in 32 bits and let the borrow fall out of bit 8, the
+            // same way `Op::Cmp` below does. The operand must reach `set_v1`
+            // un-negated: that expression reads bit 8 of `a ^ b ^ r`, so an
+            // operand carrying set bits above 7 poisons the term.
             Op::Sub | Op::Sbc => {
                 let a = self.get_reg(op.target) as u32;
                 let b = arg as u32;
@@ -810,15 +800,8 @@ impl Cpu for Cpu6800 {
                 self.rmw_write(bus, &op, arg, v);
             }
 
-            // ASR keeps the sign bit; LSR shifts a zero in. The two differ in
+            // ASR keeps the sign bit; LSR shifts a zero in. They differ in
             // nothing else, so they share the read, the flags and the write.
-            //
-            // The C++ `case ASR:` had no `break` and fell through into
-            // `case LSR:`, which re-read the operand and overwrote both the
-            // result and the flags -- so ASR *was* LSR, and the memory form
-            // read its address twice, which is observable on a device
-            // register. The 6809 core never had the bug; this one no longer
-            // does either.
             Op::Asr | Op::Lsr => {
                 let v = self.rmw_read(bus, &op, arg);
                 self.set_cc(CC_C, v & 1 != 0);
@@ -1130,11 +1113,7 @@ mod tests {
         assert_eq!(cpu.sp, 0x00ff);
     }
 
-    /// `asr` keeps the sign bit, and is *not* `lsr`. The C++ `case ASR:` fell
-    /// through into `case LSR:`, which overwrote the result, so this used to
-    /// leave 0x40; a real 6800 leaves 0xc0. This test and
-    /// `memory_asr_reads_its_operand_once` are what keep the repair from being
-    /// undone silently.
+    /// `asr` keeps the sign bit, and is *not* `lsr`: 0x80 shifts to 0xc0.
     #[test]
     fn asr_preserves_the_sign_bit() {
         let (mut cpu, mut bus) = boot(&[0x86, 0x80, 0x47]); // lda #0x80 ; asra
@@ -1151,10 +1130,9 @@ mod tests {
         assert!(!cpu.cc_set(CC_N));
     }
 
-    /// The other half of the fallthrough: the discarded ASR pass read the
-    /// operand before the LSR pass read it again, so a memory-form `asr` hit
-    /// its address twice. Invisible in RAM, but not on a device register, and
-    /// it was trace-visible. One read now, like every other read-modify-write.
+    /// A memory-form `asr` reads its address exactly once, like every other
+    /// read-modify-write. A second read would be invisible in RAM but not on a
+    /// device register, and it is trace-visible either way.
     #[test]
     fn memory_asr_reads_its_operand_once() {
         let (mut cpu, mut bus) = boot(&[0x77, 0x01, 0x00]); // asr 0x0100
@@ -1180,10 +1158,9 @@ mod tests {
     /// `V = A7·!M7·!R7 + !A7·M7·R7` and "C set on borrow" say, over every
     /// operand pair and both carry inputs.
     ///
-    /// The C++ negated the operand and added instead, and `set_v1` reads bit 8
-    /// of `a ^ b ^ m` -- which a 32-bit negation sets for any non-zero operand.
-    /// V came out inverted for the whole of `suba #$80`. This exhaustive check
-    /// is what keeps that from coming back.
+    /// Exhaustive rather than spot-checked because V is easy to get subtly
+    /// wrong: an operand of exactly 0x80 is its own negation, so a formulation
+    /// that goes through one lands on the wrong answer there and nowhere else.
     #[test]
     fn sub_and_sbc_flags_match_the_datasheet_for_every_operand() {
         for m in 0..=0xffu8 {
@@ -1216,8 +1193,8 @@ mod tests {
         }
     }
 
-    /// `sba` (A - B) is the same arithmetic without an operand fetch, and had
-    /// the same inverted V at B = 0x80.
+    /// `sba` (A - B) is the same arithmetic without an operand fetch, so it
+    /// gets the same exhaustive check.
     #[test]
     fn sba_flags_match_the_datasheet_for_every_operand() {
         for b in 0..=0xffu8 {

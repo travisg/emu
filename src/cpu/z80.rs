@@ -55,17 +55,14 @@
 //!
 //! # Faithfulness
 //!
-//! The base page and the CB page are complete (every opcode value decodes).
-//! The ED page was full of holes inherited from the C++ and was filled in in
-//! August 2026: `LDI`/`LDD`/`LDDR` joined `LDIR` on a shared helper (which also
-//! stopped `LDIR` forcing PV clear while it still had bytes to move), `NEG`
-//! picked up its seven aliases, `RETN` appeared at all, and `IM` went from six
-//! encodings -- two of them on the wrong mode -- to all eight. What is left
-//! undecoded on the page really is undefined, and still ends the run.
+//! The base page and the CB page are complete (every opcode value decodes), and
+//! so is every ED encoding a real Z80 defines -- aliases and undocumented forms
+//! included. What is left undecoded on the ED page is genuinely undefined, and
+//! ends the run.
 //!
-//! Other deliberate quirks, each marked at its use site: most CB shifts ignore
-//! an active DD/FD prefix and then abort; `HALT` is a `NOP`, because no ported
-//! machine can wake a halted CPU and halting would deadlock the run rather than
+//! Deliberate quirks, each marked at its use site: most CB shifts ignore an
+//! active DD/FD prefix and then abort; `HALT` is a `NOP`, because no machine
+//! here can wake a halted CPU and halting would deadlock the run rather than
 //! end it; `RETI` is a plain `RET`, with nothing daisy-chained to notify;
 //! `RLC`/`RES`/`SET` have the undocumented register writeback.
 
@@ -937,9 +934,7 @@ impl CpuZ80 {
                 if dst == 0b110 && src == 0b110 {
                     // HALT, treated as a NOP
                 } else if (self.prefix_dd || self.prefix_fd) && src == 0b110 {
-                    // LD r, (IX+d) / LD r, (IY+d). The C++ added `d` *unsigned*
-                    // in this one direction while sign-extending it in every
-                    // other indexed form -- so `ld a,(ix-1)` read ix+255.
+                    // LD r, (IX+d) / LD r, (IY+d)
                     let addr = self.indexed_addr(bus, self.prefix_dd);
                     let val = self.mem_read(bus, addr);
                     // dst can't be (HL): that combination is HALT, above
@@ -1185,10 +1180,9 @@ impl CpuZ80 {
 
     /// `LDI` / `LDIR` / `LDD` / `LDDR`.
     ///
-    /// PV is "BC is still non-zero after the transfer", so it is *set* while a
-    /// repeating form still has work to do. The C++ forced it clear
-    /// unconditionally and implemented only `LDIR`, which meant a guest could
-    /// not use the flag to spot the last iteration; both are fixed here.
+    /// PV is "BC is still non-zero after the transfer", so it stays *set* while
+    /// a repeating form has work left and clears on the final byte -- which is
+    /// how a guest spots the last iteration.
     fn block_move(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         let src = self.hl();
         let val = self.mem_read(bus, src);
@@ -1348,20 +1342,18 @@ impl CpuZ80 {
             0x4d => self.pc = self.pop16(bus),
 
             // RETN and its undocumented aliases: RET, then IFF1 is restored
-            // from the copy IFF2 kept when the interrupt was accepted. Absent
-            // in the C++ entirely, which would have ended the run on any
-            // NMI-using guest.
+            // from the copy IFF2 kept when the interrupt was accepted.
             0x45 | 0x55 | 0x5d | 0x65 | 0x6d | 0x75 | 0x7d => {
                 self.pc = self.pop16(bus);
                 self.iff1 = self.iff2;
             }
 
-            // IM 0 / IM 1 / IM 2, over all eight encodings. The C++ had only
-            // six and had two of those on the wrong mode: 0x5e is IM 2, not
-            // IM 1, and 0x66 is IM 0, not IM 2. 0x4e and 0x6e are the
-            // "IM 0/1" holes, undefined on NMOS silicon and taken as IM 0
-            // here, which costs nothing because IM 0 falls back to IM 1's
-            // `rst 0x38` at the interrupt entry anyway.
+            // IM 0 / IM 1 / IM 2, over all eight encodings -- the mapping is
+            // not the regular one it looks like, so check it against silicon
+            // rather than the pattern. 0x4e and 0x6e are the "IM 0/1" holes,
+            // undefined on NMOS and taken as IM 0 here, which costs nothing
+            // because IM 0 falls back to IM 1's `rst 0x38` at the interrupt
+            // entry anyway.
             0x46 | 0x4e | 0x66 | 0x6e => self.im = 0,
             0x56 | 0x76 => self.im = 1,
             0x5e | 0x7e => self.im = 2,
@@ -1518,11 +1510,11 @@ impl Cpu for CpuZ80 {
         self.prefix_fd = false;
         let mut used = PrefixUse::default();
 
-        // Interrupt entry. The RC2014's SIO drives this for real -- its
-        // console input is interrupt-driven and works no other way. IM 0 and
-        // IM 2 fall back to IM 1's `rst 0x38`, as the C++ does; no machine here
-        // selects either, and IM 2 would need a device-supplied vector on the
-        // bus that nothing offers.
+        // Interrupt entry. The RC2014's SIO is the one thing that drives this:
+        // its console input is interrupt-driven and works no other way. IM 0
+        // and IM 2 fall back to IM 1's `rst 0x38` -- no machine here selects
+        // either, and IM 2 would need a device-supplied vector that nothing on
+        // the bus offers.
         let ints = bus.poll_interrupts();
         let op = if ints.irq && self.iff1 {
             self.iff1 = false;
@@ -1647,8 +1639,7 @@ mod tests {
     }
 
     /// `LD r, (IX+d)` adds the displacement **unsigned**, unlike every other
-    /// indexed form. That was a bug in the C++ -- `ld a,(ix-1)` read ix+255 --
-    /// and this test is what keeps it fixed.
+    /// indexed form, in both directions and under either prefix.
     #[test]
     fn ld_r_indexed_sign_extends_the_displacement() {
         for (prefix, load) in [(0xddu8, 0x21u8), (0xfd, 0x21)] {
@@ -1657,7 +1648,7 @@ mod tests {
                 prefix, load, 0x00, 0x01,   // ld ix/iy, 0x0100
                 prefix, 0x7e, 0xff,         // ld a, (ix-1) / (iy-1)
             ]);
-            bus.mem[0x01ff] = 0xaa; // where the C++ looked
+            bus.mem[0x01ff] = 0xaa; // where an unsigned displacement would look
             bus.mem[0x00ff] = 0x55; // where a real z80 looks
 
             run_steps(&mut cpu, &mut bus, 2);
@@ -1752,9 +1743,8 @@ mod tests {
         assert_eq!(cpu.pc, 0x000b);
     }
 
-    /// LDI, LDD and LDDR were holes in the C++ even though LDIR was there;
-    /// all four now run off one helper. LDI/LDD move a single byte and leave
-    /// PC alone.
+    /// LDI and LDD move a single byte and leave PC alone -- the repeat is what
+    /// separates them from LDIR/LDDR, which share the same helper.
     #[test]
     fn the_single_shot_block_moves_step_in_both_directions() {
         for (op, hl, de) in [(0xa0u8, 0x0101u16, 0x0201u16), (0xa8, 0x00ff, 0x01ff)] {
@@ -1792,8 +1782,7 @@ mod tests {
     }
 
     /// PV is "BC is still non-zero", so it is set on every iteration but the
-    /// last. The C++ forced it clear unconditionally, which left a guest no way
-    /// to spot the final byte.
+    /// last -- which is how a guest spots the final byte.
     #[test]
     fn a_block_move_reports_bc_in_pv() {
         #[rustfmt::skip]
@@ -1811,9 +1800,9 @@ mod tests {
         assert_eq!(cpu.f & (F_H | F_N), 0);
     }
 
-    /// NEG decodes at all eight `ED xx4/xxC` encodings, not just 0x44, and
-    /// RETN (0x45 plus six aliases) exists at all -- both were holes in the
-    /// C++, and either would have ended the run on a real guest.
+    /// NEG decodes at all eight `ED xx4/xxC` encodings, and RETN at 0x45 plus
+    /// its six aliases. Assemblers emit the canonical form, but hand-written
+    /// and self-modifying code does reach the others.
     #[test]
     fn the_neg_and_retn_aliases_all_decode() {
         for op in [0x44u8, 0x4c, 0x54, 0x5c, 0x64, 0x6c, 0x74, 0x7c] {
@@ -1836,8 +1825,9 @@ mod tests {
         }
     }
 
-    /// All eight IM encodings, including the two the C++ had on the wrong mode
-    /// (0x5e is IM 2, 0x66 is IM 0) and the two it did not decode at all.
+    /// All eight IM encodings. The mapping is irregular -- 0x5e is IM 2 while
+    /// the neighbouring 0x56 is IM 1, and 0x66 drops back to IM 0 -- so it is
+    /// worth pinning every one rather than trusting the pattern.
     #[test]
     fn every_im_encoding_selects_the_right_mode() {
         for (op, mode) in [

@@ -41,14 +41,11 @@ pub enum Endian {
 /// Interrupt lines as seen by the CPU. The lines live in the machine (which
 /// knows what's wired to them); how they're serviced lives in the CPU.
 ///
-/// The C++ never had a working interrupt-injection path here (the z80's
-/// `RaiseIRQ` was never called, NMI never read, IM0/IM2 stubs, and the
-/// 6800/6809 exception bitmasks never set beyond reset). The RC2014 is the
-/// first machine to drive it: its SIO raises IRQ whenever a character is
-/// waiting, which is the only way the factory rom ever sees a keystroke.
-/// NMI is still never asserted, and the 6800/6809 machines still never
-/// interrupt.
-/// The Raytheon 703 does run interrupts for real, but its 16 prioritized levels
+/// Only the RC2014 drives this: its SIO raises IRQ whenever a character is
+/// waiting, which is the only way the factory rom sees a keystroke. Nothing
+/// asserts NMI, and the 6800/6809 machines never interrupt at all, so `irq`
+/// and the z80 are the whole of what this struct does.
+/// The Raytheon 703 runs interrupts for real too, but its 16 prioritized levels
 /// don't fit an irq/nmi pair -- see `poll_interrupt_lines`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct IntStatus {
