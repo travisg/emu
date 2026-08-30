@@ -35,7 +35,7 @@
 //!   - `cmp` on a byte sets H as well
 //!   - `asr` has no fallthrough bug here
 //!
-//! Preserved bug-for-bug against the oracle; see the 6800 core's note.
+//! Preserved bug-for-bug through the port; see the 6800 core's note.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -1212,7 +1212,7 @@ impl Cpu for Cpu6809 {
     }
 
     fn trace_line(&self, out: &mut dyn Write) -> std::io::Result<()> {
-        // must match Cpu6809::TraceInstruction() in cpu/cpu6809.cpp exactly
+        // the format the C++ Cpu6809::TraceInstruction() emitted, kept
         writeln!(
             out,
             "PC={:04x} A={:02x} B={:02x} X={:04x} Y={:04x} U={:04x} S={:04x} DP={:02x} CC={:02x}",

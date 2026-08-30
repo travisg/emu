@@ -6,8 +6,8 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 
 - **System09 (Motorola 6809)**: boots the 6809 BASIC ROM to a prompt on the terminal.
 - **MITS Altair 680 (Motorola 6800)**: boots the MITS monitor ROM on the terminal.
-- **RC2014 (Zilog Z80)**: runs the factory ROM image (see the note in `rust-conversion-plan.md`
-  about its serial port).
+- **RC2014 (Zilog Z80)**: runs the factory ROM image (see the note in `AGENTS.md` about its
+  serial port — the monitor boots but has never printed anything).
 - **Kaypro II (Zilog Z80)**: boots CP/M 2.2 from a floppy image into an SDL2 window, with a
   keyboard and a read-only floppy.
 
@@ -55,14 +55,13 @@ closing the Kaypro window.
 ## Testing
 
 ```bash
-cargo test                          # unit tests; the trace-diff suites skip without an oracle
+cargo test                          # the whole suite: no ROMs, no external binaries
 ./test/run_basic6809_lang_test.sh   # end-to-end: boots BASIC and runs a language test program
 ```
 
-The `tests/trace_diff_*.rs` suites compare this emulator instruction by instruction against the
-original C++ implementation it was ported from. The C++ tree is gone from the working tree but not
-from history — `AGENTS.md` has the recipe for building it in a worktree and pointing `EMU_ORACLE` at
-it.
+`cargo test` needs nothing outside the repo. The end-to-end scripts do: `run_basic6809_lang_test.sh`
+needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`, and the Raytheon 703 scripts
+(`make -C test ray703-test` and friends) need `script(1)` and python3. `AGENTS.md` covers them all.
 
 ## Project Structure
 
@@ -73,6 +72,7 @@ it.
 - `src/console/`: the terminal and SDL2 frontends, and the channel/handles that connect them to
   the CPU thread.
 - `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
-- `tests/`: trace-diff suites. `test/`: the 6809 BASIC regression and the assembly sources of the
-  6809 test ROMs.
-- `rust-conversion-plan.md`: how the port from C++ was done and validated.
+- `tests/`: the one integration test. `test/`: the end-to-end regression scripts, the assembly
+  sources of the 6809 test ROMs, and everything Raytheon 703 (`test/703/`, including a Tiny BASIC
+  and transcriptions of two 1968 program listings).
+- `AGENTS.md`: the full guide — build, run, test, architecture, and the deliberate quirks.

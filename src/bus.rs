@@ -41,10 +41,10 @@ pub enum Endian {
 /// Interrupt lines as seen by the CPU. The lines live in the machine (which
 /// knows what's wired to them); how they're serviced lives in the CPU.
 ///
-/// Scaffolding for the ported cores: no C++ core has a working interrupt-
-/// injection path (the z80's `RaiseIRQ` is never called, NMI is never read,
-/// IM0/IM2 are stubs, and the 6800/6809 exception bitmasks are never set beyond
-/// reset), so none of *this* struct is trace-validatable against the oracle.
+/// Scaffolding for the ported cores: none of them ever had a working
+/// interrupt-injection path (the z80's `RaiseIRQ` was never called, NMI never
+/// read, IM0/IM2 stubs, and the 6800/6809 exception bitmasks never set beyond
+/// reset), so no ported machine exercises any of *this* struct.
 /// The Raytheon 703 does run interrupts for real, but its 16 prioritized levels
 /// don't fit an irq/nmi pair -- see `poll_interrupt_lines`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]

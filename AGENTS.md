@@ -6,9 +6,9 @@ Guidance for AI coding agents working in this repository. `CLAUDE.md` imports th
 
 Terminal-driven emulator for several vintage computer systems: Motorola 6809 (System09), MITS Altair 680 (6800), Kaypro II (Z80, CP/M, SDL2 video window), RC2014 (Z80), and the Raytheon 703 (1967, 16-bit).
 
-Written in Rust. Most of it is a port of an earlier C++ tree, validated against it instruction by instruction; the C++ tree was removed once the port was complete; its last version is commit `332e1cd`. Comments in the Rust cite C++ files and line numbers (`cpuz80.cpp:1196` and the like) — those resolve in that commit, e.g. `git show 332e1cd:cpu/cpuz80.cpp`. `rust-conversion-plan.md` is the history and rationale of the port.
+Written in Rust. Most of it is a port of an earlier C++ tree, and was validated against that tree instruction by instruction while the port was under way — both sides ran over the same ROM under `--trace` and the output had to be byte-identical. The C++ tree was removed once the port was complete and the comparison with it is now retired; the tree's last version is commit `332e1cd`. Comments in the Rust name the C++ files they came from (`//! Port of cpu/cpuz80.cpp`), which resolve in that commit: `git show 332e1cd:cpu/cpuz80.cpp`.
 
-The **Raytheon 703 is not a port** — the C++ never had it, so there is no oracle for it and no trace to match. It is written from the *703 Computer Reference and Interface Manual*; the parts of that scan an emulator needs are transcribed next to it as `Raytheon703refMan_isa.txt`, along with the PTB bootstrap and the teletype driver listings, and the comments in `src/cpu/ray703.rs` cite the manual's own section numbers (`2-7.6`, `1-3.3.2`). Darwin Geiselbrecht's `rustheon` and `Raytheon` emulators (github.com/IslandSparky, both MIT) were used as a cross-check, not as a base; where they and the manual disagree, the manual wins, and the disagreements are named at their use sites.
+The **Raytheon 703 is not a port** — the C++ never had it, and nothing else models it either. It is written from the *703 Computer Reference and Interface Manual*; the parts of that scan an emulator needs are transcribed next to it as `Raytheon703refMan_isa.txt`, along with the PTB bootstrap and the teletype driver listings, and the comments in `src/cpu/ray703.rs` cite the manual's own section numbers (`2-7.6`, `1-3.3.2`). Darwin Geiselbrecht's `rustheon` and `Raytheon` emulators (github.com/IslandSparky, both MIT) were used as a cross-check, not as a base; where they and the manual disagree, the manual wins, and the disagreements are named at their use sites.
 
 ## Build
 
@@ -44,7 +44,7 @@ Run from the repo root — default ROM paths are relative (`roms/...`), and `rom
 - Systems: `6809`, `altair680`, `kaypro`, `ray703`, `rc2014`. An optional subsystem suffix selects a variant (e.g. `6809-obc` — currently rejected with an explicit error, it needs an unported `uart16550`).
 - `-c/--cpu` is accepted but ignored — the CPU is chosen by the system.
 - `-l/--limit` bounds the run by *instruction* count (the name is historical); use it for non-interactive/automated runs. A limit of N executes N−1 instructions.
-- `-t/--trace` writes one line of register state per instruction to a file. This was the cross-validation oracle format; it's still the fastest way to see what a machine is doing.
+- `-t/--trace` writes one line of register state per instruction to a file — the fastest way to see what a machine is doing. It logs PC and registers but deliberately never the opcode: peeking would be a memory read that an untraced run doesn't make, which on a device register would change what the guest sees.
 - `--throttle` paces the CPU to the machine's real clock rate (from the registry's `clock_hz`); `--throttle N` paces to N Hz, which is slow motion for free. Cores report cycles per step via `Cpu::last_step_cycles`; a core that reports 0 (all the ported ones, so far) announces itself once and runs uncapped. Only the 703 counts cycles today, from appendix B's opcode index.
 - `--fast-io` makes devices complete I/O instantly instead of at their period rates — currently that means the 703's teletype, which otherwise takes its real tenth of a second per character. It is a different axis from `--throttle` (whether device models charge machine time, versus whether machine time is paced against the wall clock), so the two compose: `-s ray703-panel --fast-io` is a real-time panel with an instant terminal. The flag reaches every machine through `registry::MachineOpts`; a machine with no device timing to disable ignores it.
 - The console puts the terminal in raw mode and passes Ctrl-C through to the guest. **Ctrl-D exits cleanly** (or close the SDL window for kaypro).
@@ -57,11 +57,11 @@ Run from the repo root — default ROM paths are relative (`roms/...`), and `rom
 ## Test
 
 ```bash
-cargo test                       # unit tests; the oracle-gated cases report as ignored
+cargo test                       # everything; no ROMs, no external binaries, nothing skipped
 cargo clippy --all-targets       # kept clean
 ```
 
-Each CPU core has an in-module `mod tests` driving hand-assembled programs over `cpu::testbus::TestBus` (flat 64K plus an IO space, a `watch` counter for operand re-reads, and `run_steps`). These need no ROMs and no oracle, so they are what `cargo test` actually covers on a bare checkout. Several of them pin the deliberate quirks listed under Architecture. Derive expected values from the implementation, not from a datasheet, and keep a named test per quirk: those are what a future cleanup would silently break.
+Each CPU core has an in-module `mod tests` driving hand-assembled programs over `cpu::testbus::TestBus` (flat 64K plus an IO space, a `watch` counter for operand re-reads, and `run_steps`). These need no ROMs and nothing outside the repo, so they are the bulk of what `cargo test` covers. Several of them pin the deliberate quirks listed under Architecture. Derive expected values from the implementation, not from a datasheet, and keep a named test per quirk: those are what a future cleanup would silently break.
 
 End-to-end regression: boots 6809 BASIC, feeds it `test/basic6809_lang_test.bas`, and checks the captured log for `BASIC LANGUAGE TEST PASS`:
 
@@ -79,24 +79,17 @@ make -C test ray703-test            # builds the image, then runs the test
 ./test/run_ray703_demo_test.sh      # if the image is already built
 ```
 
-Needs `script(1)` and python3, and no oracle. No period ROM image is involved — the demo is built from source in this tree — but the `roms` symlink still has to resolve, because that is where `make -C test ray703` writes the image and where the registry's `default_rom` looks for it. The test waits for the banner to appear in the live log rather than sleeping: the emulator only starts listening once it has put the terminal in raw mode, and anything typed before that is eaten by the line discipline, which looks exactly like a broken emulator.
+Needs `script(1)` and python3. No period ROM image is involved — the demo is built from source in this tree — but the `roms` symlink still has to resolve, because that is where `make -C test ray703` writes the image and where the registry's `default_rom` looks for it. The test waits for the banner to appear in the live log rather than sleeping: the emulator only starts listening once it has put the terminal in raw mode, and anything typed before that is eaten by the line discipline, which looks exactly like a broken emulator.
 
 The disc has its own end-to-end test on the same harness: `make -C test ray703-disc-test` boots `test/703/disc.asm` against a fresh blank image in a scratch directory, greps for its `DISC TEST PASS` and the clean halt, and then byte-checks the image file for the pattern the guest wrote — a 94-word span deliberately crossing a track boundary, driven over two live interrupt levels (teletype on 0, disc completion on 1). `make -C test ray703-boot-test` covers the LOAD button: it embeds the one-sector boot program in a fresh image, boots it with `ray703-load`, and greps for the guest's banner and halt.
 
 **Tiny BASIC** (`test/703/basic.asm`, ~1300 words) is the tree's largest guest: a Palo Alto-class 16-bit integer BASIC — variables A–Z, `@(0..1023)`, `PRINT INPUT LET IF GOTO GOSUB RETURN FOR NEXT REM END`, `LIST RUN NEW`, `RND/ABS/SIZE`, `BYE` to halt — with an interrupt-driven teletype on the demo's model and its `*`/`/` running on the hardware MPY/DIV. `make -C test ray703-basic` builds it; `./target/debug/emu -s ray703 -r roms/703/basic.bin` talks to it; `make -C test ray703-basic-test` runs the scripted session (`test/run_ray703_basic_test.sh`): types a program exercising the editor, evaluator, FOR/GOSUB, the array, RND's bounds and INPUT, RUNs it, and greps for the outputs plus the clean `BYE` halt. One rule for driving it from a script: **pace every line on the guest falling silent**, not merely on the prompt appearing. Keys typed while the previous line is still being processed are dropped, Ctrl-C excepted, exactly as a busy 1968 machine dropped what a Model 33 fed it — and since the teletype prints at ten characters a second, the last character of `READY` or `? ` reaches the terminal while the guest is still spinning for it to drain, a good tenth of a second before the `T.GETL` that opens the line buffer. So wait for the prompt *and then for the output to stop growing*, which is `wait_quiet` in `test/run_ray703_basic_test.sh` and was the printer going quiet for the operator. The source's header comment is the map: page-per-ORG layout, SMB/JSX pairs for every cross-page transfer, no direct byte references, characters kept bit-7-set end to end.
 
-**Trace-diff against the C++ oracle** (`tests/trace_diff_{6800,6809,z80,kaypro}.rs`). These drive both implementations over the same ROM image and require byte-identical `--trace` output; they were the load-bearing gate for the port and remain the strongest regression check on the cores. All 59 oracle-dependent cases are `#[ignore]`d, so plain `cargo test` reports them as ignored rather than passing a comparison that never ran; the handful in those files that need only the Rust tree still run by default. To run the gate, build an oracle:
+`tests/machine_boot.rs` is the only integration test in the crate: it builds a 6809 through the registry from a synthetic Intel HEX image and runs it. The core-level claims are all covered in `src/cpu/`; what this one adds is the path a real run takes — `registry::find` to a factory, a `.hex` off disk, the boxed `Cpu`/`Bus` trait objects a `Machine` hands back.
 
-```bash
-git worktree add /tmp/emu-cpp 332e1cd
-git -C /tmp/emu-cpp submodule update --init     # libihex
-make -C /tmp/emu-cpp                            # needs clang, make, sdl2-config, objdump
-EMU_ORACLE=/tmp/emu-cpp/build-emu/emu cargo test -- --include-ignored
-```
+Until August 2026 there was one more, retired with this note: `tests/trace_diff_{6800,6809,z80,kaypro}.rs` ran the Rust and the C++ over the same ROM and required byte-identical `--trace` output. It was the load-bearing gate for the port, and it is retired along with the tree it compared against — the in-module tests are the regression cover now. If a future change wants that kind of leverage back, the harness is in the history — `git log --diff-filter=D -- tests/trace_diff_z80.rs` finds the removal, and `git show <that>^:tests/trace_diff_z80.rs` the file — along with the two rules it took a while to learn: a harness that spawns `emu` as a child must hold the child's stdin open for the child's whole life (`child.stdin.take()` before `wait()`), and lengths get asserted before contents, because `zip()` stops at the shorter side and a truncated capture otherwise passes without comparing anything.
 
-Once asked for explicitly, a missing oracle, ROM or floppy image is a hard failure with a message naming what is absent — the tests are opt-in, so silently passing would defeat the point. Run from the repo root (the ROMs and `mbasic-games.img` are resolved relative to it). About 2.5 minutes wall clock, dominated by spawning the oracle once per case. Two harness rules, learned the hard way and worth keeping: hold the child's stdin open for its whole life (`child.stdin.take()` before `wait()`), and assert trace *lengths* before comparing content.
-
-The trace-diff gate does not and cannot cover the 703: there is no C++ 703 to diff against. Its `--trace` format is therefore ours to choose rather than something to match, and its regression cover is the in-module tests plus the demo test above. The last of the core's unit tests runs the actual PTB bootstrap over a synthetic tape, which is the closest thing to a period artifact available: it self-modifies, so it pins byte addressing, the interrupt frame and the idle loop at once.
+The 703's `--trace` format was never bound to anything external, and its regression cover is the in-module tests plus the demo test above. The last of the core's unit tests runs the actual PTB bootstrap over a synthetic tape, which is the closest thing to a period artifact available: it self-modifies, so it pins byte addressing, the interrupt frame and the idle loop at once.
 
 **Running the period software.** `test/703/listings/` holds hand transcriptions of two 1968 Raytheon program listings — X-RAY EXEC (DN 390779) and the relocating loader (DN 390682C). `make -C test ray703-listings` turns them into core images in `roms/703/`, and `./target/debug/emu -s ray703 -r roms/703/xray.bin` boots X-RAY. **Type Ctrl-J before a command and Return after it**: X-RAY's records open on a line feed and close on a carriage return, and without the leading Ctrl-J it silently discards everything typed. `make -C test ray703-verify` re-assembles a transcript and diffs it against the object code the 1968 assembler printed — the loader matches on all 596 words; X-RAY does not assemble yet and says why. `test/703/README.md` is the index and the to-do list.
 
@@ -117,7 +110,15 @@ Threading/lifecycle (`src/main.rs`): parse args → `registry::find(name)` → f
 
 System metadata: `src/system/registry.rs` holds a static `SYSTEMS` table (`name`, `cpu`, `default_rom`, factory), which drives `-h` and the factory. Adding a machine = one entry there plus a `system/*.rs`. Never hardcode system/ROM info in `main.rs` — extend the table. `main.rs` chooses the frontend by which `Display` variant the machine returned (or none), not by system name.
 
-Known, deliberate quirks preserved from the C++ (all documented at their use sites; don't "fix" them casually, they are trace-validated behaviour): the 6800 `ASR` falls through into `LSR`; the Z80 `LD r,(IX+d)` adds `d` unsigned; the Z80 ED page is intentionally incomplete; `HALT` is a `NOP`; the RC2014 SIO never reports transmit-empty so its monitor never prints. `IntStatus`/`poll_interrupts` remain scaffolding: no ported machine asserts a line. See "Known defects reproduced, not fixed" in `rust-conversion-plan.md`.
+Known, deliberate quirks preserved from the C++. All are documented at their use sites and each has a named test, which is what makes "fixing" one a visible change rather than a silent one — don't do it casually:
+
+- the 6800 `ASR` falls through into `LSR`, so a real 6800's sign bit is lost and the memory form reads its operand twice (`asr_falls_through_into_lsr`, `memory_asr_reads_its_operand_twice`)
+- the Z80 `LD r,(IX+d)` adds `d` unsigned while every other indexed form sign-extends (`ld_r_indexed_adds_the_displacement_unsigned`)
+- the Z80 ED page is intentionally incomplete — `LDI`/`LDD`/`LDDR` are holes though `LDIR` exists, `NEG` is only `0x44`, `RETN` is absent (`the_unimplemented_ed_block_moves_stop_the_run`)
+- `HALT` is a `NOP` (`halt_is_a_nop`)
+- **the RC2014 can never transmit** (`the_sio_status_never_reports_transmit_empty`). Port `$80`'s status byte reports receive-available (bit 0) and the interrupt condition (bit 1), never bit 2, "transmit buffer empty". The factory ROM's output routine at `$0116` polls exactly that bit, so the monitor initialises the SIO, writes its channel-B setup, and spins there forever; neither this nor the C++ ever writes the console data port `$81`. The machine has never printed anything. The fix is small — report TX-empty unconditionally, as `dev/mc6850` already does with `TDRE` — and nothing blocks it any more now that there is no second tree to keep in step.
+
+`IntStatus`/`poll_interrupts` are likewise shape without substance: no ported machine asserts a line, the Z80's `RaiseIRQ` equivalent is never called, and IM 0/IM 2 fall back to IM 1. The 703 is the one machine here that runs interrupts for real, and it uses `poll_interrupt_lines` instead.
 
 ### The 703
 
@@ -139,7 +140,7 @@ Deliberate divergences, all documented at their use sites: `HLT` exits the emula
 
 - Idiomatic Rust; `cargo clippy --all-targets` clean. The tree is not `rustfmt`-formatted wholesale — match the surrounding code rather than reformatting files.
 - Files start with the modeline `// vim: ts=4:sw=4:expandtab:`, the MIT license header (copy it from any existing file; the text is in `LICENSE`), and a `//!` module doc explaining what the file is (and, where relevant, which C++ file it ports).
-- Every non-obvious behaviour gets a comment saying *why*, especially anything preserved for oracle compatibility.
+- Every non-obvious behaviour gets a comment saying *why*, especially anything preserved from the C++ rather than chosen.
 - Prefer minimal, localized diffs; avoid broad reformatting.
 
 ## Commits

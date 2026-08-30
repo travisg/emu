@@ -64,8 +64,8 @@ pub trait Cpu {
     /// 0 means this core does not count cycles, which renders throttling
     /// inert (the run loop warns once and runs uncapped). Cores that do
     /// count keep the tally internal and override this; nothing about it
-    /// may influence `trace_line()` -- the ported cores' trace output is
-    /// oracle-locked.
+    /// may influence `trace_line()`, for the reason given there -- a traced
+    /// run and an untraced one must execute identically.
     fn last_step_cycles(&self) -> u32 {
         0
     }
@@ -80,12 +80,10 @@ pub trait Cpu {
     /// Human-readable register dump, for debugging.
     fn dump(&self);
 
-    /// One line of golden-trace state for the instruction *about to* execute.
+    /// One line of trace state for the instruction *about to* execute.
     ///
-    /// Must match the C++ `--trace` format byte for byte -- see
-    /// `trace_oracle.h`. In particular it must log PC plus register state and
-    /// **not** the opcode: peeking the opcode would consume a byte whenever PC
-    /// sits on a device register, so a traced run would diverge from an
-    /// untraced one.
+    /// Must log PC plus register state and **not** the opcode: peeking the
+    /// opcode would consume a byte whenever PC sits on a device register, so a
+    /// traced run would diverge from an untraced one.
     fn trace_line(&self, out: &mut dyn Write) -> std::io::Result<()>;
 }

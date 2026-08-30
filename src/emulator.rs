@@ -223,8 +223,8 @@ impl Emulator {
         // Console::Stop() when its Run() returns for any reason
         self.shutdown.store(true, Ordering::SeqCst);
 
-        // the trace is a diff artifact; a truncated one silently reads as a
-        // successful short run, so flush before we return
+        // a truncated trace silently reads as a successful short run, so
+        // flush before we return
         if let Some(t) = self.trace.as_mut() {
             let _ = t.flush();
         }
@@ -343,8 +343,7 @@ impl Emulator {
             }
 
             // Emitted before the instruction runs, so the line describes the
-            // state the instruction starts from -- the same point the C++
-            // oracle emits at.
+            // state the instruction starts from.
             if let Some(t) = self.trace.as_mut() {
                 let _ = self.cpu.trace_line(t);
             }
@@ -446,7 +445,7 @@ mod tests {
 
     #[test]
     fn cycle_limit_executes_n_minus_one_instructions() {
-        // matches the C++ oracle: -l 100000 yields 99999 traced instructions
+        // the historical semantics, kept: -l 100000 yields 99999 instructions
         let (mut emu, steps) = emulator_with(None);
         emu.set_cycle_limit(Some(100));
         assert_eq!(emu.run(), ExitReason::CycleLimit);

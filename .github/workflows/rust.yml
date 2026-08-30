@@ -26,7 +26,8 @@ jobs:
     - name: Clippy
       run: cargo clippy --all-targets -- -D warnings
 
-    # unit tests only, in effect: the trace-diff suites skip themselves when
-    # there is no C++ oracle (EMU_ORACLE) and the e2e test needs the roms
+    # the whole suite runs here: it needs no ROM images and no external
+    # binaries. The end-to-end scripts in test/ do need ROMs, so they don't run
+    # in CI at all -- see the Test section of AGENTS.md
     - name: Test
       run: cargo test --verbose

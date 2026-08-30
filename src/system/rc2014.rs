@@ -182,3 +182,57 @@ impl Bus for Rc2014 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Build a machine over a synthetic full-size rom, and hand back the
+    /// keystroke channel so a test can feed the SIO.
+    fn build(name: &str) -> (Rc2014, std::sync::mpsc::Sender<u8>) {
+        let dir = std::env::temp_dir().join(format!("emu-rc2014-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom_path = dir.join("rom.bin");
+        // rom byte i = i, so reads are recognisable
+        let image: Vec<u8> = (0..BANK_SIZE).map(|i| i as u8).collect();
+        std::fs::File::create(&rom_path).unwrap().write_all(&image).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+        let machine = Rc2014::new(&rom_path, console).unwrap();
+        std::fs::remove_file(&rom_path).ok();
+        std::fs::remove_dir(&dir).ok();
+        (machine, tx)
+    }
+
+    /// The RC2014's defining defect, and the reason its monitor has never
+    /// printed anything: port $80 reports receive-available and the interrupt
+    /// condition, and never bit 2, "transmit buffer empty". The factory rom's
+    /// output routine at $0116 polls exactly that bit, so it spins there
+    /// forever and never writes the data port.
+    ///
+    /// A real SIO/2 does report it -- `dev/mc6850`'s `TDRE` is the same idea
+    /// done right -- so this is a divergence from the hardware, deliberately
+    /// carried over from the C++ this was ported from. Fixing it is a one-line
+    /// change here; this test is what makes the change visible rather than
+    /// silent.
+    #[test]
+    fn the_sio_status_never_reports_transmit_empty() {
+        const TX_EMPTY: u8 = 1 << 2;
+
+        // latch empty
+        let (mut sys, tx) = build("txempty");
+        assert_eq!(sys.io_read8(0x80), 0);
+
+        // latch full: the two bits that *are* reported, and still not bit 2
+        tx.send(b'q').unwrap();
+        let status = sys.io_read8(0x80);
+        assert_eq!(status, SIO_RX_AVAILABLE | SIO_INT_PENDING);
+        assert_eq!(status & TX_EMPTY, 0);
+
+        // and it stays clear across the read that drains the latch
+        assert_eq!(sys.io_read8(0x81), b'q');
+        assert_eq!(sys.io_read8(0x80) & TX_EMPTY, 0);
+    }
+}

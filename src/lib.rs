@@ -23,11 +23,13 @@
  */
 //! Terminal-driven emulator for several vintage computer systems.
 //!
-//! A Rust port of the original C++ emulator, validated instruction by
-//! instruction against it (`--trace` on both sides). The C++ tree was removed
-//! once the port was complete; comments throughout still cite the C++ files
-//! and line numbers, which resolve in the last commit that had them -- see
-//! AGENTS.md. History and rationale: `rust-conversion-plan.md`.
+//! Most of it is a port of an earlier C++ emulator, and was validated against
+//! that emulator instruction by instruction (`--trace` on both sides) while
+//! the port was under way. The C++ tree was removed once the port was
+//! complete, and the comparison with it is retired; comments throughout still
+//! name the C++ files they came from, and those resolve in the last commit
+//! that had them -- see AGENTS.md. The Raytheon 703 is not a port and has no
+//! such ancestor.
 
 pub mod bus;
 pub mod console;

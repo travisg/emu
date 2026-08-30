@@ -24,11 +24,11 @@
 //! Raytheon 703 interpreter core.
 //!
 //! Unlike the other cores in this tree, this one is not a port of anything:
-//! the C++ emulator never had a 703, so there is no oracle and no trace to
-//! match. It is written from the *Raytheon 703 Computer Reference and
-//! Interface Manual*, whose relevant sections are transcribed alongside the
-//! scans as `Raytheon703refMan_isa.txt`. Section references in the comments
-//! below ("2-7.6", "1-3.3.2") are to that manual.
+//! the C++ emulator this tree grew out of never had a 703. It is written from
+//! the *Raytheon 703 Computer Reference and Interface Manual*, whose relevant
+//! sections are transcribed alongside the scans as `Raytheon703refMan_isa.txt`.
+//! Section references in the comments below ("2-7.6", "1-3.3.2") are to that
+//! manual.
 //!
 //! Cross-checked against two emulators written by Darwin Geiselbrecht, who
 //! programmed these machines: `rustheon` (Rust) and `Raytheon` (Python), both
@@ -987,10 +987,10 @@ impl Cpu for Cpu703 {
     }
 
     fn trace_line(&self, out: &mut dyn Write) -> std::io::Result<()> {
-        // No C++ oracle exists for this machine, so unlike the other cores
-        // this format is ours to choose. It follows the shape of the others:
-        // PC first, then registers, and never the opcode -- peeking at the
-        // instruction would be a memory read that an untraced run doesn't do.
+        // Nothing constrains this machine's format, so it simply follows
+        // the shape of the others: PC first, then registers, and never the
+        // opcode -- peeking at the instruction would be a memory read that an
+        // untraced run doesn't do.
         writeln!(
             out,
             "PC={:04x} AC={:04x} IX={:04x} EX={:02x} ST={:04x}",

@@ -26,9 +26,8 @@
 //! Flat 64K of RAM plus an IO space, so a test can hand-assemble a handful of
 //! bytes, run them through a core and assert on the result. The machines in
 //! `system` are the real buses; this exists so a core can be exercised without
-//! one, and so `cargo test` covers all three cores on a bare checkout -- the
-//! trace-diff suites in `tests/` need both a `roms` symlink and a C++ oracle
-//! binary, and skip themselves without them.
+//! one, and so `cargo test` covers all three ported cores on a bare checkout,
+//! with no rom images and nothing outside the repo.
 
 use super::{Cpu, StepResult};
 use crate::bus::Bus;

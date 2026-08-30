@@ -27,10 +27,10 @@
 //! decode table indexed by opcode, then a switch on the addressing mode to
 //! fetch the operand and a switch on the operation to execute it.
 //!
-//! Behaviour is deliberately preserved bug-for-bug, because the C++ is the
-//! trace-diff oracle. Where this core is knowingly wrong about a real 6800 it
-//! is called out in a comment; do not "fix" those without also changing the
-//! C++ and re-baselining the oracle.
+//! Behaviour was deliberately preserved bug-for-bug through the port. Where
+//! this core is knowingly wrong about a real 6800 it is called out in a
+//! comment and pinned by a named test; those divergences are decisions, not
+//! accidents, so read the comment before "fixing" one.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -1038,7 +1038,7 @@ impl Cpu for Cpu6800 {
     }
 
     fn trace_line(&self, out: &mut dyn Write) -> std::io::Result<()> {
-        // must match Cpu6800::TraceInstruction() in cpu/cpu6800.cpp exactly
+        // the format the C++ Cpu6800::TraceInstruction() emitted, kept
         writeln!(
             out,
             "PC={:04x} A={:02x} B={:02x} X={:04x} S={:04x} CC={:02x}",
@@ -1126,9 +1126,10 @@ mod tests {
         assert_eq!(cpu.sp, 0x00ff);
     }
 
-    /// `asr` is identical to `lsr` here: the C++ `case ASR:` falls through into
-    /// `case LSR:`, which overwrites the result. A real 6800 would leave 0xc0.
-    /// Do not "fix" this without re-baselining the oracle.
+    /// `asr` is identical to `lsr` here: the C++ `case ASR:` fell through into
+    /// `case LSR:`, which overwrites the result, and the port kept it. A real
+    /// 6800 would leave 0xc0. This test and `memory_asr_reads_its_operand_twice`
+    /// are what make the divergence visible if anyone "fixes" it.
     #[test]
     fn asr_falls_through_into_lsr() {
         let (mut cpu, mut bus) = boot(&[0x86, 0x80, 0x47]); // lda #0x80 ; asra

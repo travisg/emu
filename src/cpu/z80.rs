@@ -23,7 +23,7 @@
  */
 //! Zilog Z80 interpreter core.
 //!
-//! Port of `cpu/cpuz80.cpp`, preserved bug-for-bug against the C++ oracle.
+//! Port of `cpu/cpuz80.cpp`, preserved bug-for-bug.
 //!
 //! # Why this core is shaped differently from the 6800/6809 ones
 //!
@@ -59,8 +59,8 @@
 //! **the ED page is full of holes** and must stay that way: `LDI`, `LDD` and
 //! `LDDR` are absent (only `LDIR` exists), `NEG` is only `0x44` and not its
 //! seven aliases, `RETN` is absent, and `IM` is missing its `0x76`/`0x7e`
-//! encodings. Each falls through to `BadOpcode`, which ends the run. Filling
-//! any of them in would diverge from the oracle.
+//! encodings. Each falls through to `BadOpcode`, which ends the run. Leaving
+//! them out is a decision carried over from the C++, not an oversight.
 //!
 //! Other deliberate quirks, each marked at its use site: `LD r, (IX+d)` adds
 //! `d` unsigned while every other indexed form sign-extends; most CB shifts
@@ -1499,8 +1499,8 @@ impl Cpu for CpuZ80 {
 
         // Interrupt entry. Shape only -- nothing in the tree asserts IRQ (the
         // RC2014's SIO has a TODO where the raise would go), so unlike the rest
-        // of this file it is not validated against the oracle. IM 0 and IM 2
-        // fall back to IM 1's `rst 0x38`, as the C++ does.
+        // of this file nothing exercises it. IM 0 and IM 2 fall back to IM 1's
+        // `rst 0x38`, as the C++ does.
         let ints = bus.poll_interrupts();
         let op = if ints.irq && self.iff1 {
             self.iff1 = false;
@@ -1729,8 +1729,9 @@ mod tests {
     }
 
     /// The ED page is deliberately incomplete: LDI, LDD and LDDR are holes even
-    /// though LDIR is implemented. Filling them in would diverge from the
-    /// oracle.
+    /// though LDIR is implemented. That is inherited from the C++ and kept; this
+    /// test is what makes filling one in a visible change rather than a silent
+    /// one.
     #[test]
     fn the_unimplemented_ed_block_moves_stop_the_run() {
         for op in [0xa0u8, 0xa8, 0xb8] {
@@ -1740,8 +1741,8 @@ mod tests {
     }
 
     /// An instruction that saw a DD/FD prefix but had no use for it ends the
-    /// run. This decides trace *length*, so it is load-bearing for the oracle
-    /// diff, not just an error path.
+    /// run -- not an error path so much as the decode's shape, since it decides
+    /// how far a run gets.
     #[test]
     fn an_unconsumed_index_prefix_stops_the_run() {
         let (mut cpu, mut bus) = boot(&[0xdd, 0x00]); // dd nop
