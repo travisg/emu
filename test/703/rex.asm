@@ -3,10 +3,10 @@
 ; REX -- Raytheon EXec: a preemptive round-robin executive for the 703.
 ;
 ; Three tasks share the processor under a 60 Hz timer interrupt, each
-; printing its letter through an interrupt-driven teletype driver, so the
-; output is the scheduler made visible: at ten characters a second the
-; letters interleave; under --fast-io each task streams a run of its letter
-; until the next tick takes the processor away.  A '.' from the keyboard
+; printing its letter through an interrupt-driven teletype driver and then
+; sleeping for a fixed number of ticks, so the output is the scheduler made
+; visible: the three letters arrive at their own intervals, and when every
+; task is asleep the idle task has the processor.  A '.' from the keyboard
 ; shuts it down -- the tasks park, the printer drains, REX 703 DOWN, halt.
 ; Nothing else typed is echoed or used.
 ;
@@ -62,6 +62,22 @@
 ;   depositing.  Once task A's drain finds every mailbox empty and the
 ;   printer idle, no letter can chase the down-message.
 ;
+; * SLEEP IS SPIN PLUS STATE, because the machine has no instruction with
+;   which to yield.  A task stores its delay and marks itself SLEEPING in
+;   one masked window, then spins reading its own state; the scheduler
+;   passes over a sleeping task, counts its delay down on every tick, and
+;   marks it runnable again at zero, whereupon the spin falls through.  The
+;   cost is the fraction of a tick the task spins before the first tick
+;   takes the processor away -- the price of having nowhere to yield to.
+;   The spin must live OUTSIDE [ISRBEG, ISREND): a task whose spin the
+;   defer check mistook for the driver would never be switched away from.
+;
+; * THE IDLE TASK is what runs when every task is asleep, and the reason
+;   the scheduler's scan can always finish.  It is a branch to self, which
+;   is a legal idle here because the levels are enabled and unmasked, and
+;   it is scanned by nobody: the scan covers the real tasks and falls back
+;   to idle when none of them can run.
+;
 ; * A FRESH TASK'S STATUS is GLB plus its entry page.  A zero status word
 ;   would resume the task in local mode with EXR 0 and its first memory
 ;   reference would land in page 0.  The entries sit on 1024-word byte
@@ -76,7 +92,7 @@
 ;   0000-000B  interrupt blocks: level 0 (teletype), level 1 unused,
 ;              level 2 (line clock; word 8 = saved PC, word 10 = status)
 ;   0040-      page 0: START, then ISRBEG..ISREND (SCHED, SERV, KICK),
-;              then the kernel cells and the TCB table
+;              then the kernel cells, the TCB table and the idle task
 ;   0800-      page 1: task A -- banner, gate, letter loop, supervisor
 ;   1000-      page 2: task B -- letter loop
 ;   1800-      page 3: task C -- letter loop
@@ -99,6 +115,22 @@
 
 L2PC            EQU     8               ; the level 2 block words SCHED edits:
 L2ST            EQU     10              ; rewriting them before INR 2 is the switch
+
+; A task control block: the four words of context the hardware and the
+; switch move between them, then the two the scheduler runs on.
+T.ACR           EQU     0
+T.IXR           EQU     1
+T.PCR           EQU     2
+T.MST           EQU     3               ; machine status: EXR, indicators, mode
+T.STA           EQU     4               ; S.RUN or S.SLP
+T.DLY           EQU     5               ; ticks left, while sleeping
+TCBW            EQU     6               ; words per block
+
+S.RUN           EQU     0
+S.SLP           EQU     1
+
+NTASK           EQU     3               ; the tasks the scheduler scans...
+TIDLE           EQU     TCBW*NTASK      ; ...and the idle task's block, past them
 
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
@@ -129,7 +161,35 @@ ISRBEG          EQU     $
 SCHED           SMB     S2SAVA          ; the SMB lead: EXR still holds the
                 STW     S2SAVA          ; interrupted task's page
                 STX     S2SAVX
-                LDW     L2PC            ; where did the tick land?
+
+; Count the tick against every sleeping task, and do it before the defer
+; check: a tick that caught the teletype's service routine still spent a
+; sixtieth of a second, and a sleep that skipped those would stretch by
+; however long the driver happened to be busy.  A delay is never stored
+; below one, so the count reaches zero exactly and never runs past it.
+                CLR
+                STW     SCIX
+SCTKL           LDX     SCIX
+                LDW     *TCBT+T.STA
+                CMW     KSLP
+                SEQ                     ; asleep?
+                JMP     SCTKN
+                LDW     *TCBT+T.DLY
+                SUB     K1
+                STW     *TCBT+T.DLY
+                SAZ                     ; the last tick of the sleep?
+                JMP     SCTKN
+                CLR
+                STW     *TCBT+T.STA     ; wake it
+SCTKN           LDW     SCIX
+                ADD     KTCBW
+                STW     SCIX
+                CMW     KTIDLE
+                SLS                     ; another real task to visit?
+                JMP     SCDEF
+                JMP     SCTKL
+
+SCDEF           LDW     L2PC            ; where did the tick land?
                 CMW     KISRB
                 SLS                     ; below ISRBEG: task code
                 JMP     SCHI
@@ -144,29 +204,51 @@ SCHI            CMW     KISRE
 ; A task was running: park its frame, pick the next, resume it.  The
 ; compare indicators and any overflow this arithmetic sets are clobber
 ; without consequence -- INR 2 restores the whole status from word 10.
-SCSW            LDX     CURX            ; IXR = 4 * current task
+SCSW            LDX     CURX            ; IXR = the current task's block
                 LDW     S2SAVA
-                STW     *TCBT           ; outgoing ACR
+                STW     *TCBT+T.ACR
                 LDW     S2SAVX
-                STW     *TCBT+1         ; outgoing IXR
+                STW     *TCBT+T.IXR
                 LDW     L2PC
-                STW     *TCBT+2         ; outgoing PC
+                STW     *TCBT+T.PCR
                 LDW     L2ST
-                STW     *TCBT+3         ; outgoing status
-                LDW     CURX            ; round robin: 0, 4, 8, 0, ...
-                ADD     K4
-                CMW     K12
+                STW     *TCBT+T.MST
+
+; Round robin over the tasks that can run, starting past the one just
+; parked.  A task that is asleep is simply skipped; if none of them can
+; run the idle task always can, which is what makes this scan terminate.
+                LDW     CURX
+                STW     SCIX
+                LDW     KNTASK
+                STW     SCTRY
+SCSCN           LDW     SCIX
+                ADD     KTCBW
+                CMW     KTIDLE
                 SLS
-                CLR
+                CLR                     ; past the last block: wrap
+                STW     SCIX
+                CAX
+                LDW     *TCBT+T.STA
+                SAZ                     ; runnable?
+                JMP     SCNRD
+                JMP     SCPIK
+SCNRD           LDW     SCTRY
+                SUB     K1
+                STW     SCTRY
+                SAZ                     ; any candidate left to look at?
+                JMP     SCSCN
+                LDW     KTIDLE          ; every task is asleep: go idle
+                STW     SCIX
+SCPIK           LDW     SCIX
                 STW     CURX
                 LDX     CURX
-                LDW     *TCBT+2
+                LDW     *TCBT+T.PCR
                 STW     L2PC            ; incoming PC and status go into the
-                LDW     *TCBT+3         ; level block; INR does the loading
+                LDW     *TCBT+T.MST     ; level block; INR does the loading
                 STW     L2ST
-                LDW     *TCBT+1
+                LDW     *TCBT+T.IXR
                 STW     S2SAVX          ; park the incoming IXR -- the index
-                LDW     *TCBT           ; register still holds the TCB offset
+                LDW     *TCBT+T.ACR     ; register still holds the TCB offset
                 LDX     S2SAVX
                 INR     2
 
@@ -260,23 +342,37 @@ MBCH1           WORD    0               ; C -- contiguous, KICK and SERV
 MBCH2           WORD    0               ; index them from MBCH0
 SHUTREQ         WORD    0               ; set by SERV on '.', read by tasks
 BGATE           WORD    0               ; set by task A when the banner is out
-CURX            WORD    0               ; 4 * current task, pre-scaled
+CURX            WORD    0               ; the current task's block offset
+SCIX            WORD    0               ; SCHED's walk over the blocks
+SCTRY           WORD    0               ; candidates left in the scan
 K1              WORD    1
 K3              WORD    3
-K4              WORD    4
-K12             WORD    12
 KM1             WORD    X'FFFF'
+KSLP            WORD    S.SLP
+KTCBW           WORD    TCBW
+KNTASK          WORD    NTASK
+KTIDLE          WORD    TIDLE
 KISRB           WORD    ISRBEG
 KISRE           WORD    ISREND
 
-; The TCB table, four words per task: ACR, IXR, PC, status.  Slot 0 is
-; blank because the kernel becomes task A and the first tick fills it.  A
-; status is GLB (X'80') plus the entry page in the EXR field, which for a
-; 1024-word-aligned entry is exactly the entry doubled; a zero status
-; would resume the task in local mode pointed at page 0.
-TCBT            WORD    0,0,0,0
-                WORD    0,0,BTASK,(BTASK*2)+X'80'
-                WORD    0,0,CTASK,(CTASK*2)+X'80'
+; The task control blocks.  Slot 0 is blank because the kernel becomes
+; task A and the first tick fills it in.  A status is GLB (X'80') plus the
+; entry page in the EXR field, which for a 1024-word-aligned entry is
+; exactly the entry doubled -- the identity holds for the three task pages
+; and not for the idle task, which lives in page 0 and whose EXR is
+; therefore plain zero.  A zero status word would resume a task in local
+; mode pointed at page 0.
+TCBT            WORD    0,0,0,0,S.RUN,0
+                WORD    0,0,BTASK,(BTASK*2)+X'80',S.RUN,0
+                WORD    0,0,CTASK,(CTASK*2)+X'80',S.RUN,0
+                WORD    0,0,IDLE,X'80',S.RUN,0
+
+; What the machine runs when every task is asleep.  A branch to self is a
+; legal idle here -- the levels are enabled and unmasked, so the tick that
+; ends somebody's sleep takes the processor away from it -- and it sits
+; outside [ISRBEG, ISREND) like any other task's code, or the scheduler
+; could never switch away from it.
+IDLE            JMP     IDLE
 
 ; ---------------------------------------------------------------- task A
 ; Prints the banner, opens the gate for B and C, then prints its letter
@@ -299,6 +395,7 @@ ARUN            SMB     SHUTREQ
                 JMP     AQUIT
                 LDW     ACH
                 JSX     APUTC
+                JSX     ANAP            ; and stand down for half a second
                 JMP     ARUN
 
 ; Shutdown.  Wait for every letter still in flight to reach the printer --
@@ -326,6 +423,27 @@ AQUIT           SMB     MBCH0
                 MSK
                 DOT     2,0             ; disconnect the line clock
                 HLT
+
+; Sleep ANAPN ticks: store the delay and the state in one masked window,
+; so the tick cannot read half of it, then spin on the state until the
+; scheduler marks this task runnable again.  The spin burns whatever is
+; left of the current tick -- there is no instruction with which to give
+; the processor back -- and nothing after that, because a sleeping task is
+; passed over by the scan.
+ANAP            SUBR
+                MSK
+                LDW     ANAPN
+                SMB     A.DLY
+                STW     A.DLY
+                LDW     AKSLP
+                SMB     A.STA
+                STW     A.STA
+                UNM
+ANAPW           SMB     A.STA
+                LDW     A.STA
+                SAZ                     ; awake again?
+                JMP     ANAPW
+                EXIT    ANAP
 
 ; Print one character from ACR: deposit in task A's mailbox, kick the
 ; printer, spin until SERV reports it gone.  The deposit window is masked
@@ -360,8 +478,13 @@ APRL            LDW     ABANP
                 JMP     APRL
 APRD            EXIT    APRT
 
+A.STA           EQU     TCBT+0*TCBW+T.STA   ; this task's own block fields
+A.DLY           EQU     TCBT+0*TCBW+T.DLY
+
 ACH             WORD    'A'
 AK1             WORD    1
+AKSLP           WORD    S.SLP
+ANAPN           WORD    30              ; half a second between letters
 ABANP           WORD    0               ; APRT's cursor and limit, byte
 APEND           WORD    0               ; addresses
 ABANA           WORD    ABAN*2
@@ -402,11 +525,31 @@ BWAIT           SMB     MBCH1
                 LDW     MBCH1
                 SAZ                     ; cleared by SERV when printed
                 JMP     BWAIT
+
+; Sleep BNAPN ticks; see task A's ANAP for what the two cells mean and why
+; the spin has to sit out here in the task's own page.
+                MSK
+                LDW     BNAPN
+                SMB     B.DLY
+                STW     B.DLY
+                LDW     BKSLP
+                SMB     B.STA
+                STW     B.STA
+                UNM
+BNAPW           SMB     B.STA
+                LDW     B.STA
+                SAZ                     ; awake again?
+                JMP     BNAPW
                 JMP     BRUN
 BQUIT           UNM
 BPARK           JMP     BPARK           ; parked; a legal idle, levels live
 
+B.STA           EQU     TCBT+1*TCBW+T.STA
+B.DLY           EQU     TCBT+1*TCBW+T.DLY
+
 BCH             WORD    'B'
+BKSLP           WORD    S.SLP
+BNAPN           WORD    45              ; three quarters of a second
 
 ; ---------------------------------------------------------------- task C
                 ORG     X'1800'
@@ -431,8 +574,25 @@ CWAIT           SMB     MBCH2
                 LDW     MBCH2
                 SAZ
                 JMP     CWAIT
+                MSK
+                LDW     CNAPN
+                SMB     C.DLY
+                STW     C.DLY
+                LDW     CKSLP
+                SMB     C.STA
+                STW     C.STA
+                UNM
+CNAPW           SMB     C.STA
+                LDW     C.STA
+                SAZ                     ; awake again?
+                JMP     CNAPW
                 JMP     CRUN
 CQUIT           UNM
 CPARK           JMP     CPARK
 
+C.STA           EQU     TCBT+2*TCBW+T.STA
+C.DLY           EQU     TCBT+2*TCBW+T.DLY
+
 CCH             WORD    'C'
+CKSLP           WORD    S.SLP
+CNAPN           WORD    60              ; a second

@@ -11,9 +11,9 @@ set -euo pipefail
 #
 #   --fast-io   the teletype's pacing is not what is under test, and the
 #               scheduling slices stay real machine time regardless -- the
-#               line clock ignores the flag. With an instant printer each
-#               task streams a run of its letter per 9,523-cycle slice, so
-#               the alternation below is runs, not single characters.
+#               line clock ignores the flag. The tasks sleep between
+#               letters, so what this speeds up is the wall-clock time the
+#               sleeps take, not the intervals the guest observes.
 #   -l          a hang guard. A wedged guest becomes "stopping, CycleLimit"
 #               instead of a stuck test, and the verdict grep rejects it.
 #               2e9 instructions is roughly ten times a normal run here.
@@ -66,12 +66,10 @@ window() {
     sed -n '/REX 703 UP/,$p' "$LOG_FILE"
 }
 
-# True once each task has printed at least 30 letters and the stream has at
-# least 7 runs -- six changes of hand, two full rotations. Thresholds and
-# alternation rather than exact counts, because the tick lands where it
-# lands: a tick that catches the service routine defers, one that catches a
-# task's masked deposit window is held a few instructions, so the slice
-# boundaries are not at fixed character offsets.
+# True once every task has printed several letters and the stream has
+# changed hands repeatedly. Thresholds and alternation rather than exact
+# counts: the three tasks sleep for 30, 45 and 60 ticks, so they drift
+# through every phase against each other and no fixed pattern is owed.
 enough_output() {
     local w a b c runs
     w=$(window)
@@ -79,7 +77,7 @@ enough_output() {
     b=$(printf %s "$w" | tr -cd 'B' | wc -c)
     c=$(printf %s "$w" | tr -cd 'C' | wc -c)
     runs=$(printf %s "$w" | tr -cd 'ABC' | tr -s 'ABC' | wc -c)
-    (( a >= 30 && b >= 30 && c >= 30 && runs >= 7 ))
+    (( a >= 5 && b >= 5 && c >= 5 && runs >= 9 ))
 }
 
 FIFO=$(mktemp -u)
