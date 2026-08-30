@@ -11,7 +11,12 @@ OBJCOPY   := objcopy
 
 .PHONY: all clean basic6809-test
 
-all: t6809.ihx test.ihx rom.bin
+# The 6809 sources, all built in place under 6809/. memtest is the only one
+# meant to run; the other two exist to be assembled. README.md says which is
+# which.
+M6809 := 6809
+
+all: $(M6809)/memtest.bin $(M6809)/t6809.ihx $(M6809)/addressing.ihx
 
 # Assemble: <stem>.asm -> <stem>.rel (side-effects: .lst, .rst)
 %.rel: %.asm
@@ -21,20 +26,19 @@ all: t6809.ihx test.ihx rom.bin
 %.ihx: %.rel
 	$(LINK) $(LINKFLAGS) $*
 
-# rom needs the -u flag to update the listing with absolute addresses
-rom.ihx: rom.rel
+# memtest needs the -u flag to update the listing with absolute addresses
+$(M6809)/memtest.ihx: $(M6809)/memtest.rel
 	$(LINK) -niu $(basename $@)
 
 # Convert ihex to flat binary. objcopy starts the output at the lowest address
-# in the image, which for rom.asm is its 0xc000 origin.
-rom.bin: rom.ihx
+# in the image, which for memtest.asm is its 0xc000 origin.
+$(M6809)/memtest.bin: $(M6809)/memtest.ihx
 	$(OBJCOPY) -I ihex -O binary $< $@
 
 clean:
-	rm -f t6809.rel t6809.lst t6809.rst t6809.ihx
-	rm -f test.rel test.lst test.rst test.ihx
-	rm -f rom.rel rom.lst rom.rst rom.ihx rom.bin
+	rm -f $(M6809)/*.rel $(M6809)/*.lst $(M6809)/*.rst $(M6809)/*.ihx $(M6809)/*.bin
 	rm -f 703/demo.lst 703/basic.lst 703/disc.lst 703/boot.lst 703/tape.lst
+	rm -f *.log
 
 basic6809-test:
 	./run_basic6809_lang_test.sh

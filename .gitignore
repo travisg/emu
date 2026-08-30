@@ -15,12 +15,12 @@ __pycache__/
 /target
 
 # assembler outputs and end-to-end test logs in test/
-/test/*.ihx
-/test/*.rel
-/test/*.rst
-/test/*.lst
-/test/*.bin
 /test/*.log
+/test/6809/*.ihx
+/test/6809/*.rel
+/test/6809/*.rst
+/test/6809/*.lst
+/test/6809/*.bin
 /test/703/*.lst
 
 # ROM and disk images are not tracked; see tools/rom-manifest.txt

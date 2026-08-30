@@ -8,7 +8,7 @@ ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 # the same test against another binary (target/release/emu, say).
 EMU_BIN="${EMU_BIN:-$ROOT_DIR/target/debug/emu}"
 ROM_FILE="$ROOT_DIR/roms/6809/BASIC.HEX"
-PROGRAM_FILE="$SCRIPT_DIR/basic6809_lang_test.bas"
+PROGRAM_FILE="$SCRIPT_DIR/6809/lang_test.bas"
 LOG_FILE="${1:-$SCRIPT_DIR/basic6809_lang_test.log}"
 
 if [[ ! -x "$EMU_BIN" ]]; then

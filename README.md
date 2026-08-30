@@ -74,9 +74,9 @@ needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`, and the Raytheon 703 sc
 - `src/console/`: the terminal and SDL2 frontends, and the channel/handles that connect them to
   the CPU thread.
 - `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
-- `tests/`: the one integration test. `test/`: the end-to-end regression scripts, the assembly
-  sources of the 6809 test ROMs, and everything Raytheon 703 (`test/703/`, including a Tiny BASIC
-  and transcriptions of two 1968 program listings).
+- `tests/`: the one integration test. `test/`: the end-to-end regression scripts and the guest
+  programs they drive, by machine — `test/6809/` and `test/703/` (the latter including a Tiny
+  BASIC and transcriptions of two 1968 program listings). See `test/README.md`.
 - `tools/`: development tools — the 703 assembler, the listing transcription workflow, and the
   ROM fetcher.
 - `roms/`, `disks/`: where the images the machines boot and mount go. Untracked; see the README
