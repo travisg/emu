@@ -27,7 +27,7 @@ for the guest's own report of success.
     make -C test ray703-basic-test   # a scripted Tiny BASIC session
     make -C test ray703-disc-test    # the 74601 disc, over two interrupt levels
     make -C test ray703-boot-test    # the disc controller's LOAD button
-    make -C test ray703-rex-test     # REX: preemptive scheduling, sleep, and its shell
+    make -C test ray703-rex-test     # REX: scheduling, sleep, queues, and its shell
 
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
