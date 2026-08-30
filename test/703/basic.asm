@@ -14,19 +14,30 @@
 ; Build with `make -C test ray703-basic`; run with
 ; `./target/debug/emu -s ray703 -r roms/703/basic.bin`.
 ;
-; Ground rules, learned from the machine (see AGENTS.md for the manual
-; citations):
+; Ground rules -- some the machine's, some disciplines this program chose
+; (see AGENTS.md for the manual citations):
 ;
 ;  - One accumulator, one index register, no stack.  IXR is always caller
 ;    scratch: it is the index, the JSX return link, the low half of the
 ;    double shifts, and MPY/DIV's high half, so every long-lived pointer
 ;    lives in a cell and is loaded at the point of use.
 ;  - Code never falls across a page boundary and every cross-page jump or
-;    call is an SMB/JMP or SMB/JSX pair.  A skip never targets one -- the
-;    skip would jump the SMB and decouple the pair.
-;  - No direct byte references at all.  A byte page is half a word page and
-;    the split is the easiest thing on this machine to get wrong, so every
-;    byte access is indexed through IXR from an address cell.
+;    call is an SMB/JMP or SMB/JSX pair, kept adjacent and never made a
+;    skip target.  That is this program's discipline, not the machine's:
+;    a global-mode indexed JMP reaches anywhere (for the price of an
+;    address cell and IXR), and EXR survives a skip between the pair,
+;    since only a memory reference reloads it (1-3).  But a skip landing
+;    on the JMP would jump the SMB, and a skip fired between the two
+;    would leave the selected page live for the next memory reference
+;    wherever execution falls; adjacency retires both hazards.
+;  - No direct byte references, by the same kind of choice -- the machine
+;    has them: a byte instruction uses all five EXR bits where a word
+;    instruction drops the low one, so a direct LDB/STB reaches any of
+;    the 64K bytes (1-3.3.1).  But the byte-page-is-half-a-word-page
+;    split is the easiest thing on this machine to get wrong, and this
+;    program runs in global mode, where an indexed byte access is a flat
+;    16-bit address with no page arithmetic at all; so every byte access
+;    is indexed through IXR from an address cell.
 ;  - Characters are handled bit-7-set, exactly as the teletype delivers
 ;    them ('A' assembles to C1 and compares equal to a received A).  Case
 ;    is folded where letters are recognized, not in storage.  DOT 14,14

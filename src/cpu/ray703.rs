@@ -1353,8 +1353,8 @@ mod tests {
     }
 
     /// The extension register reverts to the page of the program counter after
-    /// every memory reference (1-3), so SML/SMU govern exactly one
-    /// instruction. Get the order backwards and SML stops working entirely.
+    /// every memory reference (1-3), so SML/SMU govern exactly one memory
+    /// reference. Get the order backwards and SML stops working entirely.
     #[test]
     fn the_extension_register_reverts_after_one_reference() {
         // SML 4 / LDW 0x001 / LDW 0x002
