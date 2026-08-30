@@ -92,7 +92,11 @@
 ; * MAILBOX OWNERSHIP.  Task i writes MBCH+i, one character, only when it
 ;   holds zero and only inside its masked window; SERV alone clears it,
 ;   which is the task's "printed" signal; KICK only reads.  Characters are
-;   never zero, so zero means empty.
+;   never zero, so zero means empty.  Having deposited, the task waits on
+;   that cell the way anything waits here: masked, look; if the character
+;   is still there, mark itself WAITING and hand the processor on.  SERV
+;   wakes it as it clears the cell, and the task looks again -- so nothing
+;   in this executive holds the processor to wait for a device.
 ;
 ; * INPUT GOES THROUGH A QUEUE, so the shell waits rather than polls and
 ;   what is typed while it is busy is held rather than lost.  The service
@@ -128,8 +132,8 @@
 ;   rewriting its own level's block and running on to its own INR, which
 ;   is what SERV does when RESCHD says a task has been woken.
 ;
-; * THE IDLE TASK is what runs when every task is asleep, and the reason
-;   the scheduler's scan can always finish.  It is a branch to self, which
+; * THE IDLE TASK is what runs when every task is asleep or waiting, and
+;   the reason the scheduler's scan can always finish.  It is a branch to self, which
 ;   is a legal idle here because the levels are enabled and unmasked, and
 ;   it is scanned by nobody: the scan covers the real tasks and falls back
 ;   to idle when none of them can run.
@@ -340,10 +344,31 @@ SERV            SMB     S0SAVA          ; the SMB lead again
                 SAM                     ; no owner: a keystroke should wait
                 JMP     STX0
                 JMP     SRX
-STX0            LDX     OWNER
+STX0            LDW     OWNER
+                STW     S0OWN
+                CAX
                 CLR
                 STW     *MBCH0          ; the owner's "printed" signal
-                LDW     KM1
+
+; ...and wake it, if it is waiting for exactly that.  Only if: a task the
+; shell stopped between depositing and this completion must stay stopped,
+; and the wake is advice rather than a promise -- the waiter looks at its
+; own mailbox again when it runs, and finds it empty either way.
+                LDW     S0OWN           ; its block: six words to a task
+                SLL     1
+                STW     S0TMP
+                SLL     1
+                ADD     S0TMP
+                CAX
+                LDW     *TCBT+T.STA
+                CMW     KWAIT
+                SEQ                     ; waiting on the printer?
+                JMP     STX1
+                CLR
+                STW     *TCBT+T.STA
+                LDW     K1
+                STW     RESCHD
+STX1            LDW     KM1
                 STW     OWNER
                 JSX     KICK            ; start the next waiting character
 SRX             DIN     14,15           ; collect the frame, and ask for
@@ -581,6 +606,8 @@ ISREND          EQU     $
 ; ---------------------------------------------------------------- kernel data
 S0SAVA          WORD    0               ; level 0's register saves
 S0SAVX          WORD    0
+S0OWN           WORD    0               ; the task whose character finished
+S0TMP           WORD    0               ; and the arithmetic that finds it
 S2SAVA          WORD    0               ; level 2's register saves
 S2SAVX          WORD    0
 OWNER           WORD    X'FFFF'         ; task whose character is printing;
@@ -593,7 +620,6 @@ MBCH1           WORD    0               ; C and the shell -- contiguous, KICK
 MBCH2           WORD    0               ; and SERV index them from MBCH0
 MBCH3           WORD    0
 SHUTREQ         WORD    0               ; set by the shell's HALT, read by tasks
-BGATE           WORD    0               ; set by the shell when the banner is out
 CURX            WORD    TCBW*3          ; the current task's block offset: the
                                         ; kernel becomes the shell, so it
                                         ; starts on the shell's own block
@@ -643,9 +669,9 @@ KISRE           WORD    ISREND
 ; and not for the idle task, which lives in page 0 and whose EXR is
 ; therefore plain zero.  A zero status word would resume a task in local
 ; mode pointed at page 0.
-TCBT            WORD    0,0,ATASK,(ATASK*2)+X'80',S.RUN,0
-                WORD    0,0,BTASK,(BTASK*2)+X'80',S.RUN,0
-                WORD    0,0,CTASK,(CTASK*2)+X'80',S.RUN,0
+TCBT            WORD    0,0,ATASK,(ATASK*2)+X'80',S.OFF,0
+                WORD    0,0,BTASK,(BTASK*2)+X'80',S.OFF,0
+                WORD    0,0,CTASK,(CTASK*2)+X'80',S.OFF,0
                 WORD    0,0,0,0,S.RUN,0
                 WORD    0,0,IDLE,X'80',S.RUN,0
 
@@ -701,18 +727,14 @@ QGT             LDW     *Q.BUF
 IDLE            JMP     IDLE
 
 ; ---------------------------------------------------------------- task A
-; A letter task, and the model for the two below it: wait for the shell to
-; finish the banner, then print a letter and sleep, forever.  The masked
-; window is the whole protocol -- SHUTREQ read and the character deposited
-; with SERV locked out, so a deposit can never follow an observed shutdown.
+; A letter task, and the model for the two below it: print a letter and
+; sleep, forever.  It is born stopped and the shell releases it once the
+; banner is out.  The masked window is the whole protocol -- SHUTREQ read
+; and the character deposited with SERV locked out, so a deposit can
+; never follow an observed shutdown.
                 ORG     X'800'
 
-ATASK           SMB     BGATE
-                LDW     BGATE
-                SAZ
-                JMP     ARUN
-                JMP     ATASK
-ARUN            MSK
+ATASK           MSK
                 SMB     SHUTREQ
                 LDW     SHUTREQ
                 SAZ
@@ -723,10 +745,19 @@ ARUN            MSK
                 SMB     KICK
                 JSX     KICK
                 UNM
-AWAIT           SMB     MBCH0
+AWAIT           MSK
+                SMB     MBCH0
                 LDW     MBCH0
-                SAZ                     ; cleared by SERV when printed
+                SAZ                     ; printed yet?
+                JMP     AWBLK
+                JMP     AWDON
+AWBLK           LDW     AKWAI          ; no: stand down until SERV says so,
+                SMB     A.STA          ; and look again when it does -- a
+                STW     A.STA          ; wake is advice, not a promise
+                SMB     SWTCH
+                JSX     SWTCH
                 JMP     AWAIT
+AWDON           UNM
 
 ; Sleep ANAPN ticks: store the delay and the state in one masked window,
 ; so the tick cannot read half of it, and hand the processor straight on.
@@ -741,7 +772,7 @@ AWAIT           SMB     MBCH0
                 STW     A.STA
                 SMB     SWTCH
                 JSX     SWTCH           ; and the processor goes elsewhere
-                JMP     ARUN          ; now, not at the next tick
+                JMP     ATASK         ; now, not at the next tick
 AQUIT           UNM
 APARK           JMP     APARK           ; parked; a legal idle, levels live
 
@@ -750,20 +781,14 @@ A.DLY           EQU     TCBT+0*TCBW+T.DLY
 
 ACH             WORD    'A'
 AKSLP           WORD    S.SLP
+AKWAI           WORD    S.WAI
 ANAPN           WORD    30              ; half a second between letters
 
 ; ---------------------------------------------------------------- task B
-; Wait for the banner, then print the letter forever.  The masked window
-; is the whole protocol: SHUTREQ checked and the character deposited with
-; SERV locked out, so a deposit can never follow an observed shutdown.
+; Task A above is the model for this one.
                 ORG     X'1000'
 
-BTASK           SMB     BGATE
-                LDW     BGATE
-                SAZ
-                JMP     BRUN
-                JMP     BTASK
-BRUN            MSK
+BTASK           MSK
                 SMB     SHUTREQ
                 LDW     SHUTREQ
                 SAZ
@@ -774,10 +799,19 @@ BRUN            MSK
                 SMB     KICK
                 JSX     KICK
                 UNM
-BWAIT           SMB     MBCH1
+BWAIT           MSK
+                SMB     MBCH1
                 LDW     MBCH1
-                SAZ                     ; cleared by SERV when printed
+                SAZ                     ; printed yet?
+                JMP     BWBLK
+                JMP     BWDON
+BWBLK           LDW     BKWAI          ; no: stand down until SERV says so,
+                SMB     B.STA          ; and look again when it does -- a
+                STW     B.STA          ; wake is advice, not a promise
+                SMB     SWTCH
+                JSX     SWTCH
                 JMP     BWAIT
+BWDON           UNM
 
 ; Sleep BNAPN ticks; task A above says what the two cells mean.
                 MSK
@@ -789,7 +823,7 @@ BWAIT           SMB     MBCH1
                 STW     B.STA
                 SMB     SWTCH
                 JSX     SWTCH           ; and the processor goes elsewhere
-                JMP     BRUN          ; now, not at the next tick
+                JMP     BTASK         ; now, not at the next tick
 BQUIT           UNM
 BPARK           JMP     BPARK           ; parked; a legal idle, levels live
 
@@ -798,17 +832,13 @@ B.DLY           EQU     TCBT+1*TCBW+T.DLY
 
 BCH             WORD    'B'
 BKSLP           WORD    S.SLP
+BKWAI           WORD    S.WAI
 BNAPN           WORD    45              ; three quarters of a second
 
 ; ---------------------------------------------------------------- task C
                 ORG     X'1800'
 
-CTASK           SMB     BGATE
-                LDW     BGATE
-                SAZ
-                JMP     CRUN
-                JMP     CTASK
-CRUN            MSK
+CTASK           MSK
                 SMB     SHUTREQ
                 LDW     SHUTREQ
                 SAZ
@@ -819,10 +849,19 @@ CRUN            MSK
                 SMB     KICK
                 JSX     KICK
                 UNM
-CWAIT           SMB     MBCH2
+CWAIT           MSK
+                SMB     MBCH2
                 LDW     MBCH2
-                SAZ
+                SAZ                     ; printed yet?
+                JMP     CWBLK
+                JMP     CWDON
+CWBLK           LDW     CKWAI          ; no: stand down until SERV says so,
+                SMB     C.STA          ; and look again when it does -- a
+                STW     C.STA          ; wake is advice, not a promise
+                SMB     SWTCH
+                JSX     SWTCH
                 JMP     CWAIT
+CWDON           UNM
                 MSK
                 LDW     CNAPN
                 SMB     C.DLY
@@ -832,7 +871,7 @@ CWAIT           SMB     MBCH2
                 STW     C.STA
                 SMB     SWTCH
                 JSX     SWTCH           ; and the processor goes elsewhere
-                JMP     CRUN          ; now, not at the next tick
+                JMP     CTASK         ; now, not at the next tick
 CQUIT           UNM
 CPARK           JMP     CPARK
 
@@ -841,21 +880,25 @@ C.DLY           EQU     TCBT+2*TCBW+T.DLY
 
 CCH             WORD    'C'
 CKSLP           WORD    S.SLP
+CKWAI           WORD    S.WAI
 CNAPN           WORD    60              ; a second
 
 ; ---------------------------------------------------------------- the shell
-; Task 3.  Prints the banner, opens the gate for the letter tasks, and
-; then reads a line and runs it, forever.  Everything it prints goes
+; Task 3.  Prints the banner, starts the letter tasks, and then reads a
+; line and runs it, forever.  Everything it prints goes
 ; through its own mailbox one character at a time like any other task's
 ; letter, so a command's output and the background letters interleave on
 ; the printer exactly as two users' output did.
                 ORG     X'2000'
 
+; The letter tasks are born stopped so that nothing of theirs lands in
+; the banner; releasing them is exactly what START with no argument does,
+; so it is done by falling into that, which goes on to the prompt.
 SHELL           LDW     SHMBAN
                 JSX     SHMSG
-                LDW     SHK1
-                SMB     BGATE
-                STW     BGATE           ; the letter tasks may speak now
+                CLR
+                STW     SHNST
+                JMP     SHSALL
 
 SHLOOP          LDW     SHMPRM
                 JSX     SHMSG
@@ -1154,9 +1197,10 @@ SHAGB           LDW     SHK2
 
 ; ---------------------------------------------------------------- output
 ; One character from ACR: deposit in the shell's mailbox, kick the
-; printer, spin until SERV reports it gone.  The deposit window is masked
-; for KICK's sake; the spin is not, so the tick is free to schedule around
-; a task that is only waiting on the printer.
+; printer, and stand down until SERV reports it printed.  The deposit
+; window is masked for KICK's sake, and so is each look at the mailbox
+; afterwards, so that the completion cannot land between the look and the
+; decision to wait on it.  The letter tasks do the same thing; see task A.
 SHPUTC          SUBR
                 AND     SHK0FF
                 MSK
@@ -1165,10 +1209,19 @@ SHPUTC          SUBR
                 SMB     KICK
                 JSX     KICK
                 UNM
-SHPWT           SMB     MBCH3
+SHPWT           MSK
+                SMB     MBCH3
                 LDW     MBCH3
-                SAZ
+                SAZ                     ; printed yet?
+                JMP     SHPWB
+                JMP     SHPWD
+SHPWB           LDW     SHKWAI
+                SMB     SH.STA
+                STW     SH.STA
+                SMB     SWTCH
+                JSX     SWTCH
                 JMP     SHPWT
+SHPWD           UNM
                 EXIT    SHPUTC
 
 ; The two characters packed in ACR, high half first.
@@ -1312,6 +1365,8 @@ SHGLE           LDW     SHFIL           ; terminate it; SHKLBE leaves room
                 EXIT    SHGETL
 
 ; ---------------------------------------------------------------- shell data
+SH.STA          EQU     TCBT+3*TCBW+T.STA   ; this task's own state word
+
 SHCUR           WORD    0               ; the cursor into the line, a byte
 SHFIL           WORD    0               ; and where SHGETL is filling it
 SHCH            WORD    0               ; the character it is filing
@@ -1347,6 +1402,7 @@ SHKCA           WORD    'A'
 SHKCC           WORD    'C'
 SHKSLP          WORD    S.SLP
 SHKOFF          WORD    S.OFF
+SHKWAI          WORD    S.WAI
 SHKUPM          WORD    X'FFDF'         ; folds a letter to upper case
 SHKCQ           WORD    QCONS           ; the queue the keyboard fills
 SHKTCW          WORD    TCBW
