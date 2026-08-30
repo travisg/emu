@@ -45,7 +45,7 @@ Run a system:
 ```bash
 ./target/debug/emu                          # the default system (6809)
 ./target/debug/emu -s altair680
-./target/debug/emu -s kaypro                # opens a window; also loads mbasic-games.img from the cwd
+./target/debug/emu -s kaypro                # opens a window; also loads disks/mbasic-games.img
 ./target/debug/emu -s 6809 -r roms/6809/BASIC.HEX
 ./target/debug/emu -s 6809 -l 1000000       # stop after a million instructions
 ./target/debug/emu -s 6809 -t trace.txt     # log one line of CPU state per instruction

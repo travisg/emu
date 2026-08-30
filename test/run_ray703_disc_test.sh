@@ -50,17 +50,18 @@ wait_for() {
     return 1
 }
 
-# The machine mounts ray703-disc{0..3}.img from the current directory, so the
-# emulator runs in a scratch directory holding a fresh blank image -- exactly
-# the platter size, all zeros. python3 makes the blank because truncate(1)
-# does not exist everywhere the tests run.
+# The machine mounts disks/ray703-disc{0..3}.img under the current directory,
+# so the emulator runs in a scratch directory holding a fresh blank image --
+# exactly the platter size, all zeros. python3 makes the blank because
+# truncate(1) does not exist everywhere the tests run.
 WORK=$(mktemp -d)
 FIFO=$(mktemp -u)
 mkfifo "$FIFO"
 : > "$LOG_FILE"
 trap 'rm -f "$FIFO"; rm -rf "$WORK"' EXIT
 
-DISC_IMG="$WORK/ray703-disc0.img"
+mkdir "$WORK/disks"
+DISC_IMG="$WORK/disks/ray703-disc0.img"
 python3 -c "open('$DISC_IMG', 'wb').truncate(770048)"
 
 # The fifo is held open for the emulator's whole life -- closing it looks like

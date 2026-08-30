@@ -45,9 +45,9 @@ use std::path::Path;
 
 pub const DEFAULT_ROM: &str = "roms/kaypro/kayproii_u47.bin";
 pub const VIDEO_ROM: &str = "roms/kaypro/kayproii_u43.bin";
-/// Loaded from the current directory, as the C++ does. Not a rom, so not
-/// tracked in the repo -- see AGENTS.md.
-pub const DEFAULT_FLOPPY: &str = "mbasic-games.img";
+/// Mounted from `disks/` under the current directory. Not a rom, so not
+/// tracked in the repo -- see disks/README.md.
+pub const DEFAULT_FLOPPY: &str = "disks/mbasic-games.img";
 
 pub const WINDOW_TITLE: &str = "Kaypro II Emulator";
 
