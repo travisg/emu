@@ -11,12 +11,13 @@
 # 6809 (System09): Grant Searle's build of Microsoft Extended BASIC.
 roms/6809/BASIC.HEX             6a282de5ac6ada90b50e35c72608e1306cd5caee7d80d872dfbd50a315c3775c  -
 
-# Kaypro II: the boot PROM and the character generator, dumped from the chips.
-roms/kaypro/kayproii_u47.bin    0f72f1cecb5a66f7d623156a69c0ea4036e47eb4df8e8fa165c0e95bd45067a0  -
-roms/kaypro/kayproii_u43.bin    cde431c9e506edf11261f7e7d52fd60b1a43fe2d9ea0d3e06f271d4cab4884fa  -
+# Kaypro II: the boot PROM (part 81-232) and the character generator (81-146a),
+# dumped from the chips. kaypro.txt in the archive records the donor machines.
+roms/kaypro/kayproii_u47.bin    0f72f1cecb5a66f7d623156a69c0ea4036e47eb4df8e8fa165c0e95bd45067a0  http://www.retroarchive.org/maslin/roms/kaypro/81-232.rom
+roms/kaypro/kayproii_u43.bin    cde431c9e506edf11261f7e7d52fd60b1a43fe2d9ea0d3e06f271d4cab4884fa  http://www.retroarchive.org/maslin/roms/kaypro/81-146a.rom
 
 # RC2014: the factory ROM, Grant Searle's monitor around Microsoft BASIC 4.7b.
-roms/rc2014/24886009.BIN        db0312ada33065281781fc9b0f6c85ac0f987265c11cd51afac8ac58244f7fd6  -
+roms/rc2014/24886009.BIN        db0312ada33065281781fc9b0f6c85ac0f987265c11cd51afac8ac58244f7fd6  https://raw.githubusercontent.com/RC2014Z80/RC2014/master/ROMs/Factory/24886009.BIN
 
 # MITS Altair 680b: the PROM monitor.
 roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed239eed3af2b5ddd201  -
