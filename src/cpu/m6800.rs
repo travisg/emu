@@ -656,7 +656,9 @@ impl Cpu for Cpu6800 {
                 } else if op.width == 1 {
                     bus.read8(addr as u32) as i32
                 } else {
-                    // XXX doesn't handle wraparound, as in the C++
+                    // The high byte is at addr+1 with no wrap back into the
+                    // zero page, so `ldx $ff` reads $00ff and $0100 -- page one
+                    // is reachable from direct mode, by exactly one byte.
                     bus.read16(addr as u32, Endian::Big) as i32
                 };
             }
@@ -1209,6 +1211,35 @@ mod tests {
                 assert_eq!(cpu.cc_set(CC_C), wide < 0, "{ctx}: C");
             }
         }
+    }
+
+    /// Direct mode addresses the zero page, but a 16-bit operand there reads
+    /// `addr` and `addr+1` with no wrap back to $00, so the three 16-bit direct
+    /// readers -- `cpx`, `lds`, `ldx` -- reach $0100 and nothing further.
+    #[test]
+    fn a_16_bit_direct_operand_crosses_into_page_one() {
+        let (mut cpu, mut bus) = boot(&[0xde, 0xff]); // ldx $ff
+        bus.mem[0x00ff] = 0x12;
+        bus.mem[0x0100] = 0x34;
+        bus.mem[0x0000] = 0x99; // where a zero-page wrap would land
+
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.ix, 0x1234);
+    }
+
+    /// The one wrap a 16-bit access does make is at the top of the address
+    /// space, and it comes from the bus rather than the core: every machine
+    /// masks the address to 16 bits, so `addr+1` past $ffff lands on $0000.
+    /// Only extended and indexed modes can reach that far.
+    #[test]
+    fn a_16_bit_operand_wraps_at_the_top_of_the_address_space() {
+        let (mut cpu, mut bus) = boot(&[0xfe, 0xff, 0xff]); // ldx $ffff
+        // after reset, so the reset vector's low byte is free to reuse
+        bus.mem[0xffff] = 0x12;
+        bus.mem[0x0000] = 0x34;
+
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.ix, 0x1234);
     }
 
     #[test]

@@ -621,7 +621,13 @@ impl CpuZ80 {
 
     /// `INC r` and `DEC r`, which differ only in the direction and three flags.
     fn inc_dec_r(&mut self, bus: &mut dyn Bus, r: u8, used: &mut PrefixUse, inc: bool) {
-        let bump = |v: u8| if inc { v.wrapping_add(1) } else { v.wrapping_sub(1) };
+        let bump = |v: u8| {
+            if inc {
+                v.wrapping_add(1)
+            } else {
+                v.wrapping_sub(1)
+            }
+        };
 
         let (old, new) = if self.prefix_dd && r == 0b110 {
             let addr = self.indexed_addr(bus, true);
@@ -644,7 +650,14 @@ impl CpuZ80 {
         self.set_flag(F_PV, old == if inc { 0x7f } else { 0x80 });
         self.set_sz(new);
         self.set_flag(F_N, !inc);
-        self.set_flag(F_H, if inc { (old & 0x0f) == 0x0f } else { (old & 0x0f) == 0 });
+        self.set_flag(
+            F_H,
+            if inc {
+                (old & 0x0f) == 0x0f
+            } else {
+                (old & 0x0f) == 0
+            },
+        );
     }
 
     /// The unprefixed opcode page.
@@ -802,7 +815,13 @@ impl CpuZ80 {
 
             (0, 3) => {
                 // INC ss / DEC ss -- no flags
-                let bump = |v: u16| if q == 0 { v.wrapping_add(1) } else { v.wrapping_sub(1) };
+                let bump = |v: u16| {
+                    if q == 0 {
+                        v.wrapping_add(1)
+                    } else {
+                        v.wrapping_sub(1)
+                    }
+                };
                 if self.prefix_dd && p == 0b10 {
                     self.ix = bump(self.ix);
                     used.dd = true;
@@ -815,7 +834,7 @@ impl CpuZ80 {
                 }
             }
 
-            (0, 4) => self.inc_dec_r(bus, y, used, true),  // INC r
+            (0, 4) => self.inc_dec_r(bus, y, used, true), // INC r
             (0, 5) => self.inc_dec_r(bus, y, used, false), // DEC r
 
             (0, 6) => {
@@ -903,7 +922,14 @@ impl CpuZ80 {
                     };
 
                     self.set_flag(F_C, carry);
-                    self.set_flag(F_H, if sub { h_carry && (a & 0x0f) < 6 } else { (a & 0x0f) > 9 });
+                    self.set_flag(
+                        F_H,
+                        if sub {
+                            h_carry && (a & 0x0f) < 6
+                        } else {
+                            (a & 0x0f) > 9
+                        },
+                    );
                     let res = self.a;
                     self.set_sz(res);
                     self.set_flag(F_PV, parity(res));
@@ -1145,7 +1171,11 @@ impl CpuZ80 {
         let val = bus.io_read8(self.c as u16);
         let addr = self.hl();
         self.mem_write(bus, addr, val);
-        self.set_hl(if inc { addr.wrapping_add(1) } else { addr.wrapping_sub(1) });
+        self.set_hl(if inc {
+            addr.wrapping_add(1)
+        } else {
+            addr.wrapping_sub(1)
+        });
         self.b = self.b.wrapping_sub(1);
         self.finish_block_repeat(repeat);
     }
@@ -1157,7 +1187,11 @@ impl CpuZ80 {
         let addr = self.hl();
         let val = self.mem_read(bus, addr);
         bus.io_write8(self.c as u16, val);
-        self.set_hl(if inc { addr.wrapping_add(1) } else { addr.wrapping_sub(1) });
+        self.set_hl(if inc {
+            addr.wrapping_add(1)
+        } else {
+            addr.wrapping_sub(1)
+        });
         self.finish_block_repeat(repeat);
     }
 
@@ -1214,7 +1248,11 @@ impl CpuZ80 {
         let res = a.wrapping_sub(val);
         let bc = self.bc().wrapping_sub(1);
         self.set_bc(bc);
-        self.set_hl(if inc { addr.wrapping_add(1) } else { addr.wrapping_sub(1) });
+        self.set_hl(if inc {
+            addr.wrapping_add(1)
+        } else {
+            addr.wrapping_sub(1)
+        });
 
         self.set_flag(F_S, (res & 0x80) != 0);
         self.set_flag(F_Z, res == 0);
@@ -1288,7 +1326,10 @@ impl CpuZ80 {
                 self.set_flag(F_C, hl as i32 - ss as i32 - (c as i32) < 0);
                 self.set_flag(F_N, true);
                 self.set_flag(F_PV, ((hl ^ ss) & (hl ^ res as u16) & 0x8000) != 0);
-                self.set_flag(F_H, (hl & 0xfff) as i32 - (ss & 0xfff) as i32 - (c as i32) < 0);
+                self.set_flag(
+                    F_H,
+                    (hl & 0xfff) as i32 - (ss & 0xfff) as i32 - (c as i32) < 0,
+                );
                 self.set_flag(F_Z, res as u16 == 0);
                 self.set_flag(F_S, (res & 0x8000) != 0);
                 self.set_hl(res as u16);
@@ -1385,15 +1426,15 @@ impl CpuZ80 {
             0xb2 => self.block_in(bus, true, true),   // INIR
             0xba => self.block_in(bus, false, true),  // INDR
 
-            0xa3 => self.block_out(bus, true, false),  // OUTI
+            0xa3 => self.block_out(bus, true, false), // OUTI
             0xab => self.block_out(bus, false, false), // OUTD
-            0xb3 => self.block_out(bus, true, true),   // OTIR
-            0xbb => self.block_out(bus, false, true),  // OTDR
+            0xb3 => self.block_out(bus, true, true),  // OTIR
+            0xbb => self.block_out(bus, false, true), // OTDR
 
-            0xa0 => self.block_move(bus, true, false),  // LDI
+            0xa0 => self.block_move(bus, true, false), // LDI
             0xa8 => self.block_move(bus, false, false), // LDD
-            0xb0 => self.block_move(bus, true, true),   // LDIR
-            0xb8 => self.block_move(bus, false, true),  // LDDR
+            0xb0 => self.block_move(bus, true, true),  // LDIR
+            0xb8 => self.block_move(bus, false, true), // LDDR
 
             _ => {
                 eprintln!("unhandled ED prefixed-opcode {op:#x}");
@@ -1429,7 +1470,11 @@ impl CpuZ80 {
     }
 
     fn exec_cb(&mut self, bus: &mut dyn Bus, used: &mut PrefixUse) -> StepResult {
-        let d = if self.prefix_dd || self.prefix_fd { self.read_d(bus) } else { 0 };
+        let d = if self.prefix_dd || self.prefix_fd {
+            self.read_d(bus)
+        } else {
+            0
+        };
         let op = self.read_n(bus);
 
         let x = op >> 6;
@@ -1440,7 +1485,11 @@ impl CpuZ80 {
             0 => {
                 // RLC is the only rotate with an indexed form; y != 0 falls
                 // through to the plain path even under a prefix, and aborts.
-                let addr = if y == 0 { self.cb_indexed_addr(d, used) } else { None };
+                let addr = if y == 0 {
+                    self.cb_indexed_addr(d, used)
+                } else {
+                    None
+                };
                 match addr {
                     Some(addr) => {
                         let val = self.mem_read(bus, addr);
@@ -1833,9 +1882,14 @@ mod tests {
     #[test]
     fn every_im_encoding_selects_the_right_mode() {
         for (op, mode) in [
-            (0x46u8, 0u8), (0x4e, 0), (0x66, 0), (0x6e, 0),
-            (0x56, 1), (0x76, 1),
-            (0x5e, 2), (0x7e, 2),
+            (0x46u8, 0u8),
+            (0x4e, 0),
+            (0x66, 0),
+            (0x6e, 0),
+            (0x56, 1),
+            (0x76, 1),
+            (0x5e, 2),
+            (0x7e, 2),
         ] {
             let (mut cpu, mut bus) = boot(&[0xed, op]);
             cpu.im = 3; // a value no encoding can produce
@@ -1885,7 +1939,13 @@ mod tests {
         let cpu = add(0x0f, 0x01);
         assert_eq!(cpu.a, 0x10);
         assert_eq!(
-            (cpu.flag(F_C), cpu.flag(F_H), cpu.flag(F_Z), cpu.flag(F_S), cpu.flag(F_PV)),
+            (
+                cpu.flag(F_C),
+                cpu.flag(F_H),
+                cpu.flag(F_Z),
+                cpu.flag(F_S),
+                cpu.flag(F_PV)
+            ),
             (false, true, false, false, false)
         );
 
@@ -1893,7 +1953,13 @@ mod tests {
         let cpu = add(0xff, 0x01);
         assert_eq!(cpu.a, 0x00);
         assert_eq!(
-            (cpu.flag(F_C), cpu.flag(F_H), cpu.flag(F_Z), cpu.flag(F_S), cpu.flag(F_PV)),
+            (
+                cpu.flag(F_C),
+                cpu.flag(F_H),
+                cpu.flag(F_Z),
+                cpu.flag(F_S),
+                cpu.flag(F_PV)
+            ),
             (true, true, true, false, false)
         );
 
@@ -1901,7 +1967,13 @@ mod tests {
         let cpu = add(0x7f, 0x01);
         assert_eq!(cpu.a, 0x80);
         assert_eq!(
-            (cpu.flag(F_C), cpu.flag(F_H), cpu.flag(F_Z), cpu.flag(F_S), cpu.flag(F_PV)),
+            (
+                cpu.flag(F_C),
+                cpu.flag(F_H),
+                cpu.flag(F_Z),
+                cpu.flag(F_S),
+                cpu.flag(F_PV)
+            ),
             (false, true, false, true, true)
         );
 
