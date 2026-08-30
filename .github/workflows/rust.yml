@@ -38,7 +38,7 @@ jobs:
       run: make -C test ray703
 
     - name: 703 end-to-end tests
-      run: make -C test ray703-test ray703-basic-test ray703-disc-test ray703-boot-test
+      run: make -C test ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-rex-test
 
     # Re-assembles a 1968 listing transcript and diffs it against the object
     # code printed beside it. Pure python; the X-RAY half is a known fail and

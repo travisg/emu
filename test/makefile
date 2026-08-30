@@ -37,7 +37,7 @@ $(M6809)/memtest.bin: $(M6809)/memtest.ihx
 
 clean:
 	rm -f $(M6809)/*.rel $(M6809)/*.lst $(M6809)/*.rst $(M6809)/*.ihx $(M6809)/*.bin
-	rm -f 703/demo.lst 703/basic.lst 703/disc.lst 703/boot.lst 703/tape.lst
+	rm -f 703/demo.lst 703/basic.lst 703/disc.lst 703/boot.lst 703/tape.lst 703/rex.lst
 	rm -f *.log
 
 basic6809-test:
@@ -53,9 +53,9 @@ MKDISC703    := ../tools/mkdisc703.py
 RAY703_ROMS  := ../roms/703
 RAY703_DISKS := ../disks
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-rex ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-rex-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
 
-ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-listings
+ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-rex ray703-listings
 
 ray703-demo: $(RAY703_ROMS)/demo.bin
 
@@ -80,6 +80,13 @@ $(RAY703_ROMS)/boot.bin: 703/boot.asm $(ASM703)
 	@size=$$(wc -c < $@); if [ $$size -gt 94 ]; then \
 		echo "error: boot.bin is $$size bytes; the LOAD button reads one 94-byte sector"; \
 		rm -f $@; exit 1; fi
+
+# REX, the preemptive round-robin executive on the invented 60 Hz line clock.
+ray703-rex: $(RAY703_ROMS)/rex.bin
+
+$(RAY703_ROMS)/rex.bin: 703/rex.asm $(ASM703)
+	@mkdir -p $(RAY703_ROMS)
+	$(ASM703) $< -o $@ -l 703/rex.lst
 
 # Tiny BASIC, the largest guest in the tree and the reason the emulator has
 # hardware multiply/divide.
@@ -158,3 +165,6 @@ ray703-disc-test: ray703-disc
 
 ray703-boot-test: ray703-boot
 	./run_ray703_boot_test.sh
+
+ray703-rex-test: ray703-rex
+	./run_ray703_rex_test.sh

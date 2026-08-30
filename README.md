@@ -96,6 +96,7 @@ make -C test ray703                                   # build the guests first
 
 ./target/debug/emu -s ray703                          # a demo: banner, then echoes what you type
 ./target/debug/emu -s ray703 -r roms/703/basic.bin    # Tiny BASIC, ~1300 words, written for it
+./target/debug/emu -s ray703 -r roms/703/rex.bin --fast-io   # REX, a preemptive executive: watch it schedule
 ./target/debug/emu -s ray703 -r roms/703/xray.bin     # X-RAY EXEC, transcribed from a 1968 listing
 ```
 
