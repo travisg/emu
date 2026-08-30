@@ -148,7 +148,7 @@ Deliberate divergences, all documented at their use sites: `HLT` exits the emula
 ## Style
 
 - Idiomatic Rust; `cargo clippy --all-targets` clean. The tree is not `rustfmt`-formatted wholesale — match the surrounding code rather than reformatting files.
-- Files start with the modeline `// vim: ts=4:sw=4:expandtab:`, the MIT license header (copy it from any existing file; the text is in `LICENSE`), and a `//!` module doc explaining what the file is (and, where relevant, which C++ file it ports).
+- Files start with the modeline `// vim: ts=4:sw=4:expandtab:`, the three-line MIT notice pointing at `LICENSE` (copy it from any existing file), and a `//!` module doc explaining what the file is (and, where relevant, which C++ file it ports).
 - Every non-obvious behaviour gets a comment saying *why*, especially anything preserved from the C++ rather than chosen.
 - Prefer minimal, localized diffs; avoid broad reformatting.
 
