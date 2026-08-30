@@ -113,9 +113,9 @@ System metadata: `src/system/registry.rs` holds a static `SYSTEMS` table (`name`
 Known, deliberate quirks preserved from the C++. All are documented at their use sites and each has a named test, which is what makes "fixing" one a visible change rather than a silent one — don't do it casually:
 
 - the 6800 `ASR` falls through into `LSR`, so a real 6800's sign bit is lost and the memory form reads its operand twice (`asr_falls_through_into_lsr`, `memory_asr_reads_its_operand_twice`)
-- the Z80 `LD r,(IX+d)` adds `d` unsigned while every other indexed form sign-extends (`ld_r_indexed_adds_the_displacement_unsigned`)
-- the Z80 ED page is intentionally incomplete — `LDI`/`LDD`/`LDDR` are holes though `LDIR` exists, `NEG` is only `0x44`, `RETN` is absent (`the_unimplemented_ed_block_moves_stop_the_run`)
-- `HALT` is a `NOP` (`halt_is_a_nop`)
+- `HALT` is a `NOP` (`halt_is_a_nop`) — and this one is load-bearing, not just inherited: no ported machine can wake a halted Z80, so a real `HALT` would deadlock the run instead of ending it
+- most Z80 CB shifts ignore an active DD/FD prefix and then abort, after already reading the displacement and touching `(HL)`
+- the Z80 `RETI` is a plain `RET` — nothing here daisy-chains, so there is no IEO to release
 
 Until August 2026 there was one more, and it is the reason the RC2014 had never printed anything: port `$80`'s status byte reported receive-available (bit 0) and the interrupt condition (bit 1) but never bit 2, "transmit buffer empty", and the factory ROM's output routine at `$0116` polls exactly that bit. The monitor initialised the SIO and spun there forever. Two changes make that machine work, and both are pinned by tests in `src/system/rc2014.rs`: TX-empty is now reported unconditionally (`the_sio_status_always_reports_transmit_empty`), and — because the ROM's console *input* is nothing but its mode-1 handler at `$0038` filling a ring buffer — the SIO now asserts IRQ while its receive latch is full (`a_waiting_character_asserts_irq_until_the_data_port_is_read`). The machine boots Grant Searle's monitor into Microsoft BASIC 4.7b and is interactive.
 

@@ -55,17 +55,19 @@
 //!
 //! # Faithfulness
 //!
-//! The base page and the CB page are complete (every opcode value decodes), but
-//! **the ED page is full of holes** and must stay that way: `LDI`, `LDD` and
-//! `LDDR` are absent (only `LDIR` exists), `NEG` is only `0x44` and not its
-//! seven aliases, `RETN` is absent, and `IM` is missing its `0x76`/`0x7e`
-//! encodings. Each falls through to `BadOpcode`, which ends the run. Leaving
-//! them out is a decision carried over from the C++, not an oversight.
+//! The base page and the CB page are complete (every opcode value decodes).
+//! The ED page was full of holes inherited from the C++ and was filled in in
+//! August 2026: `LDI`/`LDD`/`LDDR` joined `LDIR` on a shared helper (which also
+//! stopped `LDIR` forcing PV clear while it still had bytes to move), `NEG`
+//! picked up its seven aliases, `RETN` appeared at all, and `IM` went from six
+//! encodings -- two of them on the wrong mode -- to all eight. What is left
+//! undecoded on the page really is undefined, and still ends the run.
 //!
-//! Other deliberate quirks, each marked at its use site: `LD r, (IX+d)` adds
-//! `d` unsigned while every other indexed form sign-extends; most CB shifts
-//! ignore an active DD/FD prefix and then abort; `HALT` is a `NOP`; `RETI` is a
-//! plain `RET`; `RLC`/`RES`/`SET` have the undocumented register writeback.
+//! Other deliberate quirks, each marked at its use site: most CB shifts ignore
+//! an active DD/FD prefix and then abort; `HALT` is a `NOP`, because no ported
+//! machine can wake a halted CPU and halting would deadlock the run rather than
+//! end it; `RETI` is a plain `RET`, with nothing daisy-chained to notify;
+//! `RLC`/`RES`/`SET` have the undocumented register writeback.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -934,23 +936,16 @@ impl CpuZ80 {
                 let (dst, src) = (y, z);
                 if dst == 0b110 && src == 0b110 {
                     // HALT, treated as a NOP
-                } else if self.prefix_dd && src == 0b110 {
-                    // LD r, (IX+d). NOTE: `d` is added *unsigned* here, while
-                    // every other indexed form sign-extends it. Bug in the C++,
-                    // preserved deliberately.
-                    let d = self.read_n(bus) as u16;
-                    let addr = self.ix.wrapping_add(d);
+                } else if (self.prefix_dd || self.prefix_fd) && src == 0b110 {
+                    // LD r, (IX+d) / LD r, (IY+d). The C++ added `d` *unsigned*
+                    // in this one direction while sign-extending it in every
+                    // other indexed form -- so `ld a,(ix-1)` read ix+255.
+                    let addr = self.indexed_addr(bus, self.prefix_dd);
                     let val = self.mem_read(bus, addr);
                     // dst can't be (HL): that combination is HALT, above
                     self.write_r(dst, val);
-                    used.dd = true;
-                } else if self.prefix_fd && src == 0b110 {
-                    // LD r, (IY+d) -- unsigned displacement too
-                    let d = self.read_n(bus) as u16;
-                    let addr = self.iy.wrapping_add(d);
-                    let val = self.mem_read(bus, addr);
-                    self.write_r(dst, val);
-                    used.fd = true;
+                    used.dd = self.prefix_dd;
+                    used.fd = !self.prefix_dd;
                 } else if self.prefix_dd && dst == 0b110 {
                     // LD (IX+d), r -- sign-extended, as everywhere else
                     let addr = self.indexed_addr(bus, true);
@@ -1188,6 +1183,33 @@ impl CpuZ80 {
         }
     }
 
+    /// `LDI` / `LDIR` / `LDD` / `LDDR`.
+    ///
+    /// PV is "BC is still non-zero after the transfer", so it is *set* while a
+    /// repeating form still has work to do. The C++ forced it clear
+    /// unconditionally and implemented only `LDIR`, which meant a guest could
+    /// not use the flag to spot the last iteration; both are fixed here.
+    fn block_move(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
+        let src = self.hl();
+        let val = self.mem_read(bus, src);
+        let dst = self.de();
+        self.mem_write(bus, dst, val);
+
+        let step = if inc { 1u16 } else { 0xffffu16 };
+        self.set_hl(src.wrapping_add(step));
+        self.set_de(dst.wrapping_add(step));
+        let bc = self.bc().wrapping_sub(1);
+        self.set_bc(bc);
+
+        if repeat && bc != 0 {
+            self.pc = self.pc.wrapping_sub(2); // repeat the instruction
+        }
+
+        self.set_flag(F_H, false);
+        self.set_flag(F_PV, bc != 0);
+        self.set_flag(F_N, false);
+    }
+
     /// `CPI` / `CPIR` / `CPD` / `CPDR`. The comparison never writes A, and C is
     /// left alone.
     fn block_cp(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
@@ -1307,8 +1329,9 @@ impl CpuZ80 {
                 self.write_dd(p, val);
             }
 
-            // NEG. Only this encoding: the seven aliases are holes.
-            0x44 => {
+            // NEG, with the seven undocumented aliases that decode to it on
+            // real silicon (every ED opcode whose low three bits are 0b100).
+            0x44 | 0x4c | 0x54 | 0x5c | 0x64 | 0x6c | 0x74 | 0x7c => {
                 let old = self.a;
                 let res = 0u8.wrapping_sub(old);
                 self.set_flag(F_S, (res & 0x80) != 0);
@@ -1320,14 +1343,28 @@ impl CpuZ80 {
                 self.a = res;
             }
 
-            // RETI -- a plain RET, with no interrupt-controller notification
+            // RETI -- a plain RET, with no interrupt-controller notification.
+            // Nothing here daisy-chains, so there is no IEO to release.
             0x4d => self.pc = self.pop16(bus),
 
-            // IM 0 / IM 1 / IM 2, each with its documented alternate encoding.
-            // 0x76 and 0x7e are holes.
-            0x46 | 0x4e => self.im = 0,
-            0x56 | 0x5e => self.im = 1,
-            0x66 | 0x6e => self.im = 2,
+            // RETN and its undocumented aliases: RET, then IFF1 is restored
+            // from the copy IFF2 kept when the interrupt was accepted. Absent
+            // in the C++ entirely, which would have ended the run on any
+            // NMI-using guest.
+            0x45 | 0x55 | 0x5d | 0x65 | 0x6d | 0x75 | 0x7d => {
+                self.pc = self.pop16(bus);
+                self.iff1 = self.iff2;
+            }
+
+            // IM 0 / IM 1 / IM 2, over all eight encodings. The C++ had only
+            // six and had two of those on the wrong mode: 0x5e is IM 2, not
+            // IM 1, and 0x66 is IM 0, not IM 2. 0x4e and 0x6e are the
+            // "IM 0/1" holes, undefined on NMOS silicon and taken as IM 0
+            // here, which costs nothing because IM 0 falls back to IM 1's
+            // `rst 0x38` at the interrupt entry anyway.
+            0x46 | 0x4e | 0x66 | 0x6e => self.im = 0,
+            0x56 | 0x76 => self.im = 1,
+            0x5e | 0x7e => self.im = 2,
 
             0x47 => self.i = self.a, // LD I, A
             0x4f => self.r = self.a, // LD R, A
@@ -1360,26 +1397,10 @@ impl CpuZ80 {
             0xb3 => self.block_out(bus, true, true),   // OTIR
             0xbb => self.block_out(bus, false, true),  // OTDR
 
-            // LDIR. LDI, LDD and LDDR are *not* implemented -- leave them as
-            // holes. PV is forced clear even when the instruction repeats.
-            0xb0 => {
-                let src = self.hl();
-                let val = self.mem_read(bus, src);
-                let dst = self.de();
-                self.mem_write(bus, dst, val);
-
-                self.set_hl(src.wrapping_add(1));
-                self.set_de(dst.wrapping_add(1));
-                let bc = self.bc().wrapping_sub(1);
-                self.set_bc(bc);
-                if bc != 0 {
-                    self.pc = self.pc.wrapping_sub(2); // repeat the instruction
-                }
-
-                self.set_flag(F_H, false);
-                self.set_flag(F_PV, false);
-                self.set_flag(F_N, false);
-            }
+            0xa0 => self.block_move(bus, true, false),  // LDI
+            0xa8 => self.block_move(bus, false, false), // LDD
+            0xb0 => self.block_move(bus, true, true),   // LDIR
+            0xb8 => self.block_move(bus, false, true),  // LDDR
 
             _ => {
                 eprintln!("unhandled ED prefixed-opcode {op:#x}");
@@ -1626,20 +1647,22 @@ mod tests {
     }
 
     /// `LD r, (IX+d)` adds the displacement **unsigned**, unlike every other
-    /// indexed form. Bug in the C++, preserved deliberately: a real z80 would
-    /// read 0x00ff here.
+    /// indexed form. That was a bug in the C++ -- `ld a,(ix-1)` read ix+255 --
+    /// and this test is what keeps it fixed.
     #[test]
-    fn ld_r_indexed_adds_the_displacement_unsigned() {
-        #[rustfmt::skip]
-        let (mut cpu, mut bus) = boot(&[
-            0xdd, 0x21, 0x00, 0x01, // ld ix, 0x0100
-            0xdd, 0x7e, 0xff,       // ld a, (ix-1)
-        ]);
-        bus.mem[0x01ff] = 0xaa; // where this core looks
-        bus.mem[0x00ff] = 0x55; // where a real z80 would
+    fn ld_r_indexed_sign_extends_the_displacement() {
+        for (prefix, load) in [(0xddu8, 0x21u8), (0xfd, 0x21)] {
+            #[rustfmt::skip]
+            let (mut cpu, mut bus) = boot(&[
+                prefix, load, 0x00, 0x01,   // ld ix/iy, 0x0100
+                prefix, 0x7e, 0xff,         // ld a, (ix-1) / (iy-1)
+            ]);
+            bus.mem[0x01ff] = 0xaa; // where the C++ looked
+            bus.mem[0x00ff] = 0x55; // where a real z80 looks
 
-        run_steps(&mut cpu, &mut bus, 2);
-        assert_eq!(cpu.a, 0xaa);
+            run_steps(&mut cpu, &mut bus, 2);
+            assert_eq!(cpu.a, 0x55, "prefix {prefix:#04x}");
+        }
     }
 
     /// The store direction is the contrast: `LD (IX+d), r` sign-extends, as
@@ -1729,15 +1752,103 @@ mod tests {
         assert_eq!(cpu.pc, 0x000b);
     }
 
-    /// The ED page is deliberately incomplete: LDI, LDD and LDDR are holes even
-    /// though LDIR is implemented. That is inherited from the C++ and kept; this
-    /// test is what makes filling one in a visible change rather than a silent
-    /// one.
+    /// LDI, LDD and LDDR were holes in the C++ even though LDIR was there;
+    /// all four now run off one helper. LDI/LDD move a single byte and leave
+    /// PC alone.
     #[test]
-    fn the_unimplemented_ed_block_moves_stop_the_run() {
-        for op in [0xa0u8, 0xa8, 0xb8] {
+    fn the_single_shot_block_moves_step_in_both_directions() {
+        for (op, hl, de) in [(0xa0u8, 0x0101u16, 0x0201u16), (0xa8, 0x00ff, 0x01ff)] {
+            #[rustfmt::skip]
+            let (mut cpu, mut bus) = boot(&[
+                0x21, 0x00, 0x01,   // ld hl, 0x0100
+                0x11, 0x00, 0x02,   // ld de, 0x0200
+                0x01, 0x02, 0x00,   // ld bc, 2
+                0xed, op,           // ldi / ldd
+            ]);
+            bus.load(0x0100, &[0x5a]);
+            run_steps(&mut cpu, &mut bus, 4);
+
+            assert_eq!(bus.mem[0x0200], 0x5a, "ed {op:#04x}");
+            assert_eq!((cpu.hl(), cpu.de(), cpu.bc()), (hl, de, 1), "ed {op:#04x}");
+            assert_eq!(cpu.pc, 0x000b, "single-shot: no rewind");
+        }
+    }
+
+    #[test]
+    fn lddr_copies_a_block_backwards() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x21, 0x03, 0x01,       // ld hl, 0x0103 -- last byte of the source
+            0x11, 0x03, 0x02,       // ld de, 0x0203
+            0x01, 0x04, 0x00,       // ld bc, 4
+            0xed, 0xb8,             // lddr
+        ]);
+        bus.load(0x0100, &[0xde, 0xad, 0xbe, 0xef]);
+        run_steps(&mut cpu, &mut bus, 7);
+
+        assert_eq!(&bus.mem[0x0200..0x0204], &[0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!((cpu.hl(), cpu.de(), cpu.bc()), (0x00ff, 0x01ff, 0));
+        assert_eq!(cpu.pc, 0x000b);
+    }
+
+    /// PV is "BC is still non-zero", so it is set on every iteration but the
+    /// last. The C++ forced it clear unconditionally, which left a guest no way
+    /// to spot the final byte.
+    #[test]
+    fn a_block_move_reports_bc_in_pv() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x21, 0x00, 0x01,       // ld hl, 0x0100
+            0x11, 0x00, 0x02,       // ld de, 0x0200
+            0x01, 0x02, 0x00,       // ld bc, 2
+            0xed, 0xb0,             // ldir
+        ]);
+        run_steps(&mut cpu, &mut bus, 4);
+        assert_ne!(cpu.f & F_PV, 0, "one byte still to go");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.f & F_PV, 0, "bc hit zero");
+        // H and N are always cleared, whichever way it went
+        assert_eq!(cpu.f & (F_H | F_N), 0);
+    }
+
+    /// NEG decodes at all eight `ED xx4/xxC` encodings, not just 0x44, and
+    /// RETN (0x45 plus six aliases) exists at all -- both were holes in the
+    /// C++, and either would have ended the run on a real guest.
+    #[test]
+    fn the_neg_and_retn_aliases_all_decode() {
+        for op in [0x44u8, 0x4c, 0x54, 0x5c, 0x64, 0x6c, 0x74, 0x7c] {
+            let (mut cpu, mut bus) = boot(&[0x3e, 0x01, 0xed, op]); // ld a,1 ; neg
+            run_steps(&mut cpu, &mut bus, 2);
+            assert_eq!(cpu.a, 0xff, "ed {op:#04x}");
+            assert_eq!(cpu.f & (F_N | F_C), F_N | F_C, "ed {op:#04x}");
+        }
+
+        for op in [0x45u8, 0x55, 0x5d, 0x65, 0x6d, 0x75, 0x7d] {
+            // push 0x1234 as the return address, then retn to it
+            let (mut cpu, mut bus) = boot(&[0x21, 0x34, 0x12, 0xe5, 0xed, op]);
+            cpu.sp = 0x8000;
+            // iff2 is the copy an interrupt entry left behind; retn restores it
+            cpu.iff1 = false;
+            cpu.iff2 = true;
+            run_steps(&mut cpu, &mut bus, 3);
+            assert_eq!(cpu.pc, 0x1234, "ed {op:#04x}");
+            assert!(cpu.iff1, "ed {op:#04x}: retn restores iff1 from iff2");
+        }
+    }
+
+    /// All eight IM encodings, including the two the C++ had on the wrong mode
+    /// (0x5e is IM 2, 0x66 is IM 0) and the two it did not decode at all.
+    #[test]
+    fn every_im_encoding_selects_the_right_mode() {
+        for (op, mode) in [
+            (0x46u8, 0u8), (0x4e, 0), (0x66, 0), (0x6e, 0),
+            (0x56, 1), (0x76, 1),
+            (0x5e, 2), (0x7e, 2),
+        ] {
             let (mut cpu, mut bus) = boot(&[0xed, op]);
-            assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode, "ed {op:#04x}");
+            cpu.im = 3; // a value no encoding can produce
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.im, mode, "ed {op:#04x}");
         }
     }
 

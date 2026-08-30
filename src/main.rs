@@ -65,7 +65,10 @@ fn usage(argv0: &str) {
     eprintln!();
     eprintln!("valid systems:");
     for s in registry::SYSTEMS {
-        eprint!("  {:-10} cpu: {:-4} default rom: {}", s.name, s.cpu, s.default_rom);
+        eprint!(
+            "  {:-10} cpu: {:-4} default rom: {}",
+            s.name, s.cpu, s.default_rom
+        );
         if let Some(hz) = s.clock_hz {
             eprint!("  clock: {hz} Hz");
         }
@@ -193,7 +196,9 @@ fn main() -> ExitCode {
 
     // Build the machine object
     let (_, subsystem) = registry::split_name(&args.system);
-    let opts = registry::MachineOpts { fast_io: args.fast_io };
+    let opts = registry::MachineOpts {
+        fast_io: args.fast_io,
+    };
     let machine = match (desc.factory)(&rom, endpoint, subsystem, &opts) {
         Ok(m) => m,
         Err(e) => {
