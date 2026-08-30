@@ -67,7 +67,7 @@ needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`, and the Raytheon 703 sc
 
 ## Project Structure
 
-- `src/cpu/`: CPU cores (6800, 6809, Z80), each implementing the `Cpu` trait against a `Bus`.
+- `src/cpu/`: CPU cores (6800, 6809, Z80, Raytheon 703), each implementing the `Cpu` trait against a `Bus`.
 - `src/system/`: one file per machine (the bus, address decode, devices, ROM loading) and the
   registry that describes them.
 - `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO, WD1793 floppy controller.
@@ -77,4 +77,8 @@ needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`, and the Raytheon 703 sc
 - `tests/`: the one integration test. `test/`: the end-to-end regression scripts, the assembly
   sources of the 6809 test ROMs, and everything Raytheon 703 (`test/703/`, including a Tiny BASIC
   and transcriptions of two 1968 program listings).
+- `tools/`: development tools — the 703 assembler, the listing transcription workflow, and the
+  ROM fetcher.
+- `roms/`, `disks/`: where the images the machines boot and mount go. Untracked; see the README
+  in each.
 - `AGENTS.md`: the full guide — build, run, test, architecture, and the deliberate quirks.
