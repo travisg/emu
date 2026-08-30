@@ -68,14 +68,15 @@
 ;   which is the task's "printed" signal; KICK only reads.  Characters are
 ;   never zero, so zero means empty.
 ;
-; * THE LINE BUFFER IS PRIMED BEFORE IT IS OPENED.  SERV fills it through
-;   INPP and stops when LNRDY says a line is waiting, so the shell primes
-;   the pointer and clears the flag in one masked window.  Both cells are
-;   born with the buffer already primed and the flag already set, which is
-;   what makes the gap between arming the keyboard and the shell's first
-;   prime safe: a character typed into it is dropped rather than stored
-;   through a pointer that is still zero, which is byte address zero,
-;   which is the level 0 program counter save.
+; * INPUT GOES THROUGH A QUEUE, so the shell waits rather than polls and
+;   what is typed while it is busy is held rather than lost.  The service
+;   routine posts each character and wakes whoever waits on the queue;
+;   the shell blocks in Q.GET until there is one, and empties the queue
+;   in the slice it is next given.  One waiter to a queue, so one reader.
+;   Putting and taking happen at interrupt level or under the mask, which
+;   is what keeps the counts honest, and a full queue drops -- there is
+;   no pointer here to store a character through before it is primed,
+;   which was the shape of the bug basic.asm had.
 ;
 ; * SHUTDOWN ORDERING.  Every letter task reads SHUTREQ inside the same
 ;   masked window as its deposit, and the shell -- the only writer of
@@ -163,6 +164,18 @@ TCBW            EQU     6               ; words per block
 S.RUN           EQU     0
 S.SLP           EQU     1
 S.OFF           EQU     2               ; suspended by the shell's STOP
+S.WAI           EQU     3               ; blocked on a queue
+
+; A queue: a ring of words, a count, and the one task waiting on it.
+; Words rather than characters because the next thing to go through one
+; is a message between tasks.
+Q.HEAD          EQU     0               ; where the next one comes from
+Q.TAIL          EQU     1               ; where the next one goes
+Q.CNT           EQU     2
+Q.CAP           EQU     3
+Q.BUF           EQU     4               ; word address of the ring
+Q.WTR           EQU     5               ; the block waiting, or -1
+QW              EQU     6               ; words per descriptor
 
 NTASK           EQU     4               ; the tasks the scheduler scans...
 TIDLE           EQU     TCBW*NTASK      ; ...and the idle task's block, past them
@@ -306,65 +319,14 @@ SRX             DIN     14,15           ; collect the frame, and ask for
                 JMP     SRX1            ; other half, not an error
                 JMP     SEXIT
 
-; File the character in the line buffer.  Nothing is echoed here: the
-; teletype is armed for its own echo, so what the operator sees is the
-; Model 33 printing its own keyboard, and this routine only stores.
-SRX1            STW     SCHR
-                LDW     LNRDY
-                SAZ                     ; a line still waiting to be read?
-                JMP     SEXIT           ; yes: drop this one, as a busy
-                JMP     SRXOK           ; machine dropped what was typed at it
-SRXOK           LDW     SCHR
-                CLB     X'8D'           ; carriage return ends the line
-                SNE
-                JMP     SRXEOL
-                CLB     X'8A'           ; and so does a line feed, so a
-                SNE                     ; script piped in with newline
-                JMP     SRXEOL          ; endings reads like a typed Return
-                CLB     X'FF'           ; rubout backs up over a character
-                SNE
-                JMP     SRXRUB
-                CLB     X'E1'           ; below 'a'?
-                SLS
-                JMP     SRXHI
-                JMP     SRXPUT
-SRXHI           CLB     X'FA'           ; above 'z'?
-                SGR
-                AND     UPMASK          ; in range: clear bit 5, folding to
-                                        ; upper case, which is all the
-                                        ; commands are written in
-SRXPUT          STW     SCHR
-                LDW     INPP
-                CMW     INPE            ; room for one more?
-                SNE
-                JMP     SEXIT           ; no: drop it
-                CAX
-                LDW     SCHR
-                STB     *0
-                LDW     INPP
-                ADD     K1
-                STW     INPP
-                JMP     SEXIT
-
-; A printing terminal cannot take ink back, so the rubout prints as itself
-; and only the buffer forgets the character.
-SRXRUB          LDW     INPP
-                CMW     INPB            ; anything to back up over?
-                SEQ
-                JMP     SRXR1
-                JMP     SEXIT
-SRXR1           SUB     K1
-                STW     INPP
-                JMP     SEXIT
-
-; Terminate the line and hand it to the shell. INPE leaves room for this
-; zero even when the buffer filled up.
-SRXEOL          LDW     INPP
-                CAX
-                CLR
-                STB     *0
-                LDW     K1
-                STW     LNRDY
+; Post the character to the console queue and have done with it.  The
+; driver keeps no line: what a line is -- where it ends, what a rubout
+; does to it, which case it is in -- is the shell's business, and this
+; routine's is to get the character off the teletype.  Nothing is echoed
+; here either; the Model 33 is armed to print its own keyboard.
+SRX1            STW     QITEM
+                LDW     KCONSQ
+                JSX     Q.PUT
 SEXIT           LDW     S0SAVA
                 LDX     S0SAVX
                 INR     0
@@ -487,6 +449,45 @@ SWTCH           MSK
                 UNM
                 INR     3
 
+; Put the word in QITEM into the queue the accumulator addresses, and
+; make the task waiting on it runnable if there is one.  Callers must be
+; at interrupt level, as the teletype's service routine is, or hold the
+; mask: this walks a queue that tasks read under MSK.  A full queue drops
+; the word, which is what a teletype does to a line nobody is reading.
+Q.PUT           SUBR
+                STW     QPD
+                CAX
+                LDW     *Q.CNT
+                CMW     *Q.CAP
+                SNE                     ; full?
+                JMP     QPX
+                LDW     *Q.BUF
+                ADD     *Q.TAIL
+                CAX
+                LDW     QITEM
+                STW     *0
+                LDX     QPD
+                LDW     *Q.TAIL
+                ADD     K1
+                CMW     *Q.CAP
+                SLS
+                CLR                     ; round the ring
+                STW     *Q.TAIL
+                LDW     *Q.CNT
+                ADD     K1
+                STW     *Q.CNT
+                LDW     *Q.WTR          ; anybody asleep on it?
+                SAM
+                JMP     QPWK
+                JMP     QPX
+QPWK            CAX                     ; the waiter's block: wake it, and
+                CLR                     ; forget it -- a queue holds one
+                STW     *TCBT+T.STA     ; waiter, which is all a single
+                LDX     QPD             ; reader ever needs
+                LDW     KM1
+                STW     *Q.WTR
+QPX             EXIT    Q.PUT
+
 ISREND          EQU     $
 
 ; ---------------------------------------------------------------- kernel data
@@ -515,20 +516,26 @@ SWACR           WORD    0               ; ...what it had in the accumulator
 SWIXR           WORD    0               ; ...and the index the next task wants
 TICKS           WORD    0               ; ticks into the current second...
 SECS            WORD    0               ; ...and seconds since REX came up
-SCHR            WORD    0               ; SERV's character scratch
-
-; The line the shell reads.  INPP and LNRDY are born primed and ready --
-; see the header: a character typed before the shell's first prime has to
-; be dropped, not stored through a pointer that is still zero.
-LNRDY           WORD    1
-INPP            WORD    LBUF*2
-INPB            WORD    LBUF*2          ; where the line starts...
-INPE            WORD    LBUF*2+62       ; ...and the last byte the zero
-                                        ; terminator may need
+QITEM           WORD    0               ; what Q.PUT is to put
+QPD             WORD    0               ; and the queue it is putting it in
+QGD             WORD    0               ; Q.GET's queue...
+QGI             WORD    0               ; ...and what it took out
 K1              WORD    1
 K60             WORD    60
-UPMASK          WORD    X'FFDF'
 KM1             WORD    X'FFFF'
+KWAIT           WORD    S.WAI
+KCONSQ          WORD    QCONS
+
+; The console queue: what the teletype's service routine puts characters
+; into and the shell takes them out of.  The service routine fills it at
+; interrupt speed and the shell empties it a slice at a time, so its
+; depth is how far input may run ahead of the shell being scheduled --
+; several typed lines, which is more than a Model 33 can deliver in the
+; sixtieth of a second the shell waits to be picked.  Past that it drops,
+; the way a teletype drops what nobody is reading.
+QCONS           WORD    0,0,0,QCONSN,QCONSB,X'FFFF'
+QCONSN          EQU     128
+QCONSB          RES     QCONSN
 KSLP            WORD    S.SLP
 KTCBW           WORD    TCBW
 KNTASK          WORD    NTASK
@@ -556,9 +563,51 @@ TCBT            WORD    0,0,ATASK,(ATASK*2)+X'80',S.RUN,0
 ; ends somebody's sleep takes the processor away from it -- and it sits
 ; outside [ISRBEG, ISREND) like any other task's code, or the scheduler
 ; could never switch away from it.
-IDLE            JMP     IDLE
+; Take a word out of the queue the accumulator addresses, waiting for one
+; if the queue is empty.  Outside the deferred range deliberately: a task
+; blocks here, and a tick that finds it here has every business switching
+; away from it.
+;
+; The wait is the queue's own: mark this task waiting, hang its block off
+; the queue, and hand the processor on.  Q.PUT wakes it and forgets it.
+; One waiter to a queue, so one reader to a queue -- a second task
+; blocking here would displace the first, which would then never wake.
+Q.GET           SUBR
+                STW     QGD
+QGL             MSK
+                LDX     QGD
+                LDW     *Q.CNT
+                SAZ                     ; anything in it?
+                JMP     QGT
+                JMP     QGW
+QGW             LDW     CURX
+                LDX     QGD
+                STW     *Q.WTR
+                LDX     CURX
+                LDW     KWAIT
+                STW     *TCBT+T.STA
+                JSX     SWTCH           ; gone until Q.PUT wakes this task
+                JMP     QGL             ; awake: look again
+QGT             LDW     *Q.BUF
+                ADD     *Q.HEAD
+                CAX
+                LDW     *0
+                STW     QGI
+                LDX     QGD
+                LDW     *Q.HEAD
+                ADD     K1
+                CMW     *Q.CAP
+                SLS
+                CLR                     ; round the ring
+                STW     *Q.HEAD
+                LDW     *Q.CNT
+                SUB     K1
+                STW     *Q.CNT
+                UNM
+                LDW     QGI
+                EXIT    Q.GET
 
-LBUF            RES     32              ; the shell's line, 64 bytes
+IDLE            JMP     IDLE
 
 ; ---------------------------------------------------------------- task A
 ; A letter task, and the model for the two below it: wait for the shell to
@@ -719,28 +768,8 @@ SHELL           LDW     SHMBAN
 
 SHLOOP          LDW     SHMPRM
                 JSX     SHMSG
-
-; Open the line buffer.  Masked, because SERV fills it through INPP and
-; must see the pointer primed and the flag cleared together or not at all.
-                MSK
+                JSX     SHGETL          ; a line, however long that takes
                 LDW     SHKLBB
-                SMB     INPP
-                STW     INPP
-                CLR
-                SMB     LNRDY
-                STW     LNRDY
-                UNM
-
-; Wait for a line, sleeping between looks: a shell that spun here would be
-; runnable forever and the idle task would never see the processor.
-SHWT            SMB     LNRDY
-                LDW     LNRDY
-                SAZ                     ; a line yet?
-                JMP     SHGO
-                JSX     SHNAP
-                JMP     SHWT
-
-SHGO            LDW     SHKLBB
                 STW     SHCUR
                 JSX     SHTOK           ; the command word
                 LDW     STOK0
@@ -1131,24 +1160,70 @@ SHDL2           LDW     SHV
                 JSX     SHPRT
                 EXIT    SHDEC
 
-; Sleep SHKNAP ticks; the letter tasks say how this works.
-SHNAP           SUBR
-                MSK
-                LDW     SHKNAP
-                SMB     SH.DLY
-                STW     SH.DLY
-                LDW     SHKSLP
-                SMB     SH.STA
-                STW     SH.STA
-                SMB     SWTCH
-                JSX     SWTCH
-                EXIT    SHNAP
+; Collect a line into the buffer.  Every character comes from the console
+; queue, which puts this task to sleep until the teletype's service
+; routine has one -- so the shell holds no processor at all between
+; keystrokes, and a burst typed while it is busy waits in the queue
+; instead of being lost.
+;
+; What a line is belongs here rather than in the driver: a carriage
+; return or a line feed ends it, a rubout backs up over a character, and
+; lower case is folded up because that is all the commands are written
+; in. The rubout itself prints, since a printing terminal cannot take ink
+; back; only the buffer forgets.
+SHGETL          SUBR
+                LDW     SHKLBB
+                STW     SHFIL
+SHGL            LDW     SHKCQ
+                SMB     Q.GET
+                JSX     Q.GET
+                STW     SHCH
+                CLB     X'8D'           ; carriage return ends the line
+                SNE
+                JMP     SHGLE
+                CLB     X'8A'           ; and so does a line feed, so a
+                SNE                     ; script piped in with newline
+                JMP     SHGLE           ; endings reads like a typed Return
+                CLB     X'FF'           ; rubout
+                SNE
+                JMP     SHGLR
+                CLB     X'E1'           ; below 'a'?
+                SLS
+                JMP     SHGLU
+                JMP     SHGLS
+SHGLU           CLB     X'FA'           ; above 'z'?
+                SGR
+                AND     SHKUPM          ; in range: clear bit 5
+SHGLS           STW     SHCH
+                LDW     SHFIL
+                CMW     SHKLBE          ; room for one more?
+                SNE
+                JMP     SHGL            ; no: drop it
+                CAX
+                LDW     SHCH
+                STB     *0
+                LDW     SHFIL
+                ADD     SHK1
+                STW     SHFIL
+                JMP     SHGL
+SHGLR           LDW     SHFIL
+                CMW     SHKLBB          ; anything to back up over?
+                SEQ
+                JMP     SHGLR1
+                JMP     SHGL
+SHGLR1          SUB     SHK1
+                STW     SHFIL
+                JMP     SHGL
+SHGLE           LDW     SHFIL           ; terminate it; SHKLBE leaves room
+                CAX
+                CLR
+                STB     *0
+                EXIT    SHGETL
 
 ; ---------------------------------------------------------------- shell data
-SH.STA          EQU     TCBT+3*TCBW+T.STA
-SH.DLY          EQU     TCBT+3*TCBW+T.DLY
-
 SHCUR           WORD    0               ; the cursor into the line, a byte
+SHFIL           WORD    0               ; and where SHGETL is filling it
+SHCH            WORD    0               ; the character it is filing
 SHTP            WORD    0               ; the command table cursor            
 SHTI            WORD    0               ; STAT's task index...
 SHTO            WORD    0               ; ...and its block offset
@@ -1181,16 +1256,13 @@ SHKCA           WORD    'A'
 SHKCC           WORD    'C'
 SHKSLP          WORD    S.SLP
 SHKOFF          WORD    S.OFF
-SHKNAP          WORD    6               ; ticks between looks at the buffer:
-                                        ; one character time, since the
-                                        ; teletype cannot deliver faster than
-                                        ; ten a second and the spin in front
-                                        ; of every nap costs the rest of a
-                                        ; tick whatever the nap is worth
+SHKUPM          WORD    X'FFDF'         ; folds a letter to upper case
+SHKCQ           WORD    QCONS           ; the queue the keyboard fills
 SHKTCW          WORD    TCBW
 SHKNB           WORD    NTASK+1         ; blocks STAT prints, idle included
 SHKNL           WORD    TCBW*NLETT      ; past the last letter task's block
-SHKLBB          WORD    LBUF*2
+SHKLBB          WORD    LBUF*2          ; the line, and the last byte its
+SHKLBE          WORD    LBUF*2+62       ; zero terminator may need
 SHKDBE          WORD    SHDB*2+5        ; the last byte of the digit buffer
 SHKNAM          WORD    SHNAM
 SHKSTA          WORD    SHSTA
@@ -1200,7 +1272,9 @@ SHKTAB          WORD    SHTAB
 SHNAM           WORD    'A ','B ','C ','SH','ID'
 
 ; Four a state, indexed by the state doubled.
-SHSTA           WORD    'RU','N ','SL','P ','OF','F '
+SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT'
+
+LBUF            RES     32              ; the line the shell is reading
 
 ; The commands: four characters of name, then where to go. '?' is HELP
 ; under another name, and UP is UPTIME under a shorter one.

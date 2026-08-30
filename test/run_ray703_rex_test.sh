@@ -76,11 +76,11 @@ wait_count() {
 }
 
 # Wait for the printer to fall quiet: two stable samples of the log's size.
-# The prompt appearing is not the cue on its own -- REX opens its line buffer
-# after printing the prompt, and a character typed before that is dropped by
-# design, exactly as a busy 1968 machine dropped what was typed at it. Only
-# usable with the letter tasks stopped, since otherwise the log never stops
-# growing, which is what the STOP below is for.
+# REX has type-ahead -- input queues while it is busy -- so this is not here
+# to keep keystrokes from being dropped; it is here so each command's output
+# is matched against a log that has stopped moving. Only usable with the
+# letter tasks stopped, since otherwise the log never stops growing, which
+# is what the STOP below is for.
 wait_quiet() {
     local last='' size tries=0 stable=0
     while (( tries < 100 )); do
