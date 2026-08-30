@@ -38,18 +38,28 @@
 ; The rules that keep it sound.  Each is enforced exactly where it is
 ; stated, and nothing else in the listing may care:
 ;
-; * THE DEFER CHECK.  SCHED switches only when the saved PC at word 8 lies
-;   outside [ISRBEG, ISREND), the contiguous block holding SCHED, SERV,
-;   KICK, PICK and SWTCH.  The range is the code in which a tick must not
-;   start a switch.  A tick landing in the driver preempted the level 0
-;   service (or its entry), and the level 2 block then holds the service
-;   routine's frame, not a task's: switching on it would strand SERV's
-;   INR 0 and park half a driver in a TCB.  A tick landing on SWTCH's one
-;   unmasked instruction finds a switch already staged and half made.
-;   Both want the same answer -- return, and leave it to a later tick --
-;   and deferring costs at most one tick.  Tasks execute the rest of the
-;   range only under MSK, so no other saved program counter can fall
-;   inside it.
+; * A SWITCH MADE FROM AN INTERRUPT PARKS THE FRAME IN THAT LEVEL'S
+;   BLOCK, so it may only be made when the block holds a task's frame,
+;   and the test for that is the saved program counter: outside
+;   [ISRBEG, ISREND), the contiguous block holding SCHED, SERV, KICK,
+;   PICK and SWTCH, it interrupted a task; inside, it did not.  Both
+;   switching paths make it -- the tick at word 8, the teletype's service
+;   routine at word 0 -- and both simply return when it fails.  Inside
+;   the range there are two cases and they want the same answer: an
+;   interrupt landing in the driver would otherwise strand its INR and
+;   park half a driver in a TCB, and one landing on SWTCH's single
+;   unmasked instruction would park a half-made switch in the block of
+;   the task being switched to.  Tasks execute the rest of the range only
+;   under MSK, so no other saved program counter can fall inside it.
+;
+; * SCHEDULING HAPPENS AT BOTH ENDS.  The tick takes the processor from a
+;   task that has had it long enough; a service routine that made a task
+;   runnable gives it the processor as it returns, rather than leaving it
+;   to wait up to a sixtieth of a second for the next tick.  A character
+;   posted to the console queue therefore reaches the shell in the time
+;   it takes to return from the interrupt that carried it.  SERV holds
+;   the mask across its switch, because the tick outranks level 0 and
+;   would otherwise land in the middle of the scan they share.
 ;
 ; * THE SMB LEAD.  The entry sequence does not reload EXR, so a service
 ;   routine's first memory reference resolves in the page of whatever it
@@ -146,6 +156,8 @@
                 WORD    0               ; loads them with INR 3 -- see the
                 WORD    0               ; header. Level 3 is never enabled.
 
+L0PC            EQU     0               ; the level 0 block words SERV edits
+L0ST            EQU     2               ; when it returns as another task
 L2PC            EQU     8               ; the level 2 block words SCHED edits:
 L2ST            EQU     10              ; rewriting them before INR 2 is the switch
 L3PC            EQU     12              ; and the level 3 words SWTCH edits,
@@ -327,7 +339,61 @@ SRX             DIN     14,15           ; collect the frame, and ask for
 SRX1            STW     QITEM
                 LDW     KCONSQ
                 JSX     Q.PUT
-SEXIT           LDW     S0SAVA
+
+; Return -- as somebody else, if waking a task made one runnable that was
+; not before.  This is the second half of the scheduling: the tick takes
+; the processor away from a task that has had it long enough, and this
+; gives it to a task that has just been given something to do, without
+; waiting up to a sixtieth of a second for the next tick.  Together they
+; are why a character posted to the console queue reaches the shell in
+; the time it takes to return from the interrupt.
+;
+; The same test the tick makes, for the same reason: the block holds a
+; task's frame only when the saved program counter lies outside the
+; range.  Inside it, level 0 interrupted a task that was midway through
+; SWTCH, and parking that frame would write a half-made switch into the
+; block of the task it was switching to.  Masked from there on, so that
+; the tick -- which outranks this level and would otherwise land in the
+; middle of PICK -- is held until the UNM, where it defers.
+SEXIT           LDW     RESCHD
+                SAZ                     ; anything newly runnable?
+                JMP     SEXSW
+                JMP     SEXPL
+SEXSW           CLR
+                STW     RESCHD
+                MSK
+                LDW     L0PC
+                CMW     KISRB
+                SLS
+                JMP     SEXHI
+                JMP     SEXDO
+SEXHI           CMW     KISRE
+                SLS
+                JMP     SEXDO
+                JMP     SEXPU           ; in the range: not a task's frame
+SEXDO           LDX     CURX
+                LDW     S0SAVA
+                STW     *TCBT+T.ACR
+                LDW     S0SAVX
+                STW     *TCBT+T.IXR
+                LDW     L0PC
+                STW     *TCBT+T.PCR
+                LDW     L0ST
+                STW     *TCBT+T.MST
+                JSX     PICK
+                LDX     CURX
+                LDW     *TCBT+T.PCR
+                STW     L0PC            ; this level's own block, so the INR
+                LDW     *TCBT+T.MST     ; below returns as the chosen task
+                STW     L0ST
+                LDW     *TCBT+T.IXR
+                STW     S0SAVX
+                LDW     *TCBT+T.ACR
+                LDX     S0SAVX
+                UNM
+                INR     0
+SEXPU           UNM
+SEXPL           LDW     S0SAVA
                 LDX     S0SAVX
                 INR     0
 
@@ -486,6 +552,8 @@ QPWK            CAX                     ; the waiter's block: wake it, and
                 LDX     QPD             ; reader ever needs
                 LDW     KM1
                 STW     *Q.WTR
+                LDW     K1              ; and ask the service routine to
+                STW     RESCHD          ; return as whoever can run now
 QPX             EXIT    Q.PUT
 
 ISREND          EQU     $
@@ -509,6 +577,9 @@ BGATE           WORD    0               ; set by the shell when the banner is ou
 CURX            WORD    TCBW*3          ; the current task's block offset: the
                                         ; kernel becomes the shell, so it
                                         ; starts on the shell's own block
+RESCHD          WORD    0               ; a wake happened: reschedule at the
+                                        ; next service routine exit that is
+                                        ; standing on a task's frame
 SCIX            WORD    0               ; PICK's walk over the blocks
 SCTRY           WORD    0               ; candidates left in the scan
 SWRET           WORD    0               ; SWTCH's caller: where it resumes...
