@@ -11,7 +11,7 @@ OBJCOPY   := objcopy
 
 .PHONY: all clean basic6809-test
 
-all: t6809.ihx test.ihx rom.h
+all: t6809.ihx test.ihx rom.bin
 
 # Assemble: <stem>.asm -> <stem>.rel (side-effects: .lst, .rst)
 %.rel: %.asm
@@ -30,17 +30,11 @@ rom.ihx: rom.rel
 rom.bin: rom.ihx
 	$(OBJCOPY) -I ihex -O binary $< $@
 
-# Generate C array header from the flat binary
-rom.h: rom.bin
-	@echo "prog_uchar rom[] PROGMEM = {" > $@
-	hexdump -v -e '16/1 "0x%02x, "' -e '"\n"' $< >> $@
-	@echo "};" >> $@
-
 clean:
 	rm -f t6809.rel t6809.lst t6809.rst t6809.ihx
 	rm -f test.rel test.lst test.rst test.ihx
-	rm -f rom.rel rom.lst rom.rst rom.ihx rom.bin rom.h
-	rm -f 703/demo.lst 703/basic.lst 703/disc.lst 703/boot.lst
+	rm -f rom.rel rom.lst rom.rst rom.ihx rom.bin
+	rm -f 703/demo.lst 703/basic.lst 703/disc.lst 703/boot.lst 703/tape.lst
 
 basic6809-test:
 	./run_basic6809_lang_test.sh
