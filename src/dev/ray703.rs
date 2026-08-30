@@ -59,6 +59,10 @@
 //! characters per 57,142 emulated cycles, however fast the host gets through
 //! them. The guest sees period-correct timing either way, which is the part a
 //! program can actually observe.
+//!
+//! One device in this file has no drawing number behind it: the 60 Hz line
+//! clock at the bottom, which is invented. Its own doc comment says so at
+//! length.
 
 use crate::console::ConsoleEndpoint;
 use crate::cpu::ray703::CLOCK_HZ;
@@ -68,6 +72,9 @@ use std::path::Path;
 /// DIO device codes (392292, "Individual Devices").
 pub const DEV_TTY: u8 = 0xe;
 pub const DEV_TAPE_READER: u8 = 0xd;
+/// ...and the one code no Raytheon document assigns: the invented line
+/// clock's, picked from the unused space (the disc holds 1, disc74601.rs).
+pub const DEV_LINE_CLOCK: u8 = 0x2;
 
 /// Characters a second for the Model 33 on the console. The driver listing
 /// (392292, "Individual Devices") says it outright: "the standard Teletype
@@ -379,6 +386,77 @@ impl TapeReader703 {
         self.frame = Some(self.frames[self.pos]);
         self.pos += 1;
         1 << self.level
+    }
+}
+
+/// 60 Hz line-frequency clock, DIO device 2.
+///
+/// INVENTED HARDWARE. Unlike everything else in this file -- and everything
+/// else on this machine's DIO channel -- no Raytheon document stands behind
+/// this device: no drawing number, no manual section, no driver listing. The
+/// tree needed a periodic interrupt source for a preemptive executive
+/// (`test/703/rex.asm`), and a line clock is the period-plausible shape for
+/// one: a transformer tap and a zero-crossing detector pulsing an interrupt
+/// level at the mains rate, the instrument the PDP-8 knew as the KW8.
+///
+/// The programming model is one bit. `DOT 2,1` connects it, and every zero
+/// crossing from then on pulses the level; function 0 -- the tree-wide
+/// disconnect code -- or any other function disconnects, and disconnecting
+/// forgets the phase, so a re-arm always waits one full period. It has no
+/// readable register at all: a DIN to device 2 falls through the machine
+/// decode's open-bus default and reads zero, exactly as when the device was
+/// not installed.
+///
+/// Deliberately *not* affected by `--fast-io`: the clock is a time base, not
+/// an I/O completion, and an "instant" timer is an interrupt storm. That is
+/// what lets a test run `--fast-io` for an instant teletype while an
+/// executive's scheduling slices stay real machine time.
+pub struct LineClock703 {
+    level: u8,
+    armed: bool,
+    /// Cycles banked toward the next tick. The post-pulse remainder carries
+    /// forward -- unlike the teletype, which starts a fresh character time
+    /// per character -- because a clock's whole job is the long-run rate,
+    /// and resetting would lose up to an instruction's worth of cycles on
+    /// every tick.
+    acc: u32,
+}
+
+/// 571,429 / 60 truncates to 9,523 cycles, 16.665 ms -- the same figure the
+/// disc uses for half a revolution, because 1800 RPM and 60 Hz are the same
+/// rate. The 0.03% truncation error is far inside any mains tolerance.
+const LINE_CLOCK_PERIOD_CYCLES: u32 = (CLOCK_HZ / 60) as u32;
+
+const FN_LINE_CLOCK_CONNECT: u8 = 0x1;
+
+impl LineClock703 {
+    pub fn new(level: u8) -> Self {
+        LineClock703 { level, armed: false, acc: 0 }
+    }
+
+    pub fn dot(&mut self, function: u8, _val: u16) {
+        // Connecting -- or reconnecting -- starts a fresh full period, and
+        // anything that is not the connect function disconnects, the
+        // teletype's rule.
+        self.armed = function == FN_LINE_CLOCK_CONNECT;
+        self.acc = 0;
+    }
+
+    /// Bank the elapsed cycles and pulse the level once per period. A
+    /// disconnected clock banks nothing -- contrast the teletype's standing
+    /// keystroke credit, which models an operator the machine kept waiting;
+    /// nothing waits behind a clock. Multiple owed periods merge into one
+    /// pulse, which the CPU's per-level latch would do anyway.
+    pub fn poll(&mut self, elapsed: u32) -> u16 {
+        if !self.armed {
+            return 0;
+        }
+        self.acc = self.acc.saturating_add(elapsed);
+        if self.acc >= LINE_CLOCK_PERIOD_CYCLES {
+            self.acc %= LINE_CLOCK_PERIOD_CYCLES;
+            return 1 << self.level;
+        }
+        0
     }
 }
 
@@ -729,5 +807,67 @@ mod tests {
         let mut reader = TapeReader703::new(0);
         reader.dot(FN_READ, 0);
         assert_eq!(reader.poll(0), 0);
+    }
+
+    // -- the line clock ----------------------------------------------------
+
+    #[test]
+    fn an_unarmed_line_clock_never_pulses() {
+        let mut clk = LineClock703::new(2);
+        for _ in 0..10 {
+            assert_eq!(clk.poll(LINE_CLOCK_PERIOD_CYCLES), 0);
+        }
+        // disconnecting after a connect leaves it just as silent
+        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
+        clk.dot(FN_DISCONNECT, 0);
+        assert_eq!(clk.poll(10 * LINE_CLOCK_PERIOD_CYCLES), 0);
+    }
+
+    /// The first tick comes one full period after the connect, never sooner:
+    /// a disconnected clock banks nothing.
+    #[test]
+    fn the_first_pulse_comes_exactly_one_period_after_arming() {
+        let mut clk = LineClock703::new(5); // the level is configurable
+        clk.poll(LINE_CLOCK_PERIOD_CYCLES); // banked nowhere -- still unarmed
+        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
+        assert_eq!(clk.poll(LINE_CLOCK_PERIOD_CYCLES - 1), 0);
+        assert_eq!(clk.poll(1), 1 << 5);
+    }
+
+    /// The accumulator keeps the remainder past each pulse, so the long-run
+    /// rate is exact: one hundred periods of cycles fed in chunks that never
+    /// divide evenly must yield exactly one hundred pulses. A counter that
+    /// restarted from zero at each pulse -- the teletype's per-character
+    /// pattern -- would lose most of a chunk every period and drift slow.
+    #[test]
+    fn the_cadence_carries_the_remainder_and_does_not_drift() {
+        let mut clk = LineClock703::new(2);
+        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
+        let total = 100 * LINE_CLOCK_PERIOD_CYCLES;
+        let mut fed = 0;
+        let mut pulses = 0;
+        while fed < total {
+            let chunk = 13.min(total - fed); // 13 does not divide 9,523
+            if clk.poll(chunk) != 0 {
+                pulses += 1;
+            }
+            fed += chunk;
+        }
+        assert_eq!(pulses, 100);
+    }
+
+    #[test]
+    fn disconnecting_forgets_the_phase() {
+        let mut clk = LineClock703::new(2);
+        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
+        clk.poll(LINE_CLOCK_PERIOD_CYCLES - 1);
+        clk.dot(FN_DISCONNECT, 0);
+        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
+        assert_eq!(clk.poll(LINE_CLOCK_PERIOD_CYCLES - 1), 0, "the banked cycles are gone");
+        assert_eq!(clk.poll(1), 1 << 2);
+
+        // any function that is not the connect disconnects
+        clk.dot(0x3, 0);
+        assert_eq!(clk.poll(10 * LINE_CLOCK_PERIOD_CYCLES), 0);
     }
 }

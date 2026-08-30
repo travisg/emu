@@ -1766,6 +1766,58 @@ mod tests {
         assert!(!cpu.levels[3].active, "the level is back to Idle");
     }
 
+    /// The entry sequence saves EXR in the status word but does not reload
+    /// it, so the service routine's first memory reference -- a bare JMP or
+    /// JSX included -- resolves in the page of the code it interrupted. Only
+    /// that reference: it reloads EXR from the program counter as any memory
+    /// reference does, and everything after it addresses the routine's own
+    /// page. A service routine that can be entered from another page must
+    /// therefore lead with SML/SMU, a generic the entry cannot split -- the
+    /// saved status carries the selection and INR restores it.
+    #[test]
+    fn interrupt_entry_leaves_exr_for_the_service_routines_first_reference() {
+        // the interrupted program runs at word 0x1000 (byte page 4); the
+        // level 3 service routine at 0x200 is STW 0x050 / STW 0x051
+        let (mut cpu, mut bus) = boot_at(0x1000, &[0x0100]);
+        bus.load(0x0d << 1, &0x0200u16.to_be_bytes());
+        bus.load(0x200 << 1, &0x7050u16.to_be_bytes());
+        bus.load(0x201 << 1, &0x7051u16.to_be_bytes());
+        cpu.exr = 4;
+        cpu.acr = 0xbeef;
+        cpu.levels[3].enabled = true;
+        bus.int_lines = 1 << 3;
+
+        run_steps(&mut cpu, &mut bus, 1); // entry
+        assert_eq!(cpu.exr, 4, "entry saves EXR but does not change it");
+        run_steps(&mut cpu, &mut bus, 1); // STW 0x050
+        assert_eq!(
+            word(&mut bus, 0x1050),
+            0xbeef,
+            "the first reference resolves in the interrupted page"
+        );
+        assert_eq!(word(&mut bus, 0x0050), 0, "not in the routine's own");
+        run_steps(&mut cpu, &mut bus, 1); // STW 0x051
+        assert_eq!(
+            word(&mut bus, 0x0051),
+            0xbeef,
+            "the second is back in the routine's page"
+        );
+
+        // the discipline: the same routine led by SML 0 stores where it
+        // means to, whatever page it interrupted
+        let (mut cpu, mut bus) = boot_at(0x1000, &[0x0100]);
+        bus.load(0x0d << 1, &0x0200u16.to_be_bytes());
+        bus.load(0x200 << 1, &0x0080u16.to_be_bytes()); // SML 0
+        bus.load(0x201 << 1, &0x7050u16.to_be_bytes());
+        cpu.exr = 4;
+        cpu.acr = 0xbeef;
+        cpu.levels[3].enabled = true;
+        bus.int_lines = 1 << 3;
+        run_steps(&mut cpu, &mut bus, 3); // entry, SML, STW
+        assert_eq!(word(&mut bus, 0x0050), 0xbeef);
+        assert_eq!(word(&mut bus, 0x1050), 0, "nothing strayed into the interrupted page");
+    }
+
     /// "An interrupt signal sent from an external device is ignored" while the
     /// level is Disabled (3-1) -- not deferred, not latched.
     #[test]
