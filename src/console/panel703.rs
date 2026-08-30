@@ -27,14 +27,16 @@
 //! Two rows of round lamp-indicators -- the PROGRAM COUNTER row, always
 //! live, and the SELECTED DISPLAY row behind the six-position DISPLAY
 //! SELECTOR rotary -- rendered as incandescent bulbs from the duty-cycle
-//! accumulators the core feeds; the switches: RUN, HALT, RESET, SINGLE
+//! accumulators the core feeds; the switches: RUN, HALT -- a red
+//! switch-indicator, lit while the machine is halted -- RESET, SINGLE
 //! STEP/COMMAND, the two CLEARs, ENTER/DISPLAY, the SENSE toggles, and
 //! the lamps themselves, which are switch-indicators -- clicking one keys
 //! that bit. Switch actuations go to the run loop as [`PanelCommand`]s;
 //! the selector knob is state of this frontend alone, which is what lets
 //! it be "changed while the program is running" (5-2).
 //!
-//! The machine starts halted, as a real one did at power-on: press RUN.
+//! The machine starts halted, as a real one did at power-on: the HALT
+//! lens glows red until RUN is pressed.
 //!
 //! The teletype stays on the terminal: this frontend spawns the ordinary
 //! [`TerminalFrontend`] on a second thread to pump stdin, and guest output
@@ -118,6 +120,11 @@ const LAMP_LIT: Color = Color::RGB(0xff, 0xd6, 0x82);
 const LAMP_GLOW: Color = Color::RGB(0xff, 0xb0, 0x50);
 const LAMP_UNLIT: Color = Color::RGB(0x54, 0x42, 0x2a);
 const LAMP_BEZEL: Color = Color::RGB(0x3a, 0x3a, 0x3a);
+/// The HALT indicator's red lens: a bulb behind red glass lit, a deep
+/// maroon unlit -- which is the near-black circle figure 5-1 draws.
+const HALT_LIT: Color = Color::RGB(0xe8, 0x38, 0x24);
+const HALT_UNLIT: Color = Color::RGB(0x46, 0x12, 0x0e);
+const HALT_GLOW: Color = Color::RGB(0xe0, 0x30, 0x20);
 
 /// The selector's positions in [`SELECTOR_ORDER`] order, spread over the top
 /// arc of the knob like the rotary in figure 5-1.
@@ -341,13 +348,25 @@ impl Panel703Frontend {
 
     fn draw_buttons(&mut self) {
         for (x, label) in BUTTONS {
-            self.circle(x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
-            // HALT's button is the dark one in figure 5-1
+            // HALT is a red light -- figure 5-1's one dark circle is its
+            // lens -- so it renders as a switch-indicator like ENTER and
+            // DISPLAY: still pressed to halt, and lit while the machine
+            // sits halted, from the run state the Emulator publishes.
+            // (The lamp rows' cycle deltas can't drive it: under a slow
+            // --throttle a running machine has whole frames with no
+            // cycles in them.)
             let face = if label == "HALT" {
-                Color::RGB(0x20, 0x20, 0x20)
+                if self.panel.halted() {
+                    let glow = Color::RGBA(HALT_GLOW.r, HALT_GLOW.g, HALT_GLOW.b, 80);
+                    self.circle(x, CONTROLS_Y, BUTTON_R + 7, glow);
+                    HALT_LIT
+                } else {
+                    HALT_UNLIT
+                }
             } else {
                 Color::RGB(0x8a, 0x8a, 0x84)
             };
+            self.circle(x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
             self.circle(x, CONTROLS_Y, BUTTON_R, face);
             self.text_centered(x, CONTROLS_Y - BUTTON_R - 20, 1, label, PANEL_INK);
         }

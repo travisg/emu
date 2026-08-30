@@ -50,6 +50,11 @@ pub struct Machine {
     /// `Emulator::set_panel_control`; its presence is also what makes HLT
     /// halt to the panel instead of exiting.
     pub panel_control: Option<std::sync::mpsc::Receiver<crate::console::PanelCommand>>,
+    /// A handle on the panel's shared lamp state, for
+    /// `Emulator::set_panel_state` -- the run loop publishes whether the
+    /// machine is halted, which lights the HALT indicator's red lens.
+    /// The frontend's own handle rides inside `display`.
+    pub panel: Option<crate::console::PanelState>,
 }
 
 /// Build-time options that apply across systems. Every factory receives
@@ -84,6 +89,7 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Mac
         display: None,
         throttle_hz: None,
         panel_control: None,
+        panel: None,
     })
 }
 
@@ -94,6 +100,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Machin
         display: None,
         throttle_hz: None,
         panel_control: None,
+        panel: None,
     })
 }
 
@@ -104,6 +111,7 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineO
         display: None,
         throttle_hz: None,
         panel_control: None,
+        panel: None,
     })
 }
 
@@ -136,10 +144,13 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
     let mut display = None;
     let mut throttle_hz = None;
     let mut panel_control = None;
+    let mut panel_state = None;
     if panel {
         let state = crate::console::PanelState::new();
         cpu.attach_panel(state.clone());
-        // switch actuations flow frontend -> run loop over this channel
+        // ...one clone for the run loop's halt reporting...
+        panel_state = Some(state.clone());
+        // ...and switch actuations flow frontend -> run loop over this channel
         let (ctl_tx, ctl_rx) = std::sync::mpsc::channel();
         display = Some(Display::Panel703 { title: "Raytheon 703", panel: state, control: ctl_tx });
         panel_control = Some(ctl_rx);
@@ -171,6 +182,7 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
         display,
         throttle_hz,
         panel_control,
+        panel: panel_state,
     })
 }
 
@@ -187,6 +199,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Machin
         display: Some(display),
         throttle_hz: None,
         panel_control: None,
+        panel: None,
     })
 }
 

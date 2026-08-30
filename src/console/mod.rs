@@ -190,6 +190,10 @@ struct PanelInner {
     /// *false* position (5-4), so all-clear preserves the no-panel
     /// behaviour of every sense skip skipping.
     sense: AtomicU8,
+    /// Whether the machine sits halted at the panel, published by the run
+    /// loop (the only place that knows -- HLT and bad opcodes halt there
+    /// too, not just the switch). Drives the HALT indicator's red lens.
+    halted: AtomicBool,
 
     /// Lamp on-time accumulators, for rendering the lamps as incandescent
     /// bulbs rather than point samples: for each lamp source (PC row plus
@@ -251,6 +255,14 @@ impl PanelState {
     /// DISPLAY's read-back).
     pub fn set_mbr(&self, v: u16) {
         self.0.mbr.store(v, Ordering::Relaxed);
+    }
+
+    /// CPU-thread side, called by the `Emulator` on every run-state change:
+    /// the machine is sitting halted at the panel. Not derivable frontend-
+    /// side from the cycle accumulators -- under a slow `--throttle` a
+    /// *running* machine has whole frames with no cycles in them.
+    pub fn set_halted(&self, halted: bool) {
+        self.0.halted.store(halted, Ordering::Relaxed);
     }
 
     /// Charge `cycles` of on-time to every currently lit bit of every lamp
@@ -327,6 +339,12 @@ impl PanelState {
 
     pub fn toggle_sense(&self, n: u8) {
         self.0.sense.fetch_xor(1 << n, Ordering::Relaxed);
+    }
+
+    /// Frontend-side: is the machine halted at the panel? Lights the HALT
+    /// indicator's red lens.
+    pub fn halted(&self) -> bool {
+        self.0.halted.load(Ordering::Relaxed)
     }
 }
 

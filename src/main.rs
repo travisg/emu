@@ -250,6 +250,7 @@ fn main() -> ExitCode {
     emu.set_cycle_limit(args.limit);
     emu.set_throttle(throttle_hz);
     emu.set_panel_control(machine.panel_control);
+    emu.set_panel_state(machine.panel);
     if let Some(path) = args.trace {
         match std::fs::File::create(&path) {
             Ok(f) => emu.set_trace(Some(Box::new(BufWriter::new(f)))),

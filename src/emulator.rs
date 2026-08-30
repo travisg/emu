@@ -24,7 +24,7 @@
 //! The run loop: a CPU, the bus it drives, and the things that stop it.
 
 use crate::bus::Bus;
-use crate::console::PanelCommand;
+use crate::console::{PanelCommand, PanelState};
 use crate::cpu::{Cpu, StepResult};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -135,6 +135,12 @@ pub struct Emulator {
     /// presence is also what turns a HLT into a halted state instead of an
     /// exit -- with no panel there is no RUN switch to resume from.
     control: Option<Receiver<PanelCommand>>,
+    /// The panel's shared lamp state, when the machine has one. The run
+    /// loop is the only place that knows whether the machine is halted
+    /// (HLT and bad opcodes halt to the panel too, not just the switch),
+    /// so it publishes every run-state change here for the HALT
+    /// indicator's red lens.
+    panel: Option<PanelState>,
     run_state: RunState,
 }
 
@@ -160,6 +166,7 @@ impl Emulator {
             trace: None,
             throttle: None,
             control: None,
+            panel: None,
             run_state: RunState::Running,
         }
     }
@@ -168,8 +175,26 @@ impl Emulator {
     /// starts halted, as a real one did at power-on: the operator presses
     /// RUN. Everything else keeps running from reset, as always.
     pub fn set_panel_control(&mut self, control: Option<Receiver<PanelCommand>>) {
-        self.run_state = if control.is_some() { RunState::Halted } else { RunState::Running };
+        let state = if control.is_some() { RunState::Halted } else { RunState::Running };
         self.control = control;
+        self.set_run_state(state);
+    }
+
+    /// Wire in the panel's lamp state so run-state changes reach its HALT
+    /// indicator. Publishes the current state immediately, so the order of
+    /// this and `set_panel_control` doesn't matter.
+    pub fn set_panel_state(&mut self, panel: Option<PanelState>) {
+        self.panel = panel;
+        self.set_run_state(self.run_state);
+    }
+
+    /// Every run-state change comes through here so the panel's HALT lens
+    /// always shows the truth.
+    fn set_run_state(&mut self, state: RunState) {
+        self.run_state = state;
+        if let Some(p) = &self.panel {
+            p.set_halted(state == RunState::Halted);
+        }
     }
 
     pub fn set_cycle_limit(&mut self, limit: Option<i64>) {
@@ -250,18 +275,18 @@ impl Emulator {
     fn handle_command(&mut self, cmd: &PanelCommand) -> bool {
         match cmd {
             PanelCommand::Run => {
-                self.run_state = RunState::Running;
+                self.set_run_state(RunState::Running);
                 false
             }
             PanelCommand::Halt => {
-                self.run_state = RunState::Halted;
+                self.set_run_state(RunState::Halted);
                 false
             }
             // "Each actuation of the switch executes one instruction ...
             // then halts" (5-3) -- pressed while running, that means one
             // more instruction and then the halt.
             PanelCommand::SingleCommand => {
-                self.run_state = RunState::Halted;
+                self.set_run_state(RunState::Halted);
                 true
             }
             PanelCommand::Reset => {
@@ -270,7 +295,7 @@ impl Emulator {
                 // RUN -- a reset that left the machine free-running from
                 // word 0 would make that flow impossible.
                 self.cpu.reset(&mut *self.bus);
-                self.run_state = RunState::Halted;
+                self.set_run_state(RunState::Halted);
                 false
             }
             // Everything else is data entry the core owns.
@@ -331,7 +356,7 @@ impl Emulator {
                         // The panel has a RUN switch, so a HLT halts to it
                         // instead of ending the process.
                         println!("halted; RUN resumes");
-                        self.run_state = RunState::Halted;
+                        self.set_run_state(RunState::Halted);
                     } else {
                         return ExitReason::Halted;
                     }
@@ -341,7 +366,7 @@ impl Emulator {
                         // Halting to the panel makes a mistyped hand entry
                         // recoverable instead of fatal.
                         println!("bad opcode; halted");
-                        self.run_state = RunState::Halted;
+                        self.set_run_state(RunState::Halted);
                     } else {
                         return ExitReason::BadOpcode;
                     }
@@ -491,6 +516,7 @@ mod tests {
         steps: Arc<std::sync::atomic::AtomicU64>,
         resets: Arc<std::sync::atomic::AtomicU64>,
         commands: Arc<std::sync::Mutex<Vec<PanelCommand>>>,
+        panel: PanelState,
     }
 
     impl ScriptedCpu {
@@ -508,7 +534,9 @@ mod tests {
                 Emulator::new(Box::new(cpu), Box::new(NullBus), Arc::new(AtomicBool::new(false)));
             let (tx, rx) = std::sync::mpsc::channel();
             emu.set_panel_control(Some(rx));
-            PanelRig { emu, tx, steps, resets, commands }
+            let panel = PanelState::new();
+            emu.set_panel_state(Some(panel.clone()));
+            PanelRig { emu, tx, steps, resets, commands, panel }
         }
     }
 
@@ -537,6 +565,35 @@ mod tests {
         drop(tx);
         assert_eq!(emu.run(), ExitReason::Shutdown);
         assert_eq!(steps.load(Ordering::SeqCst), 0);
+    }
+
+    /// The HALT indicator is a red light, so every run-state change must
+    /// reach the panel state: lit at power-on, doused by RUN, relit when a
+    /// HLT halts to the panel. The HLT leg runs the emulator on a thread, as
+    /// it really runs, because a queued RUN can't outlive the channel: the
+    /// run loop treats a disconnected sender as shutdown before stepping.
+    #[test]
+    fn the_halt_lens_follows_the_run_state() {
+        let PanelRig { mut emu, tx, panel, steps, .. } =
+            ScriptedCpu::build(vec![StepResult::Halted]);
+        assert!(panel.halted(), "a panel machine powers on halted");
+        emu.handle_command(&PanelCommand::Run);
+        assert!(!panel.halted(), "RUN douses the lens");
+        emu.handle_command(&PanelCommand::Halt);
+        assert!(panel.halted(), "the HALT switch lights it");
+
+        // a HLT instruction halts to the panel, and the lens shows it
+        emu.handle_command(&PanelCommand::Run);
+        assert!(!panel.halted());
+        let runner = std::thread::spawn(move || emu.run());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !panel.halted() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(panel.halted(), "HLT relights the lens");
+        assert_eq!(steps.load(Ordering::SeqCst), 1);
+        drop(tx);
+        assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
     }
 
     #[test]
