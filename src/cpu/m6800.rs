@@ -27,10 +27,12 @@
 //! decode table indexed by opcode, then a switch on the addressing mode to
 //! fetch the operand and a switch on the operation to execute it.
 //!
-//! Behaviour was deliberately preserved bug-for-bug through the port. Where
-//! this core is knowingly wrong about a real 6800 it is called out in a
-//! comment and pinned by a named test; those divergences are decisions, not
-//! accidents, so read the comment before "fixing" one.
+//! Behaviour was preserved bug-for-bug through the port, so where this core is
+//! knowingly wrong about a real 6800 it is called out in a comment and pinned
+//! by a named test; those divergences are decisions, not accidents, so read the
+//! comment before "fixing" one. The C++'s `ASR`-falls-into-`LSR` was the
+//! largest of them and was repaired in August 2026, once there was no second
+//! tree to stay byte-identical with.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -800,25 +802,19 @@ impl Cpu for Cpu6800 {
                 self.rmw_write(bus, &op, arg, v);
             }
 
-            // NOTE: the C++ `case ASR:` has no break and falls through into
-            // `case LSR:`, which re-reads the operand and overwrites both the
-            // result and the flags. ASR is therefore identical to LSR, and it
-            // performs a *second* operand read -- which is observable on a
-            // device register. Reproduced exactly; see the plan doc.
+            // ASR keeps the sign bit; LSR shifts a zero in. The two differ in
+            // nothing else, so they share the read, the flags and the write.
+            //
+            // The C++ `case ASR:` had no `break` and fell through into
+            // `case LSR:`, which re-read the operand and overwrote both the
+            // result and the flags -- so ASR *was* LSR, and the memory form
+            // read its address twice, which is observable on a device
+            // register. The 6809 core never had the bug; this one no longer
+            // does either.
             Op::Asr | Op::Lsr => {
-                if op.op == Op::Asr {
-                    // the discarded ASR pass, kept for its bus read and for
-                    // the flag writes the LSR pass then clobbers
-                    let v = self.rmw_read(bus, &op, arg);
-                    self.set_cc(CC_C, v & 1 != 0);
-                    let shifted = (v & 0x80) | (v >> 1);
-                    self.set_nz1(shifted as u32);
-                    self.set_v_from_n_xor_c();
-                }
-
                 let v = self.rmw_read(bus, &op, arg);
                 self.set_cc(CC_C, v & 1 != 0);
-                let v = v >> 1;
+                let v = if op.op == Op::Asr { (v & 0x80) | (v >> 1) } else { v >> 1 };
                 self.set_nz1(v as u32);
                 self.set_v_from_n_xor_c();
                 self.rmw_write(bus, &op, arg, v);
@@ -1126,37 +1122,44 @@ mod tests {
         assert_eq!(cpu.sp, 0x00ff);
     }
 
-    /// `asr` is identical to `lsr` here: the C++ `case ASR:` fell through into
-    /// `case LSR:`, which overwrites the result, and the port kept it. A real
-    /// 6800 would leave 0xc0. This test and `memory_asr_reads_its_operand_twice`
-    /// are what make the divergence visible if anyone "fixes" it.
+    /// `asr` keeps the sign bit, and is *not* `lsr`. The C++ `case ASR:` fell
+    /// through into `case LSR:`, which overwrote the result, so this used to
+    /// leave 0x40; a real 6800 leaves 0xc0. This test and
+    /// `memory_asr_reads_its_operand_once` are what keep the repair from being
+    /// undone silently.
     #[test]
-    fn asr_falls_through_into_lsr() {
+    fn asr_preserves_the_sign_bit() {
         let (mut cpu, mut bus) = boot(&[0x86, 0x80, 0x47]); // lda #0x80 ; asra
         run_steps(&mut cpu, &mut bus, 2);
-        assert_eq!(cpu.a, 0x40);
+        assert_eq!(cpu.a, 0xc0);
         assert!(!cpu.cc_set(CC_C));
+        assert!(cpu.cc_set(CC_N));
+        assert!(cpu.cc_set(CC_V)); // V is N xor C
+
+        // and a clear sign bit shifts in a zero, exactly like lsr
+        let (mut cpu, mut bus) = boot(&[0x86, 0x40, 0x47]); // lda #0x40 ; asra
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.a, 0x20);
         assert!(!cpu.cc_set(CC_N));
     }
 
-    /// The other half of the fallthrough: the discarded ASR pass reads the
-    /// operand before the LSR pass reads it again, so a memory-form `asr` hits
-    /// its address twice. That is invisible in RAM but not on a device
-    /// register, and it is trace-visible.
+    /// The other half of the fallthrough: the discarded ASR pass read the
+    /// operand before the LSR pass read it again, so a memory-form `asr` hit
+    /// its address twice. Invisible in RAM, but not on a device register, and
+    /// it was trace-visible. One read now, like every other read-modify-write.
     #[test]
-    fn memory_asr_reads_its_operand_twice() {
+    fn memory_asr_reads_its_operand_once() {
         let (mut cpu, mut bus) = boot(&[0x77, 0x01, 0x00]); // asr 0x0100
         bus.mem[0x0100] = 0x81;
         bus.watch = Some(0x0100);
         run_steps(&mut cpu, &mut bus, 1);
-        assert_eq!(bus.watch_reads, 2);
-        assert_eq!(bus.mem[0x0100], 0x40);
-        // flags come from the LSR pass, which clobbers the ASR pass's
+        assert_eq!(bus.watch_reads, 1);
+        assert_eq!(bus.mem[0x0100], 0xc0);
         assert!(cpu.cc_set(CC_C));
-        assert!(!cpu.cc_set(CC_N));
-        assert!(cpu.cc_set(CC_V)); // V is N xor C
+        assert!(cpu.cc_set(CC_N));
+        assert!(!cpu.cc_set(CC_V)); // V is N xor C
 
-        // lsr, the same operation without the extra read
+        // lsr, the same shape without the sign bit
         let (mut cpu, mut bus) = boot(&[0x74, 0x01, 0x00]); // lsr 0x0100
         bus.mem[0x0100] = 0x81;
         bus.watch = Some(0x0100);
