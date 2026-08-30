@@ -38,8 +38,8 @@ end-to-end test drives; `basic.asm`, a Tiny BASIC running on the hardware
 multiply/divide option; `disc.asm`, the 74601 disc exerciser; `boot.asm`,
 the one-sector program the controller's LOAD button reads; `tape.asm`, the
 image the PTB bootstrap loads off paper tape; and `rex.asm`, REX, a
-preemptive round-robin executive on the emulator's invented 60 Hz line
-clock. AGENTS.md's Test section describes the harness each of them runs
+preemptive round-robin executive with a shell, running on the emulator's
+invented 60 Hz line clock. AGENTS.md's Test section describes the harness each of them runs
 under.
 
 ## Running the period software

@@ -2,18 +2,19 @@
 set -euo pipefail
 
 # End-to-end test for REX, the preemptive executive: boot it, watch the three
-# tasks' letters appear and alternate -- which is the scheduler, the line
-# clock, the context switch and the mailbox teletype driver all working at
-# once -- then type the '.' that asks it to shut down and check for the
-# down-message and the clean halt.
+# letter tasks run in the background -- which is the scheduler, the line
+# clock, the context switch, the sleep machinery and the mailbox teletype
+# driver all working at once -- then drive its shell through the commands and
+# shut the machine down with HALT.
 #
 # Two firsts for a 703 harness, both deliberate:
 #
 #   --fast-io   the teletype's pacing is not what is under test, and the
 #               scheduling slices stay real machine time regardless -- the
-#               line clock ignores the flag. The tasks sleep between
-#               letters, so what this speeds up is the wall-clock time the
-#               sleeps take, not the intervals the guest observes.
+#               line clock ignores the flag. What it speeds up is the wall
+#               clock time the tasks' sleeps take, not the intervals the
+#               guest observes, so REX reports an uptime in machine seconds
+#               that runs far ahead of the test's own wall clock.
 #   -l          a hang guard. A wedged guest becomes "stopping, CycleLimit"
 #               instead of a stuck test, and the verdict grep rejects it.
 #               2e9 instructions is roughly ten times a normal run here.
@@ -59,25 +60,79 @@ wait_for() {
     return 1
 }
 
-# The task output since the banner: everything script(1) wrote before the
-# banner is startup noise, and nothing after it but the tasks and the
-# down-message can produce an A, a B or a C.
-window() {
-    sed -n '/REX 703 UP/,$p' "$LOG_FILE"
+# Wait until at least N lines carry the pattern -- one prompt to a line, so
+# this counts prompts rather than merely finding the first one.
+wait_count() {
+    local pattern="$1" want="$2" tries=0
+    while (( tries < 300 )); do
+        if (( $(grep -c -- "$pattern" "$LOG_FILE" 2>/dev/null || echo 0) >= want )); then
+            return 0
+        fi
+        sleep 0.1
+        (( tries += 1 ))
+    done
+    echo "error: timed out waiting for $want of '$pattern' (see $LOG_FILE)" >&2
+    return 1
 }
 
-# True once every task has printed several letters and the stream has
+# Wait for the printer to fall quiet: two stable samples of the log's size.
+# The prompt appearing is not the cue on its own -- REX opens its line buffer
+# after printing the prompt, and a character typed before that is dropped by
+# design, exactly as a busy 1968 machine dropped what was typed at it. Only
+# usable with the letter tasks stopped, since otherwise the log never stops
+# growing, which is what the STOP below is for.
+wait_quiet() {
+    local last='' size tries=0 stable=0
+    while (( tries < 100 )); do
+        size=$(wc -c < "$LOG_FILE")
+        if [[ "$size" == "$last" ]]; then
+            (( stable += 1 ))
+            (( stable >= 2 )) && return 0
+        else
+            stable=0
+        fi
+        last=$size
+        sleep 0.15
+        (( tries += 1 ))
+    done
+    return 0
+}
+
+PROMPT='REX> '
+
+# Everything the tasks printed before the first command was typed. Scoping
+# matters: the shell's own output says STAT, START and COMMANDS, and the
+# terminal echoes every command back, so counting A, B and C over the whole
+# log would count the shell's text as though the tasks had printed it.
+background() {
+    sed -n "/REX 703 UP/,/${PROMPT}[A-Z]/p" "$LOG_FILE"
+}
+
+# True once every letter task has run several times and the printer has
 # changed hands repeatedly. Thresholds and alternation rather than exact
-# counts: the three tasks sleep for 30, 45 and 60 ticks, so they drift
-# through every phase against each other and no fixed pattern is owed.
+# counts: the tasks sleep for 30, 45 and 60 ticks, so they drift through
+# every phase against each other and no fixed pattern is owed.
 enough_output() {
     local w a b c runs
-    w=$(window)
+    w=$(background)
     a=$(printf %s "$w" | tr -cd 'A' | wc -c)
     b=$(printf %s "$w" | tr -cd 'B' | wc -c)
     c=$(printf %s "$w" | tr -cd 'C' | wc -c)
     runs=$(printf %s "$w" | tr -cd 'ABC' | tr -s 'ABC' | wc -c)
     (( a >= 5 && b >= 5 && c >= 5 && runs >= 9 ))
+}
+
+# What the letter tasks printed between B alone being started and the STOP
+# that follows. The terminal echoes every command back and the letters land
+# on whatever line the printer is on, so the prompt and the echoed command
+# have to come out before anything is counted -- STOP and HALT are made of
+# the letters being counted. This is the deterministic half of the
+# STOP/START check: the STAT taken while a task is running is not matched
+# against exactly, because a letter can land anywhere in a line the printer
+# is sharing, which is the whole point of the executive.
+after_start() {
+    sed -n '/START B/,/STOP/p' "$LOG_FILE" | tail -n +2 \
+        | sed -e 's/REX>//g' -e 's/STOP//g'
 }
 
 FIFO=$(mktemp -u)
@@ -94,15 +149,37 @@ EMU_PID=$!
 # like ctrl-d and shuts the machine down mid-test.
 exec 3>"$FIFO"
 
-# A timeout here is not fatal on its own -- the checks below report what
-# actually reached the log, which says more than "timed out" does.
+# A timeout anywhere here is not fatal on its own -- the checks at the end
+# report what actually reached the log, which says more than "timed out".
 if wait_for 'REX 703 UP'; then
+    # let the background tasks run a while, unprompted
     tries=0
     while (( tries < 300 )) && ! enough_output; do
         sleep 0.1
         (( tries += 1 ))
     done
-    printf '.' >&3            # ask REX to shut down
+
+    # A first STAT with the tasks still running, which is the only thing
+    # that reaches the sleeping-task display -- a stopped task has no delay
+    # left to report. Nothing is matched against its output; the run would
+    # not get this far if the path were broken.
+    wait_count "$PROMPT" 1 && printf 'STAT\r' >&3
+
+    # Then stop them: with the printer quiet, every command's output can be
+    # matched exactly, and wait_quiet becomes usable for pacing.
+    wait_count "$PROMPT" 2 && printf 'STOP\r' >&3
+
+    wait_count "$PROMPT" 3 && wait_quiet && printf 'STAT\r' >&3
+    wait_count "$PROMPT" 4 && wait_quiet && printf 'HELP\r' >&3
+    wait_count "$PROMPT" 5 && wait_quiet && printf 'ECHO SHELL OUTPUT OK\r' >&3
+    wait_count "$PROMPT" 6 && wait_quiet && printf 'FROB\r' >&3
+
+    # One task back on its feet, and only that one.
+    wait_count "$PROMPT" 7 && wait_quiet && printf 'START B\r' >&3
+    wait_for 'BBB' || true
+
+    wait_count "$PROMPT" 8 && printf 'STOP\r' >&3
+    wait_count "$PROMPT" 9 && wait_quiet && printf 'HALT\r' >&3
     wait_for 'REX 703 DOWN' || true
     wait_for 'stopping, Halted' || true
 fi
@@ -112,8 +189,23 @@ fi
 exec 3>&-
 wait "$EMU_PID" || true
 
+# What the shell had to have printed: STAT's uptime and task table with the
+# tasks stopped and the shell itself running, the command list, ECHO's line
+# on a line of its own (the terminal's echo of the command that asked for it
+# begins with the prompt instead), the refusal, and B alone back at work --
+# and, since A and C stay stopped through all of it, that the two letters
+# they would otherwise have printed never appear after the START.
 if grep -q 'REX 703 UP' "$LOG_FILE" \
     && enough_output \
+    && grep -q 'UPTIME [0-9][0-9]* SEC' "$LOG_FILE" \
+    && grep -q '^0 A  OFF' "$LOG_FILE" \
+    && grep -q '^3 SH RUN' "$LOG_FILE" \
+    && grep -q '^4 ID RUN' "$LOG_FILE" \
+    && grep -q '^COMMANDS HELP STAT UPTIME' "$LOG_FILE" \
+    && grep -q '^SHELL OUTPUT OK' "$LOG_FILE" \
+    && grep -q '^WHAT' "$LOG_FILE" \
+    && (( $(after_start | tr -cd 'B' | wc -c) >= 3 )) \
+    && (( $(after_start | tr -cd 'AC' | wc -c) == 0 )) \
     && grep -q 'REX 703 DOWN' "$LOG_FILE" \
     && grep -q 'stopping, Halted' "$LOG_FILE"; then
     echo "PASS: ray703 rex test ($EMU_BIN)"
