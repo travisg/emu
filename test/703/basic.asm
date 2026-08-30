@@ -30,6 +30,12 @@
 ;    on the JMP would jump the SMB, and a skip fired between the two
 ;    would leave the selected page live for the next memory reference
 ;    wherever execution falls; adjacency retires both hazards.
+;  - The level 0 service routine leads with SMB, because the interrupt
+;    entry sequence saves EXR without reloading it (3-3): its first
+;    memory reference resolves in the page of whatever it interrupted,
+;    and this interpreter runs in pages 1 and 2 while a program does.
+;    Only the first one needs it, since that reference reloads EXR from
+;    the program counter like any other.
 ;  - No direct byte references, by the same kind of choice -- the machine
 ;    has them: a byte instruction uses all five EXR bits where a word
 ;    instruction drops the low one, so a direct LDB/STB reaches any of
