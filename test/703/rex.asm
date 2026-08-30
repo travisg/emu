@@ -1,13 +1,14 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; REX -- Raytheon EXec: a preemptive round-robin executive for the 703.
+; REX -- Raytheon EXec: a round-robin executive for the 703, preemptive
+; and cooperative at once.
 ;
-; Four tasks share the processor under a 60 Hz timer interrupt.  Three of
-; them print their letter through an interrupt-driven teletype driver and
-; then sleep for a fixed number of ticks, so the scheduler is visible in
-; the output: the letters arrive at their own intervals, and when every
-; task is asleep the idle task has the processor.  The fourth is a shell,
-; which reads a line from the keyboard and runs a command:
+; Four tasks share the processor.  Three of them print their letter
+; through an interrupt-driven teletype driver and then sleep for a fixed
+; number of ticks, so the scheduling is visible in the output: the letters
+; arrive at their own intervals, and when every task is asleep the idle
+; task has the processor.  The fourth is a shell, which waits on a queue
+; of keystrokes and runs a command:
 ;
 ;   HELP or ?    the command list
 ;   STAT         every task's state, and how long each sleeper has left
@@ -17,8 +18,8 @@
 ;   ECHO text    print the rest of the line
 ;   HALT         park the tasks, drain the printer and stop the machine
 ;
-; The Model 33 echoes what is typed in hardware, so the shell arms the
-; keyboard for it (DOT 14,11) and never echoes a character itself.
+; The Model 33 echoes what is typed in hardware, so the keyboard is armed
+; for it at start-up (DOT 14,11) and nothing here echoes a character.
 ;
 ; The timer is the emulator's invented 60 Hz line clock: DIO device 2,
 ; interrupt level 2, connected with DOT 2,1 -- the one device on this
@@ -29,11 +30,24 @@
 ; interrupt entry saves the program counter at word 4L and the machine
 ; status -- EXR, the comparison indicators, the addressing mode -- at word
 ; 4L+2, and INR restores both (3-3).  A task's whole context is therefore
-; four words (ACR, IXR and those two), and a context switch is: copy them
-; into the outgoing task's TCB, copy the incoming task's four back, INR 2.
-; Because the status word travels too, a task can be preempted between an
-; SMB and the reference it governs, or between a compare and its skip, and
-; resume none the wiser.
+; four words (ACR, IXR and those two), and every switch here is the same
+; handful of copies: park the outgoing task's four in its TCB, write the
+; incoming task's program counter and status into an interrupt block, load
+; its accumulator and index, and INR that block's level.  Because the
+; status word travels with it, a task can be preempted between an SMB and
+; the reference it governs, or between a compare and its skip, and resume
+; none the wiser.
+;
+; The processor changes hands three ways, and the block each one uses is
+; the block its INR names:
+;
+;   the tick        SCHED, on level 2, takes it from a task that has had
+;                   it long enough.  Word 8.
+;   a service exit  SERV returns as a task it has just made runnable,
+;                   rather than leaving it until the next tick.  Word 0.
+;   a task          SWTCH, called to sleep or to wait on a queue, hands
+;                   it on there and then.  Word 12, level 3's block,
+;                   which nothing interrupts -- see the rule below.
 ;
 ; The rules that keep it sound.  Each is enforced exactly where it is
 ; stated, and nothing else in the listing may care:
@@ -42,7 +56,9 @@
 ;   BLOCK, so it may only be made when the block holds a task's frame,
 ;   and the test for that is the saved program counter: outside
 ;   [ISRBEG, ISREND), the contiguous block holding SCHED, SERV, KICK,
-;   PICK and SWTCH, it interrupted a task; inside, it did not.  Both
+;   PICK, SWTCH and Q.PUT, it interrupted a task; inside, it did not.
+;   Q.GET is deliberately outside it: a task blocks in there, and a tick
+;   that finds one has every business switching away from it.  Both
 ;   switching paths make it -- the tick at word 8, the teletype's service
 ;   routine at word 0 -- and both simply return when it fails.  Inside
 ;   the range there are two cases and they want the same answer: an
@@ -98,8 +114,8 @@
 ;
 ; * SLEEP IS A STATE, A DELAY AND A SWITCH.  A task stores its delay and
 ;   marks itself SLEEPING in one masked window and calls SWTCH, which
-;   gives the processor to somebody else there and then instead of
-;   leaving the task to spin out the rest of the tick.  The scheduler
+;   gives the processor to somebody else there and then, without waiting
+;   for a tick to come and take it away.  The scheduler
 ;   passes over a sleeping task, counts its delay down on every tick and
 ;   marks it runnable again at zero; SWTCH returns when the task is next
 ;   picked, so the sleep is simply how long the call takes.
@@ -107,8 +123,10 @@
 ; * SWTCH IS FOR TASKS.  A service routine that called it would rewrite
 ;   CURX and walk away from its own INR, leaving its level Active for
 ;   good -- and a level that never returns holds off every level at or
-;   below it, which is the whole interrupt system, silently.  Service
-;   routines run to their INR and leave the scheduling to the tick.
+;   below it, which is the whole interrupt system, silently.  A service
+;   routine that wants to reschedule does it the other way about, by
+;   rewriting its own level's block and running on to its own INR, which
+;   is what SERV does when RESCHD says a task has been woken.
 ;
 ; * THE IDLE TASK is what runs when every task is asleep, and the reason
 ;   the scheduler's scan can always finish.  It is a branch to self, which
@@ -127,14 +145,16 @@
 ;
 ; Memory map, everything below X'4000':
 ;
-;   0000-000B  interrupt blocks: level 0 (teletype), level 1 unused,
-;              level 2 (line clock; word 8 = saved PC, word 10 = status)
-;   0040-      page 0: START, then ISRBEG..ISREND (SCHED, SERV, KICK),
-;              then the kernel cells, the TCB table and the idle task
+;   0000-000F  interrupt blocks: level 0 (teletype), level 1 unused,
+;              level 2 (line clock), level 3 (never signalled -- SWTCH
+;              stages a switch in it and loads it with INR 3)
+;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
+;              KICK, PICK, SWTCH and Q.PUT; then the kernel cells, the
+;              console queue, the TCB table, Q.GET and the idle task
 ;   0800-      page 1: task A -- letter loop
 ;   1000-      page 2: task B -- letter loop
 ;   1800-      page 3: task C -- letter loop
-;   2000-      page 4: the shell -- banner, prompt, commands
+;   2000-      page 4: the shell -- banner, prompt, commands, line buffer
 ;
 ; Build with asm703.py; see the makefile's ray703-rex target.  Run:
 ;
