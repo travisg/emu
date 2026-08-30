@@ -1124,7 +1124,12 @@ SHKCA           WORD    'A'
 SHKCC           WORD    'C'
 SHKSLP          WORD    S.SLP
 SHKOFF          WORD    S.OFF
-SHKNAP          WORD    2               ; ticks between looks at the buffer
+SHKNAP          WORD    6               ; ticks between looks at the buffer:
+                                        ; one character time, since the
+                                        ; teletype cannot deliver faster than
+                                        ; ten a second and the spin in front
+                                        ; of every nap costs the rest of a
+                                        ; tick whatever the nap is worth
 SHKTCW          WORD    TCBW
 SHKNB           WORD    NTASK+1         ; blocks STAT prints, idle included
 SHKNL           WORD    TCBW*NLETT      ; past the last letter task's block

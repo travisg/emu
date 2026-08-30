@@ -100,12 +100,18 @@ wait_quiet() {
 
 PROMPT='REX> '
 
-# Everything the tasks printed before the first command was typed. Scoping
-# matters: the shell's own output says STAT, START and COMMANDS, and the
-# terminal echoes every command back, so counting A, B and C over the whole
-# log would count the shell's text as though the tasks had printed it.
+# Set once the letter tasks have been seen running on their own, before a
+# single command has been typed.
+BACKGROUND_RAN=0
+
+# Everything printed so far. This is only a count of what the tasks
+# printed while nothing has been typed yet: the shell's own output says
+# STAT, START and COMMANDS, and the terminal echoes every command back, so
+# once the session starts these letters stop meaning anything. The verdict
+# below therefore remembers what this said at the one moment it was true
+# rather than asking again at the end.
 background() {
-    sed -n "/REX 703 UP/,/${PROMPT}[A-Z]/p" "$LOG_FILE"
+    sed -n '/REX 703 UP/,$p' "$LOG_FILE"
 }
 
 # True once every letter task has run several times and the printer has
@@ -158,6 +164,7 @@ if wait_for 'REX 703 UP'; then
         sleep 0.1
         (( tries += 1 ))
     done
+    enough_output && BACKGROUND_RAN=1
 
     # A first STAT with the tasks still running, which is the only thing
     # that reaches the sleeping-task display -- a stopped task has no delay
@@ -196,7 +203,7 @@ wait "$EMU_PID" || true
 # and, since A and C stay stopped through all of it, that the two letters
 # they would otherwise have printed never appear after the START.
 if grep -q 'REX 703 UP' "$LOG_FILE" \
-    && enough_output \
+    && (( BACKGROUND_RAN )) \
     && grep -q 'UPTIME [0-9][0-9]* SEC' "$LOG_FILE" \
     && grep -q '^0 A  OFF' "$LOG_FILE" \
     && grep -q '^3 SH RUN' "$LOG_FILE" \
