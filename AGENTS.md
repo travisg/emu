@@ -61,6 +61,10 @@ cargo test                       # everything; no ROMs, no external binaries, no
 cargo clippy --all-targets       # kept clean
 ```
 
+CI runs those two and the 703 end-to-end harnesses below, which need no
+third-party ROM image — their guests are built from source in this tree. The
+6809 BASIC test is the one that stays local, because it boots Microsoft BASIC.
+
 Each CPU core has an in-module `mod tests` driving hand-assembled programs over `cpu::testbus::TestBus` (flat 64K plus an IO space, a `watch` counter for operand re-reads, and `run_steps`). These need no ROMs and nothing outside the repo, so they are the bulk of what `cargo test` covers. Several of them pin the deliberate quirks listed under Architecture. Derive expected values from the implementation, not from a datasheet, and keep a named test per quirk: those are what a future cleanup would silently break.
 
 End-to-end regression: boots 6809 BASIC, feeds it `test/basic6809_lang_test.bas`, and checks the captured log for `BASIC LANGUAGE TEST PASS`:
