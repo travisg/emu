@@ -26,11 +26,6 @@
 //! A direct port of `cpu/cpu6800.cpp`, which is table-driven: a 256-entry
 //! decode table indexed by opcode, then a switch on the addressing mode to
 //! fetch the operand and a switch on the operation to execute it.
-//!
-//! Behaviour was preserved bug-for-bug through the port, so where this core is
-//! knowingly wrong about a real 6800 it is called out in a comment and pinned
-//! by a named test; those divergences are decisions, not accidents, so read the
-//! comment before "fixing" one.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};

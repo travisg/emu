@@ -27,15 +27,12 @@
 //! three 256-entry pages: the base page, the `0x10` prefix page at +0x100 and
 //! the `0x11` prefix page at +0x200.
 //!
-//! Several details differ from the 6800 core in ways that are easy to get
-//! wrong when porting both; each is called out at its use site:
-//!   - `SET_V1` uses `result >> 1`, not `(a^b^result) >> 1`
+//! Four details differ from the 6800 core and are easy to conflate; each is
+//! called out at its use site:
+//!   - `set_v1` uses `result >> 1`, not `(a^b^result) >> 1`
 //!   - stack pushes pre-decrement (the 6800 post-decrements)
-//!   - `shared_memwrite` sets N/Z *after* the write, from the written value
+//!   - `rmw_write` sets N/Z *after* the write, from the written value
 //!   - `cmp` on a byte sets H as well
-//!   - `asr` and `lsr` are separate operations, not one falling into the other
-//!
-//! Preserved bug-for-bug through the port; see the 6800 core's note.
 
 use super::{Cpu, StepResult};
 use crate::bus::{Bus, Endian};
@@ -1403,8 +1400,8 @@ mod tests {
         assert_eq!(cpu.s, 0x0400);
     }
 
-    /// Unlike the 6800 core, `asr` here really is an arithmetic shift: the sign
-    /// bit is preserved and the operand is read exactly once.
+    /// `asr` is an arithmetic shift: the sign bit is preserved, and the
+    /// operand is read exactly once.
     #[test]
     fn asr_preserves_the_sign_bit_and_reads_its_operand_once() {
         let (mut cpu, mut bus) = boot(&[0x86, 0x80, 0x47]); // lda #0x80 ; asra

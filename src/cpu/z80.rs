@@ -23,7 +23,8 @@
  */
 //! Zilog Z80 interpreter core.
 //!
-//! Port of `cpu/cpuz80.cpp`, preserved bug-for-bug.
+//! Port of `cpu/cpuz80.cpp`. Several of its behaviours are kept deliberately
+//! rather than corrected -- see Faithfulness below.
 //!
 //! # Why this core is shaped differently from the 6800/6809 ones
 //!
@@ -1410,7 +1411,8 @@ impl CpuZ80 {
     /// rotates ignore the prefix**: only RLC, BIT, RES and SET have an indexed
     /// form. The others fall through to the plain `(HL)` path and then end the
     /// run at the prefix check, having already read the displacement and
-    /// touched `(HL)`. Preserved so traces match right up to the failure.
+    /// touched `(HL)` -- so the abort is not clean, and a guest that reaches
+    /// one has already had a byte of memory rotated under it.
     /// `(IX+d)` / `(IY+d)` for the four CB operations that honour the prefix,
     /// marking it consumed. DD wins when both are set, which leaves FD
     /// unconsumed and ends the run.
