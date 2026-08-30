@@ -34,17 +34,22 @@ public URL fall back to downloading. Either way the sha256 has to match before
 the file is kept, so a half-finished download or a wrong dump is caught here
 rather than as a machine that boots to garbage.
 
+A URL ending in "#member" names a file inside a zip to extract, which is how
+the 6809 BASIC image is published.
+
 An image already in place is verified, never overwritten: a mismatch is
 reported and the file left alone, because the copy on disk may be the good one
 and the manifest stale.
 """
 
 import hashlib
+import io
 import os
 import shutil
 import sys
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 MANIFEST = Path(__file__).resolve().parent / "rom-manifest.txt"
@@ -63,8 +68,10 @@ def sha256(path):
 def read_manifest():
     entries = []
     for lineno, line in enumerate(MANIFEST.read_text().splitlines(), 1):
-        line = line.split("#", 1)[0].strip()
-        if not line:
+        # Only a whole-line comment: a "#" inside a field is the zip member a
+        # URL ends with, and stripping it would silently fetch the zip itself.
+        line = line.strip()
+        if not line or line.startswith("#"):
             continue
         fields = line.split()
         if len(fields) != 3:
@@ -88,13 +95,23 @@ def fetch_from_archive(archive, relpath, dest, digest):
 
 
 def fetch_from_url(url, dest, digest):
+    url, _, member = url.partition("#")
     try:
-        with urllib.request.urlopen(url) as response, open(dest, "wb") as out:
-            shutil.copyfileobj(response, out)
+        with urllib.request.urlopen(url) as response:
+            body = response.read()
     except (urllib.error.URLError, OSError) as e:
         return None, f"download failed: {e}"
+
+    if member:
+        try:
+            body = zipfile.ZipFile(io.BytesIO(body)).read(member)
+        except (zipfile.BadZipFile, KeyError) as e:
+            return None, f"{url} does not hold {member}: {e}"
+
+    dest.write_bytes(body)
     if sha256(dest) == digest:
-        return f"downloaded from {url}", None
+        where = f"{member} in {url}" if member else url
+        return f"downloaded from {where}", None
     dest.unlink()
     return None, f"downloaded from {url} but the hash did not match"
 

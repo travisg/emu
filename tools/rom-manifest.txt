@@ -1,15 +1,18 @@
 # ROM and disk images the emulator needs, none of which are in the repo.
 #
 # One entry per line: destination path, sha256, source URL ("-" if the image
-# has no public home and has to be supplied by hand). tools/fetch-roms.py
-# reads this file; it copies from the local archive named by $EMU_ROM_ARCHIVE
-# first, falls back to the URL, and verifies the hash either way.
+# has no public home and has to be supplied by hand). A URL ending in "#member"
+# names a file inside a zip. tools/fetch-roms.py reads this file; it copies
+# from the local archive named by $EMU_ROM_ARCHIVE first, falls back to the
+# URL, and verifies the hash either way.
 #
 # The 703 guests are not here -- they are built from source in this tree with
 # "make -C test ray703", which writes them to roms/703.
 
-# 6809 (System09): Grant Searle's build of Microsoft Extended BASIC.
-roms/6809/BASIC.HEX             6a282de5ac6ada90b50e35c72608e1306cd5caee7d80d872dfbd50a315c3775c  -
+# 6809 (System09): Grant Searle's build of Microsoft Extended BASIC. His page
+# asks that its contents not be reproduced elsewhere, so this links to the zip
+# he publishes and takes the one file out of it.
+roms/6809/BASIC.HEX             6ee280c10cc8c7391d9892324550f18ee1ca2514499b7c2b327e3dcde671805b  http://searle.x10host.com/6809/ExBasRom.zip#ExBasROM.hex
 
 # Kaypro II: the boot PROM (part 81-232) and the character generator (81-146a),
 # dumped from the chips. kaypro.txt in the archive records the donor machines.
