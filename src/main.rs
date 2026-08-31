@@ -24,9 +24,12 @@ use std::sync::Arc;
 
 /// What `--throttle` asked for. `RealTime` means "the machine's own clock
 /// rate, from the registry"; an explicit rate gives slow motion (or fast
-/// motion) for free.
+/// motion) for free; `Flat` is `--no-throttle`, running uncapped even on a
+/// machine whose factory defaults real time on (the panel ones). `Unset`
+/// means neither flag was given, which leaves that default in force.
 enum ThrottleArg {
-    Off,
+    Unset,
+    Flat,
     RealTime,
     Hz(u64),
 }
@@ -46,7 +49,7 @@ struct Args {
 }
 
 fn usage(argv0: &str) {
-    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--fast-io]");
+    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io]");
     eprintln!();
     eprintln!("valid systems:");
     for s in registry::SYSTEMS {
@@ -63,7 +66,8 @@ fn usage(argv0: &str) {
     eprintln!("note: system may include a subsystem suffix like '6809-obc'.");
     eprintln!("note: cpu is currently selected by system; --cpu is accepted but ignored.");
     eprintln!("note: --trace writes one line of cpu state per instruction to tracefile.");
-    eprintln!("note: --throttle paces the cpu to its real clock rate (shown above), or to an explicit rate in Hz.");
+    eprintln!("note: --throttle paces the cpu to its real clock rate (shown above), or to an explicit rate in Hz (--throttle N or --throttle=N).");
+    eprintln!("note: --no-throttle runs flat out, overriding the real-time default the panel machines carry.");
     eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
 }
 
@@ -79,16 +83,28 @@ fn parse_args() -> Result<Args, ()> {
         rom: None,
         limit: None,
         trace: None,
-        throttle: ThrottleArg::Off,
+        throttle: ThrottleArg::Unset,
         fast_io: false,
     };
 
     let mut i = 1;
     while i < argv.len() {
-        let arg = argv[i].as_str();
+        let raw = argv[i].as_str();
+
+        // getopt_long also took `--option=value`, and for the optional-rate
+        // --throttle the attached form was the only way to name a rate at
+        // all -- so peel it off and accept both spellings. Short options
+        // never had it.
+        let (arg, attached) = match raw.split_once('=') {
+            Some((name, val)) if raw.starts_with("--") => (name, Some(val.to_string())),
+            _ => (raw, None),
+        };
 
         // returns the value for an option that takes one
         let value = |i: &mut usize| -> Option<String> {
+            if attached.is_some() {
+                return attached.clone();
+            }
             *i += 1;
             argv.get(*i).cloned()
         };
@@ -125,15 +141,32 @@ fn parse_args() -> Result<Args, ()> {
             }
             "--throttle" => {
                 // The rate is optional: bare --throttle means the machine's
-                // own clock. There are no positional arguments, so a next
-                // argument that parses as a number is the rate.
-                match argv.get(i + 1).and_then(|v| v.parse::<u64>().ok()) {
+                // own clock. `--throttle=N` names one outright and a junk N
+                // is an error; otherwise, since there are no positional
+                // arguments, a next argument that parses as a number is the
+                // rate.
+                let rate = match &attached {
+                    Some(v) => match v.parse::<u64>() {
+                        Ok(hz) => Some(hz),
+                        Err(_) => {
+                            eprintln!("--throttle: '{v}' is not a rate in Hz");
+                            return Err(());
+                        }
+                    },
+                    None => match argv.get(i + 1).and_then(|v| v.parse::<u64>().ok()) {
+                        Some(hz) => {
+                            i += 1;
+                            Some(hz)
+                        }
+                        None => None,
+                    },
+                };
+                match rate {
                     Some(0) => {
                         eprintln!("--throttle: rate must be nonzero");
                         return Err(());
                     }
                     Some(hz) => {
-                        i += 1;
                         println!("throttling to {hz} Hz");
                         args.throttle = ThrottleArg::Hz(hz);
                     }
@@ -143,12 +176,24 @@ fn parse_args() -> Result<Args, ()> {
                     }
                 }
             }
+            "--no-throttle" => {
+                if attached.is_some() {
+                    eprintln!("--no-throttle takes no value");
+                    return Err(());
+                }
+                println!("running flat out, machine default or not");
+                args.throttle = ThrottleArg::Flat;
+            }
             "--fast-io" => {
+                if attached.is_some() {
+                    eprintln!("--fast-io takes no value");
+                    return Err(());
+                }
                 println!("devices will complete i/o instantly");
                 args.fast_io = true;
             }
             _ => {
-                eprintln!("unknown option '{arg}'");
+                eprintln!("unknown option '{raw}'");
                 usage(&argv0);
                 return Err(());
             }
@@ -217,10 +262,12 @@ fn main() -> ExitCode {
         None => Box::new(TerminalFrontend::new(tx)),
     };
 
-    // Throttle precedence: an explicit rate beats a bare --throttle (the
-    // machine's own clock, from the registry), which beats the machine
-    // factory's default; everything else runs flat out, as always.
+    // Throttle precedence: --no-throttle and an explicit rate beat a bare
+    // --throttle (the machine's own clock, from the registry), which beats
+    // the machine factory's default; nothing given runs flat out except on
+    // the machines whose factory defaults real time (the panel ones).
     let throttle_hz = match args.throttle {
+        ThrottleArg::Flat => None,
         ThrottleArg::Hz(hz) => Some(hz),
         ThrottleArg::RealTime => match desc.clock_hz {
             Some(hz) => Some(hz),
@@ -232,7 +279,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         },
-        ThrottleArg::Off => machine.throttle_hz,
+        ThrottleArg::Unset => machine.throttle_hz,
     };
 
     let has_panel = machine.panel_control.is_some();
