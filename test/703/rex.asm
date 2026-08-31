@@ -386,8 +386,14 @@ SRX             DIN     14,15           ; collect the frame, and ask for
 ; routine's is to get the character off the teletype.  Nothing is echoed
 ; here either; the Model 33 is armed to print its own keyboard.
 SRX1            STW     QITEM
-                LDW     KCONSQ
-                JSX     Q.PUT
+                CLB     X'83'           ; Ctrl-C is a flag, not a queued
+                SNE                     ; character: nothing reads the queue
+                JMP     SRXBRK          ; while a program holds the console,
+                LDW     KCONSQ          ; so an in-band break could never be
+                JSX     Q.PUT           ; seen.  Whoever consumes the flag
+                JMP     SEXIT           ; clears it.
+SRXBRK          LDW     K1
+                STW     BRKREQ
 
 ; Return -- as somebody else, if waking a task made one runnable that was
 ; not before.  This is the second half of the scheduling: the tick takes
@@ -595,14 +601,23 @@ Q.PUT           SUBR
                 SAM
                 JMP     QPWK
                 JMP     QPX
-QPWK            CAX                     ; the waiter's block: wake it, and
-                CLR                     ; forget it -- a queue holds one
-                STW     *TCBT+T.STA     ; waiter, which is all a single
-                LDX     QPD             ; reader ever needs
-                LDW     KM1
-                STW     *Q.WTR
-                LDW     K1              ; and ask the service routine to
+; Wake it only if it is waiting -- the same guard SERV's printer wake
+; makes, for the same reason: a keystroke must not restart a task the
+; shell has stopped between registering as the waiter and this put.  The
+; registration is consumed either way; a stopped task re-registers when
+; it next runs, because Q.GET looks again on every wake.
+QPWK            CAX                     ; the waiter's block
+                LDW     *TCBT+T.STA
+                CMW     KWAIT
+                SEQ                     ; waiting on the queue?
+                JMP     QPW2
+                CLR
+                STW     *TCBT+T.STA     ; wake it...
+                LDW     K1              ; ...and ask the service routine to
                 STW     RESCHD          ; return as whoever can run now
+QPW2            LDX     QPD             ; forget the waiter -- a queue holds
+                LDW     KM1             ; one, which is all a single reader
+                STW     *Q.WTR          ; ever needs
 QPX             EXIT    Q.PUT
 
 ISREND          EQU     $
@@ -624,6 +639,8 @@ MBCH1           WORD    0               ; C and the shell -- contiguous, KICK
 MBCH2           WORD    0               ; and SERV index them from MBCH0
 MBCH3           WORD    0
 SHUTREQ         WORD    0               ; set by the shell's HALT, read by tasks
+BRKREQ          WORD    0               ; Ctrl-C arrived; set by SERV, cleared
+                                        ; by whoever owns the console
 CURX            WORD    TCBW*3          ; the current task's block offset: the
                                         ; kernel becomes the shell, so it
                                         ; starts on the shell's own block
