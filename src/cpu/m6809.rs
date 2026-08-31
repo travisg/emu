@@ -464,6 +464,86 @@ const fn build_ops() -> [OpDecode; 256 * 3] {
 
 static OPS: [OpDecode; 256 * 3] = build_ops();
 
+/// Base cycle counts per opcode, from the MC6809 datasheet's instruction
+/// table, in `build_ops` order. Page-2/3 entries (index 0x1xx/0x2xx) hold
+/// their own listed totals, prefix byte included. Entries the datasheet
+/// marks "+" (indexed forms, and 4+ LEA) hold the base value: the postbyte
+/// penalty is added by `indexed_addr`, which is the only place that knows
+/// the mode. PSHS/PULS hold 5 and charge +1 per byte in their exec arms;
+/// long conditional branches hold 5 and charge +1 when taken.
+#[rustfmt::skip]
+const CYCLE_LIST: &[(u16, u8)] = &[
+    // add/adc: 8-bit imm 2 / dir 4 / idx 4+ / ext 5, addd two more
+    (0x8b, 2), (0xcb, 2), (0xc3, 4), (0x9b, 4), (0xdb, 4), (0xd3, 6),
+    (0xab, 4), (0xeb, 4), (0xe3, 6), (0xbb, 5), (0xfb, 5), (0xf3, 7),
+    (0x89, 2), (0xc9, 2), (0x99, 4), (0xd9, 4), (0xa9, 4), (0xe9, 4), (0xb9, 5), (0xf9, 5),
+    // sub/sbc, same shape
+    (0x80, 2), (0xc0, 2), (0x83, 4), (0x90, 4), (0xd0, 4), (0x93, 6),
+    (0xa0, 4), (0xe0, 4), (0xa3, 6), (0xb0, 5), (0xf0, 5), (0xb3, 7),
+    (0x82, 2), (0xc2, 2), (0x92, 4), (0xd2, 4), (0xa2, 4), (0xe2, 4), (0xb2, 5), (0xf2, 5),
+    // cmp: 8-bit as alu; cmpx 4/6/6+/7; the page-2/3 compares one more
+    (0x81, 2), (0xc1, 2), (0x91, 4), (0xd1, 4), (0xa1, 4), (0xe1, 4), (0xb1, 5), (0xf1, 5),
+    (0x8c, 4), (0x9c, 6), (0xac, 6), (0xbc, 7),
+    (0x183, 5), (0x193, 7), (0x1a3, 7), (0x1b3, 8), // cmpd
+    (0x18c, 5), (0x19c, 7), (0x1ac, 7), (0x1bc, 8), // cmpy
+    (0x283, 5), (0x293, 7), (0x2a3, 7), (0x2b3, 8), // cmpu
+    (0x28c, 5), (0x29c, 7), (0x2ac, 7), (0x2bc, 8), // cmps
+    // and/bit/eor/or, plus andcc/orcc at 3
+    (0x84, 2), (0xc4, 2), (0x94, 4), (0xd4, 4), (0xa4, 4), (0xe4, 4), (0xb4, 5), (0xf4, 5),
+    (0x1c, 3), (0x1a, 3),
+    (0x85, 2), (0xc5, 2), (0x95, 4), (0xd5, 4), (0xa5, 4), (0xe5, 4), (0xb5, 5), (0xf5, 5),
+    (0x88, 2), (0xc8, 2), (0x98, 4), (0xd8, 4), (0xa8, 4), (0xe8, 4), (0xb8, 5), (0xf8, 5),
+    (0x8a, 2), (0xca, 2), (0x9a, 4), (0xda, 4), (0xaa, 4), (0xea, 4), (0xba, 5), (0xfa, 5),
+    // misc
+    (0x12, 2), (0x1e, 8), (0x3a, 3), (0x1f, 6), (0x1d, 2), // nop exg abx tfr sex
+    // rmw: register 2, direct 6, indexed 6+, extended 7
+    (0x4f, 2), (0x5f, 2), (0x0f, 6), (0x6f, 6), (0x7f, 7), // clr
+    (0x43, 2), (0x53, 2), (0x03, 6), (0x63, 6), (0x73, 7), // com
+    (0x40, 2), (0x50, 2), (0x00, 6), (0x60, 6), (0x70, 7), // neg
+    (0x4a, 2), (0x5a, 2), (0x0a, 6), (0x6a, 6), (0x7a, 7), // dec
+    (0x4c, 2), (0x5c, 2), (0x0c, 6), (0x6c, 6), (0x7c, 7), // inc
+    (0x48, 2), (0x58, 2), (0x08, 6), (0x68, 6), (0x78, 7), // asl
+    (0x47, 2), (0x57, 2), (0x07, 6), (0x67, 6), (0x77, 7), // asr
+    (0x44, 2), (0x54, 2), (0x04, 6), (0x64, 6), (0x74, 7), // lsr
+    (0x49, 2), (0x59, 2), (0x09, 6), (0x69, 6), (0x79, 7), // rol
+    (0x46, 2), (0x56, 2), (0x06, 6), (0x66, 6), (0x76, 7), // ror
+    (0x4d, 2), (0x5d, 2), (0x0d, 6), (0x6d, 6), (0x7d, 7), // tst
+    // lea 4+, psh/pul 5 plus one per byte
+    (0x32, 4), (0x33, 4), (0x30, 4), (0x31, 4),
+    (0x34, 5), (0x36, 5), (0x35, 5), (0x37, 5),
+    // loads: 8-bit 2/4/4+/5; d/u/x 3/5/5+/6; the page-2 s/y one more
+    (0x86, 2), (0xc6, 2), (0xcc, 3), (0x1ce, 4), (0xce, 3), (0x8e, 3), (0x18e, 4),
+    (0x96, 4), (0xd6, 4), (0xdc, 5), (0x1de, 6), (0xde, 5), (0x9e, 5), (0x19e, 6),
+    (0xa6, 4), (0xe6, 4), (0xec, 5), (0x1ee, 6), (0xee, 5), (0xae, 5), (0x1ae, 6),
+    (0xb6, 5), (0xf6, 5), (0xfc, 6), (0x1fe, 7), (0xfe, 6), (0xbe, 6), (0x1be, 7),
+    // stores, same shape without the immediate column
+    (0x97, 4), (0xd7, 4), (0xdd, 5), (0x1df, 6), (0xdf, 5), (0x9f, 5), (0x19f, 6),
+    (0xb7, 5), (0xf7, 5), (0xfd, 6), (0x1ff, 7), (0xff, 6), (0xbf, 6), (0x1bf, 7),
+    (0xa7, 4), (0xe7, 4), (0xed, 5), (0x1ef, 6), (0xef, 5), (0xaf, 5), (0x1af, 6),
+    // branches: short 3, bsr 7, lbra 5, lbsr 9, long conditionals 5 (+1 taken)
+    (0x20, 3), (0x21, 3), (0x22, 3), (0x23, 3), (0x24, 3), (0x25, 3), (0x26, 3), (0x27, 3),
+    (0x28, 3), (0x29, 3), (0x2a, 3), (0x2b, 3), (0x2c, 3), (0x2d, 3), (0x2e, 3), (0x2f, 3),
+    (0x8d, 7), (0x16, 5), (0x17, 9),
+    (0x121, 5), (0x122, 5), (0x123, 5), (0x124, 5), (0x125, 5), (0x126, 5), (0x127, 5),
+    (0x128, 5), (0x129, 5), (0x12a, 5), (0x12b, 5), (0x12c, 5), (0x12d, 5), (0x12e, 5), (0x12f, 5),
+    // jmp 3/3+/4, jsr 7/7+/8, rts 5
+    (0x0e, 3), (0x6e, 3), (0x7e, 4),
+    (0x9d, 7), (0xad, 7), (0xbd, 8),
+    (0x39, 5),
+];
+
+const fn build_cycles() -> [u8; 256 * 3] {
+    let mut c = [0u8; 256 * 3];
+    let mut i = 0;
+    while i < CYCLE_LIST.len() {
+        c[CYCLE_LIST[i].0 as usize] = CYCLE_LIST[i].1;
+        i += 1;
+    }
+    c
+}
+
+static CYCLES: [u8; 256 * 3] = build_cycles();
+
 #[derive(Default)]
 pub struct Cpu6809 {
     // A and B are the halves of D; the C++ overlays them in a union
@@ -476,6 +556,8 @@ pub struct Cpu6809 {
     pc: u16,
     dp: u8,
     cc: u8,
+    /// Clock cycles the last `step()` consumed, for `last_step_cycles`.
+    cycles: u32,
 }
 
 impl Cpu6809 {
@@ -673,6 +755,10 @@ impl Cpu6809 {
         let mut off: i32 = 0;
         let mut prepostinc: i32 = 0;
         let mut indirect = postbyte & (1 << 4) != 0;
+        // The datasheet's per-mode cycle adder -- the "+" in the base
+        // table's "4+". Indirection is a flat +3 on top of any mode that
+        // has an indirect form, added where `indirect` has settled.
+        let mut penalty: u32 = 0;
 
         #[derive(Copy, Clone, PartialEq)]
         enum Base {
@@ -691,45 +777,68 @@ impl Cpu6809 {
             // 5-bit signed offset; this mode has no indirect form
             off = ((postbyte & 0x1f) as i32) << 27 >> 27;
             indirect = false;
+            penalty = 1;
         } else {
             match postbyte & 0xf {
                 0x0 => {
                     prepostinc = 1;
                     indirect = false;
+                    penalty = 2;
                 }
-                0x1 => prepostinc = 2,
+                0x1 => {
+                    prepostinc = 2;
+                    penalty = 3;
+                }
                 0x2 => {
                     prepostinc = -1;
                     indirect = false;
+                    penalty = 2;
                 }
-                0x3 => prepostinc = -2,
+                0x3 => {
+                    prepostinc = -2;
+                    penalty = 3;
+                }
                 0x4 => {}
-                0x5 => off = self.b as i8 as i32,
-                0x6 => off = self.a as i8 as i32,
+                0x5 => {
+                    off = self.b as i8 as i32;
+                    penalty = 1;
+                }
+                0x6 => {
+                    off = self.a as i8 as i32;
+                    penalty = 1;
+                }
                 0x8 => {
                     off = bus.read8(self.pc as u32) as i8 as i32;
                     self.pc = self.pc.wrapping_add(1);
+                    penalty = 1;
                 }
                 0x9 => {
                     off = bus.read16(self.pc as u32, Endian::Big) as i16 as i32;
                     self.pc = self.pc.wrapping_add(2);
+                    penalty = 4;
                 }
-                0xb => off = self.d() as i16 as i32,
+                0xb => {
+                    off = self.d() as i16 as i32;
+                    penalty = 4;
+                }
                 0xc => {
                     off = bus.read8(self.pc as u32) as i8 as i32;
                     self.pc = self.pc.wrapping_add(1);
                     base = Base::Pc;
+                    penalty = 1;
                 }
                 0xd => {
                     off = bus.read16(self.pc as u32, Endian::Big) as i16 as i32;
                     self.pc = self.pc.wrapping_add(2);
                     base = Base::Pc;
+                    penalty = 5;
                 }
                 0xf => {
                     off = bus.read16(self.pc as u32, Endian::Big) as i16 as i32;
                     self.pc = self.pc.wrapping_add(2);
                     base = Base::Zero;
                     indirect = true;
+                    penalty = 2; // [nn] is the datasheet's 5, as 2 + the 3
                 }
                 // 0x7, 0xa, 0xe are 6309 E/F/W modes; the C++ asserts here
                 _ => {
@@ -738,6 +847,8 @@ impl Cpu6809 {
                 }
             }
         }
+
+        self.cycles += penalty + if indirect { 3 } else { 0 };
 
         let read_base = |cpu: &Self| match base {
             Base::Reg(r) => cpu.get_reg(r),
@@ -798,6 +909,7 @@ impl Cpu for Cpu6809 {
         };
 
         let op = OPS[index];
+        self.cycles = CYCLES[index] as u32;
 
         if op.op == Op::Bad {
             println!("unhandled opcode {:#04x} at {:#06x}", opcode, self.pc.wrapping_sub(1));
@@ -1050,7 +1162,8 @@ impl Cpu for Cpu6809 {
             Op::Push => {
                 // The postbyte names the registers; pushed high to low. When
                 // pushing onto U, the "other" stack register is S and vice
-                // versa.
+                // versa. One cycle per byte moved, on the table's base 5.
+                self.cycles += 2 * (arg as u32 & 0xf0).count_ones() + (arg as u32 & 0x0f).count_ones();
                 let stack = op.target;
                 let other = if stack == Reg::U { Reg::S } else { Reg::U };
                 if arg & 0x80 != 0 {
@@ -1088,6 +1201,8 @@ impl Cpu for Cpu6809 {
             }
 
             Op::Pull => {
+                // one cycle per byte, as for push
+                self.cycles += 2 * (arg as u32 & 0xf0).count_ones() + (arg as u32 & 0x0f).count_ones();
                 let stack = op.target;
                 let other = if stack == Reg::U { Reg::S } else { Reg::U };
                 if arg & 0x01 != 0 {
@@ -1124,6 +1239,11 @@ impl Cpu for Cpu6809 {
                         result = StepResult::InfiniteLoop;
                     }
                     self.pc = (self.pc as i32).wrapping_add(arg) as u16;
+                    // A taken long *conditional* branch is 6, not its base
+                    // 5; LBRA (cond 0, always) really is a flat 5.
+                    if op.width == 2 && op.cond != 0 {
+                        self.cycles += 1;
+                    }
                 }
             }
 
@@ -1180,6 +1300,10 @@ impl Cpu for Cpu6809 {
         }
 
         result
+    }
+
+    fn last_step_cycles(&self) -> u32 {
+        self.cycles
     }
 
     fn dump(&self) {
@@ -1498,4 +1622,109 @@ mod tests {
         }
     }
 
+    // -- cycle counts ---
+
+    /// Every implemented opcode has a nonzero cycle count and every Bad one
+    /// a zero, across all three pages. A stray zero would not merely
+    /// misprice an instruction: the run loop reads a 0 from
+    /// `last_step_cycles` as "this core does not count cycles" and
+    /// permanently disables the throttle.
+    #[test]
+    fn cycles_and_decode_agree_on_what_is_implemented() {
+        for i in 0..256 * 3 {
+            assert_eq!(OPS[i].op == Op::Bad, CYCLES[i] == 0, "index {i:#05x}");
+        }
+    }
+
+    /// Representative rows of the datasheet table: the addressing-mode
+    /// spread, the page-2/3 totals, and the flow-control counts -- including
+    /// the flat LBRA 5 next to the taken long conditional's 6.
+    #[test]
+    fn cycle_counts_match_the_datasheet() {
+        #[rustfmt::skip]
+        let cases: &[(&[u8], u32)] = &[
+            (&[0x12],                   2), // nop
+            (&[0x86, 0x55],             2), // lda #imm
+            (&[0x96, 0x20],             4), // lda dir
+            (&[0xb6, 0x02, 0x00],       5), // lda ext
+            (&[0xcc, 0x12, 0x34],       3), // ldd #imm
+            (&[0x10, 0x8e, 0x12, 0x34], 4), // ldy #imm, the page-2 total
+            (&[0x10, 0x83, 0x12, 0x34], 5), // cmpd #imm
+            (&[0x11, 0x83, 0x12, 0x34], 5), // cmpu #imm
+            (&[0x97, 0x20],             4), // sta dir
+            (&[0x08, 0x20],             6), // asl dir
+            (&[0x7f, 0x02, 0x00],       7), // clr ext
+            (&[0x1e, 0x89],             8), // exg a,b
+            (&[0x1f, 0x8b],             6), // tfr a,dp
+            (&[0x3a],                   3), // abx
+            (&[0x1d],                   2), // sex
+            (&[0x7e, 0xe1, 0x00],       4), // jmp ext
+            (&[0x9d, 0x20],             7), // jsr dir
+            (&[0xbd, 0xe1, 0x00],       8), // jsr ext
+            (&[0x8d, 0x02],             7), // bsr
+            (&[0x17, 0x00, 0x02],       9), // lbsr
+            (&[0x39],                   5), // rts
+            (&[0x26, 0x02],             3), // bne (taken; short is flat)
+            (&[0x27, 0x02],             3), // beq (not taken)
+            (&[0x16, 0x00, 0x02],       5), // lbra: always taken, flat 5
+            (&[0x10, 0x26, 0x00, 0x02], 6), // lbne taken
+            (&[0x10, 0x27, 0x00, 0x02], 5), // lbeq not taken
+        ];
+        for (prog, cycles) in cases {
+            let (mut cpu, mut bus) = boot(prog);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.last_step_cycles(), *cycles, "bytes {prog:02x?}");
+        }
+    }
+
+    /// The indexed postbyte's cycle adder, over lda's base 4: every mode,
+    /// and the flat +3 for indirection.
+    #[test]
+    fn indexed_modes_charge_the_datasheet_penalty() {
+        #[rustfmt::skip]
+        let cases: &[(&[u8], u32)] = &[
+            (&[0xa6, 0x84],             4), // lda ,x        +0
+            (&[0xa6, 0x02],             5), // lda 2,x       +1 (5-bit)
+            (&[0xa6, 0x88, 0x10],       5), // lda n8,x      +1
+            (&[0xa6, 0x89, 0x01, 0x00], 8), // lda n16,x     +4
+            (&[0xa6, 0x86],             5), // lda a,x       +1
+            (&[0xa6, 0x85],             5), // lda b,x       +1
+            (&[0xa6, 0x8b],             8), // lda d,x       +4
+            (&[0xa6, 0x80],             6), // lda ,x+       +2
+            (&[0xa6, 0x81],             7), // lda ,x++      +3
+            (&[0xa6, 0x82],             6), // lda ,-x       +2
+            (&[0xa6, 0x83],             7), // lda ,--x      +3
+            (&[0xa6, 0x8c, 0x10],       5), // lda n8,pc     +1
+            (&[0xa6, 0x8d, 0x01, 0x00], 9), // lda n16,pc    +5
+            (&[0xa6, 0x94],             7), // lda [,x]      +0+3
+            (&[0xa6, 0x98, 0x10],       8), // lda [n8,x]    +1+3
+            (&[0xa6, 0x91],            10), // lda [,x++]    +3+3
+            (&[0xa6, 0x9f, 0x02, 0x00], 9), // lda [nn]      +5
+            (&[0x30, 0x02],             5), // leax 2,x: base 4, +1
+        ];
+        for (prog, cycles) in cases {
+            let (mut cpu, mut bus) = boot(prog);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.last_step_cycles(), *cycles, "bytes {prog:02x?}");
+        }
+    }
+
+    /// Push and pull cost their base 5 plus one cycle per byte moved.
+    #[test]
+    fn push_and_pull_charge_per_byte() {
+        #[rustfmt::skip]
+        let cases: &[(&[u8], u32)] = &[
+            (&[0x34, 0x02],  6), // pshs a: one byte
+            (&[0x34, 0x06],  7), // pshs a,b
+            (&[0x36, 0x10],  7), // pshu x: two bytes
+            (&[0x34, 0xff], 17), // pshs everything: twelve bytes
+            (&[0x35, 0x06],  7), // puls a,b
+            (&[0x35, 0x80],  7), // puls pc
+        ];
+        for (prog, cycles) in cases {
+            let (mut cpu, mut bus) = boot(prog);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.last_step_cycles(), *cycles, "bytes {prog:02x?}");
+        }
+    }
 }
