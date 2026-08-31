@@ -89,12 +89,13 @@ $(RAY703_ROMS)/rex.bin: 703/rex.asm $(ASM703)
 	$(ASM703) $< -o $@ -l 703/rex.lst
 
 # Tiny BASIC, the largest guest in the tree and the reason the emulator has
-# hardware multiply/divide.
+# hardware multiply/divide.  Two files, one deck: basic.asm is the machine
+# (driver, workspace, section layout) and bcore.asm the interpreter.
 ray703-basic: $(RAY703_ROMS)/basic.bin
 
-$(RAY703_ROMS)/basic.bin: 703/basic.asm $(ASM703)
+$(RAY703_ROMS)/basic.bin: 703/basic.asm 703/bcore.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM703) $< -o $@ -l 703/basic.lst
+	$(ASM703) 703/basic.asm 703/bcore.asm -o $@ -l 703/basic.lst
 
 # tape.asm is punched rather than loaded: the .tape is what the ray703-ptb
 # subsystem feeds through the paper tape reader. The .bin beside it is only a
