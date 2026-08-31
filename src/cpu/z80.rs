@@ -114,6 +114,60 @@ const ROT_OPS: [RotOp; 8] = [
     RotOp::Srl,
 ];
 
+/// T-states per unprefixed opcode, from the Zilog Z80 CPU User Manual.
+/// Conditionals hold their not-taken value (the taken surcharge is added at
+/// the four decision sites); `JP cc, nn` really is 10 either way. The r and
+/// `(HL)` forms are distinct opcodes, so one flat table covers both; what it
+/// cannot see is an active DD/FD, charged separately (+4 per prefix byte at
+/// the fetch, +8 where a displacement is read -- +5 for `LD (IX+d), n`,
+/// whose d and n fetches overlap). The four prefix values (0xcb/0xdd/0xed/
+/// 0xfd) never reach `exec_base` and hold 0.
+#[rustfmt::skip]
+const MAIN_CYCLES: [u8; 256] = [
+    //  x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf
+         4, 10,  7,  6,  4,  4,  7,  4,  4, 11,  7,  6,  4,  4,  7,  4, // 0x
+         8, 10,  7,  6,  4,  4,  7,  4, 12, 11,  7,  6,  4,  4,  7,  4, // 1x: djnz 8, jr 12
+         7, 10, 16,  6,  4,  4,  7,  4,  7, 11, 16,  6,  4,  4,  7,  4, // 2x: jr cc 7, ld (nn),hl 16
+         7, 10, 13,  6, 11, 11, 10,  4,  7, 11, 13,  6,  4,  4,  7,  4, // 3x: inc/dec (hl) 11
+         4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 4x: ld r,r' 4, ld r,(hl) 7
+         4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 5x
+         4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 6x
+         7,  7,  7,  7,  7,  7,  4,  7,  4,  4,  4,  4,  4,  4,  7,  4, // 7x: ld (hl),r 7, halt-as-nop 4
+         4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 8x: alu a,r 4, alu a,(hl) 7
+         4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 9x
+         4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // ax
+         4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // bx
+         5, 10, 10, 10, 10, 11,  7, 11,  5, 10, 10,  0, 10, 17,  7, 11, // cx: ret cc 5, call cc 10
+         5, 10, 10, 11, 10, 11,  7, 11,  5,  4, 10, 11, 10,  0,  7, 11, // dx: out/in (n) 11
+         5, 10, 10, 19, 10, 11,  7, 11,  5,  4, 10,  4, 10,  0,  7, 11, // ex: ex (sp),hl 19, jp (hl) 4
+         5, 10, 10,  4, 10, 11,  7, 11,  5,  6, 10,  4, 10,  0,  7, 11, // fx: ld sp,hl 6
+];
+
+/// T-states per ED-page opcode, both fetches included. Block ops hold their
+/// non-repeating value (+5 is added where the PC rewinds); the aliases
+/// charge like the encodings they decode to. 0 marks the genuinely
+/// undefined values, whose BadOpcode ends the run anyway.
+#[rustfmt::skip]
+const ED_CYCLES: [u8; 256] = [
+    //  x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 0x
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 1x
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 2x
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 3x
+        12, 12, 15, 20,  8, 14,  8,  9, 12, 12, 15, 20,  8, 14,  8,  9, // 4x
+        12, 12, 15, 20,  8, 14,  8,  9, 12, 12, 15, 20,  8, 14,  8,  9, // 5x
+        12, 12, 15, 20,  8, 14,  8, 18, 12, 12, 15, 20,  8, 14,  8, 18, // 6x: rrd/rld 18
+        12, 12, 15, 20,  8, 14,  8,  0, 12, 12, 15, 20,  8, 14,  8,  0, // 7x
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 8x
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 9x
+        16, 16, 16, 16,  0,  0,  0,  0, 16, 16, 16, 16,  0,  0,  0,  0, // ax: ldi/cpi/ini/outi
+        16, 16, 16, 16,  0,  0,  0,  0, 16, 16, 16, 16,  0,  0,  0,  0, // bx: ...and the repeaters
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // cx
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // dx
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // ex
+         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // fx
+];
+
 /// Which DD/FD prefix an instruction actually made use of.
 ///
 /// The C++ carries two `consume_mPrefix*` locals and errors out at the end of
@@ -162,6 +216,9 @@ pub struct CpuZ80 {
     /// to remap `H`/`L` onto the halves of IX/IY.
     prefix_dd: bool,
     prefix_fd: bool,
+
+    /// T-states the last `step()` consumed, for `last_step_cycles`.
+    cycles: u32,
 }
 
 impl Default for CpuZ80 {
@@ -197,6 +254,7 @@ impl Default for CpuZ80 {
             r: 0,
             prefix_dd: false,
             prefix_fd: false,
+            cycles: 0,
         }
     }
 }
@@ -594,10 +652,12 @@ impl CpuZ80 {
         if self.prefix_dd && r == 0b110 {
             let addr = self.indexed_addr(bus, true);
             used.dd = true;
+            self.cycles += 8; // the displacement fetch and index add
             self.mem_read(bus, addr)
         } else if self.prefix_fd && r == 0b110 {
             let addr = self.indexed_addr(bus, false);
             used.fd = true;
+            self.cycles += 8;
             self.mem_read(bus, addr)
         } else {
             self.read_r_or_hl(bus, r)
@@ -619,12 +679,14 @@ impl CpuZ80 {
             let old = self.mem_read(bus, addr);
             self.mem_write(bus, addr, bump(old));
             used.dd = true;
+            self.cycles += 8; // the displacement fetch and index add
             (old, bump(old))
         } else if self.prefix_fd && r == 0b110 {
             let addr = self.indexed_addr(bus, false);
             let old = self.mem_read(bus, addr);
             self.mem_write(bus, addr, bump(old));
             used.fd = true;
+            self.cycles += 8;
             (old, bump(old))
         } else {
             let old = self.read_r_or_hl(bus, r);
@@ -661,6 +723,8 @@ impl CpuZ80 {
         let p = y >> 1;
         let q = y & 1;
 
+        self.cycles += MAIN_CYCLES[op as usize] as u32;
+
         match (x, z) {
             (0, 0) => match y {
                 0 => {} // NOP
@@ -677,6 +741,7 @@ impl CpuZ80 {
                     self.b = self.b.wrapping_sub(1);
                     if self.b != 0 {
                         self.pc = self.pc.wrapping_add(rel as u16);
+                        self.cycles += 5; // 13 taken, 8 not
                     }
                 }
                 3 => {
@@ -689,6 +754,7 @@ impl CpuZ80 {
                     let rel = self.read_d(bus);
                     if self.test_cond(y - 4) {
                         self.pc = self.pc.wrapping_add(rel as u16);
+                        self.cycles += 5; // 12 taken, 7 not
                     }
                 }
             },
@@ -831,11 +897,15 @@ impl CpuZ80 {
                         let val = self.read_n(bus);
                         self.mem_write(bus, addr, val);
                         used.dd = true;
+                        // +5, not the usual +8: the d and n fetches overlap,
+                        // so the whole thing is 19 = 4 prefix + 10 base + 5
+                        self.cycles += 5;
                     } else if self.prefix_fd {
                         let addr = self.indexed_addr(bus, false);
                         let val = self.read_n(bus);
                         self.mem_write(bus, addr, val);
                         used.fd = true;
+                        self.cycles += 5;
                     } else {
                         let val = self.read_n(bus);
                         let addr = self.hl();
@@ -953,18 +1023,21 @@ impl CpuZ80 {
                     self.write_r(dst, val);
                     used.dd = self.prefix_dd;
                     used.fd = !self.prefix_dd;
+                    self.cycles += 8; // the displacement fetch and index add
                 } else if self.prefix_dd && dst == 0b110 {
                     // LD (IX+d), r -- sign-extended, as everywhere else
                     let addr = self.indexed_addr(bus, true);
                     let val = self.read_r(src);
                     self.mem_write(bus, addr, val);
                     used.dd = true;
+                    self.cycles += 8;
                 } else if self.prefix_fd && dst == 0b110 {
                     // LD (IY+d), r
                     let addr = self.indexed_addr(bus, false);
                     let val = self.read_r(src);
                     self.mem_write(bus, addr, val);
                     used.fd = true;
+                    self.cycles += 8;
                 } else {
                     let val = self.read_r_or_hl(bus, src);
                     self.write_r_or_hl(bus, dst, val);
@@ -981,6 +1054,7 @@ impl CpuZ80 {
                 // RET cc
                 if self.test_cond(y) {
                     self.pc = self.pop16(bus);
+                    self.cycles += 6; // 11 taken, 5 not
                 }
             }
 
@@ -1104,6 +1178,7 @@ impl CpuZ80 {
                     let pc = self.pc;
                     self.push16(bus, pc);
                     self.pc = addr;
+                    self.cycles += 7; // 17 taken, 10 not
                 }
             }
 
@@ -1191,6 +1266,7 @@ impl CpuZ80 {
             if self.b != 0 {
                 self.pc = self.pc.wrapping_sub(2); // repeat the instruction
                 self.set_flag(F_Z, false);
+                self.cycles += 5; // 21 when repeating, 16 on the last
             }
         } else {
             self.set_flag(F_Z, self.b == 0);
@@ -1217,6 +1293,7 @@ impl CpuZ80 {
 
         if repeat && bc != 0 {
             self.pc = self.pc.wrapping_sub(2); // repeat the instruction
+            self.cycles += 5; // 21 when repeating, 16 on the last
         }
 
         self.set_flag(F_H, false);
@@ -1247,6 +1324,7 @@ impl CpuZ80 {
 
         if repeat && bc != 0 && res != 0 {
             self.pc = self.pc.wrapping_sub(2);
+            self.cycles += 5; // 21 when repeating, 16 on the last
         }
     }
 
@@ -1281,6 +1359,8 @@ impl CpuZ80 {
         let op = self.read_n(bus);
         let y = (op >> 3) & 0b111;
         let p = y >> 1;
+
+        self.cycles += ED_CYCLES[op as usize] as u32;
 
         match op {
             // IN r, (C)
@@ -1477,6 +1557,8 @@ impl CpuZ80 {
                 };
                 match addr {
                     Some(addr) => {
+                        // 23 T-states with the prefix's 4 already charged
+                        self.cycles += 19;
                         let val = self.mem_read(bus, addr);
                         let res = self.rot(RotOp::Rlc, val);
                         self.mem_write(bus, addr, res);
@@ -1485,6 +1567,7 @@ impl CpuZ80 {
                         }
                     }
                     None => {
+                        self.cycles += if z == 0b110 { 15 } else { 8 };
                         let val = self.read_r_or_hl(bus, z);
                         let res = self.rot(ROT_OPS[y as usize], val);
                         self.write_r_or_hl(bus, z, res);
@@ -1496,8 +1579,14 @@ impl CpuZ80 {
                 // BIT b, r. Neither PV nor C is touched, and S is only ever set
                 // by bit 7.
                 let val = match self.cb_indexed_addr(d, used) {
-                    Some(addr) => self.mem_read(bus, addr),
-                    None => self.read_r_or_hl(bus, z),
+                    Some(addr) => {
+                        self.cycles += 16; // 20 with the prefix's 4
+                        self.mem_read(bus, addr)
+                    }
+                    None => {
+                        self.cycles += if z == 0b110 { 12 } else { 8 };
+                        self.read_r_or_hl(bus, z)
+                    }
                 };
                 self.set_flag(F_Z, (val & (1 << y)) == 0);
                 self.set_flag(F_H, true);
@@ -1511,6 +1600,7 @@ impl CpuZ80 {
                 let apply = |v: u8| if set { v | (1 << y) } else { v & !(1 << y) };
                 match self.cb_indexed_addr(d, used) {
                     Some(addr) => {
+                        self.cycles += 19; // 23 with the prefix's 4
                         let val = apply(self.mem_read(bus, addr));
                         self.mem_write(bus, addr, val);
                         if z != 0b110 {
@@ -1518,6 +1608,7 @@ impl CpuZ80 {
                         }
                     }
                     None => {
+                        self.cycles += if z == 0b110 { 15 } else { 8 };
                         let val = apply(self.read_r_or_hl(bus, z));
                         self.write_r_or_hl(bus, z, val);
                     }
@@ -1544,6 +1635,7 @@ impl Cpu for CpuZ80 {
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
         self.prefix_dd = false;
         self.prefix_fd = false;
+        self.cycles = 0;
         let mut used = PrefixUse::default();
 
         // Interrupt entry. The RC2014's SIO is the one thing that drives this:
@@ -1555,16 +1647,27 @@ impl Cpu for CpuZ80 {
         let op = if ints.irq && self.iff1 {
             self.iff1 = false;
             self.iff2 = false;
+            // The IM 1 acknowledge is 13 T-states; the RST arm below charges
+            // its fetched cost of 11, and no opcode fetch happened here.
+            self.cycles += 2;
             0xff // rst 0x38
         } else {
             // DD and FD can stack. Both stick, and DD wins the register remap
             // in read_r/write_r; but only one of them can be consumed, so
             // `DD FD 21 nn nn` loads IX and then ends the run below.
+            // Each prefix byte is its own 4 T-state fetch, so the charge is
+            // per loop iteration -- the flags can't count repeats.
             loop {
                 let op = self.read_n(bus);
                 match op {
-                    0xdd => self.prefix_dd = true,
-                    0xfd => self.prefix_fd = true,
+                    0xdd => {
+                        self.prefix_dd = true;
+                        self.cycles += 4;
+                    }
+                    0xfd => {
+                        self.prefix_fd = true;
+                        self.cycles += 4;
+                    }
                     _ => break op,
                 }
             }
@@ -1592,7 +1695,16 @@ impl Cpu for CpuZ80 {
             return StepResult::BadOpcode;
         }
 
+        // Nothing costs less than the 4 T-states of the opcode fetch. A path
+        // that forgot to charge must not report 0: the run loop reads that as
+        // "this core does not count" and permanently disables the throttle.
+        debug_assert!(self.cycles >= 4, "uncosted path for opcode {op:#04x}");
+
         StepResult::Ok
+    }
+
+    fn last_step_cycles(&self) -> u32 {
+        self.cycles
     }
 
     fn dump(&self) {
@@ -1964,5 +2076,151 @@ mod tests {
 
         // N is always cleared by add
         assert!(!add(0x01, 0x01).flag(F_N));
+    }
+
+    // -- cycle counts ---
+
+    /// Representative rows of the Zilog manual's timing tables, one per
+    /// encoding family, conditionals in their not-taken state (the taken
+    /// surcharges have their own test below).
+    #[test]
+    fn cycle_counts_match_the_zilog_manual() {
+        #[rustfmt::skip]
+        let cases: &[(&[u8], u32)] = &[
+            (&[0x00],                   4), // nop
+            (&[0x06, 0x12],             7), // ld b, n
+            (&[0x01, 0x34, 0x12],      10), // ld bc, nn
+            (&[0x7e],                   7), // ld a, (hl)
+            (&[0x70],                   7), // ld (hl), b
+            (&[0x36, 0x12],            10), // ld (hl), n
+            (&[0x34],                  11), // inc (hl)
+            (&[0x80],                   4), // add a, b
+            (&[0x86],                   7), // add a, (hl)
+            (&[0xc6, 0x12],             7), // add a, n
+            (&[0x09],                  11), // add hl, bc
+            (&[0x22, 0x00, 0x20],      16), // ld (nn), hl
+            (&[0x32, 0x00, 0x20],      13), // ld (nn), a
+            (&[0x18, 0x02],            12), // jr e
+            (&[0xc3, 0x00, 0x10],      10), // jp nn
+            (&[0xe9],                   4), // jp (hl)
+            (&[0xc9],                  10), // ret
+            (&[0xcd, 0x00, 0x10],      17), // call nn
+            (&[0xc5],                  11), // push bc
+            (&[0xc1],                  10), // pop bc
+            (&[0xe3],                  19), // ex (sp), hl
+            (&[0xf9],                   6), // ld sp, hl
+            (&[0xc7],                  11), // rst 00
+            (&[0xd3, 0x40],            11), // out (n), a
+            (&[0xdb, 0x40],            11), // in a, (n)
+            (&[0x76],                   4), // halt-as-nop
+            // dd/fd forms: +4 for the prefix, +8 where a displacement is read
+            (&[0xdd, 0x21, 0x34, 0x12], 14), // ld ix, nn
+            (&[0xdd, 0x7e, 0x02],       19), // ld a, (ix+d)
+            (&[0xfd, 0x70, 0x02],       19), // ld (iy+d), b
+            (&[0xdd, 0x36, 0x02, 0x12], 19), // ld (ix+d), n -- the +5 overlap
+            (&[0xdd, 0x34, 0x02],       23), // inc (ix+d)
+            (&[0xdd, 0x86, 0x02],       19), // add a, (ix+d)
+            (&[0xdd, 0x09],             15), // add ix, bc
+            (&[0xdd, 0xe3],             23), // ex (sp), ix
+            (&[0xdd, 0xe9],              8), // jp (ix)
+            (&[0xdd, 0xe5],             15), // push ix
+            (&[0xdd, 0xdd, 0x21, 0x34, 0x12], 18), // stacked prefixes: 4 each
+            // cb page
+            (&[0xcb, 0x00],              8), // rlc b
+            (&[0xcb, 0x06],             15), // rlc (hl)
+            (&[0xcb, 0x40],              8), // bit 0, b
+            (&[0xcb, 0x46],             12), // bit 0, (hl)
+            (&[0xcb, 0xc6],             15), // set 0, (hl)
+            (&[0xdd, 0xcb, 0x02, 0x06], 23), // rlc (ix+d)
+            (&[0xdd, 0xcb, 0x02, 0x46], 20), // bit 0, (ix+d)
+            (&[0xfd, 0xcb, 0x02, 0xc6], 23), // set 0, (iy+d)
+            // ed page
+            (&[0xed, 0x44],              8), // neg
+            (&[0xed, 0x47],              9), // ld i, a
+            (&[0xed, 0x4a],             15), // adc hl, bc
+            (&[0xed, 0x43, 0x00, 0x20], 20), // ld (nn), bc
+            (&[0xed, 0x45],             14), // retn
+            (&[0xed, 0x56],              8), // im 1
+            (&[0xed, 0x67],             18), // rrd
+            (&[0xed, 0x78],             12), // in a, (c)
+            (&[0xed, 0xa0],             16), // ldi
+            (&[0xed, 0xa1],             16), // cpi
+        ];
+        for (prog, cycles) in cases {
+            let (mut cpu, mut bus) = boot(prog);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.last_step_cycles(), *cycles, "bytes {prog:02x?}");
+        }
+    }
+
+    /// The conditional flow costs, taken vs not. After reset every flag is
+    /// clear, so NZ/NC take and Z/C do not. `JP cc` really is 10 both ways:
+    /// the target is always read.
+    #[test]
+    fn conditional_flow_charges_the_taken_surcharge() {
+        #[rustfmt::skip]
+        let cases: &[(&[u8], u32)] = &[
+            (&[0x20, 0x02],       12), // jr nz (taken)
+            (&[0x28, 0x02],        7), // jr z (not taken)
+            (&[0xc0],             11), // ret nz (taken)
+            (&[0xc8],              5), // ret z (not taken)
+            (&[0xc4, 0x00, 0x10], 17), // call nz (taken)
+            (&[0xcc, 0x00, 0x10], 10), // call z (not taken)
+            (&[0xc2, 0x00, 0x10], 10), // jp nz (taken)
+            (&[0xca, 0x00, 0x10], 10), // jp z (not taken)
+        ];
+        for (prog, cycles) in cases {
+            let (mut cpu, mut bus) = boot(prog);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.last_step_cycles(), *cycles, "bytes {prog:02x?}");
+        }
+
+        // djnz: b wraps 0 -> 255 first (taken), then reaches 0 from 1 (not)
+        let (mut cpu, mut bus) = boot(&[0x10, 0x02]);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.last_step_cycles(), 13, "djnz taken");
+        let (mut cpu, mut bus) = boot(&[0x06, 0x01, 0x10, 0x02]);
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.last_step_cycles(), 8, "djnz not taken");
+    }
+
+    /// A repeating block op is 21 T-states per iteration and 16 on the last.
+    #[test]
+    fn block_repeats_charge_the_rewind() {
+        // ld bc, 2; ldir
+        let (mut cpu, mut bus) = boot(&[0x01, 0x02, 0x00, 0xed, 0xb0]);
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.last_step_cycles(), 21, "bc still nonzero: repeats");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.last_step_cycles(), 16, "final iteration");
+    }
+
+    /// IM 1 interrupt acceptance is 13 T-states -- no opcode fetch happens,
+    /// so it is not the fetched `rst 0x38`'s 11.
+    #[test]
+    fn im1_acceptance_reports_thirteen() {
+        let (mut cpu, mut bus) = boot(&[0xfb, 0x00]); // ei; nop
+        run_steps(&mut cpu, &mut bus, 1);
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x38);
+        assert_eq!(cpu.last_step_cycles(), 13);
+    }
+
+    /// Every opcode value that completes charges at least the 4 T-states of
+    /// its own fetch. A path that forgot to charge would report 0, which the
+    /// run loop reads as "this core does not count cycles" -- and that
+    /// permanently disables the throttle, not just one instruction's pacing.
+    #[test]
+    fn every_completed_step_charges_at_least_the_fetch() {
+        for op in 0..=0xffu8 {
+            if op == 0xdd || op == 0xfd {
+                continue; // a bare prefix aborts the run by design
+            }
+            let (mut cpu, mut bus) = boot(&[op, 0x00, 0x00, 0x00]);
+            if cpu.step(&mut bus) == StepResult::Ok {
+                assert!(cpu.last_step_cycles() >= 4, "op {op:#04x}");
+            }
+        }
     }
 }

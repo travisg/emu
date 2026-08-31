@@ -32,6 +32,9 @@ pub(crate) struct TestBus {
     /// Pending interrupt-level pulses, consumed by the next
     /// `poll_interrupt_lines`. A test sets this to inject a signal.
     pub int_lines: u16,
+    /// Level-triggered IRQ line for `poll_interrupts`, the ported cores'
+    /// interrupt poll. A test sets it and clears it.
+    pub irq: bool,
     /// Running total of the cycle counts handed to `poll_interrupt_lines`, so
     /// a test can check that a core reports the machine time its devices are
     /// paced by.
@@ -52,6 +55,7 @@ impl TestBus {
             ports16: [0; 256],
             io16_writes: Vec::new(),
             int_lines: 0,
+            irq: false,
             polled_cycles: 0,
             watch: None,
             watch_reads: 0,
@@ -103,6 +107,10 @@ impl Bus for TestBus {
     fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
         self.polled_cycles += elapsed_cycles as u64;
         std::mem::take(&mut self.int_lines)
+    }
+
+    fn poll_interrupts(&mut self) -> crate::bus::IntStatus {
+        crate::bus::IntStatus { irq: self.irq, nmi: false, vector: 0 }
     }
 }
 
