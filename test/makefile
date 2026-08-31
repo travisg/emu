@@ -81,12 +81,15 @@ $(RAY703_ROMS)/boot.bin: 703/boot.asm $(ASM703)
 		echo "error: boot.bin is $$size bytes; the LOAD button reads one 94-byte sector"; \
 		rm -f $@; exit 1; fi
 
-# REX, the preemptive round-robin executive on the invented 60 Hz line clock.
+# REX, the preemptive round-robin executive on the invented 60 Hz line
+# clock -- with Tiny BASIC aboard as a task, so the image is a three-file
+# deck: the executive, the glue that makes the interpreter a task, and
+# the interpreter itself, shared with the standalone basic.bin.
 ray703-rex: $(RAY703_ROMS)/rex.bin
 
-$(RAY703_ROMS)/rex.bin: 703/rex.asm $(ASM703)
+$(RAY703_ROMS)/rex.bin: 703/rex.asm 703/brex.asm 703/bcore.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM703) $< -o $@ -l 703/rex.lst
+	$(ASM703) 703/rex.asm 703/brex.asm 703/bcore.asm -o $@ -l 703/rex.lst
 
 # Tiny BASIC, the largest guest in the tree and the reason the emulator has
 # hardware multiply/divide.  Two files, one deck: basic.asm is the machine

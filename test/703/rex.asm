@@ -9,9 +9,10 @@
 ; ticks, so the scheduling is visible in the output: the letters arrive
 ; at their own intervals, and when every task is asleep the idle task --
 ; a sixth node, off the ring -- has the processor.  One is a shell, which
-; waits on a queue of keystrokes and runs a command.  And one is
-; reserved for Tiny BASIC -- a parked stub until the interpreter joins
-; the deck.
+; waits on a queue of keystrokes and runs a command.  And one is Tiny
+; BASIC -- the interpreter of bcore.asm behind the glue of brex.asm --
+; which the shell's BASIC command hands the console to, and whose BYE
+; hands it back with the stored program kept for the next session.
 ;
 ; The letter tasks come up stopped; START sets them going.  The commands:
 ;
@@ -21,6 +22,7 @@
 ;   STOP  [A-C]  suspend a letter task, or all three
 ;   START [A-C]  release one, or all three
 ;   ECHO text    print the rest of the line
+;   BASIC        the console goes to Tiny BASIC, until its BYE
 ;   HALT         park the tasks, drain the printer and stop the machine
 ;
 ; The Model 33 echoes what is typed in hardware, so the keyboard is armed
@@ -113,6 +115,16 @@
 ;   is what keeps the counts honest, and a full queue drops -- there is
 ;   no pointer here to store a character through before it is primed,
 ;   which was the shape of the bug basic.asm had.
+;
+; * THE CONSOLE HAS ONE READER AT A TIME, and CONBSY says which: the
+;   shell when it is clear, BASIC when it is set.  The shell's BASIC
+;   command raises it in the same masked window that sets the task
+;   running, then waits on the cell itself -- reading no queue -- until
+;   BASIC's BYE clears it, wakes the shell under SERV's guard, and parks
+;   the task.  Ctrl-C never enters the queue at all: SERV raises BRKREQ
+;   instead, so a running program that reads no input can still be
+;   broken, and the grant clears the flag so a break aimed at nobody
+;   cannot land on the session that follows it.
 ;
 ; * SHUTDOWN ORDERING.  Every letter task reads SHUTREQ inside the same
 ;   masked window as its deposit, and the shell -- the only writer of
@@ -652,6 +664,10 @@ KTRY            WORD    0
 SHUTREQ         WORD    0               ; set by the shell's HALT, read by tasks
 BRKREQ          WORD    0               ; Ctrl-C arrived; set by SERV, cleared
                                         ; by whoever owns the console
+CONBSY          WORD    0               ; the console belongs to BASIC: set by
+                                        ; the shell as it grants, cleared by
+                                        ; BASIC as it hands back, and the
+                                        ; cell the shell waits on meanwhile
 CURT            WORD    SHTCB           ; the current task's node: the kernel
                                         ; becomes the shell, so it starts on
                                         ; the shell's own
@@ -700,16 +716,17 @@ KISRE           WORD    ISREND
 ; walk start uniformly at *T.NXT.  The shell's context is blank because
 ; the kernel becomes the shell and the first tick fills it in.  A status
 ; is GLB (X'80') plus the entry page in the EXR field, which for a
-; 1024-word-aligned entry is exactly the entry doubled; the entries
-; here all live in page 0, where the field is plain zero.  A zero
-; status word would resume a task in local mode pointed at page 0.
+; 1024-word-aligned entry is exactly the entry doubled -- BASIC's entry
+; is pinned to such a boundary, while LTASK and IDLE live in page 0 and
+; their EXR is therefore plain zero.  A zero status word would resume a
+; task in local mode pointed at page 0.
 ;
 ;                    STA    NXT   ACR IXR PCR    MST            DLY MBX CHR NAP NAM
 ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80',         0,  0,  'A',30, 'A '
 BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80',         0,  0,  'B',45, 'B '
 CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80',         0,  0,  'C',60, 'C '
 SHTCB           WORD SRUN, BATCB,0,  0,  0,     0,             0,  0,  0,  0,  'SH'
-BATCB           WORD SOFF, ATCB, 0,  0,  BASENT,X'80',         0,  0,  0,  0,  'BA'
+BATCB           WORD SOFF, ATCB, 0,  0,  BASENT,(BASENT*2)+X'80',0,0,  0,  0,  'BA'
 IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80',         0,  0,  0,  0,  'ID'
 
 ; What the machine runs when every task is asleep.  A branch to self is a
@@ -808,9 +825,6 @@ LWDON           UNM
                 JMP     LTASK           ; now, not at the next tick
 LQUIT           UNM
 LPARK           JMP     LPARK           ; parked; a legal idle, levels live
-
-; Where the BASIC node parks until the interpreter joins the image.
-BASENT          JMP     BASENT
 
 ; ---------------------------------------------------------------- the shell
 ; Prints the banner and then reads a line and runs it, forever.  It is
@@ -1015,6 +1029,41 @@ SHECN           JSX     SHPUTC
                 STW     SHCUR
                 JMP     SHECL
 SHECD           JSX     SHNL
+                JMP     SHLOOP
+
+; Hand the console to BASIC.  One masked window grants it: the break
+; flag cleared, so a Ctrl-C typed at this prompt cannot break the
+; session's first statement; the task set running -- its context resumes
+; wherever BYE parked it, and the very first grant starts it at BASENT;
+; and CONBSY raised.  Then the shell waits on CONBSY the way everything
+; waits here: masked look, SWAI, SWTCH, look again.  While it waits it
+; reads no queue, which is what keeps QCONS to its one reader -- the
+; console's reader is the shell exactly when CONBSY is clear, and BASIC
+; exactly when it is set.
+SHBAS           MSK
+                CLR
+                SMB     BRKREQ
+                STW     BRKREQ
+                CLR
+                SMB     BA.STA
+                STW     BA.STA
+                LDW     SHK1
+                SMB     CONBSY
+                STW     CONBSY
+                UNM
+SHBWT           MSK
+                SMB     CONBSY
+                LDW     CONBSY
+                SAZ                     ; handed back yet?
+                JMP     SHBWB
+                JMP     SHBWD
+SHBWB           LDW     SHKWAI
+                SMB     SH.STA
+                STW     SH.STA
+                SMB     SWTCH
+                JSX     SWTCH
+                JMP     SHBWT
+SHBWD           UNM
                 JMP     SHLOOP
 
 ; Shut the machine down.  The letter tasks park at their next masked
@@ -1304,6 +1353,8 @@ SHGLE           LDW     SHFIL           ; terminate it; SHKLBE leaves room
 ; ---------------------------------------------------------------- shell data
 SH.STA          EQU     SHTCB+T.STA     ; this task's own state word...
 SH.MBX          EQU     SHTCB+T.MBX     ; ...and its own mailbox
+BA.STA          EQU     BATCB+T.STA     ; the BASIC node's, for the grant
+BA.MBX          EQU     BATCB+T.MBX     ; and for brex.asm's output
 
 SHCUR           WORD    0               ; the cursor into the line, a byte
 SHFIL           WORD    0               ; and where SHGETL is filling it
@@ -1364,6 +1415,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'ST','OP',SHSTOP
                 WORD    'ST','AR',SHSTRT
                 WORD    'EC','HO',SHECHO
+                WORD    'BA','SI',SHBAS
                 WORD    'HA','LT',SHHALT
                 WORD    0,0,0
 
@@ -1397,7 +1449,7 @@ SHPRMT          TEXT    "REX>  "
 SHPRME          EQU     $
 SHWHTT          TEXT    "WHAT\r\n"
 SHWHTE          EQU     $
-SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO HALT\r\n"
+SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO BASIC HALT\r\n"
 SHHL1E          EQU     $
 SHHL2T          TEXT    "STOP AND START TAKE A B OR C\r\n"
 SHHL2E          EQU     $

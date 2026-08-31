@@ -32,15 +32,18 @@ regenerated. Everything else can: the split/sync pair round-trips both masters
 byte-exactly, header included, and `xraylist.py` reads a master directly, so
 the per-page working files are scratch and may be deleted freely.
 
-Six guests in this directory are *new* software written for the machine
+The guests in this directory are *new* software written for the machine
 rather than transcriptions: `demo.asm`, the interrupt-driven echo the
-end-to-end test drives; `basic.asm`, a Tiny BASIC running on the hardware
-multiply/divide option; `disc.asm`, the 74601 disc exerciser; `boot.asm`,
-the one-sector program the controller's LOAD button reads; `tape.asm`, the
-image the PTB bootstrap loads off paper tape; and `rex.asm`, REX, a
-round-robin executive with a shell -- preemptive and cooperative at once
--- running on the emulator's invented 60 Hz line clock. AGENTS.md's Test section describes the harness each of them runs
-under.
+end-to-end test drives; `bcore.asm`, a Tiny BASIC interpreter running on
+the hardware multiply/divide option, with `basic.asm` the wrapper that
+makes it a standalone machine; `disc.asm`, the 74601 disc exerciser;
+`boot.asm`, the one-sector program the controller's LOAD button reads;
+`tape.asm`, the image the PTB bootstrap loads off paper tape; and
+`rex.asm`, REX, a round-robin executive with a shell -- preemptive and
+cooperative at once -- running on the emulator's invented 60 Hz line
+clock, with `brex.asm` the wrapper that puts the same interpreter aboard
+it as a task. AGENTS.md's Test section describes the harness each of
+them runs under.
 
 ## Running the period software
 

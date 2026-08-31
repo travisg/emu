@@ -4,9 +4,12 @@ set -euo pipefail
 # End-to-end test for REX, the preemptive executive: boot it, start the three
 # letter tasks from its shell and watch them run -- which is the scheduler,
 # the line clock, the context switch, the sleep machinery and the mailbox
-# teletype driver all working at once -- then drive the rest of the commands
-# and shut the machine down with HALT. The letter tasks come up stopped, so
-# nothing prints until this asks it to.
+# teletype driver all working at once -- then run two Tiny BASIC sessions
+# through the shell's BASIC command (a program entered and RUN, a silent
+# GOTO loop broken with Ctrl-C via the kernel's break flag, BYE handing the
+# console back, and a second session LISTing the program the heap kept),
+# then drive the rest of the commands and shut the machine down with HALT.
+# The letter tasks come up stopped, so nothing prints until this asks it to.
 #
 # Two firsts for a 703 harness, both deliberate:
 #
@@ -181,12 +184,36 @@ if wait_for 'REX 703 UP'; then
     wait_count "$PROMPT" 6 && wait_quiet && printf 'ECHO SHELL OUTPUT OK\r' >&3
     wait_count "$PROMPT" 7 && wait_quiet && printf 'FROB\r' >&3
 
+    # A BASIC session: the console changes hands, a program goes in and
+    # runs, and Ctrl-C -- which never enters the queue; SERV raises the
+    # kernel's break flag -- stops a loop that prints nothing and reads
+    # nothing. Each line is paced on BASIC's own READY count, the way the
+    # standalone test paces on its prompt.
+    wait_count "$PROMPT" 8 && wait_quiet && printf 'BASIC\r' >&3
+    wait_for 'TINY BASIC UNDER REX' || true
+    wait_count 'READY' 1 && wait_quiet && printf '10 FOR I=1 TO 3\r' >&3
+    wait_count 'READY' 2 && wait_quiet && printf '20 PRINT "SQ";I*I\r' >&3
+    wait_count 'READY' 3 && wait_quiet && printf '30 NEXT I\r' >&3
+    wait_count 'READY' 4 && wait_quiet && printf '50 GOTO 50\r' >&3
+    wait_count 'READY' 5 && wait_quiet && printf 'RUN\r' >&3
+    wait_for 'SQ9' && printf '\003' >&3
+    wait_for 'BREAK AT 50' || true
+    wait_count 'READY' 6 && wait_quiet && printf 'BYE\r' >&3
+
+    # Back at the shell: BASIC's node shows OFF, and a second session
+    # finds the program still in the heap -- BYE parks the task, it does
+    # not reset it.
+    wait_count "$PROMPT" 9 && wait_quiet && printf 'STAT\r' >&3
+    wait_count "$PROMPT" 10 && wait_quiet && printf 'BASIC\r' >&3
+    wait_count 'READY' 7 && wait_quiet && printf 'LIST\r' >&3
+    wait_count 'READY' 8 && wait_quiet && printf 'BYE\r' >&3
+
     # One task back on its feet, and only that one.
-    wait_count "$PROMPT" 8 && wait_quiet && printf 'START B\r' >&3
+    wait_count "$PROMPT" 11 && wait_quiet && printf 'START B\r' >&3
     wait_for 'BBB' || true
 
-    wait_count "$PROMPT" 9 && printf 'STOP\r' >&3
-    wait_count "$PROMPT" 10 && wait_quiet && printf 'HALT\r' >&3
+    wait_count "$PROMPT" 12 && printf 'STOP\r' >&3
+    wait_count "$PROMPT" 13 && wait_quiet && printf 'HALT\r' >&3
     wait_for 'REX 703 DOWN' || true
     wait_for 'stopping, Halted' || true
 fi
@@ -212,6 +239,10 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && grep -q '^COMMANDS HELP STAT UPTIME' "$LOG_FILE" \
     && grep -q '^SHELL OUTPUT OK' "$LOG_FILE" \
     && grep -q '^WHAT' "$LOG_FILE" \
+    && grep -q 'TINY BASIC UNDER REX' "$LOG_FILE" \
+    && grep -q '^SQ9' "$LOG_FILE" \
+    && grep -q 'BREAK AT 50' "$LOG_FILE" \
+    && (( $(grep -c '20 PRINT "SQ"' "$LOG_FILE") >= 2 )) \
     && (( $(after_start | tr -cd 'B' | wc -c) >= 3 )) \
     && (( $(after_start | tr -cd 'AC' | wc -c) == 0 )) \
     && grep -q 'REX 703 DOWN' "$LOG_FILE" \
