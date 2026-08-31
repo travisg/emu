@@ -400,6 +400,33 @@ const fn build_ops() -> [OpDecode; 256] {
 
 static OPS: [OpDecode; 256] = build_ops();
 
+/// Clock cycles per opcode, from the M6800 datasheet's instruction table.
+/// The 6800 has no data-dependent timing -- branches cost 4 taken or not --
+/// so one flat table covers everything. 0 marks the opcodes `build_ops`
+/// leaves `Bad` (including DAA/RTI/WAI/SWI, which this core doesn't
+/// implement); `cycles_and_decode_agree_on_what_is_implemented` holds the
+/// two tables to each other.
+#[rustfmt::skip]
+const CYCLES: [u8; 256] = [
+    //  x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 xa xb xc xd xe xf
+        0, 2, 0, 0, 0, 0, 2, 2, 4, 4, 2, 2, 2, 2, 2, 2, // 0x: nop, tap/tpa, inx/dex, flag ops
+        2, 2, 0, 0, 0, 0, 2, 2, 0, 0, 0, 2, 0, 0, 0, 0, // 1x: sba/cba, tab/tba, aba
+        4, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, // 2x: branches
+        4, 4, 4, 4, 4, 4, 4, 4, 0, 5, 0, 0, 0, 0, 0, 0, // 3x: tsx/ins/pul/des/txs/psh, rts
+        2, 0, 0, 2, 2, 0, 2, 2, 2, 2, 2, 0, 2, 2, 0, 2, // 4x: rmw on A
+        2, 0, 0, 2, 2, 0, 2, 2, 2, 2, 2, 0, 2, 2, 0, 2, // 5x: rmw on B
+        7, 0, 0, 7, 7, 0, 7, 7, 7, 7, 7, 0, 7, 7, 4, 7, // 6x: rmw indexed, jmp
+        6, 0, 0, 6, 6, 0, 6, 6, 6, 6, 6, 0, 6, 6, 3, 6, // 7x: rmw extended, jmp
+        2, 2, 2, 0, 2, 2, 2, 0, 2, 2, 2, 2, 3, 8, 3, 0, // 8x: alu A imm, cpx/lds imm, bsr
+        3, 3, 3, 0, 3, 3, 3, 4, 3, 3, 3, 3, 4, 0, 4, 5, // 9x: alu A dir, sta/cpx/lds/sts dir
+        5, 5, 5, 0, 5, 5, 5, 6, 5, 5, 5, 5, 6, 8, 6, 7, // ax: alu A idx, jsr idx
+        4, 4, 4, 0, 4, 4, 4, 5, 4, 4, 4, 4, 5, 9, 5, 6, // bx: alu A ext, jsr ext
+        2, 2, 2, 0, 2, 2, 2, 0, 2, 2, 2, 2, 0, 0, 3, 0, // cx: alu B imm, ldx imm
+        3, 3, 3, 0, 3, 3, 3, 4, 3, 3, 3, 3, 0, 0, 4, 5, // dx: alu B dir, ldx/stx dir
+        5, 5, 5, 0, 5, 5, 5, 6, 5, 5, 5, 5, 0, 0, 6, 7, // ex: alu B idx, ldx/stx idx
+        4, 4, 4, 0, 4, 4, 4, 5, 4, 4, 4, 4, 0, 0, 5, 6, // fx: alu B ext, ldx/stx ext
+];
+
 pub struct Cpu6800 {
     a: u8,
     b: u8,
@@ -407,6 +434,8 @@ pub struct Cpu6800 {
     pc: u16,
     sp: u16,
     cc: u8,
+    /// Clock cycles the last `step()` consumed, for `last_step_cycles`.
+    cycles: u32,
 }
 
 impl Default for Cpu6800 {
@@ -417,7 +446,7 @@ impl Default for Cpu6800 {
 
 impl Cpu6800 {
     pub fn new() -> Self {
-        Cpu6800 { a: 0, b: 0, ix: 0, pc: 0, sp: 0, cc: 0 }
+        Cpu6800 { a: 0, b: 0, ix: 0, pc: 0, sp: 0, cc: 0, cycles: 0 }
     }
 
     fn get_reg(&self, r: Reg) -> u16 {
@@ -614,6 +643,7 @@ impl Cpu for Cpu6800 {
         self.pc = self.pc.wrapping_add(1);
 
         let op = OPS[opcode as usize];
+        self.cycles = CYCLES[opcode as usize] as u32;
 
         if op.op == Op::Bad {
             eprintln!("unhandled opcode {:#04x} at {:#06x}", opcode, self.pc.wrapping_sub(1));
@@ -989,6 +1019,10 @@ impl Cpu for Cpu6800 {
         result
     }
 
+    fn last_step_cycles(&self) -> u32 {
+        self.cycles
+    }
+
     fn dump(&self) {
         println!(
             "A 0x{:02x} B 0x{:02x} X 0x{:04x} S 0x{:04x} CC 0x{:02x} ({}{}{}{}{}) PC 0x{:04x}",
@@ -1265,5 +1299,58 @@ mod tests {
         // 0x00 is not a 6800 instruction and has no table entry
         let (mut cpu, mut bus) = boot(&[0x00]);
         assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
+    }
+
+    // -- cycle counts ---
+
+    /// Every implemented opcode has a nonzero cycle count and every Bad one
+    /// a zero. A stray zero would not merely misprice an instruction: the
+    /// run loop reads a 0 from `last_step_cycles` as "this core does not
+    /// count cycles" and permanently disables the throttle.
+    #[test]
+    fn cycles_and_decode_agree_on_what_is_implemented() {
+        for i in 0..256 {
+            assert_eq!(OPS[i].op == Op::Bad, CYCLES[i] == 0, "opcode {i:#04x}");
+        }
+    }
+
+    /// Representative rows of the datasheet table: one per addressing mode
+    /// per operand width, plus the flow-control counts. Branches cost 4
+    /// taken or not on a 6800, pinned by the pair at the end.
+    #[test]
+    fn cycle_counts_match_the_datasheet() {
+        #[rustfmt::skip]
+        let cases: &[(&[u8], u32)] = &[
+            (&[0x01],             2), // nop
+            (&[0x86, 0x55],       2), // lda #imm
+            (&[0x96, 0x20],       3), // lda dir
+            (&[0xa6, 0x02],       5), // lda ,x
+            (&[0xb6, 0x02, 0x00], 4), // lda ext
+            (&[0x8e, 0x00, 0xff], 3), // lds #imm16
+            (&[0x97, 0x20],       4), // sta dir
+            (&[0xe7, 0x02],       6), // stb ,x
+            (&[0xdf, 0x20],       5), // stx dir
+            (&[0xef, 0x02],       7), // stx ,x
+            (&[0x8c, 0x12, 0x34], 3), // cpx #imm16
+            (&[0x4f],             2), // clra
+            (&[0x67, 0x02],       7), // asr ,x
+            (&[0x7f, 0x02, 0x00], 6), // clr ext
+            (&[0x36],             4), // psha
+            (&[0x32],             4), // pula
+            (&[0x08],             4), // inx
+            (&[0x6e, 0x02],       4), // jmp ,x
+            (&[0x7e, 0xe1, 0x00], 3), // jmp ext
+            (&[0xad, 0x02],       8), // jsr ,x
+            (&[0xbd, 0xe1, 0x00], 9), // jsr ext
+            (&[0x8d, 0x02],       8), // bsr
+            (&[0x39],             5), // rts
+            (&[0x20, 0x02],       4), // bra (taken)
+            (&[0x27, 0x02],       4), // beq with Z clear (not taken)
+        ];
+        for (prog, cycles) in cases {
+            let (mut cpu, mut bus) = boot(prog);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.last_step_cycles(), *cycles, "opcode {:#04x}", prog[0]);
+        }
     }
 }
