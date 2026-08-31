@@ -194,21 +194,27 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         cpu: "6809",
         default_rom: sys09::DEFAULT_ROM,
         factory: build_sys09,
-        clock_hz: None,
+        // Grant Searle's Simple 6809, where the default rom comes from: a
+        // 7.3728 MHz crystal the 6809 divides by four, so the E clock the
+        // datasheet's cycle counts tick at is 1.8432 MHz.
+        clock_hz: Some(1_843_200),
     },
     SystemDescriptor {
         name: "altair680",
         cpu: "6800",
         default_rom: altair680::DEFAULT_ROM,
         factory: build_altair680,
-        clock_hz: None,
+        // The 680 ran its 6800 at 500 kHz -- MITS shipped it slow to suit
+        // the memory it came with.
+        clock_hz: Some(500_000),
     },
     SystemDescriptor {
         name: "kaypro",
         cpu: "z80",
         default_rom: kaypro::DEFAULT_ROM,
         factory: build_kaypro,
-        clock_hz: None,
+        // The stock Kaypro II Z80 rate (the 5 MHz machines came later).
+        clock_hz: Some(2_500_000),
     },
     SystemDescriptor {
         name: "ray703",
@@ -222,7 +228,10 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         cpu: "z80",
         default_rom: rc2014::DEFAULT_ROM,
         factory: build_rc2014,
-        clock_hz: None,
+        // The standard RC2014 crystal, 7.3728 MHz -- chosen so the serial
+        // clock divides down to 115200 baud, and the Z80 runs off the same
+        // can.
+        clock_hz: Some(7_372_800),
     },
 ];
 
