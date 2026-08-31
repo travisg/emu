@@ -23,7 +23,9 @@ roms/kaypro/kayproii_u43.bin    cde431c9e506edf11261f7e7d52fd60b1a43fe2d9ea0d3e0
 roms/rc2014/24886009.BIN        db0312ada33065281781fc9b0f6c85ac0f987265c11cd51afac8ac58244f7fd6  https://raw.githubusercontent.com/RC2014Z80/RC2014/master/ROMs/Factory/24886009.BIN
 
 # MITS Altair 680b: the PROM monitor.
-roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed239eed3af2b5ddd201  -
+# The original source is a 680b manual, which has a copy of the PROM listing.
+roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed239eed3af2b5ddd201  https://github.com/travisg/emu/releases/download/v0.0.1-assets/mits680b.bin
 
 # Kaypro floppy: CP/M 2.2 with MBASIC and games.
-disks/mbasic-games.img          e0d3fe74578b5914cdb8e36d028fb0e3ec70f434df3a710ea41ea1534304101b  -
+# The original source is a Kaypro II disk image, which has been converted to a raw floppy image.
+disks/mbasic-games.img          e0d3fe74578b5914cdb8e36d028fb0e3ec70f434df3a710ea41ea1534304101b  https://github.com/travisg/emu/releases/download/v0.0.1-assets/mbasic-games.img
