@@ -105,12 +105,15 @@ impl Wd1793 {
         self.image.is_some()
     }
 
-    /// INTRQ line, as the machine's status latch reads it back.
+    /// The INTRQ output line. On the Kaypro these lines gate the Z80's NMI
+    /// rather than appearing in a readable port (the system latch at 0x1c
+    /// reads back what was written -- see `system/kaypro.rs`), so today
+    /// only the tests observe them.
     pub fn interrupt_pending(&self) -> bool {
         self.intrq
     }
 
-    /// DRQ line, as the machine's status latch reads it back.
+    /// The DRQ output line; see `interrupt_pending`.
     pub fn data_ready(&self) -> bool {
         self.drq
     }

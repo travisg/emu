@@ -46,9 +46,7 @@ const VIDEO_BASE: u16 = 0x3000;
 // port 0x1c control latch bits
 const LATCH_DRIVE_A_N: u8 = 1 << 0; // active low
 const LATCH_DRIVE_B_N: u8 = 1 << 1; // active low
-const LATCH_FDC_INTRQ_N: u8 = 1 << 6; // active low, read-only
-const LATCH_FDC_DRQ_N: u8 = 1 << 7; // active low, read-only
-const LATCH_BANK1: u8 = 1 << 7; // on write: rom/video bank in
+const LATCH_BANK1: u8 = 1 << 7; // rom/video bank in
 
 pub struct Kaypro {
     ram: Memory,
@@ -57,9 +55,11 @@ pub struct Kaypro {
     console: ConsoleEndpoint,
     fdc: Wd1793,
     sio: Z80Sio,
-    /// Port `0x1c`. Bit 7 selects the bank (set = rom + video ram visible),
-    /// bits 0-1 are active-low drive selects, and on read bits 6-7 are the
-    /// FDC's INTRQ/DRQ lines instead. Reset with the rom banked in.
+    /// Port `0x1c`, a read/write system port. Bit 7 selects the bank (set =
+    /// rom + video ram visible), bits 0-1 are active-low drive selects, and
+    /// bit 6 is the active-low drive-motor control. Reset with the rom
+    /// banked in. Reads return the byte as written -- the BIOS depends on
+    /// that, see `io_read8`.
     control_latch: u8,
 }
 
@@ -192,18 +192,20 @@ impl Bus for Kaypro {
                 self.select_fdc();
                 self.fdc.read((port & 0x03) as u8)
             }
-            // system port: the last-written output bits plus the FDC's
-            // active-low INTRQ/DRQ inputs
-            0x1c => {
-                let mut val = self.control_latch & 0x3f;
-                if !self.fdc.interrupt_pending() {
-                    val |= LATCH_FDC_INTRQ_N;
-                }
-                if !self.fdc.data_ready() {
-                    val |= LATCH_FDC_DRQ_N;
-                }
-                val
-            }
+            // System port: reads back exactly what was written. The BIOS
+            // keeps the drive-motor state in the latch itself -- before
+            // every disk operation it reads the port, tests bit 6, and only
+            // when it believes the motors are off pays a 50 x 16ms spin-up
+            // delay. The C++ instead returned the FDC's INTRQ/DRQ lines in
+            // bits 6-7 on read; since a force-interrupt precedes the check,
+            // that always read "motors off" and every disk operation cost
+            // 800ms of machine time -- invisible while the machine ran
+            // uncapped, and a two-minute program load under --throttle.
+            // Nothing polls INTRQ/DRQ here: the BIOS waits for the disk
+            // with HALT, woken by the lines' NMI gate on real hardware
+            // (and falling through to a busy-poll of the status register
+            // under this core's HALT-is-a-NOP quirk).
+            0x1c => self.control_latch,
             _ => 0,
         }
     }
@@ -348,24 +350,33 @@ mod tests {
         assert_eq!(sys.io_read8(0x07) & 0x01, 0);
     }
 
+    /// The system port reads back the byte as written, the motor bit
+    /// included. This is load-bearing for speed, not just fidelity: the
+    /// BIOS keeps its drive-motor state in the latch (bit 6, active low)
+    /// and pays a 800ms spin-up delay whenever a readback claims the
+    /// motors are off. A model that substitutes FDC lines into bits 6-7 on
+    /// read -- as the C++ did -- makes it pay that delay before every disk
+    /// operation, which stretched CP/M's boot to 32 machine-seconds and a
+    /// 40KB program load to two minutes.
     #[test]
-    fn latch_reads_back_fdc_lines_and_selects_drives() {
+    fn the_latch_reads_back_what_was_written_and_selects_drives() {
         let fx = Fixture::new("latch");
         let (mut sys, _) = fx.build();
-        // idle: no intrq, no drq -> both active-low bits set
-        assert_eq!(sys.io_read8(0x1c) & 0xc0, 0xc0);
-        // no drive selected (bits 0-1 high after writing 0x83): not ready
-        sys.io_write8(0x1c, 0x83);
+        sys.io_write8(0x1c, 0xc3); // motors off (bit 6 set)
+        assert_eq!(sys.io_read8(0x1c), 0xc3);
+        sys.io_write8(0x1c, 0x83); // motors on
+        assert_eq!(
+            sys.io_read8(0x1c),
+            0x83,
+            "the motor bit must survive the readback or the BIOS re-pays the spin-up delay"
+        );
+        // no drive selected (bits 0-1 high): not ready
         assert_ne!(sys.io_read8(0x10) & 0x80, 0);
-        // select drive A: ready
+        // select drive A: ready, and a sector read streams data
         sys.io_write8(0x1c, 0x82);
         assert_eq!(sys.io_read8(0x10) & 0x80, 0);
-        // read a sector: drq goes low in the latch, and data streams
         sys.io_write8(0x10, 0x80);
-        assert_eq!(sys.io_read8(0x1c) & 0x80, 0);
         assert_eq!(sys.io_read8(0x13), 0x11);
-        // the latch echoes the low output bits
-        assert_eq!(sys.io_read8(0x1c) & 0x3f, 0x02);
     }
 
     #[test]
