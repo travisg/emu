@@ -205,9 +205,10 @@ wait "$EMU_PID" || true
 if grep -q 'REX 703 UP' "$LOG_FILE" \
     && (( BACKGROUND_RAN )) \
     && grep -q 'UPTIME [0-9][0-9]* SEC' "$LOG_FILE" \
-    && grep -q '^0 A  OFF' "$LOG_FILE" \
-    && grep -q '^3 SH RUN' "$LOG_FILE" \
-    && grep -q '^4 ID RUN' "$LOG_FILE" \
+    && grep -q '^A  OFF' "$LOG_FILE" \
+    && grep -q '^SH RUN' "$LOG_FILE" \
+    && grep -q '^BA OFF' "$LOG_FILE" \
+    && grep -q '^ID RUN' "$LOG_FILE" \
     && grep -q '^COMMANDS HELP STAT UPTIME' "$LOG_FILE" \
     && grep -q '^SHELL OUTPUT OK' "$LOG_FILE" \
     && grep -q '^WHAT' "$LOG_FILE" \
