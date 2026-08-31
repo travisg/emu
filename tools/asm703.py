@@ -16,6 +16,15 @@ the only thing it has to produce is an absolute core image.
 Output is a flat binary of big-endian words starting at word 0, which is what
 `emu -s ray703` loads into core.
 
+Several source files may be named at once and are assembled strictly in order
+as one deck -- one location counter, one symbol table, one image -- exactly as
+if they had been concatenated, except that errors name their file. The END
+card belongs in the deck's last file. Two rules follow from the single stream:
+an ORG whose operand names a symbol needs that symbol defined in an earlier
+file (ORG evaluates as pass 1 reaches it), and a page selection (SML/SMU/SMB)
+as a file's last emitting statement would license the next file's first
+reference, so don't end a file on one.
+
 Source format follows the period listings: a label starts in column 0, the
 mnemonic is indented, and `;` begins a comment.
 
@@ -41,6 +50,7 @@ parentheses, and `$` is the address of the word being assembled.
 
 from collections import ChainMap
 import argparse
+import itertools
 import re
 import sys
 
@@ -163,9 +173,29 @@ CHAR_HIGH_BIT = 0x80
 NAMES = re.compile(r'[A-Za-z][A-Za-z0-9_.]*')
 
 
+class Loc:
+    """A source position that knows its file.
+
+    A multi-file deck reports errors as `path line N`; `seq` is the card's
+    position in the whole deck, so a mixed pile of errors sorts back into the
+    order the cards were read. Plain integers still work everywhere a Loc
+    does (xraylist.py hands encode() bare card numbers) and print as `line N`.
+    """
+    __slots__ = ('path', 'line', 'seq')
+
+    def __init__(self, path, line, seq):
+        self.path = path
+        self.line = line
+        self.seq = seq
+
+    def __str__(self):
+        return f'{self.path} line {self.line}'
+
+
 class AsmError(Exception):
     def __init__(self, lineno, message):
-        super().__init__(f'line {lineno}: {message}')
+        where = lineno if isinstance(lineno, Loc) else f'line {lineno}'
+        super().__init__(f'{where}: {message}')
         self.lineno = lineno
 
 
@@ -385,8 +415,14 @@ def condition(text, symbols, here, lineno):
     }[rel]
 
 
-def parse(path):
-    """Split the source into (lineno, label, mnemonic, operand, text) tuples."""
+def parse(path, seq=None):
+    """Split one source file into (loc, label, mnemonic, operand, text) tuples.
+
+    `seq` is a shared counter handing out deck-order positions when several
+    files make up one deck; left alone, the file is a deck of its own.
+    """
+    if seq is None:
+        seq = itertools.count()
     out = []
     with open(path, encoding='utf-8') as f:
         for lineno, raw in enumerate(f, 1):
@@ -422,7 +458,7 @@ def parse(path):
                 head, _, tail = arg.partition(' ')
                 if head.upper() in ('D', 'L', 'R'):
                     op, arg = op + head.upper(), tail.strip() or None
-            out.append((lineno, label, op, arg, text))
+            out.append((Loc(path, lineno, next(seq)), label, op, arg, text))
     return out
 
 
@@ -608,8 +644,18 @@ def encode(lineno, op, arg, symbols, here, address_syms=None,
     raise AsmError(lineno, f'unknown mnemonic {op!r}')
 
 
-def assemble(path):
-    statements = parse(path)
+def assemble(paths):
+    """Assemble one file, or a list of files as a single deck in order."""
+    if isinstance(paths, str):
+        paths = [paths]
+    seq = itertools.count()
+    statements = []
+    for path in paths:
+        if len(paths) > 1:
+            # A marker card per file, so the listing says where each begins.
+            statements.append((Loc(path, 0, next(seq)), None, None, None,
+                               f'; ==== {path}'))
+        statements.extend(parse(path, seq))
 
     # The configuration equates a TRUE/FALS guard names do not have to come
     # before it. X-RAY states its whole system description on its fifth page
@@ -637,7 +683,7 @@ def assemble(path):
     # be told apart. A label is a location; an EQU is one only if what it was
     # equated to is.
     address_syms = set()
-    for lineno, label, op, arg, text in statements:
+    for idx, (lineno, label, op, arg, text) in enumerate(statements):
         try:
             if op in CONDITIONALS:
                 if op == 'ENDC':
@@ -661,6 +707,14 @@ def assemble(path):
                 continue
             if op == 'END':
                 placed.append((lineno, here, op, arg, text))
+                # Trailing cards in the same file are dropped, as they always
+                # were; a whole later file after the END is a deck mistake.
+                tail = {s[0].path for s in statements[idx + 1:]
+                        if isinstance(s[0], Loc) and s[0].path != lineno.path}
+                if tail:
+                    errors.append(AsmError(
+                        lineno,
+                        f'END here leaves {", ".join(sorted(tail))} unassembled'))
                 break
             if op == 'EQU':
                 if not label:
@@ -826,8 +880,11 @@ def assemble(path):
         listing.append((addr, words, text))
 
     if errors:
-        # Both passes contribute, so put the report back in source order.
-        errors.sort(key=lambda e: getattr(e, 'lineno', 0))
+        # Both passes contribute, so put the report back in deck order.
+        def order(e):
+            where = getattr(e, 'lineno', 0)
+            return where.seq if isinstance(where, Loc) else where
+        errors.sort(key=order)
         raise AsmErrorList(errors, listing, symbols)
     if not core:
         raise AsmError(0, 'nothing was assembled')
@@ -871,7 +928,8 @@ def write_listing(path, listing, symbols):
 
 def main():
     ap = argparse.ArgumentParser(description='Raytheon 703 assembler')
-    ap.add_argument('source')
+    ap.add_argument('sources', metavar='source', nargs='+',
+                    help='source files, assembled in order as one deck')
     ap.add_argument('-o', '--output', required=True, help='flat big-endian core image')
     ap.add_argument('-l', '--listing', help='write an address/word/source listing')
     # Deliberately the same "addr word" shape that xraylist.py --obj emits, so
@@ -887,13 +945,14 @@ def main():
                          'in src/system/ray703.rs (default 0x100)')
     args = ap.parse_args()
 
+    deck = ' '.join(args.sources)
     try:
-        image, listing, symbols, core = assemble(args.source)
+        image, listing, symbols, core = assemble(args.sources)
     except AsmErrorList as e:
         for err in e.errors:
-            print(f'{args.source}: {err}', file=sys.stderr)
+            print(err, file=sys.stderr)
         n = len(e.errors)
-        print(f'{args.source}: {n} error{"s" if n != 1 else ""}, no image written',
+        print(f'{deck}: {n} error{"s" if n != 1 else ""}, no image written',
               file=sys.stderr)
         # The listing is where a pile of errors actually gets read, so write
         # it even though there is nothing to load.
@@ -901,7 +960,7 @@ def main():
             write_listing(args.listing, e.listing, e.symbols)
         return 1
     except AsmError as e:
-        print(f'{args.source}: {e}', file=sys.stderr)
+        print(e, file=sys.stderr)
         return 1
 
     with open(args.output, 'wb') as f:
@@ -911,11 +970,11 @@ def main():
         try:
             tape = punch_tape(image, int(args.tape_origin, 0))
         except AsmError as e:
-            print(f'{args.source}: {e}', file=sys.stderr)
+            print(f'{deck}: {e}', file=sys.stderr)
             return 1
         with open(args.tape, 'wb') as f:
             f.write(tape)
-        print(f'{args.source}: {len(tape)} frames -> {args.tape}')
+        print(f'{deck}: {len(tape)} frames -> {args.tape}')
 
     if args.map:
         with open(args.map, 'w', encoding='utf-8') as f:
@@ -925,7 +984,7 @@ def main():
     if args.listing:
         write_listing(args.listing, listing, symbols)
 
-    print(f'{args.source}: {len(image) // 2} words -> {args.output}')
+    print(f'{deck}: {len(image) // 2} words -> {args.output}')
     return 0
 
 
