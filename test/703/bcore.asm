@@ -20,9 +20,9 @@
 ;   REXGLUE     EQU: 0 = the standalone machine, where BYE halts; 1 =
 ;               under an executive, where BYE jumps to the wrapper's
 ;               B.BYEX and the machine belongs to other tasks too
-;   B.CPARS, B.CCELL, B.CGLOB, B.CODE1, B.CODE2
-;               EQU: where this file's five sections begin -- the wrapper
-;               decides the whole layout
+;   B.CORE      EQU: where this file begins.  The core is one contiguous
+;               stream, and the whole deck -- wrapper and core together --
+;               must sit inside one 2048-word page (see the ground rules)
 ;   W.LBUF, W.LBUFSZ, W.VARS, W.ESTK, W.OSTK, W.GSTK, W.FSTK, W.NBUF,
 ;   W.HEAP, W.HEAPTOP, W.ARRAY
 ;               EQU: the workspace.  Anything byte-addressed -- the line
@@ -51,15 +51,20 @@
 ;    scratch: it is the index, the JSX return link, the low half of the
 ;    double shifts, and MPY/DIV's high half, so every long-lived pointer
 ;    lives in a cell and is loaded at the point of use.
-;  - Code never falls across a page boundary and every cross-page jump or
-;    call is an SMB/JMP or SMB/JSX pair, kept adjacent and never made a
-;    skip target.  That is this program's discipline, not the machine's:
-;    a global-mode indexed JMP reaches anywhere (for the price of an
-;    address cell and IXR), and EXR survives a skip between the pair,
-;    since only a memory reference reloads it (1-3).  But a skip landing
-;    on the JMP would jump the SMB, and a skip fired between the two
-;    would leave the selected page live for the next memory reference
-;    wherever execution falls; adjacency retires both hazards.
+;  - The whole program lives in one 2048-word page, wrapper included, so
+;    a direct reference reaches everything and there is no page selection
+;    anywhere in this file -- the assembler's page check holds each build
+;    to that (a reference that landed outside the page is a hard error,
+;    not a wrong page at run time).  The two exceptions are the T.BRK
+;    pairs: that cell is the wrapper's to place, and an executive's
+;    wrapper points it at a kernel cell in another page, so its two
+;    references keep the adjacent SMB in front (SMB governs exactly the
+;    one memory reference after it, 1-3, and selecting the current page
+;    costs nothing when the cell is near).  Where an SMB/JMP or SMB/JSX
+;    pair does appear -- here or in a wrapper -- it is kept adjacent and
+;    never made a skip target: a skip landing on the JMP would jump the
+;    SMB, and one fired between the two would leave the selected page
+;    live for the next memory reference wherever execution falls.
 ;  - No direct byte references, by the same kind of choice -- the machine
 ;    has them: a byte instruction uses all five EXR bits where a word
 ;    instruction drops the low one, so a direct LDB/STB reaches any of
@@ -80,7 +85,7 @@
 ; it, word-clean, without consuming it.  At the end of the line it returns
 ; the CR, and keeps returning it -- the CR is the parser's floor.
 ; P.GET: the same, but consume the character (never the CR).
-                ORG     B.CPARS
+                ORG     B.CORE
 P.PEEK          SUBR
 P.PKLP          LDX     L.TXTPTR
                 CLR
@@ -106,12 +111,9 @@ P.GET           SUBR
                 LDW     T.CHR2
 P.GTDN          EXIT    P.GET
 
-; P.GET's scratch cell, placed by the wrapper.
-                ORG     B.CCELL
 T.CHR2          WORD    0               ; P.GET's scratch
 
-; Interpreter state shared across pages.
-                ORG     B.CGLOB
+; Interpreter state.
 L.TXTPTR        WORD    0               ; byte address of the next source char
 L.CURLIN        WORD    0               ; word address of the running record
 L.PGMEND        WORD    0               ; word address one past the heap's end
@@ -121,32 +123,23 @@ S.RUNMOD        WORD    0               ; zero = immediate, else running
 ; sixteen-bit constant is a cell.
 K.ONE           WORD    1
 
-; ================================================================= page 1
+; ========================================================== the mainline
 ; The READY loop, the run loop, the line editor and the keyword dispatch,
 ; plus the statements that need no expression stack of their own.
-                ORG     B.CODE1
 
 B.COLD          LDW     K1.HEAP         ; empty program
-                SMB     L.PGMEND
                 STW     L.PGMEND
                 CLR
-                SMB     S.RUNMOD
                 STW     S.RUNMOD
-                SMB     E.RESET
                 JSX     E.RESET
-                SMB     T.CRLF
                 JSX     T.CRLF
 
 ; ------------------------------------------------------------ READY loop
 B.RLOOP         LDW     K1.RDYD         ; prompt; the scripted harness paces
-                SMB     M.MSG           ; its typing on this string
-                JSX     M.MSG
-                SMB     T.GETL
+                JSX     M.MSG           ; its typing on this string
                 JSX     T.GETL
                 LDW     K1.LBUFA
-                SMB     L.TXTPTR
                 STW     L.TXTPTR
-                SMB     P.PEEK
                 JSX     P.PEEK
                 CLB     X'8D'           ; empty line
                 SNE
@@ -160,19 +153,17 @@ B.RDIG          CLB     X'B9'
                 JMP     B.EDIT          ; a digit
                 JMP     B.EXEC0         ; above '9': a statement
 B.EXEC0         CLR                     ; immediate statement
-                SMB     S.RUNMOD
                 STW     S.RUNMOD
                 JMP     B.EXEC
 
 ; ---------------------------------------------------------- line editor
 ; A leading number edits the heap: delete any record with that number,
 ; then insert the new text unless the line was bare.
-B.EDIT          SMB     M.GETN
-                JSX     M.GETN
+B.EDIT          JSX     M.GETN
                 STW     S.LNO
                 SAZ                     ; line 0 is not a line
                 JMP     B.ED1
-                JMP     B.WHTJ
+                JMP     E.WHAT
 B.ED1           LDW     S.LNO
                 JSX     L.FIND
                 LDW     L.FEQ
@@ -180,27 +171,23 @@ B.ED1           LDW     S.LNO
                 JMP     B.ED2
                 JMP     B.ED3
 B.ED2           JSX     L.DEL           ; replace = delete, then insert
-B.ED3           SMB     P.PEEK
-                JSX     P.PEEK
+B.ED3           JSX     P.PEEK
                 CLB     X'8D'
                 SNE
                 JMP     B.RLOOP         ; bare number: delete only
-                SMB     T.INPP          ; bytes to store, CR included
-                LDW     T.INPP
+                LDW     T.INPP          ; bytes to store, CR included
                 ADD     K1.ONE
-                SMB     L.TXTPTR
                 SUB     L.TXTPTR
                 STW     S.NB
                 ADD     K1.ONE          ; record words = 2 + (bytes+1)/2
                 SRL     1
                 ADD     K1.TWO
                 STW     S.RLEN
-                SMB     L.PGMEND        ; room?
-                ADD     L.PGMEND
+                ADD     L.PGMEND        ; room?
                 CMW     K1.HPTOP
                 SGR
                 JMP     B.ED4
-                JMP     B.SRYJ
+                JMP     E.SORRY
 B.ED4           JSX     L.OPEN          ; open the gap at L.FP
                 LDW     L.FP            ; header
                 CAX
@@ -212,7 +199,6 @@ B.ED4           JSX     L.OPEN          ; open the gap at L.FP
                 ADD     K1.TWO
                 SLL     1
                 STW     L.MD
-                SMB     L.TXTPTR
                 LDW     L.TXTPTR
                 STW     L.MS
                 ADD     S.NB
@@ -245,7 +231,6 @@ L.FIND          SUBR
                 LDW     K1.HEAP
                 STW     L.FP
 L.FDLP          LDW     L.FP
-                SMB     L.PGMEND
                 CMW     L.PGMEND
                 SLS
                 JMP     L.FDX           ; off the end
@@ -276,7 +261,6 @@ L.DEL           SUBR
                 LDW     L.FP
                 STW     L.MD
 L.DLLP          LDW     L.MS
-                SMB     L.PGMEND
                 CMW     L.PGMEND
                 SLS
                 JMP     L.DLDN          ; everything below is moved
@@ -293,21 +277,17 @@ L.DLLP          LDW     L.MS
                 ADD     K1.ONE
                 STW     L.MD
                 JMP     L.DLLP
-L.DLDN          SMB     L.PGMEND
-                LDW     L.PGMEND
+L.DLDN          LDW     L.PGMEND
                 SUB     L.DLN
-                SMB     L.PGMEND
                 STW     L.PGMEND
                 EXIT    L.DEL
 
 ; L.OPEN: open a gap of S.RLEN words at L.FP with a descending copy, and
 ; grow the heap.
 L.OPEN          SUBR
-                SMB     L.PGMEND
                 LDW     L.PGMEND
                 STW     L.MS            ; one past the last source word
                 ADD     S.RLEN
-                SMB     L.PGMEND
                 STW     L.PGMEND
 L.OPLP          LDW     L.MS
                 CMW     L.FP
@@ -329,8 +309,7 @@ L.OPDN          EXIT    L.OPEN
 ; ------------------------------------------------------------- run loop
 ; B.EXEC executes the statement at the source cursor; B.NEXT is where a
 ; finished statement goes; B.STEP0 runs the line at L.CURLIN.
-B.EXEC          SMB     P.PEEK
-                JSX     P.PEEK
+B.EXEC          JSX     P.PEEK
                 CLB     X'8D'
                 SNE
                 JMP     B.NEXT          ; an empty statement is fine
@@ -344,11 +323,8 @@ B.EXLP          LDW     S.KN
                 ADD     S.KN
                 CAX
                 LDW     *0
-                SMB     M.LP
                 STW     M.LP
-                SMB     M.LIT
                 JSX     M.LIT
-                SMB     M.LF
                 LDW     M.LF
                 SAZ
                 JMP     B.EXHIT
@@ -363,8 +339,7 @@ B.EXHIT         LDW     K1.KWHNDW       ; dispatch through the parallel table
                 CAX
                 JMP     *0
 
-B.IMPLT         SMB     P.PEEK          ; a letter or '@' starts a LET
-                JSX     P.PEEK
+B.IMPLT         JSX     P.PEEK          ; a letter or '@' starts a LET
                 CLB     X'C0'           ; '@'
                 SNE
                 JMP     S.LET
@@ -372,99 +347,79 @@ B.IMPLT         SMB     P.PEEK          ; a letter or '@' starts a LET
                 CLB     'A'
                 SLS
                 JMP     B.IMP2
-                JMP     B.WHTJ          ; below 'A'
+                JMP     E.WHAT          ; below 'A'
 B.IMP2          CLB     'Z'
                 SGR
                 JMP     S.LET           ; a letter
-                JMP     B.WHTJ          ; above 'Z'
+                JMP     E.WHAT          ; above 'Z'
 
-B.NEXT          SMB     S.RUNMOD
-                LDW     S.RUNMOD
+B.NEXT          LDW     S.RUNMOD
                 SAZ
                 JMP     B.STEP
                 JMP     B.RLOOP
 
-B.STEP          SMB     L.CURLIN        ; on to the next record
-                LDW     L.CURLIN
+B.STEP          LDW     L.CURLIN        ; on to the next record
                 CAX
                 LDW     *1
-                SMB     L.CURLIN
                 ADD     L.CURLIN
-                SMB     L.CURLIN
                 STW     L.CURLIN
-B.STEP0         SMB     T.BRK           ; Ctrl-C lands between statements
-                LDW     T.BRK
+B.STEP0         SMB     T.BRK           ; Ctrl-C lands between statements.
+                LDW     T.BRK           ; The SMB stays: T.BRK is the
+                                        ; wrapper's to place, and brex.asm
+                                        ; points it at a kernel cell in
+                                        ; another page.
                 SAZ
                 JMP     B.BREAK
-                SMB     L.CURLIN        ; fell off the end?
-                LDW     L.CURLIN
-                SMB     L.PGMEND
+                LDW     L.CURLIN        ; fell off the end?
                 CMW     L.PGMEND
                 SLS
                 JMP     B.FIN
-B.STP2          SMB     L.CURLIN        ; point the cursor at its text
-                LDW     L.CURLIN
+B.STP2          LDW     L.CURLIN        ; point the cursor at its text
                 ADD     K1.TWO
                 SLL     1
-                SMB     L.TXTPTR
                 STW     L.TXTPTR
                 JMP     B.EXEC
 
 B.FIN           CLR
-                SMB     S.RUNMOD
                 STW     S.RUNMOD
                 JMP     B.RLOOP
 
 B.BREAK         CLR
-                SMB     T.BRK
+                SMB     T.BRK           ; the SMB stays; see B.STEP0
                 STW     T.BRK
                 LDW     K1.BRKD
-                SMB     M.MSG
                 JSX     M.MSG
-                SMB     E.ERR           ; " AT n", unwind, READY
-                JMP     E.ERR
-
-; Error trampolines: skip-jump targets must be in this page.
-B.WHTJ          SMB     E.WHAT
-                JMP     E.WHAT
-B.SRYJ          SMB     E.SORRY
-                JMP     E.SORRY
-B.HOWJ          SMB     E.HOW
-                JMP     E.HOW
+                JMP     E.ERR           ; " AT n", unwind, READY
 
 ; ------------------------------------------------------------ statements
 ; LET, spelled out or implied: a variable A-Z or an element @(i), an equals
 ; sign, an expression.
-S.LET           SMB     P.PEEK
-                JSX     P.PEEK
+S.LET           JSX     P.PEEK
                 CLB     X'C0'           ; '@'
                 SNE
                 JMP     S.LTAR
-                SMB     P.GET           ; variable letter
-                JSX     P.GET
+                JSX     P.GET           ; variable letter
                 AND     K1.DF
                 CLB     'A'
                 SLS
                 JMP     S.LT1
-                JMP     B.WHTJ          ; below 'A'
+                JMP     E.WHAT          ; below 'A'
 S.LT1           CLB     'Z'
                 SGR
                 JMP     S.LTV           ; a letter
-                JMP     B.WHTJ          ; above 'Z'
+                JMP     E.WHAT          ; above 'Z'
 S.LTV           SUB     K1.CA           ; its cell
                 ADD     K1.VARSW
                 STW     S.LTGT
                 JMP     S.LTEQ
 S.LTAR          JSX     S.SUBSC         ; @(i): the element's cell
                 STW     S.LTGT
-S.LTEQ          SMB     P.GET
-                JSX     P.GET
+S.LTEQ          JSX     P.GET
                 CLB     X'BD'           ; '='
                 SNE
                 JMP     S.LTE2
-                JMP     B.WHTJ
-S.LTE2          SMB     EVAL
-                JSX     EVAL
+                JMP     E.WHAT
+S.LTE2          JSX     EVAL
                 LDX     S.LTGT
                 STW     *0
                 JMP     B.NEXT
@@ -472,59 +427,49 @@ S.LTE2          SMB     EVAL
 ; S.SUBSC: consume '@ ( expr )' from the cursor ('@' still under it) and
 ; return the element's word address.
 S.SUBSC         SUBR
-                SMB     P.GET
                 JSX     P.GET           ; the '@'
-                SMB     P.GET
                 JSX     P.GET
                 CLB     X'A8'           ; '('
                 SNE
                 JMP     S.SB2
-                JMP     B.WHTJ
-S.SB2           SMB     EVAL
-                JSX     EVAL
+                JMP     E.WHAT
+S.SB2           JSX     EVAL
                 STW     S.SBT
-                SMB     P.GET
                 JSX     P.GET
                 CLB     X'A9'           ; ')'
                 SNE
                 JMP     S.SB3
-                JMP     B.WHTJ
+                JMP     E.WHAT
 S.SB3           LDW     S.SBT
                 SAM                     ; 0 <= i < 1024
                 JMP     S.SB4
-                JMP     B.HOWJ
+                JMP     E.HOW
 S.SB4           CMW     K1.1024
                 SLS
-                JMP     B.HOWJ          ; 1024 and up is out of bounds
+                JMP     E.HOW          ; 1024 and up is out of bounds
                 ADD     K1.ARRW
                 EXIT    S.SUBSC
 
 ; IF expr [THEN] statement: false skips the rest of the line.
-S.IF            SMB     EVAL
-                JSX     EVAL
+S.IF            JSX     EVAL
                 SAZ
                 JMP     S.IF2
                 JMP     B.NEXT          ; false
 S.IF2           LDW     K1.THEND        ; an optional THEN
-                SMB     M.LP
                 STW     M.LP
-                SMB     M.LIT
                 JSX     M.LIT
                 JMP     B.EXEC          ; and the rest is a statement
 
 ; GOTO expr / GOSUB's shared tail: find the line and run it.
-S.GOTO          SMB     EVAL
-                JSX     EVAL
+S.GOTO          JSX     EVAL
 S.GOX           JSX     L.FIND
                 LDW     L.FEQ
                 SAZ
                 JMP     S.GO2
-                JMP     B.HOWJ          ; no such line
+                JMP     E.HOW          ; no such line
 S.GO2           LDW     L.FP
-                SMB     L.CURLIN
                 STW     L.CURLIN
                 LDW     K1.ONE
-                SMB     S.RUNMOD
                 STW     S.RUNMOD
                 JMP     B.STEP0         ; through the break check, so a
                                         ; GOTO-to-self loop stays stoppable
@@ -543,13 +488,10 @@ S.RNCL          LDW     L.MT
                 SLS
                 JMP     S.RN2           ; all clear
                 JMP     S.RNCL
-S.RN2           SMB     E.RESET
-                JSX     E.RESET
+S.RN2           JSX     E.RESET
                 LDW     K1.ONE
-                SMB     S.RUNMOD
                 STW     S.RUNMOD
                 LDW     K1.HEAP
-                SMB     L.CURLIN
                 STW     L.CURLIN
                 JMP     B.STEP0
 
@@ -558,8 +500,7 @@ S.RN2           SMB     E.RESET
 ; A trailing separator holds the carriage return for the next PRINT.
 S.PRT           CLR
                 STW     S.PSEP
-S.PRLP          SMB     P.PEEK
-                JSX     P.PEEK
+S.PRLP          JSX     P.PEEK
                 CLB     X'8D'
                 SNE
                 JMP     S.PREOL
@@ -572,24 +513,18 @@ S.PRLP          SMB     P.PEEK
                 CLB     X'AC'           ; ','
                 SNE
                 JMP     S.PRCOM
-                SMB     EVAL            ; an expression
-                JSX     EVAL
-                SMB     M.PUTN
+                JSX     EVAL            ; an expression
                 JSX     M.PUTN
                 CLR
                 STW     S.PSEP
                 JMP     S.PRLP
-S.PRSEP         SMB     P.GET
-                JSX     P.GET
+S.PRSEP         JSX     P.GET
                 LDW     K1.ONE
                 STW     S.PSEP
                 JMP     S.PRLP
-S.PRCOM         SMB     P.GET
-                JSX     P.GET
+S.PRCOM         JSX     P.GET
 S.PRC2          LLB     X'A0'           ; at least one space, then out to
-                SMB     T.PUTC          ; the zone boundary
-                JSX     T.PUTC
-                SMB     T.COL
+                JSX     T.PUTC          ; the zone boundary
                 LDW     T.COL
                 AND     K1.7
                 SAZ
@@ -597,10 +532,8 @@ S.PRC2          LLB     X'A0'           ; at least one space, then out to
                 LDW     K1.ONE
                 STW     S.PSEP
                 JMP     S.PRLP
-S.PRSTR         SMB     P.GET
-                JSX     P.GET           ; the opening quote
-                SMB     L.TXTPTR        ; print straight out of the source
-                LDW     L.TXTPTR
+S.PRSTR         JSX     P.GET           ; the opening quote
+                LDW     L.TXTPTR        ; print straight out of the source
                 STW     S.PRS
 S.PRSC          LDX     S.PRS           ; find the closing quote
                 CLR
@@ -610,21 +543,17 @@ S.PRSC          LDX     S.PRS           ; find the closing quote
                 JMP     S.PRS2
                 CLB     X'8D'           ; unterminated
                 SNE
-                JMP     B.WHTJ
+                JMP     E.WHAT
                 LDW     S.PRS
                 ADD     K1.ONE
                 STW     S.PRS
                 JMP     S.PRSC
 S.PRS2          LDW     S.PRS
-                SMB     T.PWEND
                 STW     T.PWEND
-                SMB     L.TXTPTR
                 LDW     L.TXTPTR
-                SMB     T.PUTW
                 JSX     T.PUTW
                 LDW     S.PRS           ; consume through the quote
                 ADD     K1.ONE
-                SMB     L.TXTPTR
                 STW     L.TXTPTR
                 CLR
                 STW     S.PSEP
@@ -632,7 +561,6 @@ S.PRS2          LDW     S.PRS
 S.PREOL         LDW     S.PSEP          ; a trailing separator holds the CR
                 SAZ
                 JMP     B.NEXT
-                SMB     T.CRLF
                 JSX     T.CRLF
                 JMP     B.NEXT
 
@@ -640,16 +568,13 @@ S.PREOL         LDW     S.PSEP          ; a trailing separator holds the CR
 S.LIST          LDW     K1.HEAP
                 STW     S.LP
 S.LSLP          LDW     S.LP
-                SMB     L.PGMEND
                 CMW     L.PGMEND
                 SLS
                 JMP     B.NEXT          ; every record listed
                 CAX
                 LDW     *0
-                SMB     M.PUTN
                 JSX     M.PUTN
                 LLB     X'A0'
-                SMB     T.PUTC
                 JSX     T.PUTC
                 LDW     S.LP            ; the record's text
                 ADD     K1.TWO
@@ -667,12 +592,9 @@ S.LSSC          LDX     S.LE            ; find its CR
                 STW     S.LE
                 JMP     S.LSSC
 S.LS3           LDW     S.LE
-                SMB     T.PWEND
                 STW     T.PWEND
                 LDW     S.LT
-                SMB     T.PUTW
                 JSX     T.PUTW
-                SMB     T.CRLF
                 JSX     T.CRLF
                 LDW     S.LP            ; next record
                 CAX
@@ -683,7 +605,6 @@ S.LS3           LDW     S.LE
 
 ; The one-line statements.
 S.NEW           LDW     K1.HEAP
-                SMB     L.PGMEND
                 STW     L.PGMEND
                 JMP     B.FIN
 S.REM           JMP     B.NEXT
@@ -693,11 +614,11 @@ S.BYE           HLT                     ; the operator's exit -- and the
                 JMP     B.NEXT          ; harness's; RUN resumes it
                 ENDC
                 FALS    REXGLUE=0
-S.BYE           SMB     B.BYEX          ; the executive's exit: hand the
-                JMP     B.BYEX          ; console back to the shell
+S.BYE           JMP     B.BYEX          ; the executive's exit: hand the
+                                        ; console back to the shell
                 ENDC
 
-; ------------------------------------------------- page 1 data and cells
+; ---------------------------------------------- mainline data and cells
 S.KN            WORD    0               ; dispatch trial index
 S.LNO           WORD    0               ; editor: the target line number
 S.NB            WORD    0               ; editor: text bytes, CR included
@@ -769,10 +690,9 @@ KWHND           WORD    S.PRT,S.INPUT,S.LET,S.IF,S.GOSUB
                 WORD    S.GOTO,S.RET,S.FOR,S.NXT,S.REM
                 WORD    S.END,S.LIST,S.RUN,S.NEW,S.BYE
 
-; ================================================================= page 2
+; ========================================================= the evaluator
 ; The expression evaluator, the arithmetic, and the statements that lean on
 ; them.
-                ORG     B.CODE2
 
 ; E.RESET: empty every stack.  RUN does this, and so does the error path.
 E.RESET         SUBR
@@ -788,10 +708,8 @@ E.RESET         SUBR
 M.MSG           SUBR
                 CAX
                 LDW     *1
-                SMB     T.PWEND
                 STW     T.PWEND
                 LDW     *0
-                SMB     T.PUTW
                 JSX     T.PUTW
                 EXIT    M.MSG
 
@@ -799,9 +717,7 @@ M.MSG           SUBR
 ; A match consumes it (case folded, leading blanks skipped) and sets M.LF;
 ; a miss leaves the cursor where it was.
 M.LIT           SUBR
-                SMB     P.PEEK          ; settle the cursor on a character
-                JSX     P.PEEK
-                SMB     L.TXTPTR
+                JSX     P.PEEK          ; settle the cursor on a character
                 LDW     L.TXTPTR
                 STW     M.SP2
                 LDW     M.LP
@@ -841,7 +757,6 @@ M.LMISS         CLR
                 STW     M.LF
                 EXIT    M.LIT
 M.LHIT          LDW     M.SP2
-                SMB     L.TXTPTR
                 STW     L.TXTPTR
                 LDW     K2.ONE
                 STW     M.LF
@@ -852,8 +767,7 @@ M.LHIT          LDW     M.SP2
 M.GETN          SUBR
                 CLR
                 STW     M.NV
-M.GNLP          SMB     P.PEEK
-                JSX     P.PEEK
+M.GNLP          JSX     P.PEEK
                 CLB     X'B0'
                 SLS
                 JMP     M.GNDG
@@ -876,10 +790,8 @@ M.GNOK          STW     M.NC
                 SAP
                 JMP     M.GNOV
                 STW     M.NV
-                SMB     L.TXTPTR        ; consume the digit
-                LDW     L.TXTPTR
+                LDW     L.TXTPTR        ; consume the digit
                 ADD     K2.ONE
-                SMB     L.TXTPTR
                 STW     L.TXTPTR
                 JMP     M.GNLP
 M.GNOV          JMP     E.HOW
@@ -894,7 +806,6 @@ M.PUTN          SUBR
                 SAM
                 JMP     M.PNPOS
                 LLB     X'AD'           ; '-'
-                SMB     T.PUTC
                 JSX     T.PUTC
                 LDW     M.PV
                 CMP
@@ -931,7 +842,6 @@ M.PNE2          STW     M.PD
                 ADD     M.PD
                 CAX
                 LDW     *0
-                SMB     T.PUTC
                 JSX     T.PUTC
                 JMP     M.PNEM
 
@@ -951,8 +861,7 @@ EVAL            SUBR
                 STW     E.SP
                 STW     E.OSP
                 STW     E.NPAR
-E.OPD           SMB     P.PEEK          ; operand position
-                JSX     P.PEEK
+E.OPD           JSX     P.PEEK          ; operand position
                 CLB     X'AD'           ; unary minus
                 SNE
                 JMP     E.ONEG
@@ -979,17 +888,14 @@ E.OD2           CLB     'Z'
                 SGR
                 JMP     E.ONAM          ; a letter
                 JMP     E.WHAT          ; above 'Z'
-E.ONUM          SMB     M.GETN
-                JSX     M.GETN
+E.ONUM          JSX     M.GETN
                 JSX     E.PUSH
                 JMP     E.OPER
-E.ONEG          SMB     P.GET
-                JSX     P.GET
+E.ONEG          JSX     P.GET
                 LDW     K2.FIVE
                 JSX     E.OPSH
                 JMP     E.OPD
-E.OPAR          SMB     P.GET
-                JSX     P.GET
+E.OPAR          JSX     P.GET
                 CLR
                 JSX     E.MARK
                 JMP     E.OPD
@@ -998,28 +904,24 @@ E.OARR          JSX     E.EATLP         ; '@' then '('
                 JSX     E.MARK
                 JMP     E.OPD
 E.ONAM          LDW     K2.RNDD         ; RND( ?
-                SMB     M.LP
                 STW     M.LP
                 JSX     M.LIT
                 LDW     M.LF
                 SAZ
                 JMP     E.ORND
                 LDW     K2.ABSD         ; ABS( ?
-                SMB     M.LP
                 STW     M.LP
                 JSX     M.LIT
                 LDW     M.LF
                 SAZ
                 JMP     E.OABS
                 LDW     K2.SIZD         ; SIZE ?
-                SMB     M.LP
                 STW     M.LP
                 JSX     M.LIT
                 LDW     M.LF
                 SAZ
                 JMP     E.OSIZ
-                SMB     P.GET           ; a variable, then
-                JSX     P.GET
+                JSX     P.GET           ; a variable, then
                 AND     K2.DF
                 SUB     K2.CA
                 ADD     K2.VARSW
@@ -1035,20 +937,17 @@ E.OABS          JSX     E.EATP
                 LDW     K2.FOURT
                 JSX     E.MARK
                 JMP     E.OPD
-E.OSIZ          SMB     L.PGMEND
-                LDW     L.PGMEND
+E.OSIZ          LDW     L.PGMEND
                 CMP
                 ADD     K2.HPTOP        ; heap top - heap end = free words
                 JSX     E.PUSH
                 JMP     E.OPER
 
 E.EATLP         SUBR                    ; consume '@' and its '('
-                SMB     P.GET
                 JSX     P.GET
                 JSX     E.EATP
                 EXIT    E.EATLP
 E.EATP          SUBR                    ; consume a required '('
-                SMB     P.GET
                 JSX     P.GET
                 CLB     X'A8'
                 SNE
@@ -1064,8 +963,7 @@ E.MARK          SUBR                    ; push the marker in ACR and count it
                 EXIT    E.MARK
 
 ; Operator position: classify what follows the operand.
-E.OPER          SMB     P.PEEK
-                JSX     P.PEEK
+E.OPER          JSX     P.PEEK
                 CLB     X'AA'           ; '*'
                 SNE
                 JMP     E.BMUL
@@ -1101,12 +999,9 @@ E.BSUB          LDW     K2.TWO
                 JMP     E.BIN1
 E.BEQ           LDW     K2.SIX
 E.BIN1          STW     E.OPC
-                SMB     P.GET
                 JSX     P.GET
                 JMP     E.BINOP
-E.BLT           SMB     P.GET
-                JSX     P.GET
-                SMB     P.PEEK
+E.BLT           JSX     P.GET
                 JSX     P.PEEK
                 CLB     X'BE'           ; '<>'
                 SNE
@@ -1117,19 +1012,15 @@ E.BLT           SMB     P.GET
                 LDW     K2.EIGHT
                 STW     E.OPC
                 JMP     E.BINOP
-E.BNE2          SMB     P.GET
-                JSX     P.GET
+E.BNE2          JSX     P.GET
                 LDW     K2.SEVEN
                 STW     E.OPC
                 JMP     E.BINOP
-E.BLE2          SMB     P.GET
-                JSX     P.GET
+E.BLE2          JSX     P.GET
                 LDW     K2.TEN2
                 STW     E.OPC
                 JMP     E.BINOP
-E.BGT           SMB     P.GET
-                JSX     P.GET
-                SMB     P.PEEK
+E.BGT           JSX     P.GET
                 JSX     P.PEEK
                 CLB     X'BD'           ; '>='
                 SNE
@@ -1137,8 +1028,7 @@ E.BGT           SMB     P.GET
                 LDW     K2.NINE
                 STW     E.OPC
                 JMP     E.BINOP
-E.BGE2          SMB     P.GET
-                JSX     P.GET
+E.BGE2          JSX     P.GET
                 LDW     K2.ELEVEN
                 STW     E.OPC
 
@@ -1169,8 +1059,7 @@ E.RPAR          LDW     E.NPAR
                 SAZ
                 JMP     E.RP1
                 JMP     E.FIN
-E.RP1           SMB     P.GET
-                JSX     P.GET
+E.RP1           JSX     P.GET
 E.RPLP          LDW     E.OSP
                 SAZ
                 JMP     E.RP2
@@ -1420,32 +1309,26 @@ E.HOW           LDW     K2.HOWD
                 JMP     E.ERR
 E.SORRY         LDW     K2.SRYD
                 JSX     M.MSG
-E.ERR           SMB     S.RUNMOD
-                LDW     S.RUNMOD
+E.ERR           LDW     S.RUNMOD
                 SAZ
                 JMP     E.ERAT
                 JMP     E.ERDN
 E.ERAT          LDW     K2.ATD
                 JSX     M.MSG
-                SMB     L.CURLIN
                 LDW     L.CURLIN
                 CAX
                 LDW     *0
                 JSX     M.PUTN
-E.ERDN          SMB     T.CRLF
-                JSX     T.CRLF
+E.ERDN          JSX     T.CRLF
                 JSX     E.RESET
                 CLR
-                SMB     S.RUNMOD
                 STW     S.RUNMOD
-                SMB     B.RLOOP
                 JMP     B.RLOOP
 
 ; ---------------------------------------------------- FOR / NEXT
 ; The frame holds the variable's cell, the limit, the step, and the word
 ; address of the FOR line itself; NEXT restarts the line after it.
-S.FOR           SMB     P.GET
-                JSX     P.GET
+S.FOR           JSX     P.GET
                 AND     K2.DF
                 CLB     'A'
                 SLS
@@ -1458,7 +1341,6 @@ S.FO0           CLB     'Z'
 S.FO1           SUB     K2.CA
                 ADD     K2.VARSW
                 STW     S.FVAR
-                SMB     P.GET
                 JSX     P.GET
                 CLB     X'BD'           ; '='
                 SNE
@@ -1468,7 +1350,6 @@ S.FO2           JSX     EVAL
                 LDX     S.FVAR
                 STW     *0
                 LDW     K2.TOD          ; TO is not optional
-                SMB     M.LP
                 STW     M.LP
                 JSX     M.LIT
                 LDW     M.LF
@@ -1480,7 +1361,6 @@ S.FO3           JSX     EVAL
                 LDW     K2.ONE          ; STEP is
                 STW     S.FSTP
                 LDW     K2.STPD
-                SMB     M.LP
                 STW     M.LP
                 JSX     M.LIT
                 LDW     M.LF
@@ -1505,19 +1385,16 @@ S.FO5           LDW     S.FSP           ; push the frame
                 LDW     S.FSTP
                 STW     *2
                 LDX     S.FT
-                SMB     L.CURLIN
                 LDW     L.CURLIN
                 STW     *3
                 LDW     S.FSP
                 ADD     K2.ONE
                 STW     S.FSP
-                SMB     B.NEXT
                 JMP     B.NEXT
 
 ; NEXT: find the frame for this variable, discarding anything stacked
 ; inside it, step, test, and either loop or fall out.
-S.NXT           SMB     P.GET
-                JSX     P.GET
+S.NXT           JSX     P.GET
                 AND     K2.DF
                 CLB     'A'
                 SLS
@@ -1577,14 +1454,11 @@ S.NXDWN         LDX     S.FT
                 JMP     S.NXOUT
 S.NXGO          LDX     S.FT            ; loop: rerun from the FOR line
                 LDW     *3
-                SMB     L.CURLIN
                 STW     L.CURLIN
-                SMB     B.STEP
                 JMP     B.STEP
 S.NXOUT         LDW     S.FSP
                 SUB     K2.ONE
                 STW     S.FSP
-                SMB     B.NEXT
                 JMP     B.NEXT
 
 ; ---------------------------------------------------- GOSUB / RETURN
@@ -1597,15 +1471,13 @@ S.GOSUB         JSX     EVAL
                 JMP     E.SORRY         ; eight calls deep already
                 ADD     K2.GSTKW
                 CAX
-                SMB     L.CURLIN
                 LDW     L.CURLIN
                 STW     *0
                 LDW     S.GSP
                 ADD     K2.ONE
                 STW     S.GSP
                 LDW     S.FT2
-                SMB     S.GOX           ; find it and run it, like GOTO
-                JMP     S.GOX
+                JMP     S.GOX           ; find it and run it, like GOTO
 
 S.RET           LDW     S.GSP
                 SAZ
@@ -1616,9 +1488,7 @@ S.RT2           SUB     K2.ONE
                 ADD     K2.GSTKW
                 CAX
                 LDW     *0
-                SMB     L.CURLIN
                 STW     L.CURLIN
-                SMB     B.STEP
                 JMP     B.STEP
 
 ; ---------------------------------------------------------------- INPUT
@@ -1626,17 +1496,14 @@ S.RT2           SUB     K2.ONE
 ; Anything unparseable just asks again.  Only meaningful while a program
 ; is running -- in immediate mode the statement itself lives in the very
 ; buffer the reply would land in, so it is refused.
-S.INPUT         SMB     S.RUNMOD
-                LDW     S.RUNMOD
+S.INPUT         LDW     S.RUNMOD
                 SAZ
                 JMP     S.IN1
                 JMP     E.HOW
-S.IN1           SMB     P.PEEK          ; the target
-                JSX     P.PEEK
+S.IN1           JSX     P.PEEK          ; the target
                 CLB     X'C0'
                 SNE
                 JMP     S.INAR
-                SMB     P.GET
                 JSX     P.GET
                 AND     K2.DF
                 CLB     'A'
@@ -1651,34 +1518,26 @@ S.IN2           SUB     K2.CA
                 ADD     K2.VARSW
                 STW     S.ITGT
                 JMP     S.INASK
-S.INAR          SMB     S.SUBSC
-                JSX     S.SUBSC
+S.INAR          JSX     S.SUBSC
                 STW     S.ITGT
-S.INASK         SMB     L.TXTPTR        ; the program cursor, kept safe
-                LDW     L.TXTPTR        ; while the reply overwrites LBUF
-                STW     S.ITP
+S.INASK         LDW     L.TXTPTR        ; the program cursor, kept safe
+                STW     S.ITP           ; while the reply overwrites LBUF
 S.INAGN         LDW     K2.ASKD
                 JSX     M.MSG
-                SMB     T.GETL
                 JSX     T.GETL
-                SMB     K.LBUFA         ; parse the reply instead
-                LDW     K.LBUFA
-                SMB     L.TXTPTR
+                LDW     K.LBUFA         ; parse the reply instead
                 STW     L.TXTPTR
                 CLR
                 STW     S.ISGN
-                SMB     P.PEEK
                 JSX     P.PEEK
                 CLB     X'AD'           ; a leading minus
                 SNE
                 JMP     S.INMIN
                 JMP     S.INDIG
-S.INMIN         SMB     P.GET
-                JSX     P.GET
+S.INMIN         JSX     P.GET
                 LDW     K2.ONE
                 STW     S.ISGN
-S.INDIG         SMB     P.PEEK          ; a digit had better follow
-                JSX     P.PEEK
+S.INDIG         JSX     P.PEEK          ; a digit had better follow
                 CLB     X'B0'
                 SLS
                 JMP     S.IND2
@@ -1687,8 +1546,7 @@ S.IND2          CLB     X'B9'
                 SGR
                 JMP     S.IN3           ; a digit
                 JMP     S.INAGN         ; above '9': ask again
-S.IN3           SMB     M.GETN
-                JSX     M.GETN
+S.IN3           JSX     M.GETN
                 STW     S.FT2
                 LDW     S.ISGN
                 SAZ
@@ -1701,20 +1559,16 @@ S.IN5           LDW     S.FT2
                 LDX     S.ITGT
                 STW     *0
                 LDW     S.ITP           ; back to the program text
-                SMB     L.TXTPTR
                 STW     L.TXTPTR
-                SMB     P.PEEK
                 JSX     P.PEEK
                 CLB     X'AC'           ; ',' and around again
                 SNE
                 JMP     S.IN6
-                SMB     B.NEXT
                 JMP     B.NEXT
-S.IN6           SMB     P.GET
-                JSX     P.GET
+S.IN6           JSX     P.GET
                 JMP     S.IN1
 
-; ------------------------------------------------- page 2 data and cells
+; --------------------------------------------- evaluator data and cells
 E.SP            WORD    0               ; operand stack depth
 E.OSP           WORD    0               ; operator stack depth
 E.NPAR          WORD    0               ; open markers

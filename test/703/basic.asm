@@ -12,10 +12,10 @@
 ;
 ;  - The level 0 service routine leads with SMB, because the interrupt
 ;    entry sequence saves EXR without reloading it (3-3): its first
-;    memory reference resolves in the page of whatever it interrupted,
-;    and the interpreter runs in pages 1 and 2 while a program does.
+;    memory reference resolves in the page of whatever it interrupted.
 ;    Only the first one needs it, since that reference reloads EXR from
-;    the program counter like any other.
+;    the program counter like any other.  (T.SERV's own comment says why
+;    the lead is kept with the whole program in one page.)
 ;  - Keys typed while the previous line is still being processed are
 ;    dropped (Ctrl-C excepted), as they were on the iron; anything driving
 ;    this program from a script must pace its typing on the guest's own
@@ -31,24 +31,16 @@
 ; under this machine's signed-only compares):
 ;
 ;   0000-003F  interrupt blocks (level 0 in use)
-;   0040-07FF  page 0: tty driver, level-0 service routine, output and
-;              line primitives, source-cursor primitives, shared cells
-;   0800-0FFF  page 1: READY loop, run loop, line editor, keyword
-;              dispatch, LET IF GOTO PRINT LIST RUN NEW REM END BYE
-;   1000-17FF  page 2: expression evaluator, math, FOR NEXT GOSUB RETURN
-;              INPUT, errors, messages
+;   0040-....  the whole program, in word page 0: this driver, then the
+;              core straight after it (B.CORE EQU $ at the end of this
+;              file is what places it).  One page is what lets the core
+;              run with no page selection anywhere -- see its ground
+;              rules -- and the assembler's page check fails the build
+;              if the deck ever outgrows it.
 ;   2000-3FFF  workspace, all of it EQU-defined so the image stays small
 
-; The build selection and the core's section bases.  The core's small
-; sections interleave with the driver's cells in page 0, so the bases are
-; pinned; if the driver grows into one of the holes, the assembler's
-; "assembled twice" error says so.  The deck's END card is bcore.asm's.
 REXGLUE         EQU     0               ; BYE halts the machine
-B.CPARS         EQU     X'9F'           ; P.PEEK/P.GET, after T.GETL
-B.CCELL         EQU     X'10F'          ; T.CHR2, among the driver's cells
-B.CGLOB         EQU     X'118'          ; the shared interpreter globals
-B.CODE1         EQU     X'800'          ; page 1
-B.CODE2         EQU     X'1000'         ; page 2
+
 ; ---------------------------------------------------------------- level 0
                 ORG     0
                 JMP     START           ; clobbered by the first PCR save
@@ -107,7 +99,6 @@ START           MSK
                 STW     T.PWEND
                 LDW     K.BANA
                 JSX     T.PUTW
-                SMB     B.COLD
                 JMP     B.COLD
 
 ; ---------------------------------------------------------------- output
@@ -214,22 +205,21 @@ T.GETW          LDW     T.LNRDY
                 JMP     T.GETW
 T.GETD          EXIT    T.GETL
 
-; The core's parser sits in the hole at X'9F'-X'B9'; the driver resumes here.
-                ORG     X'BA'
-
 ; ------------------------------------------------------- level 0 service
 ; One interrupt line serves both directions, so the routine decides the way
 ; the period driver decides: a non-zero output pointer means a character is
 ; still printing and this is its completion.  Only the hardware's PC and
 ; status are saved automatically; ACR and IXR are this routine's problem.
 ;
-; The SMB in front of the first store is not decoration.  The interrupt
-; entry sequence saves EXR but does not reload it (3-3), so the routine's
-; first memory reference resolves in the page of whatever it interrupted --
-; and the interpreter runs in pages 1 and 2, where word T.SAVEA is live
-; code.  Only that first reference needs it: the store reloads EXR from the
-; program counter the way every memory reference does, and the rest of the
-; routine addresses page 0 by itself.
+; The SMB in front of the first store is the service-routine lead every
+; interruptible layout needs: the interrupt entry sequence saves EXR but
+; does not reload it (3-3), so the routine's first memory reference
+; resolves in the page of whatever it interrupted.  With the whole program
+; in one page the interrupted page is always this one, but the lead is
+; what keeps the routine correct wherever a layout puts the code, and it
+; is the shape brex.asm's executive holds its service routines to.  Only
+; the first reference needs it: the store reloads EXR from the program
+; counter the way every memory reference does.
 T.SERV          SMB     T.SAVEA
                 STW     T.SAVEA
                 STX     T.SAVEX
@@ -336,7 +326,7 @@ T.EXIT          LDW     T.SAVEA
                 LDX     T.SAVEX
                 INR     0
 
-; ------------------------------------------------- page 0 data and cells
+; --------------------------------------------------- driver data and cells
 T.OUTP          WORD    0               ; byte address of the next character
                                         ; to print; zero = transmitter idle
 T.OUTE          WORD    0               ; one past the last
@@ -344,7 +334,6 @@ T.SRET          WORD    0               ; SEND's return link
 T.SAVEA         WORD    0               ; the interrupted program's registers
 T.SAVEX         WORD    0
 T.CHAR          WORD    0               ; the keystroke being processed
-                ORG     X'110'          ; around the core's T.CHR2
 T.INPP          WORD    0               ; line buffer fill pointer (byte)
 T.LNRDY         WORD    0               ; a complete line is waiting
 T.BRK           WORD    0               ; Ctrl-C was seen
@@ -356,8 +345,7 @@ T.EB            WORD    0               ; the echo character lives here
 T.CB            WORD    0               ; T.PUTC's character lives here
 
 ; Constants.  There is no immediate wider than LLB's eight bits, so every
-; sixteen-bit constant is a cell.  (K.ONE is the core's, at X'11C'.)
-                ORG     X'11D'
+; sixteen-bit constant is a cell.  (K.ONE is the core's.)
 K.CRLF          WORD    X'8D8A'         ; CR, LF as a byte pair
 K.CRLFA         WORD    K.CRLF*2
 K.CRLFE         WORD    K.CRLF*2+2
@@ -371,3 +359,6 @@ K.BANE          WORD    P0BANEND*2
 
 P0BAN           TEXT    "RAY703 TINY BASIC \r\n"
 P0BANEND        EQU     $
+
+; The core follows the driver, in the same page.
+B.CORE          EQU     $
