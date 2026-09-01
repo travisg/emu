@@ -146,12 +146,29 @@ pub trait Bus {
     /// `elapsed_cycles` is how many clock cycles the machine ran since the last
     /// call, which is the only time base a device on this bus gets: nothing
     /// here reads a wall clock, so a device that takes time -- a teletype at
-    /// ten characters a second -- counts the machine's cycles instead. Virtual
-    /// time is the right base rather than an expedient one, because
-    /// `--throttle` turns it into real time for the whole machine at once.
+    /// ten characters a second -- counts the machine's cycles instead. How many
+    /// cycles that rate is worth comes from `set_device_pacing_hz`.
     fn poll_interrupt_lines(&mut self, _elapsed_cycles: u32) -> u16 {
         0
     }
+
+    /// The rate machine time is being paced at, in Hz -- the resolved
+    /// `--throttle` rate. Devices count cycles, so this is what turns a period
+    /// in seconds into a period in cycles: a device wanting ten of something a
+    /// second waits `hz / 10` cycles, and gets ten a second of *wall* time
+    /// whatever rate the cpu is held to.
+    ///
+    /// That decoupling is the point. Device periods derived from the machine's
+    /// own clock instead would scale with the throttle, so the slow-motion
+    /// demos (`--throttle 10`, or anything well under the real rate) would drag
+    /// a teletype down with the cpu and leave it minutes to the character.
+    /// Unset -- `--no-throttle`, or no `--throttle` at all -- leaves each device
+    /// on its machine's real clock rate, which is what it means for virtual
+    /// time to be the base when nothing is pacing it.
+    ///
+    /// A machine with no device timing to pace ignores this, as does a device
+    /// running at host speed under `--fast-io`.
+    fn set_device_pacing_hz(&mut self, _hz: u64) {}
 }
 
 #[cfg(test)]

@@ -253,6 +253,26 @@ impl Bus for Ray703 {
             | self.disc.poll(elapsed_cycles, &mut self.core)
             | self.line_clock.poll(elapsed_cycles)
     }
+
+    /// Hand the pacing rate to the devices whose periods are I/O completions:
+    /// the teletype's character time and the disc's access. The reader takes
+    /// no time at all -- it free-runs by design.
+    ///
+    /// The line clock is deliberately not among them, for a different reason
+    /// than it sits out `--fast-io`. A completion is one-shot and something
+    /// waits for it, so pacing it against the wall clock can only make a
+    /// machine more responsive. A periodic interrupt has to be answered, and
+    /// its period is only sane measured against what answering it costs --
+    /// which is counted in instructions, not seconds. Held to 60 Hz of wall
+    /// clock, `--throttle 10000` gives the 703 about 33 instructions between
+    /// ticks, fewer than REX's scheduler takes to switch a task, so the
+    /// machine services timer interrupts and nothing else. On its own clock
+    /// the tick stays 9,523 cycles whatever the throttle, and the same run is
+    /// a usable shell with the letter tasks ticking along behind it.
+    fn set_device_pacing_hz(&mut self, hz: u64) {
+        self.tty.set_pacing_hz(hz);
+        self.disc.set_pacing_hz(hz);
+    }
 }
 
 #[cfg(test)]
@@ -363,6 +383,31 @@ mod tests {
         assert_eq!(sys.poll_interrupt_lines(0), 0, "nothing here is instant");
         assert_eq!(sys.poll_interrupt_lines(period - 1), 0);
         assert_eq!(sys.poll_interrupt_lines(1), 1 << 2);
+    }
+
+    /// The pacing rate reaches the devices whose periods are I/O completions,
+    /// and stops at the line clock. At a hundredth of the machine's speed the
+    /// teletype's character is a hundredth of the cycles -- still a tenth of a
+    /// second of wall clock -- while the tick stays the 9,523 cycles a
+    /// scheduler was written against.
+    #[test]
+    fn the_pacing_rate_reaches_the_teletype_but_not_the_clock() {
+        let rom = scratch_file("pacing", &[0x01, 0x00]);
+        let hz = crate::cpu::ray703::CLOCK_HZ / 100;
+        let mut sys = machine("", &rom).unwrap();
+        sys.set_device_pacing_hz(hz);
+
+        let char_cycles = (hz / 10) as u32;
+        sys.io_write16(0xee, 0xc1); // DOT 14,E -- print a character
+        assert_eq!(sys.poll_interrupt_lines(char_cycles - 1), 0, "not printed yet");
+        assert_eq!(sys.poll_interrupt_lines(1), 1, "the completion, on level 0");
+
+        // ...and the clock, which is on the machine's own clock rate whatever
+        // the cpu is paced to -- 60 Hz of *machine* time, not of wall clock.
+        let period = (crate::cpu::ray703::CLOCK_HZ / 60) as u32;
+        sys.io_write16(0x21, 0); // DOT 2,1 -- connect the clock
+        assert_eq!(sys.poll_interrupt_lines(period - 1), 0, "one cycle short of a period");
+        assert_eq!(sys.poll_interrupt_lines(1), 1 << 2, "the tick, on level 2");
     }
 
     /// End to end through the real core: PTB loads an absolute tape out of a

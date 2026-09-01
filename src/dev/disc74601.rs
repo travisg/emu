@@ -89,15 +89,26 @@ const FN_VERIFY: u8 = 0x7; // 5-9.5.6
 const FN_READ_MEM_ADDR: u8 = 0x4;
 
 /// Half a revolution at 1800 RPM, the documented average access (5-9.1), as
-/// 703 clock cycles: 571,429 / 60 = 9,523. Like the teletype's character
-/// time, this is machine time, which is what makes it compose with
-/// `--throttle`.
-const AVG_ACCESS_CYCLES: u32 = (CLOCK_HZ / 60) as u32;
+/// a count of clock cycles. The divisor is the rate machine time is being
+/// paced at (`Disc74601::set_pacing_hz`), so the platter turns at 1800 RPM of
+/// wall clock whatever the cpu is being run at; unpaced it is the machine's own
+/// clock, 571,429 / 60 = 9,523.
+const HALF_REV_HZ: u64 = 60;
+fn avg_access_cycles(pacing_hz: u64) -> u32 {
+    (pacing_hz / HALF_REV_HZ) as u32
+}
 
 /// 5-9.1's "data transfer rate of 187,000 words per second" -- 100,000 bits a
-/// track, 30 revolutions a second -- is 3.05 cycles a word; 3 is as close as
-/// integer cycles get.
-const CYCLES_PER_WORD: u32 = 3;
+/// track, 30 revolutions a second. Unpaced that is 3.05 cycles a word; 3 is as
+/// close as integer cycles get.
+const WORDS_PER_SEC: u64 = 187_000;
+fn cycles_per_word(pacing_hz: u64) -> u32 {
+    (pacing_hz / WORDS_PER_SEC) as u32
+}
+
+/// The unpaced figures, the machine running at its own clock rate.
+const AVG_ACCESS_CYCLES: u32 = (CLOCK_HZ / HALF_REV_HZ) as u32;
+const CYCLES_PER_WORD: u32 = (CLOCK_HZ / WORDS_PER_SEC) as u32;
 
 /// Status word, Table 5-29. Bit 0 is the most significant bit, as everywhere
 /// on this machine; an all-zero word means ready for a new command.
@@ -175,6 +186,10 @@ pub struct Disc74601 {
     active: Option<Active>,
     /// `--fast-io`: transfers complete on the next poll.
     fast_io: bool,
+    /// Access time and transfer rate as cycle counts, from whatever rate
+    /// machine time is being paced at (`set_pacing_hz`).
+    access_cycles: u32,
+    word_cycles: u32,
 }
 
 impl Disc74601 {
@@ -188,12 +203,22 @@ impl Disc74601 {
             sector: 0,
             active: None,
             fast_io: false,
+            access_cycles: AVG_ACCESS_CYCLES,
+            word_cycles: CYCLES_PER_WORD,
         }
     }
 
     /// Run transfers at host speed instead of disc speed (`--fast-io`).
     pub fn set_fast_io(&mut self) {
         self.fast_io = true;
+    }
+
+    /// Turn the platter at 1800 RPM against a machine paced at `pacing_hz`
+    /// cycles to the second; see [`crate::bus::Bus::set_device_pacing_hz`].
+    /// `--fast-io` still outranks it, in `dot`.
+    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        self.access_cycles = avg_access_cycles(pacing_hz);
+        self.word_cycles = cycles_per_word(pacing_hz);
     }
 
     /// Mount an image file on a unit, Kaypro-floppy style: a file that simply
@@ -343,7 +368,7 @@ impl Disc74601 {
         let remaining = if self.fast_io {
             0
         } else {
-            AVG_ACCESS_CYCLES + words as u32 * CYCLES_PER_WORD
+            self.access_cycles + words as u32 * self.word_cycles
         };
         self.active = Some(Active { unit, op, words, remaining });
     }
@@ -728,6 +753,34 @@ mod tests {
         command(&mut d, FN_READ, 0x100, 0, 0, 2, 10);
         assert_eq!(finish(&mut d, &mut m), 0);
         assert_eq!(finish(&mut d, &mut m), 0, "a drive that is not spinning stays silent");
+    }
+
+    /// The platter turns at 1800 RPM of wall clock however slowly the cpu is
+    /// being run, so a transfer under a slow-motion throttle takes the sixtieth
+    /// of a second it takes on the real machine instead of a sixtieth of the
+    /// machine's cycles at the operator's leisure.
+    #[test]
+    fn the_transfer_time_follows_the_pacing_rate() {
+        for hz in [CLOCK_HZ, CLOCK_HZ / 100, 10_000] {
+            let (mut d, mut m) = (disc(), core());
+            d.set_pacing_hz(hz);
+            let total = (hz / 60) as u32 + 10 * (hz / 187_000) as u32;
+            command(&mut d, FN_READ, 0x100, 0, 0, 0, 10);
+            assert_eq!(d.poll(total - 1, &mut m), 0, "hz={hz}");
+            assert_eq!(d.poll(1, &mut m), 1 << LEVEL, "hz={hz}");
+        }
+    }
+
+    /// `--fast-io` outranks a pacing rate, whichever order the two arrive in:
+    /// the factory sets fast-io and `main` the rate, so a rate is not a way to
+    /// put a disc asked for host speed back on a spinning platter.
+    #[test]
+    fn fast_io_outranks_a_pacing_rate() {
+        let (mut d, mut m) = (disc(), core());
+        d.set_fast_io();
+        d.set_pacing_hz(CLOCK_HZ);
+        command(&mut d, FN_READ, 0x100, 0, 0, 0, 1000);
+        assert_eq!(d.poll(0, &mut m), 1 << LEVEL, "still instant");
     }
 
     #[test]

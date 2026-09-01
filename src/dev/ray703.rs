@@ -51,14 +51,14 @@
 //!
 //! "When the character has been printed" is a tenth of a second later, because
 //! the console is a Model 33 running at ten characters a second. The teletype
-//! is paced to that rate in *machine* time -- it is handed the clock cycles the
-//! CPU spent, and counts them -- rather than off a wall clock, which is what
-//! makes `--throttle` come out right: throttling paces cycles against real
-//! seconds for the whole machine at once, so under `--throttle` the printer
-//! runs at ten characters a second of real time, and unthrottled it runs at ten
-//! characters per 57,142 emulated cycles, however fast the host gets through
-//! them. The guest sees period-correct timing either way, which is the part a
-//! program can actually observe.
+//! counts that tenth in clock cycles -- it is handed the cycles the CPU spent,
+//! which is the only time base a device on this bus has -- and how many cycles
+//! the tenth is worth comes from the rate those cycles are being issued at
+//! (`Bus::set_device_pacing_hz`, the resolved `--throttle`). So a throttled
+//! machine prints ten characters a second of real time at any throttle, slow
+//! motion included, and an unpaced one prints ten per 57,142 emulated cycles
+//! however fast the host gets through them. The guest sees ten a second of its
+//! own time either way, which is the part a program can observe.
 //!
 //! One device in this file has no drawing number behind it: the 60 Hz line
 //! clock at the bottom, which is invented. Its own doc comment says so at
@@ -83,10 +83,18 @@ pub const DEV_LINE_CLOCK: u8 = 0x2;
 /// start, eight data, two stop -- which comes to exactly ten.
 const TTY_CHARS_PER_SEC: u64 = 10;
 
-/// The same rate as a count of 703 clock cycles, which is the only time base
-/// a device on this bus has -- see `Bus::poll_interrupt_lines`. 571429/10
-/// truncates to 57,142 cycles, 99.9985 ms at the 1.75 us cycle: a tenth of a
+/// The same rate as a count of clock cycles, which is the only time base a
+/// device on this bus has -- see `Bus::poll_interrupt_lines`. The divisor is
+/// the rate machine time is being paced at (`Tty703::set_pacing_hz`), so ten
+/// characters a second stays ten a second of wall clock however fast the cpu
+/// is being run; unpaced it is the machine's own clock, where 571429/10
+/// truncates to 57,142 cycles, 99.9985 ms at the 1.75 us cycle -- a tenth of a
 /// second to far better than a 1968 teletype's motor held it.
+fn tty_char_cycles(pacing_hz: u64) -> u32 {
+    (pacing_hz / TTY_CHARS_PER_SEC) as u32
+}
+
+/// The unpaced figure, the machine running at its own clock rate.
 const TTY_CHAR_CYCLES: u32 = (CLOCK_HZ / TTY_CHARS_PER_SEC) as u32;
 
 /// DIO function codes. The read functions arm a device; the collect functions
@@ -147,13 +155,17 @@ pub struct Tty703 {
     /// at a prompt. One character's credit means the first keystroke after an
     /// idle is instant and the second still waits its turn.
     rx_credit: u32,
-    /// Cycles per character, normally [`TTY_CHAR_CYCLES`]. Zero -- set by
-    /// `set_fast_io`, behind the `--fast-io` flag -- collapses every wait
-    /// above to "on the next poll", which is exactly the model this device
-    /// had before it was paced: completions still arrive one per poll and
-    /// keystrokes still queue behind an uncollected frame, only the time
-    /// is gone.
+    /// Cycles per character, [`tty_char_cycles`] of whatever rate machine time
+    /// is being paced at. Zero -- set by `set_fast_io`, behind the `--fast-io`
+    /// flag -- collapses every wait above to "on the next poll", which is
+    /// exactly the model this device had before it was paced: completions still
+    /// arrive one per poll and keystrokes still queue behind an uncollected
+    /// frame, only the time is gone.
     char_cycles: u32,
+    /// `--fast-io`, held separately from the zero it puts in `char_cycles` so
+    /// that a pacing rate arriving afterwards cannot quietly put the teletype
+    /// back to ten characters a second.
+    fast_io: bool,
 }
 
 impl Tty703 {
@@ -170,12 +182,28 @@ impl Tty703 {
             // waiting, so the first character in is free.
             rx_credit: TTY_CHAR_CYCLES,
             char_cycles: TTY_CHAR_CYCLES,
+            fast_io: false,
         }
     }
 
     /// Run at host speed instead of ten characters a second (`--fast-io`).
     pub fn set_fast_io(&mut self) {
+        self.fast_io = true;
         self.char_cycles = 0;
+    }
+
+    /// Pace the character time against `pacing_hz` cycles to the second, so
+    /// that ten characters a second is ten of wall clock rather than ten per
+    /// 571,429 emulated cycles. `--fast-io` outranks it: a device asked to run
+    /// at host speed stays there whatever the cpu is paced to.
+    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        if self.fast_io {
+            return;
+        }
+        self.char_cycles = tty_char_cycles(pacing_hz);
+        // The standing credit is one character time, and this is called before
+        // the machine runs, so the first keystroke is still free.
+        self.rx_credit = self.char_cycles;
     }
 
     pub fn dot(&mut self, function: u8, val: u16) {
@@ -407,10 +435,18 @@ impl TapeReader703 {
 /// decode's open-bus default and reads zero, exactly as when the device was
 /// not installed.
 ///
-/// Deliberately *not* affected by `--fast-io`: the clock is a time base, not
-/// an I/O completion, and an "instant" timer is an interrupt storm. That is
-/// what lets a test run `--fast-io` for an instant teletype while an
-/// executive's scheduling slices stay real machine time.
+/// The one device here whose period is machine time and stays machine time,
+/// against both `--fast-io` and the throttle's pacing rate. A completion is
+/// one-shot and something waits for it, so shortening one only ever makes a
+/// machine more responsive; a periodic interrupt has to be *answered*, and its
+/// period is sane only against what answering it costs, which is counted in
+/// instructions. Zero -- what `--fast-io` would ask for -- is an interrupt
+/// storm, and 60 Hz of wall clock under `--throttle 10000` is very nearly one:
+/// 33 instructions to the tick, fewer than REX's scheduler takes to switch a
+/// task. On the machine's own clock a tick is 9,523 cycles at any throttle, so
+/// an executive's scheduling slices stay the share of the machine they were
+/// written to be, and a test can run `--fast-io` for an instant teletype over
+/// unchanged slices.
 pub struct LineClock703 {
     level: u8,
     armed: bool,
@@ -422,10 +458,13 @@ pub struct LineClock703 {
     acc: u32,
 }
 
-/// 571,429 / 60 truncates to 9,523 cycles, 16.665 ms -- the same figure the
-/// disc uses for half a revolution, because 1800 RPM and 60 Hz are the same
-/// rate. The 0.03% truncation error is far inside any mains tolerance.
-const LINE_CLOCK_PERIOD_CYCLES: u32 = (CLOCK_HZ / 60) as u32;
+/// The mains rate, which is also 1800 RPM -- the figure the disc uses for half
+/// a revolution.
+const LINE_HZ: u64 = 60;
+
+/// 571,429 / 60 truncates to 9,523 cycles, 16.665 ms. The 0.03% truncation
+/// error is far inside any mains tolerance.
+const LINE_CLOCK_PERIOD_CYCLES: u32 = (CLOCK_HZ / LINE_HZ) as u32;
 
 const FN_LINE_CLOCK_CONNECT: u8 = 0x1;
 
@@ -686,6 +725,53 @@ mod tests {
         assert_eq!(tty.din(FN_COLLECT), 0xc2);
     }
 
+    /// The whole of the pacing feature in one invariant: characters a *wall*
+    /// second is `pacing_hz / char_cycles`, which is ten at every rate the cpu
+    /// can be held to. Slow motion is what needs it -- a teletype whose
+    /// character time stayed 57,142 cycles would take a minute a character at
+    /// `--throttle 10000`, and a full ninety-five at `--throttle 10`.
+    #[test]
+    fn a_paced_teletype_prints_ten_a_second_at_any_rate() {
+        // the machine's own clock, a hundredth of it, and the slow-motion demo
+        for hz in [CLOCK_HZ, CLOCK_HZ / 100, 10_000, 10] {
+            let (mut tty, _out) = tty_capturing(b"");
+            tty.set_pacing_hz(hz);
+            let expected = (hz / TTY_CHARS_PER_SEC) as u32;
+            assert_eq!(tty.char_cycles, expected, "hz={hz}");
+
+            tty.dot(FN_WRITE, 0xc1);
+            assert_eq!(tty.poll(expected - 1), 0, "one cycle short of a character, hz={hz}");
+            assert_eq!(tty.poll(1), 1, "hz={hz}");
+        }
+    }
+
+    /// The unpaced device is the machine at its own clock rate, so a run with
+    /// no `--throttle` is byte-identical to one from before there was a rate
+    /// to pass -- `set_device_pacing_hz` is simply never called.
+    #[test]
+    fn the_unpaced_character_time_is_the_machines_own_clock() {
+        let (mut tty, _out) = tty_capturing(b"");
+        assert_eq!(tty.char_cycles, TTY_CHAR_CYCLES);
+        tty.set_pacing_hz(CLOCK_HZ);
+        assert_eq!(tty.char_cycles, TTY_CHAR_CYCLES, "the same rate changes nothing");
+    }
+
+    /// `--fast-io` outranks a pacing rate, whichever order they arrive in.
+    /// The factory sets fast-io and `main` sets the rate afterwards, so a
+    /// setter that recomputed the character time unconditionally would put an
+    /// instant teletype back to ten a second the moment anyone throttled --
+    /// and the scripted sessions that pass `--fast-io` would slow to a crawl
+    /// under their own hang guards.
+    #[test]
+    fn fast_io_outranks_a_pacing_rate() {
+        let (mut tty, _out) = tty_capturing(b"");
+        tty.set_fast_io();
+        tty.set_pacing_hz(CLOCK_HZ);
+        assert_eq!(tty.char_cycles, 0, "still instant");
+        tty.dot(FN_WRITE, 0xc1);
+        assert_eq!(tty.poll(0), 1, "the completion needs no character time");
+    }
+
     /// Waiting on the guest does not cost the operator anything: a device that
     /// is armed with nobody typing keeps its credit, so the first keystroke
     /// after a wait is instant rather than a tenth of a second late.
@@ -870,4 +956,5 @@ mod tests {
         clk.dot(0x3, 0);
         assert_eq!(clk.poll(10 * LINE_CLOCK_PERIOD_CYCLES), 0);
     }
+
 }

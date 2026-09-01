@@ -41,10 +41,11 @@ struct Args {
     trace: Option<PathBuf>,
     throttle: ThrottleArg,
     /// `--fast-io`: devices complete instantly instead of at period rates.
-    /// A different axis from `--throttle`, which paces the machine against
-    /// the wall clock; this decides whether device models charge machine
-    /// time at all, so the two compose (a real-time CPU with an instant
-    /// terminal is the useful panel combination).
+    /// A different axis from `--throttle`, which paces the machine against the
+    /// wall clock and with it what a second of device time is worth in cycles;
+    /// this decides whether a device charges any time at all, so the two
+    /// compose (a real-time CPU with an instant terminal is the useful panel
+    /// combination) and fast-io outranks a pacing rate.
     fast_io: bool,
 }
 
@@ -68,6 +69,7 @@ fn usage(argv0: &str) {
     eprintln!("note: --trace writes one line of cpu state per instruction to tracefile.");
     eprintln!("note: --throttle paces the cpu to its real clock rate (shown above), or to an explicit rate in Hz (--throttle N or --throttle=N).");
     eprintln!("note: --no-throttle runs flat out, overriding the real-time default the panel machines carry.");
+    eprintln!("note: device periods follow the throttle rate, so a slow-motion cpu keeps a real-time terminal.");
     eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
 }
 
@@ -229,7 +231,7 @@ fn main() -> ExitCode {
     let opts = registry::MachineOpts {
         fast_io: args.fast_io,
     };
-    let machine = match (desc.factory)(&rom, endpoint, subsystem, &opts) {
+    let mut machine = match (desc.factory)(&rom, endpoint, subsystem, &opts) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("error initializing system: {e}");
@@ -281,6 +283,16 @@ fn main() -> ExitCode {
         },
         ThrottleArg::Unset => machine.throttle_hz,
     };
+
+    // Devices measure their periods in cycles, so they need the rate those
+    // cycles are being issued at to keep a tenth of a second a tenth of a
+    // second: a machine held to 10 kHz would otherwise take its teletype down
+    // with it, minutes to the character. Set after the throttle is resolved
+    // rather than through `MachineOpts`, because a machine's own default rate
+    // is only known once the factory has built it.
+    if let Some(hz) = throttle_hz {
+        machine.bus.set_device_pacing_hz(hz);
+    }
 
     let has_panel = machine.panel_control.is_some();
     let mut emu = Emulator::new(machine.cpu, machine.bus, Arc::clone(&shutdown));
