@@ -13,6 +13,10 @@
 //! keystrokes down the same channel the terminal frontend uses, and redraws the
 //! shared [`VideoBuffer`] whenever the CPU thread has dirtied it.
 //!
+//! The keyboard half is more than a passthrough: the window stands in for the
+//! Kaypro's own detached keyboard, so the keys that never sent ascii -- the
+//! arrows above all -- send what that keyboard sent. See [`keyboard_code`].
+//!
 //! The `sdl2` crate's context types are `!Send`, so main-thread confinement is
 //! enforced by the compiler; and the shutdown flag is polled inside the
 //! already-ticking loop, so the C++ `SDL_PushEvent(SDL_QUIT)` wake-up hack in
@@ -54,6 +58,76 @@ const FRAME_DELAY: Duration = Duration::from_millis(16);
 
 const PHOSPHOR: Color = Color::RGB(0, 255, 0);
 const BLACK: Color = Color::RGB(0, 0, 0);
+
+const CTRL: Mod = Mod::from_bits_truncate(Mod::LCTRLMOD.bits() | Mod::RCTRLMOD.bits());
+const SHIFT: Mod = Mod::from_bits_truncate(Mod::LSHIFTMOD.bits() | Mod::RSHIFTMOD.bits());
+
+/// The four arrow keys, as the keyboard sends them.
+///
+/// The Kaypro's keyboard is a detached serial one with an MCS-48 of its own
+/// (an NEC 8049 on the later boards), and its arrow keys and 14-key pad --
+/// the "18 programmable keys" of the sales copy -- send codes above 0x7f
+/// rather than ascii. The BIOS translates them through a pair of tables, and
+/// the stock table turns these four into the cursor motions the video section
+/// takes: ^K up, ^J down, ^H left, ^L right. Sending the raw codes rather
+/// than the translated ones is what a program that repatches that table gets
+/// to keep working with.
+const KEY_UP: u8 = 0xf1;
+const KEY_DOWN: u8 = 0xf2;
+const KEY_LEFT: u8 = 0xf3;
+const KEY_RIGHT: u8 = 0xf4;
+
+/// The byte a Kaypro keyboard sends for `key`, for the keys SDL's text input
+/// doesn't deliver: the arrows, the control codes, and the keys whose caps
+/// (BACK SPACE, DEL, LINE FEED) name a code rather than a character.
+///
+/// The keypad is deliberately absent. Its keys send codes of their own too,
+/// but the stock BIOS table maps them to exactly the digits and punctuation
+/// on the caps, which is what text input already delivers for a host keypad.
+fn keyboard_code(key: Keycode, keymod: Mod) -> Option<u8> {
+    let shift = keymod.intersects(SHIFT);
+    match key {
+        Keycode::Up => Some(KEY_UP),
+        Keycode::Down => Some(KEY_DOWN),
+        Keycode::Left => Some(KEY_LEFT),
+        Keycode::Right => Some(KEY_RIGHT),
+        Keycode::Backspace => Some(0x08),
+        Keycode::Tab => Some(0x09),
+        // the keyboard's LINE FEED key, which no host keyboard has a cap for.
+        // Distinct from Return to the guest: CP/M's line editor takes 0x0a as
+        // "end of the physical line", and it is a separate key here because
+        // it was a separate key there.
+        Keycode::Return if shift => Some(0x0a),
+        Keycode::Return | Keycode::KpEnter => Some(0x0d),
+        Keycode::Escape => Some(0x1b),
+        Keycode::Delete => Some(0x7f),
+        _ if keymod.intersects(CTRL) => control_code(key, shift),
+        _ => None,
+    }
+}
+
+/// The control code for a ctrl-modified key. SDL delivers no text input while
+/// ctrl is down, so without this the guest could never see one -- and CP/M is
+/// driven by them (^C warm start, ^S pause, ^Z end of file).
+fn control_code(key: Keycode, shift: bool) -> Option<u8> {
+    let code = key.into_i32();
+    if (Keycode::A.into_i32()..=Keycode::Z.into_i32()).contains(&code) {
+        // ctrl-a..ctrl-z are 0x01..0x1a
+        return Some((code - Keycode::A.into_i32()) as u8 + 1);
+    }
+    match key {
+        Keycode::LEFTBRACKET => Some(0x1b),
+        Keycode::BACKSLASH => Some(0x1c),
+        Keycode::RIGHTBRACKET => Some(0x1d),
+        // the shifted caps of the us layout, since ctrl-shift-6 is how a
+        // keyboard without a caret key of its own reaches 0x1e
+        Keycode::NUM_6 if shift => Some(0x1e),
+        Keycode::MINUS if shift => Some(0x1f),
+        Keycode::NUM_2 if shift => Some(0x00),
+        Keycode::SPACE => Some(0x00),
+        _ => None,
+    }
+}
 
 pub struct SdlFrontend {
     tx: Sender<u8>,
@@ -207,7 +281,14 @@ impl ConsoleFrontend for SdlFrontend {
                         return;
                     }
                     Event::TextInput { text, .. } => {
-                        for b in text.bytes() {
+                        // printable ascii only, which makes the KeyDown arm
+                        // below the single source of every byte under 0x20:
+                        // whatever text input delivers for Tab, Return or a
+                        // ctrl-modified key on any given platform, the guest
+                        // sees that byte once. It also keeps a non-ascii
+                        // character from reaching the guest as its utf-8
+                        // bytes -- one of which could be an arrow's 0xf1.
+                        for b in text.bytes().filter(|b| (0x20..0x7f).contains(b)) {
                             if !self.send(b) {
                                 shutdown.store(true, Ordering::SeqCst);
                                 return;
@@ -215,19 +296,12 @@ impl ConsoleFrontend for SdlFrontend {
                         }
                     }
                     Event::KeyDown { keycode: Some(key), keymod, .. } => {
-                        // the non-printable keys text input doesn't deliver
-                        let c = match key {
-                            Keycode::Backspace => Some(0x08),
-                            Keycode::Return => Some(0x0d),
-                            Keycode::Escape => Some(0x1b),
-                            Keycode::D if keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) => {
-                                println!("ctrl-d hit on SDL console, exiting");
-                                shutdown.store(true, Ordering::SeqCst);
-                                return;
-                            }
-                            _ => None,
-                        };
-                        if let Some(c) = c {
+                        if key == Keycode::D && keymod.intersects(CTRL) {
+                            println!("ctrl-d hit on SDL console, exiting");
+                            shutdown.store(true, Ordering::SeqCst);
+                            return;
+                        }
+                        if let Some(c) = keyboard_code(key, keymod) {
                             if !self.send(c) {
                                 shutdown.store(true, Ordering::SeqCst);
                                 return;
@@ -244,5 +318,71 @@ impl ConsoleFrontend for SdlFrontend {
 
             std::thread::sleep(FRAME_DELAY);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The arrows send the keyboard's own codes, not the cursor controls the
+    /// BIOS turns them into -- 0xf1..0xf4 in up, down, left, right order,
+    /// which is the order the BIOS table's ^K ^J ^H ^L are in.
+    #[test]
+    fn the_arrow_keys_send_the_raw_keyboard_codes() {
+        let none = Mod::NOMOD;
+        assert_eq!(keyboard_code(Keycode::Up, none), Some(0xf1));
+        assert_eq!(keyboard_code(Keycode::Down, none), Some(0xf2));
+        assert_eq!(keyboard_code(Keycode::Left, none), Some(0xf3));
+        assert_eq!(keyboard_code(Keycode::Right, none), Some(0xf4));
+    }
+
+    #[test]
+    fn the_named_keys_send_the_codes_on_their_caps() {
+        let none = Mod::NOMOD;
+        assert_eq!(keyboard_code(Keycode::Backspace, none), Some(0x08));
+        assert_eq!(keyboard_code(Keycode::Tab, none), Some(0x09));
+        assert_eq!(keyboard_code(Keycode::Return, none), Some(0x0d));
+        assert_eq!(keyboard_code(Keycode::KpEnter, none), Some(0x0d));
+        assert_eq!(keyboard_code(Keycode::Escape, none), Some(0x1b));
+        assert_eq!(keyboard_code(Keycode::Delete, none), Some(0x7f));
+    }
+
+    /// The keyboard's LINE FEED key, which shift-Return stands in for.
+    #[test]
+    fn shift_return_is_the_line_feed_key() {
+        assert_eq!(keyboard_code(Keycode::Return, Mod::LSHIFTMOD), Some(0x0a));
+    }
+
+    #[test]
+    fn ctrl_letters_reach_the_guest() {
+        assert_eq!(keyboard_code(Keycode::C, Mod::LCTRLMOD), Some(0x03));
+        assert_eq!(keyboard_code(Keycode::S, Mod::RCTRLMOD), Some(0x13));
+        assert_eq!(keyboard_code(Keycode::Z, Mod::LCTRLMOD), Some(0x1a));
+        // ctrl-@ and ctrl-space are both the null
+        assert_eq!(keyboard_code(Keycode::SPACE, Mod::LCTRLMOD), Some(0x00));
+        assert_eq!(keyboard_code(Keycode::NUM_2, Mod::LCTRLMOD | Mod::LSHIFTMOD), Some(0x00));
+        assert_eq!(keyboard_code(Keycode::LEFTBRACKET, Mod::LCTRLMOD), Some(0x1b));
+        assert_eq!(keyboard_code(Keycode::NUM_6, Mod::LCTRLMOD | Mod::LSHIFTMOD), Some(0x1e));
+        assert_eq!(keyboard_code(Keycode::MINUS, Mod::LCTRLMOD | Mod::LSHIFTMOD), Some(0x1f));
+    }
+
+    /// Unmodified printable keys are text input's job -- mapping them here
+    /// too would send every keystroke twice.
+    /// A live event carries the lock bits too -- every modifier test here is
+    /// an `intersects`, so they pass through.
+    #[test]
+    fn the_lock_modifiers_do_not_disturb_the_mapping() {
+        let live = Mod::LCTRLMOD | Mod::NUMMOD | Mod::CAPSMOD;
+        assert_eq!(keyboard_code(Keycode::C, live), Some(0x03));
+        assert_eq!(keyboard_code(Keycode::Up, Mod::NUMMOD | Mod::CAPSMOD), Some(0xf1));
+        assert_eq!(keyboard_code(Keycode::Return, Mod::LSHIFTMOD | Mod::NUMMOD), Some(0x0a));
+    }
+
+    #[test]
+    fn printable_keys_are_left_to_text_input() {
+        assert_eq!(keyboard_code(Keycode::A, Mod::NOMOD), None);
+        assert_eq!(keyboard_code(Keycode::NUM_1, Mod::LSHIFTMOD), None);
+        assert_eq!(keyboard_code(Keycode::Kp5, Mod::NOMOD), None);
     }
 }
