@@ -63,7 +63,9 @@ trap 'rm -f "$FIFO"' EXIT
 # image is named absolutely so this works from any directory -- the registry's
 # default_rom is relative to the repo root, and `make -C test ray703-test` does
 # not run there.
-script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
+# --no-throttle: a machine runs at its own clock rate unless told otherwise,
+# and the harness wants the answer rather than the period.
+script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE --no-throttle" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
 EMU_PID=$!
 
 # Hold the write end open for the emulator's whole life: closing it looks like

@@ -64,7 +64,9 @@ DISC_IMG="$WORK/disks/ray703-disc0.img"
 
 # The fifo is held open for the emulator's whole life -- closing it looks like
 # ctrl-d -- but nothing is ever typed: the guest runs to its HLT by itself.
-(cd "$WORK" && exec script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE" "$LOG_FILE") < "$FIFO" >/dev/null 2>&1 &
+# --no-throttle: a machine runs at its own clock rate unless told otherwise,
+# and the harness wants the answer rather than the period.
+(cd "$WORK" && exec script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE --no-throttle" "$LOG_FILE") < "$FIFO" >/dev/null 2>&1 &
 EMU_PID=$!
 exec 3>"$FIFO"
 

@@ -104,7 +104,9 @@ mkfifo "$FIFO"
 trap 'rm -f "$FIFO"' EXIT
 
 # -f flushes after every write, which is what makes wait_count work at all.
-script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
+# --no-throttle: a machine runs at its own clock rate unless told otherwise,
+# and the harness wants the answer rather than the period.
+script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE --no-throttle" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
 EMU_PID=$!
 
 # Hold the write end open for the emulator's whole life: closing it looks

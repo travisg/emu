@@ -62,7 +62,9 @@ DISC_IMG="$WORK/boot-disc.img"
 
 # The fifo is held open for the emulator's whole life -- closing it looks
 # like ctrl-d -- but nothing is typed: the guest boots, prints and halts.
-script -qfec "$EMU_BIN -s ray703-load -r $DISC_IMG" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
+# --no-throttle: a machine runs at its own clock rate unless told otherwise,
+# and the harness wants the answer rather than the period.
+script -qfec "$EMU_BIN -s ray703-load -r $DISC_IMG --no-throttle" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
 EMU_PID=$!
 exec 3>"$FIFO"
 

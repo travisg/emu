@@ -24,9 +24,9 @@ use std::sync::Arc;
 
 /// What `--throttle` asked for. `RealTime` means "the machine's own clock
 /// rate, from the registry"; an explicit rate gives slow motion (or fast
-/// motion) for free; `Flat` is `--no-throttle`, running uncapped even on a
-/// machine whose factory defaults real time on (the panel ones). `Unset`
-/// means neither flag was given, which leaves that default in force.
+/// motion) for free; `Flat` is `--no-throttle`, running uncapped. `Unset`
+/// means neither flag was given, which is real time on any machine whose
+/// registry entry names a clock rate -- every one of them today.
 enum ThrottleArg {
     Unset,
     Flat,
@@ -67,8 +67,9 @@ fn usage(argv0: &str) {
     eprintln!("note: system may include a subsystem suffix like '6809-obc'.");
     eprintln!("note: cpu is currently selected by system; --cpu is accepted but ignored.");
     eprintln!("note: --trace writes one line of cpu state per instruction to tracefile.");
-    eprintln!("note: --throttle paces the cpu to its real clock rate (shown above), or to an explicit rate in Hz (--throttle N or --throttle=N).");
-    eprintln!("note: --no-throttle runs flat out, overriding the real-time default the panel machines carry.");
+    eprintln!("note: a machine with a known clock rate (shown above) runs at it by default.");
+    eprintln!("note: --throttle paces the cpu to that rate, or to an explicit rate in Hz (--throttle N or --throttle=N).");
+    eprintln!("note: --no-throttle runs flat out, overriding the real-time default.");
     eprintln!("note: device periods follow the throttle rate, so a slow-motion cpu keeps a real-time terminal.");
     eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
 }
@@ -168,14 +169,10 @@ fn parse_args() -> Result<Args, ()> {
                         eprintln!("--throttle: rate must be nonzero");
                         return Err(());
                     }
-                    Some(hz) => {
-                        println!("throttling to {hz} Hz");
-                        args.throttle = ThrottleArg::Hz(hz);
-                    }
-                    None => {
-                        println!("throttling to the system's own clock rate");
-                        args.throttle = ThrottleArg::RealTime;
-                    }
+                    // The resolved rate is announced once the machine is
+                    // built, so nothing is printed here.
+                    Some(hz) => args.throttle = ThrottleArg::Hz(hz),
+                    None => args.throttle = ThrottleArg::RealTime,
                 }
             }
             "--no-throttle" => {
@@ -265,9 +262,11 @@ fn main() -> ExitCode {
     };
 
     // Throttle precedence: --no-throttle and an explicit rate beat a bare
-    // --throttle (the machine's own clock, from the registry), which beats
-    // the machine factory's default; nothing given runs flat out except on
-    // the machines whose factory defaults real time (the panel ones).
+    // --throttle (the machine's own clock, from the registry), which is also
+    // what nothing given resolves to -- a machine runs at the rate its real
+    // counterpart ran at unless told otherwise. A machine whose registry entry
+    // names no clock falls back to whatever rate its factory chose, and runs
+    // flat out if that is none either.
     let throttle_hz = match args.throttle {
         ThrottleArg::Flat => None,
         ThrottleArg::Hz(hz) => Some(hz),
@@ -281,7 +280,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         },
-        ThrottleArg::Unset => machine.throttle_hz,
+        ThrottleArg::Unset => desc.clock_hz.or(machine.throttle_hz),
     };
 
     // Devices measure their periods in cycles, so they need the rate those
@@ -290,8 +289,12 @@ fn main() -> ExitCode {
     // with it, minutes to the character. Set after the throttle is resolved
     // rather than through `MachineOpts`, because a machine's own default rate
     // is only known once the factory has built it.
-    if let Some(hz) = throttle_hz {
-        machine.bus.set_device_pacing_hz(hz);
+    match throttle_hz {
+        Some(hz) => {
+            machine.bus.set_device_pacing_hz(hz);
+            println!("throttling cpu to {hz} Hz");
+        }
+        None => println!("cpu is unthrottled"),
     }
 
     let has_panel = machine.panel_control.is_some();

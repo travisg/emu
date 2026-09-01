@@ -27,9 +27,10 @@ pub struct Machine {
     /// `None` for terminal-only machines, which use the console's serial
     /// output instead.
     pub display: Option<Display>,
-    /// A machine that wants real time by default sets its clock rate here
-    /// (a live front panel is meaningless uncapped); `None` runs flat out.
-    /// `--throttle` on the command line overrides either way.
+    /// A machine that wants real time whatever the registry says sets its
+    /// clock rate here (a live front panel is meaningless uncapped). `None`
+    /// leaves the default to the registry's `clock_hz`; the command line
+    /// overrides either way.
     pub throttle_hz: Option<u64>,
     /// The receiving end of a front panel's command channel, for
     /// `Emulator::set_panel_control`; its presence is also what makes HLT
@@ -140,8 +141,9 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
         display = Some(Display::Panel703 { title: "Raytheon 703", panel: state, control: ctl_tx });
         panel_control = Some(ctl_rx);
         // A live panel is meaningless uncapped -- the lamps would be a
-        // uniform blur -- so panel machines default to real time. --throttle
-        // on the command line still overrides.
+        // uniform blur -- so a panel machine asks for real time even if its
+        // registry entry names no clock rate to default to. --no-throttle on
+        // the command line still overrides.
         throttle_hz = Some(crate::cpu::ray703::CLOCK_HZ);
     }
 

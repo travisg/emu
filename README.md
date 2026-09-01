@@ -75,7 +75,15 @@ Run a system:
 ./target/debug/emu -s 6809 -r roms/6809/BASIC.HEX
 ./target/debug/emu -s 6809 -l 1000000       # stop after a million instructions
 ./target/debug/emu -s 6809 -t trace.txt     # log one line of CPU state per instruction
+./target/debug/emu -s 6809 --no-throttle    # flat out instead of at the real 1.8432 MHz
+./target/debug/emu -s 6809 --throttle 10000 # slow motion, 10 kHz
 ```
+
+Every machine runs at the clock rate its real counterpart ran at — the rate `-h` lists, announced at
+startup — so a guest runs at period speed. `--no-throttle` runs the CPU as fast as the
+host can, which is what a scripted run wants; `--throttle N` names a rate in Hz. The pacing is a knob
+on the CPU alone: a device keeps its own timing whatever the CPU is doing, so a 703 held to 10 kHz
+still has a teletype printing ten characters a second.
 
 The terminal systems run in raw mode and pass Ctrl-C through to the guest. **Ctrl-D exits**; so does
 closing the Kaypro window.
@@ -110,7 +118,7 @@ of the bit behind them rather than flickering. **A panel machine starts halted, 
 at power-on — press RUN.**
 
 ```bash
-./target/debug/emu -s ray703-panel                    # throttled to 571 kHz so the lamps move
+./target/debug/emu -s ray703-panel                    # at its own 571 kHz, so the lamps move
 ./target/debug/emu -s ray703-panel-ptb -r roms/703/tape.tape --throttle 10   # a tape, in slow motion
 ./target/debug/emu -s ray703 --fast-io                # skip the teletype's real 10 chars/sec
 ```

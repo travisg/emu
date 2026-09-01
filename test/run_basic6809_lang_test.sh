@@ -45,7 +45,9 @@ trap 'rm -f "$TMP_INPUT" "$TMP_CRLF"' EXIT
 perl -pe 's/\n/\r/g' "$TMP_INPUT" > "$TMP_CRLF"
 printf '\004' >> "$TMP_CRLF"
 
-script -qfec "$EMU_BIN -s 6809 -r $ROM_FILE" "$LOG_FILE" < "$TMP_CRLF"
+# --no-throttle: a machine runs at its own clock rate unless told otherwise,
+# and the harness wants the answer rather than the period.
+script -qfec "$EMU_BIN -s 6809 -r $ROM_FILE --no-throttle" "$LOG_FILE" < "$TMP_CRLF"
 
 if grep -q "BASIC LANGUAGE TEST PASS" "$LOG_FILE" \
     && ! grep -Eq '^[[:space:]]*FAIL[[:space:]]' "$LOG_FILE" \
