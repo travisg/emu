@@ -183,10 +183,9 @@ impl Ray703 {
     pub fn set_fast_io(&mut self) {
         self.tty.set_fast_io();
         self.disc.set_fast_io();
-        // The line clock deliberately keeps its 60 Hz period: it is a time
-        // base, not an I/O completion, and an "instant" timer is an
-        // interrupt storm. This is what lets a test run --fast-io for an
-        // instant teletype while scheduling slices stay real machine time.
+        // Not the line clock: a periodic interrupt with no period never
+        // returns. That is what lets a test run --fast-io for an instant
+        // teletype over unchanged scheduling slices.
     }
 
     /// Try to mount a disc image on one of the controller's four units.
@@ -258,20 +257,14 @@ impl Bus for Ray703 {
     /// the teletype's character time and the disc's access. The reader takes
     /// no time at all -- it free-runs by design.
     ///
-    /// The line clock is deliberately not among them, for a different reason
-    /// than it sits out `--fast-io`. A completion is one-shot and something
-    /// waits for it, so pacing it against the wall clock can only make a
-    /// machine more responsive. A periodic interrupt has to be answered, and
-    /// its period is only sane measured against what answering it costs --
-    /// which is counted in instructions, not seconds. Held to 60 Hz of wall
-    /// clock, `--throttle 10000` gives the 703 about 33 instructions between
-    /// ticks, fewer than REX's scheduler takes to switch a task, so the
-    /// machine services timer interrupts and nothing else. On its own clock
-    /// the tick stays 9,523 cycles whatever the throttle, and the same run is
-    /// a usable shell with the letter tasks ticking along behind it.
+    /// The line clock takes it too: the mains does not slow down because the
+    /// cpu did. It sits out only `--fast-io`, which is the other axis --
+    /// whether a device charges time at all, rather than what a second of it
+    /// is worth in cycles.
     fn set_device_pacing_hz(&mut self, hz: u64) {
         self.tty.set_pacing_hz(hz);
         self.disc.set_pacing_hz(hz);
+        self.line_clock.set_pacing_hz(hz);
     }
 }
 
@@ -385,13 +378,12 @@ mod tests {
         assert_eq!(sys.poll_interrupt_lines(1), 1 << 2);
     }
 
-    /// The pacing rate reaches the devices whose periods are I/O completions,
-    /// and stops at the line clock. At a hundredth of the machine's speed the
-    /// teletype's character is a hundredth of the cycles -- still a tenth of a
-    /// second of wall clock -- while the tick stays the 9,523 cycles a
-    /// scheduler was written against.
+    /// The pacing rate reaches every device with a period, the line clock
+    /// included. At a hundredth of the machine's speed a teletype character
+    /// and a clock tick are both a hundredth of the cycles, which is what
+    /// keeps each of them the fraction of a *wall* second it claims to be.
     #[test]
-    fn the_pacing_rate_reaches_the_teletype_but_not_the_clock() {
+    fn the_pacing_rate_reaches_the_teletype_and_the_clock() {
         let rom = scratch_file("pacing", &[0x01, 0x00]);
         let hz = crate::cpu::ray703::CLOCK_HZ / 100;
         let mut sys = machine("", &rom).unwrap();
@@ -402,9 +394,7 @@ mod tests {
         assert_eq!(sys.poll_interrupt_lines(char_cycles - 1), 0, "not printed yet");
         assert_eq!(sys.poll_interrupt_lines(1), 1, "the completion, on level 0");
 
-        // ...and the clock, which is on the machine's own clock rate whatever
-        // the cpu is paced to -- 60 Hz of *machine* time, not of wall clock.
-        let period = (crate::cpu::ray703::CLOCK_HZ / 60) as u32;
+        let period = (hz / 60) as u32;
         sys.io_write16(0x21, 0); // DOT 2,1 -- connect the clock
         assert_eq!(sys.poll_interrupt_lines(period - 1), 0, "one cycle short of a period");
         assert_eq!(sys.poll_interrupt_lines(1), 1 << 2, "the tick, on level 2");

@@ -60,9 +60,15 @@
 //! however fast the host gets through them. The guest sees ten a second of its
 //! own time either way, which is the part a program can observe.
 //!
-//! One device in this file has no drawing number behind it: the 60 Hz line
-//! clock at the bottom, which is invented. Its own doc comment says so at
-//! length.
+//! The 60 Hz line clock at the bottom is paced the same way and for the same
+//! reason, sixty a second of wall clock being what a mains tap gives. It is
+//! also the one device in this file with no drawing number behind it -- it is
+//! invented, and its own doc comment says so at length.
+//!
+//! The rule those two share is the whole of it: `--throttle` is a knob on the
+//! cpu, and a device keeps the rate its real counterpart ran at however fast
+//! the cpu is being run. `--fast-io` is the only thing that takes a device off
+//! that rate, and it takes it to no rate at all.
 
 use crate::console::ConsoleEndpoint;
 use crate::cpu::ray703::CLOCK_HZ;
@@ -399,14 +405,11 @@ impl TapeReader703 {
     /// off the end simply stops interrupting, which is what an operator sees
     /// when the tape runs out of the reader.
     ///
-    /// Deliberately *not* paced to the reader's 300 frames a second, though
-    /// `elapsed` is here for the day it should be. Two reasons. Nothing
-    /// watches a tape go by -- the reader has no output, so its rate decides
-    /// only how long a load takes, where the teletype's rate is the whole
-    /// character-by-character texture of using the machine. And pacing it
-    /// would cost 1,905 cycles a frame -- over three minutes a frame under the
-    /// `ray703-panel-ptb --throttle 10` slow-motion demo, which would replace
-    /// a tape load one can watch with one that never visibly finishes.
+    /// The one device here that free-runs instead of keeping its real rate,
+    /// though `elapsed` is here for the day it should take its 300 frames a
+    /// second. Nothing watches a tape go by: the reader has no output, so its
+    /// rate decides only how long a load takes, where the teletype's rate is
+    /// the whole character-by-character texture of using the machine.
     pub fn poll(&mut self, _elapsed: u32) -> u16 {
         if !self.running || self.frame.is_some() || self.pos >= self.frames.len() {
             return 0;
@@ -435,18 +438,18 @@ impl TapeReader703 {
 /// decode's open-bus default and reads zero, exactly as when the device was
 /// not installed.
 ///
-/// The one device here whose period is machine time and stays machine time,
-/// against both `--fast-io` and the throttle's pacing rate. A completion is
-/// one-shot and something waits for it, so shortening one only ever makes a
-/// machine more responsive; a periodic interrupt has to be *answered*, and its
-/// period is sane only against what answering it costs, which is counted in
-/// instructions. Zero -- what `--fast-io` would ask for -- is an interrupt
-/// storm, and 60 Hz of wall clock under `--throttle 10000` is very nearly one:
-/// 33 instructions to the tick, fewer than REX's scheduler takes to switch a
-/// task. On the machine's own clock a tick is 9,523 cycles at any throttle, so
-/// an executive's scheduling slices stay the share of the machine they were
-/// written to be, and a test can run `--fast-io` for an instant teletype over
-/// unchanged slices.
+/// Sixty a second is sixty a second of wall clock, the mains being the mains,
+/// so the period follows the rate machine time is being paced at
+/// (`set_pacing_hz`, the resolved `--throttle`) exactly as the teletype's
+/// character time does. `--throttle` is a knob on the cpu; the hardware around
+/// it keeps its own rate.
+///
+/// `--fast-io` is the one thing that takes a device off that rate, and it is
+/// the one flag this device sits out: a completion is one-shot and something
+/// waits for it, so making one instant only makes a machine more responsive,
+/// where a periodic interrupt with no period at all never returns. So
+/// `Ray703::set_fast_io` does not reach the clock, and a test can run
+/// `--fast-io` for an instant teletype over unchanged scheduling slices.
 pub struct LineClock703 {
     level: u8,
     armed: bool,
@@ -456,21 +459,49 @@ pub struct LineClock703 {
     /// and resetting would lose up to an instruction's worth of cycles on
     /// every tick.
     acc: u32,
+    /// Cycles to the tick, [`line_clock_period_cycles`] of whatever rate
+    /// machine time is being paced at.
+    period_cycles: u32,
 }
 
 /// The mains rate, which is also 1800 RPM -- the figure the disc uses for half
 /// a revolution.
 const LINE_HZ: u64 = 60;
 
-/// 571,429 / 60 truncates to 9,523 cycles, 16.665 ms. The 0.03% truncation
-/// error is far inside any mains tolerance.
+/// The mains rate as a count of clock cycles, which is the only time base a
+/// device on this bus has -- see `Bus::poll_interrupt_lines`. The divisor is
+/// the rate machine time is being paced at (`LineClock703::set_pacing_hz`).
+///
+/// The floor of one cycle guards the modulus in `poll`, which a pacing rate
+/// under 60 Hz would otherwise divide by zero. It guards nothing else: a cpu
+/// held that far below its own rate cannot answer sixty ticks a second, and
+/// choosing such a throttle is choosing that.
+fn line_clock_period_cycles(pacing_hz: u64) -> u32 {
+    ((pacing_hz / LINE_HZ) as u32).max(1)
+}
+
+/// The unpaced figure, the machine running at its own clock rate: 571,429 / 60
+/// truncates to 9,523 cycles, 16.665 ms. The 0.03% truncation error is far
+/// inside any mains tolerance.
 const LINE_CLOCK_PERIOD_CYCLES: u32 = (CLOCK_HZ / LINE_HZ) as u32;
 
 const FN_LINE_CLOCK_CONNECT: u8 = 0x1;
 
 impl LineClock703 {
     pub fn new(level: u8) -> Self {
-        LineClock703 { level, armed: false, acc: 0 }
+        LineClock703 { level, armed: false, acc: 0, period_cycles: LINE_CLOCK_PERIOD_CYCLES }
+    }
+
+    /// Pace the tick against `pacing_hz` cycles to the second, so that sixty a
+    /// second is sixty of wall clock rather than sixty per 571,429 emulated
+    /// cycles. Unlike the teletype there is no `--fast-io` to outrank it: the
+    /// clock is never asked to run at host speed.
+    ///
+    /// The banked cycles are left alone -- the modulus in `poll` absorbs an
+    /// overhang from the old period, so a rate arriving mid-run costs at most
+    /// one early tick, and the rate arrives before the machine runs anyway.
+    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        self.period_cycles = line_clock_period_cycles(pacing_hz);
     }
 
     pub fn dot(&mut self, function: u8, _val: u16) {
@@ -491,8 +522,8 @@ impl LineClock703 {
             return 0;
         }
         self.acc = self.acc.saturating_add(elapsed);
-        if self.acc >= LINE_CLOCK_PERIOD_CYCLES {
-            self.acc %= LINE_CLOCK_PERIOD_CYCLES;
+        if self.acc >= self.period_cycles {
+            self.acc %= self.period_cycles;
             return 1 << self.level;
         }
         0
@@ -957,4 +988,40 @@ mod tests {
         assert_eq!(clk.poll(10 * LINE_CLOCK_PERIOD_CYCLES), 0);
     }
 
+    /// The whole of the clock's pacing in one invariant, the teletype's test
+    /// in the other units: ticks a *wall* second is `pacing_hz /
+    /// period_cycles`, which is sixty at every rate the cpu can be held to.
+    #[test]
+    fn the_tick_is_sixty_a_wall_second_at_every_pacing_rate() {
+        for hz in [CLOCK_HZ, CLOCK_HZ / 100, CLOCK_HZ * 4, 10_000, 1_000_000] {
+            let mut clk = LineClock703::new(2);
+            clk.set_pacing_hz(hz);
+            clk.dot(FN_LINE_CLOCK_CONNECT, 0);
+            let mut pulses = 0;
+            // one wall second of machine time, an instruction's worth at a time
+            let mut fed = 0;
+            while fed < hz as u32 {
+                let chunk = 7.min(hz as u32 - fed);
+                if clk.poll(chunk) != 0 {
+                    pulses += 1;
+                }
+                fed += chunk;
+            }
+            assert_eq!(pulses, LINE_HZ, "{hz} Hz");
+        }
+    }
+
+    /// The floor keeps the modulus in `poll` from dividing by zero when the
+    /// pacing rate is under 60 Hz. One cycle to the tick is as fast as the
+    /// device goes; whether a cpu paced that slowly can answer it is the
+    /// operator's problem, not the device's.
+    #[test]
+    fn a_pacing_rate_under_sixty_hertz_floors_at_one_cycle() {
+        let mut clk = LineClock703::new(2);
+        clk.set_pacing_hz(10);
+        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
+        assert_eq!(clk.poll(0), 0, "not even the floor ticks on no cycles at all");
+        assert_eq!(clk.poll(1), 1 << 2);
+        assert_eq!(clk.poll(1), 1 << 2);
+    }
 }

@@ -155,16 +155,16 @@ pub trait Bus {
     /// The rate machine time is being paced at, in Hz -- the resolved
     /// `--throttle` rate. Devices count cycles, so this is what turns a period
     /// in seconds into a period in cycles: a device wanting ten of something a
-    /// second waits `hz / 10` cycles, and gets ten a second of *wall* time
-    /// whatever rate the cpu is held to.
+    /// second waits `hz / 10` cycles.
     ///
-    /// That decoupling is the point. Device periods derived from the machine's
-    /// own clock instead would scale with the throttle, so the slow-motion
-    /// demos (`--throttle 10`, or anything well under the real rate) would drag
-    /// a teletype down with the cpu and leave it minutes to the character.
-    /// Unset -- `--no-throttle`, or no `--throttle` at all -- leaves each device
-    /// on its machine's real clock rate, which is what it means for virtual
-    /// time to be the base when nothing is pacing it.
+    /// `--throttle` is a knob on the cpu and only the cpu. A device keeps the
+    /// rate its real counterpart ran at -- ten characters a second, sixty
+    /// ticks a second -- however fast the cpu is being run, which is what this
+    /// call is for; periods derived from the machine's own clock instead would
+    /// scale with the throttle and drag a teletype down to minutes to the
+    /// character. Unset -- `--no-throttle`, or no `--throttle` at all -- leaves
+    /// each device on its machine's real clock rate, virtual time being the
+    /// base when nothing is pacing it.
     ///
     /// A machine with no device timing to pace ignores this, as does a device
     /// running at host speed under `--fast-io`.
