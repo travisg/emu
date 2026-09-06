@@ -7,12 +7,13 @@ set -euo pipefail
 # teletype driver all working at once -- load the hello module off a scratch
 # platter both ways (RUN, which waits for it, and LOAD, which leaves it
 # running behind the prompt) and see the pool's free words come back once
-# it has exited, then run two Tiny BASIC sessions through the shell's
-# BASIC command (a program entered and RUN, a silent GOTO loop broken with
-# Ctrl-C via the kernel's break flag, BYE handing the console back, and a
-# second session LISTing the program the heap kept), then drive the rest
-# of the commands and shut the machine down with HALT. The letter tasks
-# come up stopped, so nothing prints until this asks it to.
+# it has exited, then run two Tiny BASIC sessions -- the module loaded
+# off the platter by RUN BASIC and by the BASIC alias: a program entered
+# and RUN, a silent GOTO loop broken with Ctrl-C via the kernel's break
+# flag, BYE handing the console and the memory back, and a second session
+# starting afresh -- then drive the rest of the commands and shut the
+# machine down with HALT. The letter tasks come up stopped, so nothing
+# prints until this asks it to.
 #
 # The platter is made fresh in a scratch directory and the emulator run
 # from there, since it mounts disks/ray703-disc0.img relative to where it
@@ -36,6 +37,7 @@ ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 EMU_BIN="${EMU_BIN:-$ROOT_DIR/target/debug/emu}"
 ROM_FILE="$SCRIPT_DIR/build/rex.bin"
 HELLO_OBJ="$SCRIPT_DIR/build/hello.obj"
+BASIC_OBJ="$SCRIPT_DIR/build/basic.obj"
 LOG_FILE="${1:-$SCRIPT_DIR/build/rex_test.log}"
 
 if [[ ! -x "$EMU_BIN" ]]; then
@@ -44,8 +46,8 @@ if [[ ! -x "$EMU_BIN" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$ROM_FILE" || ! -f "$HELLO_OBJ" ]]; then
-    echo "error: $ROM_FILE or $HELLO_OBJ is missing" >&2
+if [[ ! -f "$ROM_FILE" || ! -f "$HELLO_OBJ" || ! -f "$BASIC_OBJ" ]]; then
+    echo "error: $ROM_FILE, $HELLO_OBJ or $BASIC_OBJ is missing" >&2
     echo "build them with: make -C rex all modules" >&2
     exit 1
 fi
@@ -111,7 +113,10 @@ wait_quiet() {
     return 0
 }
 
-PROMPT='REX> '
+# The prompt, allowing for a letter task's letter landing anywhere inside
+# it: the printer changes hands character by character, so a task started
+# at the prompt can put its letter between any two of the shell's.
+PROMPT='R[ABC]*E[ABC]*X[ABC]*>'
 
 # Set once the letter tasks have been seen running, after START and before
 # anything else is typed, which is the only window in which counting their
@@ -161,9 +166,10 @@ mkdir -p "$(dirname "$LOG_FILE")"
 : > "$LOG_FILE"
 trap 'rm -f "$FIFO"; rm -rf "$WORK"' EXIT
 
-# The platter: hello on it, under the catalogue the loader reads.
+# The platter: the modules on it, under the catalogue the loader reads.
 mkdir -p "$WORK/disks"
-"$ROOT_DIR/tools/mkdisc703.py" "$WORK/disks/ray703-disc0.img" --add HELLO "$HELLO_OBJ" >/dev/null
+"$ROOT_DIR/tools/mkdisc703.py" "$WORK/disks/ray703-disc0.img" \
+    --add HELLO "$HELLO_OBJ" --add BASIC "$BASIC_OBJ" >/dev/null
 
 # -f flushes after every write, which is what makes the polling work at all.
 # The image is named absolutely so this works from any directory.
@@ -236,12 +242,13 @@ if wait_for 'REX 703 UP'; then
     say 'MEM'
     say 'RUN NOPE'
 
-    # A BASIC session: the console changes hands, a program goes in and
-    # runs, and Ctrl-C -- which never enters the queue; SERV raises the
-    # kernel's break flag -- stops a loop that prints nothing and reads
-    # nothing. Each line is paced on BASIC's own READY count, the way the
-    # standalone test paces on its prompt.
-    say 'BASIC'
+    # A BASIC session: the module comes off the platter, the console
+    # changes hands, a program goes in and runs, and Ctrl-C -- which never
+    # enters the queue; SERV raises the kernel's break flag -- stops a
+    # loop that prints nothing and reads nothing. Each line is paced on
+    # BASIC's own READY count, the way the standalone test paces on its
+    # prompt.
+    say 'RUN BASIC'
     wait_for 'TINY BASIC UNDER REX' || true
     wait_count 'READY' 1 && wait_quiet && printf '10 FOR I=1 TO 3\r' >&3
     wait_count 'READY' 2 && wait_quiet && printf '20 PRINT "SQ";I*I\r' >&3
@@ -252,10 +259,12 @@ if wait_for 'REX 703 UP'; then
     wait_for 'BREAK AT 50' || true
     wait_count 'READY' 6 && wait_quiet && printf 'BYE\r' >&3
 
-    # Back at the shell: BASIC's node shows OFF, and a second session
-    # finds the program still in the heap -- BYE parks the task, it does
-    # not reset it.
+    # Back at the shell: BYE gave back the module, its node and its
+    # workspace, so STAT has no BASIC node, MEM reads as before, and a
+    # second session -- BASIC is RUN BASIC under a shorter name -- starts
+    # afresh, with nothing to LIST.
     say 'STAT'
+    say 'MEM'
     say 'BASIC'
     wait_count 'READY' 7 && wait_quiet && printf 'LIST\r' >&3
     wait_count 'READY' 8 && wait_quiet && printf 'BYE\r' >&3
@@ -280,7 +289,8 @@ wait "$EMU_PID" || true
 # on a line of its own (the terminal's echo of the command that asked for it
 # begins with the prompt instead), the refusal, hello's line and its node in
 # a STAT, the catalogue's refusal, every MEM agreeing (the pool is whole
-# again after each load), and B alone back at work -- and, since A and C
+# again after each load, BASIC's included), the program typed once and
+# LISTed never, and B alone back at work -- and, since A and C
 # stay stopped through all of it, that the two letters they would otherwise
 # have printed never appear after the START.
 if grep -q 'REX 703 UP' "$LOG_FILE" \
@@ -288,7 +298,6 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && grep -q 'UPTIME [0-9][0-9]* SEC' "$LOG_FILE" \
     && grep -q '^A  OFF' "$LOG_FILE" \
     && grep -q '^SH RUN' "$LOG_FILE" \
-    && grep -q '^BA OFF' "$LOG_FILE" \
     && grep -q '^ID RUN' "$LOG_FILE" \
     && grep -q '^COMMANDS HELP STAT UPTIME' "$LOG_FILE" \
     && grep -q '^SHELL OUTPUT OK' "$LOG_FILE" \
@@ -296,12 +305,12 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && grep -q '^HELLO FROM WORD [0-9]' "$LOG_FILE" \
     && grep -q '^HE ' "$LOG_FILE" \
     && grep -q '^NO SUCH FILE' "$LOG_FILE" \
-    && (( $(grep -c '^FREE [0-9]' "$LOG_FILE") >= 3 )) \
+    && (( $(grep -c '^FREE [0-9]' "$LOG_FILE") >= 4 )) \
     && (( $(grep '^FREE [0-9]' "$LOG_FILE" | sort -u | wc -l) == 1 )) \
     && grep -q 'TINY BASIC UNDER REX' "$LOG_FILE" \
     && grep -q '^SQ9' "$LOG_FILE" \
     && grep -q 'BREAK AT 50' "$LOG_FILE" \
-    && (( $(grep -c '20 PRINT "SQ"' "$LOG_FILE") >= 2 )) \
+    && (( $(grep -c '20 PRINT "SQ"' "$LOG_FILE") == 1 )) \
     && (( $(after_start | tr -cd 'B' | wc -c) >= 3 )) \
     && (( $(after_start | tr -cd 'AC' | wc -c) == 0 )) \
     && grep -q 'REX 703 DOWN' "$LOG_FILE" \

@@ -40,6 +40,7 @@
 ;   2000-3FFF  workspace, all of it EQU-defined so the image stays small
 
 REXGLUE         EQU     0               ; BYE halts the machine
+B.ENTRY         EQU     START           ; where the program starts
 
 ; ---------------------------------------------------------------- level 0
                 ORG     0

@@ -3,16 +3,17 @@
 ; REX -- Raytheon EXec: a round-robin executive for the 703, preemptive
 ; and cooperative at once.
 ;
-; Five tasks share the processor, their control blocks a ring of linked
-; nodes the scheduler walks.  Three print a letter through an
-; interrupt-driven teletype driver and then sleep for a fixed number of
-; ticks, so the scheduling is visible in the output: the letters arrive
-; at their own intervals, and when every task is asleep the idle task --
-; a sixth node, off the ring -- has the processor.  One is a shell, which
-; waits on a queue of keystrokes and runs a command.  And one is Tiny
-; BASIC -- the interpreter of bcore.asm behind the glue of brex.asm --
-; which the shell's BASIC command hands the console to, and whose BYE
-; hands it back with the stored program kept for the next session.
+; Four tasks share the processor at power-on, their control blocks a ring
+; of linked nodes the scheduler walks, and whatever the shell loads joins
+; them.  Three print a letter through an interrupt-driven teletype driver
+; and then sleep for a fixed number of ticks, so the scheduling is
+; visible in the output: the letters arrive at their own intervals, and
+; when every task is asleep the idle task -- a fifth node, off the ring
+; -- has the processor.  One is a shell, which waits on a queue of
+; keystrokes and runs a command, and can load a module off the disc as a
+; task of its own: Tiny BASIC, the interpreter of test/703/bcore.asm
+; behind the glue of brex.asm, is one, and RUN BASIC hands it the console
+; until its BYE.
 ;
 ; The letter tasks come up stopped; START sets them going.  The commands:
 ;
@@ -25,7 +26,7 @@
 ;   MEM          the words free in the pool
 ;   LOAD name    a module off the disc, run behind the prompt
 ;   RUN  name    the same, given the console until it exits
-;   BASIC        the console goes to Tiny BASIC, until its BYE
+;   BASIC        RUN BASIC
 ;   HALT         park the tasks, drain the printer and stop the machine
 ;
 ; The Model 33 echoes what is typed in hardware, so the keyboard is armed
@@ -123,14 +124,14 @@
 ;   which was the shape of the bug basic.asm had.
 ;
 ; * THE CONSOLE HAS ONE READER AT A TIME, and CONBSY says which: the
-;   shell when it is clear, BASIC when it is set.  The shell's BASIC
-;   command raises it in the same masked window that sets the task
-;   running, then waits on the cell itself -- reading no queue -- until
-;   BASIC's BYE clears it, wakes the shell under SERV's guard, and parks
-;   the task.  Ctrl-C never enters the queue at all: SERV raises BRKREQ
-;   instead, so a running program that reads no input can still be
-;   broken, and the grant clears the flag so a break aimed at nobody
-;   cannot land on the session that follows it.
+;   shell when it is clear, the task RUN loaded when it is set.  RUN
+;   raises it in the same masked window that clears the break flag, then
+;   waits on the cell itself -- reading no queue -- until the task's
+;   K.EXIT clears it and wakes the shell under SERV's guard.  Ctrl-C
+;   never enters the queue at all: SERV raises BRKREQ instead, so a
+;   running program that reads no input can still be broken, and the
+;   grant clears the flag so a break aimed at nobody cannot land on the
+;   session that follows it.
 ;
 ; * SHUTDOWN ORDERING.  Every letter task reads SHUTREQ inside the same
 ;   masked window as its deposit, and the shell -- the only writer of
@@ -216,11 +217,13 @@
 ;              nodes run -- and the allocator
 ;   0800-      page 1: the shell -- banner, prompt, commands, line
 ;              buffer -- and its loader, with the sector it reads
-;   3000-3FFF  the pool, which the allocator hands out
+;   1000-3FFF  the pool, which the allocator hands out: what the shell
+;              loads, its nodes and its workspaces live there
 ;
-; Build with make -C rex: asm703.py over this file, brex.asm and the
-; interpreter in test/703/bcore.asm, into rex/build.  Run, from the repo
-; root:
+; Build with make -C rex: asm703.py over this file into rex/build, and the
+; modules beside it -- brex.asm over test/703/bcore.asm is basic.obj, the
+; module RUN BASIC loads.  make -C rex disc puts them on the platter, and
+; then, from the repo root:
 ;
 ;   ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io
 
@@ -327,12 +330,12 @@ Q.BUF           EQU     4               ; word address of the ring
 Q.WTR           EQU     5               ; the block waiting, or -1
 QW              EQU     6               ; words per descriptor
 
-NRING           EQU     5               ; nodes on the ring: A, B, C, the
-                                        ; shell and BASIC.  Idle is off it,
-                                        ; the scans' explicit fallback.
+NRING           EQU     4               ; nodes on the ring at power-on: A,
+                                        ; B, C and the shell.  Idle is off
+                                        ; it, the scans' explicit fallback.
 
-POOLB           EQU     X'3000'         ; the pool: core the allocator hands
-POOLE           EQU     X'4000'         ; out, above BASIC's heap
+POOLB           EQU     X'1000'         ; the pool: core the allocator hands
+POOLE           EQU     X'4000'         ; out, from the end of the image
 
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
@@ -869,23 +872,21 @@ KGLB            WORD    X'0080'         ; doubled are a status word's EXR field
 KISRB           WORD    ISRBEG
 KISRE           WORD    ISREND
 
-; The task control nodes: A -> B -> C -> SH -> BA and round again, with
-; idle off the ring and its link re-entering it, which is what lets every
-; walk start uniformly at *T.NXT.  The shell's context is blank because
-; the kernel becomes the shell and the first tick fills it in.  A status
-; is GLB (X'80') plus the entry page in the EXR field, which for a
-; 1024-word-aligned entry is exactly the entry doubled -- BASIC's entry
-; is pinned to such a boundary, while LTASK and IDLE live in page 0 and
-; their EXR is therefore plain zero.  A zero status word would resume a
-; task in local mode pointed at page 0.
+; The task control nodes: A -> B -> C -> SH and round again, with idle
+; off the ring and its link re-entering it, which is what lets every walk
+; start uniformly at *T.NXT.  The shell's context is blank because the
+; kernel becomes the shell and the first tick fills it in.  A status is
+; GLB (X'80') plus the entry page in the EXR field, and LTASK and IDLE
+; live in page 0, so theirs is plain zero; SPAWN builds one for whatever
+; the loader brings in.  A zero status word would resume a task in local
+; mode pointed at page 0.
 ;
-;                    STA    NXT   ACR IXR PCR    MST            DLY MBX CHR NAP NAM  CON
-ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80',         0,  0,  'A',30, 'A ',0
-BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80',         0,  0,  'B',45, 'B ',0
-CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80',         0,  0,  'C',60, 'C ',0
-SHTCB           WORD SRUN, BATCB,0,  0,  0,     0,             0,  0,  0,  0,  'SH',0
-BATCB           WORD SOFF, ATCB, 0,  0,  BASENT,(BASENT*2)+X'80',0,0,  0,  0,  'BA',0
-IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80',         0,  0,  0,  0,  'ID',0
+;                    STA    NXT   ACR IXR PCR    MST   DLY MBX CHR NAP NAM  CON
+ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80', 0,  0,  'A',30, 'A ',0
+BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80', 0,  0,  'B',45, 'B ',0
+CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80', 0,  0,  'C',60, 'C ',0
+SHTCB           WORD SRUN, ATCB, 0,  0,  0,     0,     0,  0,  0,  0,  'SH',0
+IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80', 0,  0,  0,  0,  'ID',0
 
 ; Read one sector -- ACR is its index, track*128+sector -- into the 47
 ; words at DRBUF, and return the controller's status, zero for a clean
@@ -1651,26 +1652,10 @@ SHECN           JSX     SHPUTC
 SHECD           JSX     SHNL
                 JMP     SHLOOP
 
-; Hand the console to BASIC.  One masked window grants it: the break
-; flag cleared, so a Ctrl-C typed at this prompt cannot break the
-; session's first statement; the task set running -- its context resumes
-; wherever BYE parked it, and the very first grant starts it at BASENT;
-; and CONBSY raised.  Then the shell waits on CONBSY the way everything
-; waits here: masked look, SWAI, SWTCH, look again.  While it waits it
-; reads no queue, which is what keeps QCONS to its one reader -- the
-; console's reader is the shell exactly when CONBSY is clear, and BASIC
-; exactly when it is set.
-SHBAS           MSK
-                CLR
-                SMB     BRKREQ
-                STW     BRKREQ
-                CLR
-                SMB     BA.STA
-                STW     BA.STA
-                LDW     SHK1
-                SMB     CONBSY
-                STW     CONBSY
-                UNM
+; Wait for the console to come back: masked look, SWAI, SWTCH, look
+; again -- reading no queue, which is what keeps QCONS to its one reader.
+; The console's reader is the shell exactly when CONBSY is clear, and the
+; task RUN loaded exactly when it is set.
 SHBWT           MSK
                 SMB     CONBSY
                 LDW     CONBSY
@@ -1699,8 +1684,17 @@ SHBWD           UNM
 ; nothing but a task that holds the console can lower CONBSY.
 SHRUN           LDW     SHK1
                 STW     LDCON
+                JSX     SHTOK           ; the name
                 JMP     SHLD1
 SHLOAD          CLR
+                STW     LDCON
+                JSX     SHTOK
+                JMP     SHLD1
+SHBASI          LDW     SHKBA0          ; BASIC: RUN BASIC, the name put
+                STW     STOK0           ; where SHTOK would have put it
+                LDW     SHKBA1
+                STW     STOK1
+                LDW     SHK1
                 STW     LDCON
 SHLD1           JSX     LDMOD
                 SAZ                     ; a node, or an error already named?
@@ -1727,7 +1721,7 @@ SHLDRN          MSK
                 JMP     SHBWT
 
 ; ---------------------------------------------------------------- the loader
-; Load the module the argument names: find it in the catalogue -- sector
+; Load the module STOK0:STOK1 names: find it in the catalogue -- sector
 ; 1, entries of a four-character name packed as SHTOK packs one, a first
 ; sector and a sector count, a zero first sector ending the table -- and run its
 ; object text into a block from the pool, one record to a sector.  The
@@ -1745,9 +1739,8 @@ SHLDRN          MSK
 ; text out of order (LC), no room (MX).  An error path jumps straight out
 ; of whatever routine it was in, as RELOADB's does.
 LDMOD           SUBR
-                JSX     SHTOK           ; the name: a short one fills only
-                LDW     STOK1           ; the second word
-                SAZ
+                LDW     STOK1           ; the name, in STOK0:STOK1 -- a short
+                SAZ                     ; one fills only the second word
                 JMP     LDM1
                 JMP     LDNOF
 LDM1            CLR
@@ -2066,11 +2059,11 @@ LDCKT           LDW     LDSUM
                 SRL     8
                 ADD     LDSUM
                 AND     SHK0FF
-                STW     LDW2
-                LDX     LDBP
-                CLR
+                STW     LDCKV           ; its own cell: a refill can come
+                LDX     LDBP            ; between the two halves of a word
+                CLR                     ; LDGETW is holding in LDW2
                 LDB     *0
-                CMW     LDW2
+                CMW     LDCKV
                 SEQ                     ; the checksum byte agrees?
                 JMP     LDECK
                 LDW     SHKDBB
@@ -2387,8 +2380,6 @@ SHGLE           LDW     SHFIL           ; terminate it; SHKLBE leaves room
 ; ---------------------------------------------------------------- shell data
 SH.STA          EQU     SHTCB+T.STA     ; this task's own state word...
 SH.MBX          EQU     SHTCB+T.MBX     ; ...and its own mailbox
-BA.STA          EQU     BATCB+T.STA     ; the BASIC node's, for the grant
-BA.MBX          EQU     BATCB+T.MBX     ; and for brex.asm's output
 
 SHCUR           WORD    0               ; the cursor into the line, a byte
 SHFIL           WORD    0               ; and where SHGETL is filling it
@@ -2419,7 +2410,8 @@ LDNSEC          WORD    0
 LDCP            WORD    0               ; the catalogue cursor
 LDBP            WORD    0               ; the byte pointer into the sector buffer
 LDBV            WORD    0               ; the byte it fetched
-LDSUM           WORD    0               ; the record's byte sum
+LDSUM           WORD    0               ; the record's byte sum, and its fold
+LDCKV           WORD    0
 LDCODE          WORD    0               ; the code, its class and its count
 LDCLS           WORD    0
 LDREP           WORD    0
@@ -2472,6 +2464,8 @@ SHKDBL          WORD    LDBUF*2+93      ; ...and its last, the checksum
 SHKLDN          WORD    T.LEN           ; words in a node
 SHKALW          WORD    ALLOCW          ; the allocator's page entries, for
 SHKALB          WORD    ALLOCB          ; an indexed JSX
+SHKBA0          WORD    'BA'            ; BASIC's name, as SHTOK packs it
+SHKBA1          WORD    'SI'
 
 ; Four characters a state, indexed by the state doubled.
 SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT'
@@ -2491,7 +2485,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'ST','OP',SHSTOP
                 WORD    'ST','AR',SHSTRT
                 WORD    'EC','HO',SHECHO
-                WORD    'BA','SI',SHBAS
+                WORD    'BA','SI',SHBASI
                 WORD    'M','EM',SHMEM
                 WORD    'LO','AD',SHLOAD
                 WORD    'R','UN',SHRUN

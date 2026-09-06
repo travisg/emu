@@ -17,35 +17,47 @@ BUILD     := build
 
 all: $(BUILD)/rex.bin
 
-# REX with Tiny BASIC aboard as a task: a three-file deck -- the executive,
-# the glue that makes the interpreter a task, and the interpreter itself.
-# rexapi.asm states the kernel's vector, cells and node layout as EQUs for
-# the modules; the check holds rex.asm's own labels to them.
-$(BUILD)/rex.bin: rex.asm brex.asm $(BCORE) rexapi.asm $(ASM703) $(APICHECK)
+# REX itself: the kernel and the shell, pages 0 and 1. rexapi.asm states
+# the kernel's vector, cells and node layout as EQUs for the modules; the
+# check holds rex.asm's own labels to them.
+$(BUILD)/rex.bin: rex.asm rexapi.asm $(ASM703) $(APICHECK)
 	@mkdir -p $(BUILD)
-	$(ASM703) rex.asm brex.asm $(BCORE) -o $@ -l $(BUILD)/rex.lst
+	$(ASM703) rex.asm -o $@ -l $(BUILD)/rex.lst
 	$(APICHECK) rexapi.asm $(BUILD)/rex.lst
 
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record
 # format, each a deck that begins with rexapi.asm.
-modules: $(BUILD)/hello.obj
+modules: $(BUILD)/hello.obj $(BUILD)/basic.obj
 
 $(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM703) rexapi.asm hello.asm --object $@ -l $(BUILD)/hello.lst
 
+# Tiny BASIC as a module: the glue that pays the interpreter's wrapper
+# debts with the executive's services, over the interpreter itself, which
+# the standalone guest in test/703 shares.
+$(BUILD)/basic.obj: rexapi.asm brex.asm $(BCORE) $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm brex.asm $(BCORE) --object $@ -l $(BUILD)/basic.lst
+
 # The relocation check: assemble a module absolute at a base, place its
 # object at that base with the reference loader, and every word must
 # agree. Two bases to a module, one in each half of a word page, so a
 # loader that took the byte page from >>11 instead of >>10 would be caught
-# on the second.
+# on the second; BASIC is too big for the upper half, so its second base
+# is as high as it fits.
 HELLO_BASES := 0x1080 0x1C40
+BASIC_BASES := 0x1080 0x1840
 
-reloc-check: $(BUILD)/hello.obj
+reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
 	@for base in $(HELLO_BASES); do \
 	    $(ASM703) --org $$base rexapi.asm hello.asm -m $(BUILD)/hello-$$base.map || exit 1; \
 	    $(RELOAD703) $(BUILD)/hello.obj --base $$base --check $(BUILD)/hello-$$base.map || exit 1; \
+	done
+	@for base in $(BASIC_BASES); do \
+	    $(ASM703) --org $$base rexapi.asm brex.asm $(BCORE) -m $(BUILD)/basic-$$base.map || exit 1; \
+	    $(RELOAD703) $(BUILD)/basic.obj --base $$base --check $(BUILD)/basic-$$base.map || exit 1; \
 	done
 
 # The platter on unit 0, with the modules on it: the emulator mounts
@@ -56,7 +68,7 @@ DISC := ../disks/ray703-disc0.img
 
 disc: modules
 	@mkdir -p ../disks
-	$(MKDISC703) $(DISC) --add HELLO $(BUILD)/hello.obj
+	$(MKDISC703) $(DISC) --add HELLO $(BUILD)/hello.obj --add BASIC $(BUILD)/basic.obj
 
 # The scripted session. EMU_BIN in the environment names another emulator
 # binary; the default is the debug build.

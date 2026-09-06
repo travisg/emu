@@ -1,18 +1,23 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; Tiny BASIC under REX -- the wrapper that makes the interpreter a task.
+; Tiny BASIC under REX -- the wrapper that makes the interpreter a module.
 ;
-; This file sits between rex.asm and test/703/bcore.asm in the deck that
-; builds rex.bin.  bcore.asm's header lists what a wrapper owes the core; this
-; one pays those debts with the executive's services instead of a driver
-; of its own:
+; This file sits between rexapi.asm and test/703/bcore.asm in the deck
+; that builds basic.obj, a relocatable module the shell's RUN BASIC loads
+; off the disc and hands the console to.  bcore.asm's header lists what a
+; wrapper owes the core; this one pays those debts with the executive's
+; services, through the vector and the cells rexapi.asm names:
 ;
-;   - output deposits one character at a time in BASIC's own mailbox and
-;     stands down until SERV reports it printed -- the same dance as the
-;     shell's SHPUTC, against this task's node.  The old driver's column
-;     count for PRINT's comma zones lives in T.PUTC here, since there is
-;     no service routine of ours to keep it.
-;   - input takes characters from the console queue with Q.GET, which
+;   - the workspace is one block from the kernel's pool, asked for at
+;     entry: the core reaches every part of it through address cells,
+;     assembled here as offsets into the block, and BASENT adds the
+;     block's address to each before the core runs.  No core to be had
+;     prints NO CORE LEFT and exits.
+;   - output deposits one character at a time in this task's own
+;     mailbox, the node CURT names, and stands down until SERV reports
+;     it printed -- the same dance as the shell's SHPUTC.  The old
+;     driver's column count for PRINT's comma zones lives in T.PUTC here.
+;   - input takes characters from the console queue with K.QGET, which
 ;     parks this task in the kernel until the teletype has one.  The
 ;     Model 33 is armed for hardware echo, so nothing here echoes an
 ;     ordinary character; the rubout's backslash still prints, because
@@ -20,47 +25,86 @@
 ;   - T.BRK is the kernel's BRKREQ: SERV sniffs Ctrl-C out of the input
 ;     stream and raises it, and the core's break check between statements
 ;     reads and clears it exactly as it did the driver's flag.  That cell
-;     is in another page, which is why the core keeps an SMB in front of
-;     its two references.
-;   - BYE is B.BYEX: hand the console back to the shell, park this task
-;     SOFF, and resume at READY -- with the heap intact -- when the
-;     shell's BASIC command next grants the console.
+;     is in the kernel's page, which is why the core keeps an SMB in front
+;     of its two references.
+;   - BYE is K.EXIT: the kernel hands the console back to the shell and
+;     gives back the module, its node and the workspace, so the next RUN
+;     BASIC starts afresh.
 ;
-; The glue and the core sit together in one 2048-word page, so the core
+; The glue and the core are one module in one 2048-word page, so the core
 ; runs with no page selection anywhere; the SMB pairs below are this
-; wrapper's own, reaching the kernel's cells and services in page 0.
+; wrapper's own, reaching the kernel's cells and entries.  Every module
+; reference here is to a location the loader relocates, or to an
+; rexapi.asm address behind an SMB.
 ;
-; The workspace: everything byte-addressed -- the line buffer and the
-; heap -- sits below word X'4000' so byte pointers stay positive under
-; this machine's signed-only compares.  The word-addressed workspace has
-; no such ceiling and sits above it.
+; The workspace, as offsets into the block.  Everything byte-addressed --
+; the line buffer and the heap -- must land below word X'4000' so byte
+; pointers stay positive under this machine's signed-only compares, which
+; the pool's own ceiling sees to.
 REXGLUE         EQU     1               ; BYE hands the console back
+B.ENTRY         EQU     BASENT          ; the module's entry, for END
 
-W.LBUF          EQU     X'1800'         ; input line buffer, 41 words
+W.LBUF          EQU     0               ; input line buffer, 41 words
 W.LBUFSZ        EQU     79              ; typed bytes; byte 80 holds the CR
-W.HEAP          EQU     X'1830'         ; program line heap...
-W.HEAPTOP       EQU     X'3000'         ; ...up to here -- 6,096 words; the
-                                        ; kernel's pool has the rest to X'4000'
-W.ARRAY         EQU     X'4000'         ; @(0..1023)
-W.VARS          EQU     X'4400'         ; A-Z, 26 words
-W.ESTK          EQU     X'4420'         ; expression operand stack, 16 words
-W.OSTK          EQU     X'4430'         ; expression operator stack, 16 words
-W.GSTK          EQU     X'4440'         ; GOSUB stack, 8 one-word frames
-W.FSTK          EQU     X'4450'         ; FOR stack, 8 four-word frames
-W.NBUF          EQU     X'4470'         ; number-print digit scratch, 5 words
+W.VARS          EQU     41              ; A-Z, 26 words
+W.ESTK          EQU     67              ; expression operand stack, 16 words
+W.OSTK          EQU     83              ; expression operator stack, 16 words
+W.GSTK          EQU     99              ; GOSUB stack, 8 one-word frames
+W.FSTK          EQU     107             ; FOR stack, 8 four-word frames
+W.NBUF          EQU     139             ; number-print digit scratch, 5 words
+W.ARRAY         EQU     144             ; @(0..1023)
+W.HEAP          EQU     1168            ; program line heap...
+W.HEAPSZ        EQU     1024            ; ...this big
+W.HEAPTOP       EQU     W.HEAP+W.HEAPSZ
+W.SIZE          EQU     W.HEAPTOP       ; the block
 
 T.BRK           EQU     BRKREQ          ; the break flag is the kernel's cell
 
 ; ---------------------------------------------------------------- entry
-; BASENT must sit on a 1024-word byte page boundary: BATCB's status word
-; is (BASENT*2)+X'80', an identity that holds only there.  It runs once,
-; on the first grant of the console; every later grant resumes wherever
-; BYE parked the task.
-                ORG     X'1000'
-
-BASENT          LDW     BKBANP          ; the banner descriptor's address --
+; Take the workspace, point the core's address cells at it -- the word
+; cells get the block's address, the byte cells twice that -- print the
+; banner, and hand over to the core.
+BASENT          LDW     BKWSZ
+                SMB     K.ALLOC
+                JSX     K.ALLOC
+                SAZ                     ; a block?
+                JMP     BWOK
+                LDW     BKNOCA          ; none: say so and go
+                JSX     M.MSG
+                SMB     K.EXIT
+                JMP     K.EXIT
+BWOK            STW     BWBASE
+                SLL     1
+                STW     BWBAS2
+                LDW     BKWTAB
+                STW     BWADD
+                LDW     BWBASE
+                STW     BWADV
+                JSX     BWFIX
+                LDW     BKBTAB
+                STW     BWADD
+                LDW     BWBAS2
+                STW     BWADV
+                JSX     BWFIX
+                LDW     BKBANP          ; the banner descriptor's address --
                 JSX     M.MSG           ; M.MSG wants the pointer, and prints
                 JMP     B.COLD          ; through the core's own window path
+
+; Add BWADV to every cell the table at BWADD names; a zero ends the table.
+BWFIX           SUBR
+BWFL            LDX     BWADD
+                LDW     *0
+                SAZ
+                JMP     BWF1
+                EXIT    BWFIX
+BWF1            CAX
+                LDW     *0
+                ADD     BWADV
+                STW     *0
+                LDW     BWADD
+                ADD     BK1
+                STW     BWADD
+                JMP     BWFL
 
 ; ---------------------------------------------------------------- output
 ; T.PUTC: print the character in ACR's low half.  Count the column first
@@ -85,22 +129,23 @@ BPCINC          LDW     T.COL
                 STW     T.COL
 BPCGO           MSK
                 LDW     BCH
-                SMB     BA.MBX
-                STW     BA.MBX
-                SMB     KICK
-                JSX     KICK
+                SMB     CURT
+                LDX     CURT
+                STW     *T.MBX
+                SMB     K.KICK
+                JSX     K.KICK
                 UNM
 BPCWT           MSK
-                SMB     BA.MBX
-                LDW     BA.MBX
+                SMB     CURT
+                LDX     CURT
+                LDW     *T.MBX
                 SAZ                     ; printed yet?
                 JMP     BPCWB
                 JMP     BPCWD
 BPCWB           LDW     BKWAI           ; no: stand down until SERV says so,
-                SMB     BA.STA          ; and look again when it does -- a
-                STW     BA.STA          ; wake is advice, not a promise
-                SMB     SWTCH
-                JSX     SWTCH
+                STW     *T.STA          ; and look again when it does -- a
+                SMB     K.SWTCH         ; wake is advice, not a promise
+                JSX     K.SWTCH
                 JMP     BPCWT
 BPCWD           UNM
                 EXIT    T.PUTC
@@ -143,9 +188,10 @@ T.CRLF          SUBR
 T.GETL          SUBR
                 LDW     BKLBA
                 STW     T.INPP
-BGL             LDW     BKCQ            ; a character from the console
-                SMB     Q.GET           ; queue, parked in the kernel until
-                JSX     Q.GET           ; the teletype has one
+BGL             SMB     KCONSQ          ; a character from the console
+                LDW     KCONSQ          ; queue, parked in the kernel until
+                SMB     K.QGET          ; the teletype has one
+                JSX     K.QGET
                 STW     BCH2
                 CLB     X'8D'           ; carriage return ends the line
                 SNE
@@ -188,31 +234,10 @@ BGLE            LLB     X'8D'           ; terminate with a CR whichever key
                 EXIT    T.GETL
 
 ; ---------------------------------------------------------------- BYE
-; Hand the console back and stand down.  The whole window is masked into
-; SWTCH, so it is one act.  CONBSY falls first: a wake the shell was not
-; yet waiting for is then recovered by the shell's own masked re-check.
-; The wake carries SERV's guard -- only a shell in SWAI is touched --
-; because a wake is advice, not a promise.  The park is SOFF, and the
-; next BASIC command's grant resumes this task right here, whereupon it
-; goes back to READY with the heap intact.
-B.BYEX          MSK
-                CLR
-                SMB     CONBSY
-                STW     CONBSY
-                SMB     SH.STA
-                LDW     SH.STA
-                CMW     BKWAI
-                SEQ                     ; waiting on the hand-back?
-                JMP     BBY2
-                CLR
-                SMB     SH.STA
-                STW     SH.STA
-BBY2            LDW     BKOFF
-                SMB     BA.STA
-                STW     BA.STA
-                SMB     SWTCH
-                JSX     SWTCH           ; gone until the next BASIC command
-                JMP     B.RLOOP
+; The task is over: the kernel hands the console back to the shell and
+; gives back everything this task holds.
+B.BYEX          SMB     K.EXIT
+                JMP     K.EXIT
 
 ; ---------------------------------------------------------------- glue data
 ; The cells of the core's seam, and this wrapper's own.
@@ -221,6 +246,10 @@ T.COL           WORD    0               ; print column, for the comma zones
 T.INPP          WORD    0               ; line buffer fill pointer (byte)
 K.LBUFA         WORD    W.LBUF*2        ; the line buffer as a byte address
 
+BWBASE          WORD    0               ; the workspace block, and twice it
+BWBAS2          WORD    0
+BWADD           WORD    0               ; BWFIX's cursor over a table...
+BWADV           WORD    0               ; ...and what it adds
 BPWP            WORD    0               ; T.PUTW's window cursor
 BCH             WORD    0               ; T.PUTC's character
 BCH2            WORD    0               ; T.GETL's character
@@ -229,19 +258,27 @@ BK0FF           WORD    X'00FF'
 BKCR            WORD    X'008D'
 BKLF            WORD    X'008A'
 BKWAI           WORD    SWAI
-BKOFF           WORD    SOFF
-BKCQ            WORD    QCONS           ; the queue the keyboard fills
+BKWSZ           WORD    W.SIZE          ; the workspace, in words
 BKLBA           WORD    W.LBUF*2
 BKLBE           WORD    W.LBUF*2+W.LBUFSZ
+BKWTAB          WORD    BWWTAB          ; the fix-up tables' addresses
+BKBTAB          WORD    BWBTAB
 BKBANP          WORD    BKBAND
+BKNOCA          WORD    BKNOCD
+
+; The core's address cells that hold word addresses into the workspace,
+; and those that hold byte addresses -- the wrapper's own among them.
+BWWTAB          WORD    K1.HEAP,K1.HPTOP,K1.VARSW,K1.VARSE,K1.ARRW
+                WORD    K2.ESTKW,K2.OSTKW,K2.GSTKW,K2.FSTKW,K2.NBUFW
+                WORD    K2.VARSW,K2.ARRW,K2.HPTOP,0
+BWBTAB          WORD    K1.LBUFA,K.LBUFA,BKLBA,BKLBE,0
+
 BKBAND          WORD    BKBANT*2,BKBANE*2
 BKBANT          TEXT    "TINY BASIC UNDER REX\r\n"
 BKBANE          EQU     $
+BKNOCD          WORD    BKNOCT*2,BKNOCE*2
+BKNOCT          TEXT    "NO CORE LEFT\r\n"
+BKNOCE          EQU     $
 
-; The core follows the glue, in the same page.
+; The core follows the glue, in the same module.
 B.CORE          EQU     $
-
-; A tripwire: the deck outgrowing the page lands on this word and the
-; assembler's "assembled twice" error names it.
-                ORG     X'17FF'
-                WORD    0

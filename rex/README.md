@@ -8,8 +8,8 @@ glue that puts Tiny BASIC aboard it as a task, and the scripted session that
 tests it.
 
     rex.asm            the executive: scheduler, drivers, queues, the shell
-    brex.asm           the wrapper that makes Tiny BASIC a REX task
     rexapi.asm         the kernel interface a module is assembled against
+    brex.asm           the wrapper that makes Tiny BASIC a module
     hello.asm          a module: prints where it landed, sleeps, exits
     run_rex_test.sh    the end-to-end test
     makefile           builds everything into build/, which is gitignored
@@ -23,11 +23,10 @@ anything here.
 ## Build, run, test
 
     cargo build                                                  # the emulator
-    make -C rex                                                  # -> rex/build/rex.bin
+    make -C rex disc                                             # rex.bin, the modules, and the platter
     ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io  # a usable shell
     make -C rex test                                             # the scripted session
-    make -C rex modules reloc-check                              # the modules, and the relocation check
-    make -C rex disc                                             # puts them on disks/ray703-disc0.img
+    make -C rex reloc-check                                      # the relocation check
 
 `--fast-io` makes the teletype instant; without it the Model 33 takes its real
 tenth of a second per character, and the scheduling slices are real machine
@@ -42,7 +41,7 @@ time either way. The shell's commands:
     MEM          the words free in the pool
     LOAD name    a module off the disc, run behind the prompt
     RUN  name    the same, given the console until it exits
-    BASIC        the console goes to Tiny BASIC, until its BYE
+    BASIC        RUN BASIC
     HALT         park the tasks, drain the printer and stop the machine
 
 `START` sets the letter tasks going and they tick along behind whatever is
@@ -56,21 +55,22 @@ is lost.
 
 ## What it is
 
-Five tasks share the processor, their control blocks a ring of linked
-nodes: everything that names a task -- the current-task cell, the printer's
-owner, a queue's waiter -- holds a node's address, a field is the indexed
-displacement off it, every scan walks the `T.NXT` links, and what a task *is*
-is data in its node, so `STOP`, `START`, `STAT` and `HALT` act on whatever
-the walk finds and adding a task is linking a node in under `MSK` -- the
-doorway a loader would use, though nothing loads dynamically yet. Three
-nodes run the one shared letter body (`LTASK`, which reads its letter, nap
-and mailbox out of its own node via `CURT`): print, sleep, repeat -- stopped
-at power-on, so the machine comes up quiet and `START` sets them going. One
-is the shell. And one is Tiny BASIC behind the `brex.asm` glue, which pays
-bcore's wrapper debts with the executive's services: output through the
-task's own mailbox, input through the console queue, `T.BRK` aliased to the
-kernel's break cell, `BYE` routed to a hand-back. The idle task is a sixth
-node off the ring, the scans' explicit fallback.
+Four tasks share the processor at power-on, their control blocks a ring
+of linked nodes, and whatever the shell loads joins them: everything that
+names a task -- the current-task cell, the printer's owner, a queue's
+waiter -- holds a node's address, a field is the indexed displacement off
+it, every scan walks the `T.NXT` links, and what a task *is* is data in
+its node, so `STOP`, `START`, `STAT` and `HALT` act on whatever the walk
+finds and adding a task is linking a node in under `MSK`, which is what
+the loader does through `SPAWN`. Three nodes run the one shared letter
+body (`LTASK`, which reads its letter, nap and mailbox out of its own node
+via `CURT`): print, sleep, repeat -- stopped at power-on, so the machine
+comes up quiet and `START` sets them going. One is the shell. Tiny BASIC
+is a module behind the `brex.asm` glue, which pays bcore's wrapper debts
+with the executive's services: a workspace from the pool at entry, output
+through the task's own mailbox, input through the console queue, `T.BRK`
+aliased to the kernel's break cell, `BYE` routed to `K.EXIT`. The idle
+task is a fifth node off the ring, the scans' explicit fallback.
 
 A context is four words, ACR, IXR and the hardware-saved PC and status, so
 the switch is a handful of word copies and an `INR 2`; the status word
@@ -118,24 +118,28 @@ queue**: the service routine posts a character and wakes the waiter -- only
 out of its wait, so a keystroke cannot restart a stopped task -- the reader
 blocks in `Q.GET` rather than polling, and one waiter to a queue means one
 reader. And **the console has one reader at a time**, named by the `CONBSY`
-cell: the shell's `BASIC` command sets the task running and raises the cell
-in one masked window, then waits on it -- reading no queue -- until BASIC's
-`BYE` clears it, wakes the shell and parks the task `OFF`, heap intact for
-the next session. Ctrl-C never enters the queue at all: the service routine
-raises the kernel's `BRKREQ` instead (BASIC's break check reads it through
-the `T.BRK` alias), so a running program that reads nothing can still be
-broken, and the grant clears the flag so a stray break cannot land on the
-session that follows. `STOP`/`START` cannot name the shell or BASIC -- only
-nodes with a letter -- because stopping the console's owner would leave the
-shell waiting on a grant nobody can return.
+cell: `RUN` raises it in the masked window that clears the break flag,
+then waits on it -- reading no queue -- until the task's `K.EXIT` clears
+it and wakes the shell. Ctrl-C never enters the queue at all: the service
+routine raises the kernel's `BRKREQ` instead (BASIC's break check reads it
+through the `T.BRK` alias), so a running program that reads nothing can
+still be broken, and the grant clears the flag so a stray break cannot
+land on the session that follows. `STOP`/`START` cannot name the shell or
+a loaded task -- only nodes with a letter -- because stopping the console's
+owner would leave the shell waiting on a hand-back nobody can make. **The
+pool is owned word by word**: every block carries the node that asked for
+it, and a task's exit gives back all of them, which is what makes a
+module's memory come and go with the module.
 
 ## The test
 
-`make -C rex test` runs `run_rex_test.sh`: boot, `STAT`, `START` and watch
-the letters interleave, `STOP`, the rest of the commands, then two BASIC
-sessions in the middle -- a program entered and RUN, a silent `GOTO` loop
-broken with Ctrl-C through the kernel's flag, `BYE` handing the console
-back, and a second session LISTing the program the heap kept -- and `HALT`.
+`make -C rex test` runs `run_rex_test.sh` on a platter it makes in a
+scratch directory: boot, `STAT`, `START` and watch the letters interleave,
+`STOP`, the rest of the commands, hello both ways with `MEM` reading the
+same after each, then two BASIC sessions -- a program entered and RUN, a
+silent `GOTO` loop broken with Ctrl-C through the kernel's flag, `BYE`
+handing the console and the memory back, and a second session starting
+afresh -- and `HALT`.
 It runs `--fast-io` (the slices stay real machine time; the clock ignores
 the flag) with a `-l` instruction-limit hang guard, and paces every command
 on the prompt count and then on the printer falling quiet, which is the
@@ -182,4 +186,9 @@ same and hands it the console until it exits. A task ends through
 `K.EXIT`, which gives back every block in the pool tagged with its node,
 the module and the node themselves included; `MEM` prints the free words,
 and it reads the same before and after. `RUN HELLO` prints the address the
-loader put it at.
+loader put it at. Tiny BASIC is the real module: `brex.asm` over
+`../test/703/bcore.asm` is `basic.obj`, and `RUN BASIC` (or `BASIC`) loads
+it, whereupon it takes its workspace -- line buffer, variables, stacks, the
+array and a heap, 2,192 words -- as one block from the pool, adds the
+block's address to the core's address cells and prints READY; its `BYE`
+gives everything back, so the next session starts afresh.

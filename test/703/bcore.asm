@@ -10,25 +10,33 @@
 ; implied.  The arithmetic runs on the hardware multiply/divide option
 ; (section 6 of the reference manual, MPY/DIV).
 ;
-; This file is the interpreter alone.  It is the tail of a two-file deck:
-; a wrapper in front of it owns the machine -- the interrupt block, the
-; console, the workspace layout -- and asm703.py assembles the pair as
-; one image.  basic.asm is the wrapper for the standalone machine.
+; This file is the interpreter alone.  It is the tail of a deck: a wrapper
+; in front of it owns the machine -- the console, the workspace, how the
+; program comes to be in core -- and asm703.py assembles the deck as one.
+; basic.asm is the wrapper for the standalone machine, an absolute image;
+; rex/brex.asm the wrapper that makes it a module under REX, relocatable,
+; with rex/rexapi.asm ahead of both.
 ;
 ; What the wrapper provides, and what the core holds it to:
 ;
 ;   REXGLUE     EQU: 0 = the standalone machine, where BYE halts; 1 =
 ;               under an executive, where BYE jumps to the wrapper's
 ;               B.BYEX and the machine belongs to other tasks too
+;   B.ENTRY     EQU: where the program starts, which this file's END names
 ;   B.CORE      EQU: where this file begins.  The core is one contiguous
 ;               stream, and the whole deck -- wrapper and core together --
 ;               must sit inside one 2048-word page (see the ground rules)
 ;   W.LBUF, W.LBUFSZ, W.VARS, W.ESTK, W.OSTK, W.GSTK, W.FSTK, W.NBUF,
 ;   W.HEAP, W.HEAPTOP, W.ARRAY
-;               EQU: the workspace.  Anything byte-addressed -- the line
-;               buffer, the heap -- must sit below word X'4000' so byte
-;               pointers stay positive under this machine's signed-only
-;               compares
+;               EQU: the workspace, as the core's address cells -- K1.LBUFA,
+;               K1.HEAP, K1.HPTOP, K1.VARSW, K1.VARSE, K1.ARRW, K2.ESTKW,
+;               K2.OSTKW, K2.GSTKW, K2.FSTKW, K2.NBUFW, K2.VARSW, K2.ARRW,
+;               K2.HPTOP -- are assembled from them; every reach into the
+;               workspace goes through those cells, so a wrapper that finds
+;               its workspace at run time adds its address to each before
+;               B.COLD.  Anything byte-addressed -- the line buffer, the
+;               heap -- must sit below word X'4000' so byte pointers stay
+;               positive under this machine's signed-only compares
 ;   T.PUTW      print the byte window [ACR, T.PWEND) and return when it
 ;               has drained
 ;   T.PUTC      print the character in ACR bits 8-15
@@ -645,8 +653,8 @@ K1.7            WORD    7
 K1.DF           WORD    X'FFDF'         ; the case fold
 K1.CA           WORD    X'00C1'         ; 'A', for variable arithmetic
 K1.1024         WORD    1024
-K1.LBUFA        WORD    W.LBUF*2
-K1.HEAP         WORD    W.HEAP
+K1.LBUFA        WORD    W.LBUF*2        ; the workspace, from the wrapper's
+K1.HEAP         WORD    W.HEAP          ; EQUs -- see the header
 K1.HPTOP        WORD    W.HEAPTOP
 K1.VARSW        WORD    W.VARS
 K1.VARSE        WORD    W.VARS+26
@@ -1671,4 +1679,4 @@ P2ASKD          WORD    P2ASK*2
                 WORD    P2ASK*2+2
 P2ASK           TEXT    "? "
 
-                END
+                END     B.ENTRY

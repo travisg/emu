@@ -37,7 +37,8 @@ The guests in this directory are *new* software written for the machine
 rather than transcriptions: `demo.asm`, the interrupt-driven echo the
 end-to-end test drives; `bcore.asm`, a Tiny BASIC interpreter running on
 the hardware multiply/divide option, with `basic.asm` the wrapper that
-makes it a standalone machine; `disc.asm`, the 74601 disc exerciser;
+makes it a standalone machine (and `../../rex/brex.asm` the one that makes
+it a module under REX); `disc.asm`, the 74601 disc exerciser;
 `boot.asm`, the one-sector program the controller's LOAD button reads;
 and `tape.asm`, the image the PTB bootstrap loads off paper tape.
 AGENTS.md's Test section describes the harness each of them runs under.
