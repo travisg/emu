@@ -17,6 +17,10 @@ tracked**, for the same reason as `roms/` — see that README and
   `make -C test ray703-blank-disc` formats unit 0, which is what the disc
   exerciser writes to; it will not overwrite a disc that already exists,
   since one a guest has written to is data rather than a build product.
+  Unit 0 is also where REX's loader looks for its modules: `make -C rex disc`
+  puts them on it under a catalogue in sector 1 (`tools/mkdisc703.py --add`),
+  making the image if there is none and rewriting only the sectors the
+  catalogue owns.
 
   An image must be exactly 770,048 bytes (385,024 words), and writes go
   through to the file. `tools/mkdisc703.py` is what makes them.

@@ -13,7 +13,7 @@ MKDISC703 := ../tools/mkdisc703.py
 BCORE     := ../test/703/bcore.asm
 BUILD     := build
 
-.PHONY: all modules reloc-check test clean
+.PHONY: all modules reloc-check disc test clean
 
 all: $(BUILD)/rex.bin
 
@@ -48,9 +48,19 @@ reloc-check: $(BUILD)/hello.obj
 	    $(RELOAD703) $(BUILD)/hello.obj --base $$base --check $(BUILD)/hello-$$base.map || exit 1; \
 	done
 
+# The platter on unit 0, with the modules on it: the emulator mounts
+# disks/ray703-disc0.img from the repo root, so after this the run line
+# in README.md has them. Made if absent; adding rewrites only the sectors
+# the catalogue owns.
+DISC := ../disks/ray703-disc0.img
+
+disc: modules
+	@mkdir -p ../disks
+	$(MKDISC703) $(DISC) --add HELLO $(BUILD)/hello.obj
+
 # The scripted session. EMU_BIN in the environment names another emulator
 # binary; the default is the debug build.
-test: all
+test: all modules
 	./run_rex_test.sh
 
 clean:

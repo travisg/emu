@@ -1419,7 +1419,6 @@ TXCUR           LDW     XPRED
 TXSWP           STW     XB
                 CMW     KPOOLE
                 SLS                     ; the end of the pool?
-                JMP     TXSW1
                 JMP     SWRES           ; then on to whoever can run
 TXSW1           CAX
                 LDW     *1
@@ -1799,12 +1798,15 @@ LDF1            STW     LDNODE
                 LDW     SHKDBL          ; on the checksum byte: the first
                 STW     LDBP            ; GETBYTE reads the first record
 
-; The text: a code byte, then what it says follows.
+; The text: a code byte, then what it says follows.  The byte arrives
+; zero-extended, so its lead bit is tested against X'80', not the sign.
 LDPROC          JSX     LDGETB
                 STW     LDCODE
-                SAM                     ; repeatable?
+                CMW     SHK80
+                SLS                     ; below X'80': a control code
+                JMP     LDRPT
                 JMP     LDCTL
-                SRL     4               ; the class: 8n..Cn
+LDRPT           SRL     4               ; the class: 8n..Cn
                 SUB     SHK8
                 CMW     SHK4
                 SGR

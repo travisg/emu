@@ -27,6 +27,7 @@ anything here.
     ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io  # a usable shell
     make -C rex test                                             # the scripted session
     make -C rex modules reloc-check                              # the modules, and the relocation check
+    make -C rex disc                                             # puts them on disks/ray703-disc0.img
 
 `--fast-io` makes the teletype instant; without it the Model 33 takes its real
 tenth of a second per character, and the scheduling slices are real machine
@@ -38,6 +39,9 @@ time either way. The shell's commands:
     STOP  [A-C]  suspend a letter task, or all three
     START [A-C]  release one, or all three
     ECHO text    print the rest of the line
+    MEM          the words free in the pool
+    LOAD name    a module off the disc, run behind the prompt
+    RUN  name    the same, given the console until it exits
     BASIC        the console goes to Tiny BASIC, until its BYE
     HALT         park the tasks, drain the printer and stop the machine
 
@@ -166,5 +170,16 @@ format carries. `make -C rex reloc-check` assembles it absolute at two
 bases, one in each half of a word page, and holds the reference loader's
 placement of the object (`../tools/reload703.py`) to those images word for
 word -- the check that the assembler's records and the loader's semantics
-agree, with no emulator in the loop. Nothing in the executive loads a
-module yet.
+agree, with no emulator in the loop.
+
+Modules live on disc unit 0 under a catalogue in sector 1 (`../tools/
+mkdisc703.py --add`, which `make -C rex disc` runs for the platter the
+emulator mounts from the repo root). The shell's `LOAD` finds one by
+name, runs its text into a block from the kernel's pool -- first fit,
+word-granular, with the page containment a module's page-offset M fields
+need -- gives it a task node and links it into the ring; `RUN` does the
+same and hands it the console until it exits. A task ends through
+`K.EXIT`, which gives back every block in the pool tagged with its node,
+the module and the node themselves included; `MEM` prints the free words,
+and it reads the same before and after. `RUN HELLO` prints the address the
+loader put it at.

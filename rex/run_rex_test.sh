@@ -4,12 +4,19 @@ set -euo pipefail
 # End-to-end test for REX, the preemptive executive: boot it, start the three
 # letter tasks from its shell and watch them run -- which is the scheduler,
 # the line clock, the context switch, the sleep machinery and the mailbox
-# teletype driver all working at once -- then run two Tiny BASIC sessions
-# through the shell's BASIC command (a program entered and RUN, a silent
-# GOTO loop broken with Ctrl-C via the kernel's break flag, BYE handing the
-# console back, and a second session LISTing the program the heap kept),
-# then drive the rest of the commands and shut the machine down with HALT.
-# The letter tasks come up stopped, so nothing prints until this asks it to.
+# teletype driver all working at once -- load the hello module off a scratch
+# platter both ways (RUN, which waits for it, and LOAD, which leaves it
+# running behind the prompt) and see the pool's free words come back once
+# it has exited, then run two Tiny BASIC sessions through the shell's
+# BASIC command (a program entered and RUN, a silent GOTO loop broken with
+# Ctrl-C via the kernel's break flag, BYE handing the console back, and a
+# second session LISTing the program the heap kept), then drive the rest
+# of the commands and shut the machine down with HALT. The letter tasks
+# come up stopped, so nothing prints until this asks it to.
+#
+# The platter is made fresh in a scratch directory and the emulator run
+# from there, since it mounts disks/ray703-disc0.img relative to where it
+# runs -- the repo root's is the user's own.
 #
 # Two firsts for a 703 harness, both deliberate:
 #
@@ -28,6 +35,7 @@ ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 EMU_BIN="${EMU_BIN:-$ROOT_DIR/target/debug/emu}"
 ROM_FILE="$SCRIPT_DIR/build/rex.bin"
+HELLO_OBJ="$SCRIPT_DIR/build/hello.obj"
 LOG_FILE="${1:-$SCRIPT_DIR/build/rex_test.log}"
 
 if [[ ! -x "$EMU_BIN" ]]; then
@@ -36,9 +44,9 @@ if [[ ! -x "$EMU_BIN" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$ROM_FILE" ]]; then
-    echo "error: rex image not found at $ROM_FILE" >&2
-    echo "build it with: make -C rex" >&2
+if [[ ! -f "$ROM_FILE" || ! -f "$HELLO_OBJ" ]]; then
+    echo "error: $ROM_FILE or $HELLO_OBJ is missing" >&2
+    echo "build them with: make -C rex all modules" >&2
     exit 1
 fi
 
@@ -148,16 +156,37 @@ after_start() {
 
 FIFO=$(mktemp -u)
 mkfifo "$FIFO"
+WORK=$(mktemp -d)
 mkdir -p "$(dirname "$LOG_FILE")"
 : > "$LOG_FILE"
-trap 'rm -f "$FIFO"' EXIT
+trap 'rm -f "$FIFO"; rm -rf "$WORK"' EXIT
+
+# The platter: hello on it, under the catalogue the loader reads.
+mkdir -p "$WORK/disks"
+"$ROOT_DIR/tools/mkdisc703.py" "$WORK/disks/ray703-disc0.img" --add HELLO "$HELLO_OBJ" >/dev/null
 
 # -f flushes after every write, which is what makes the polling work at all.
 # The image is named absolutely so this works from any directory.
 # --no-throttle: a machine runs at its own clock rate unless told otherwise,
 # and the harness wants the answer rather than the period.
-script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE --fast-io --no-throttle -l 2000000000" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1 &
+(cd "$WORK" && exec script -qfec "$EMU_BIN -s ray703 -r $ROM_FILE --fast-io --no-throttle -l 2000000000" "$LOG_FILE" < "$FIFO" >/dev/null 2>&1) &
 EMU_PID=$!
+
+# Type a command once the next prompt has appeared and the printer has
+# fallen quiet -- or, with say_now, as soon as the prompt appears, for the
+# commands typed while the letter tasks are printing. A timeout is not
+# fatal: the checks at the end report what actually reached the log.
+PROMPTS=0
+say() {
+    (( PROMPTS += 1 ))
+    wait_count "$PROMPT" $PROMPTS && wait_quiet && printf '%s\r' "$1" >&3
+    return 0
+}
+say_now() {
+    (( PROMPTS += 1 ))
+    wait_count "$PROMPT" $PROMPTS && printf '%s\r' "$1" >&3
+    return 0
+}
 
 # Hold the write end open for the emulator's whole life: closing it looks
 # like ctrl-d and shuts the machine down mid-test.
@@ -168,10 +197,10 @@ exec 3>"$FIFO"
 if wait_for 'REX 703 UP'; then
 
     # Nothing is running yet, so this one is quiet and exact.
-    wait_count "$PROMPT" 1 && wait_quiet && printf 'STAT\r' >&3
+    say 'STAT'
 
     # Set the three of them going and let them run.
-    wait_count "$PROMPT" 2 && wait_quiet && printf 'START\r' >&3
+    say 'START'
     tries=0
     while (( tries < 300 )) && ! enough_output; do
         sleep 0.1
@@ -181,19 +210,38 @@ if wait_for 'REX 703 UP'; then
 
     # Then stop them: with the printer quiet, every command's output can be
     # matched exactly, and wait_quiet becomes usable for pacing.
-    wait_count "$PROMPT" 3 && printf 'STOP\r' >&3
+    say_now 'STOP'
 
-    wait_count "$PROMPT" 4 && wait_quiet && printf 'STAT\r' >&3
-    wait_count "$PROMPT" 5 && wait_quiet && printf 'HELP\r' >&3
-    wait_count "$PROMPT" 6 && wait_quiet && printf 'ECHO SHELL OUTPUT OK\r' >&3
-    wait_count "$PROMPT" 7 && wait_quiet && printf 'FROB\r' >&3
+    say 'STAT'
+    say 'HELP'
+    say 'ECHO SHELL OUTPUT OK'
+    say 'FROB'
+
+    # The hello module, both ways. RUN waits for it, so its line is clean
+    # and the free words are back by the next prompt; LOAD leaves it to
+    # run behind the prompt, where a STAT typed at once finds it on the
+    # ring, and STAT is repeated until it has gone before the pool is
+    # counted again. A name not in the catalogue is refused.
+    say 'MEM'
+    say 'RUN HELLO'
+    wait_for 'HELLO FROM WORD' || true
+    say 'MEM'
+    say 'LOAD HELLO'
+    say_now 'STAT'
+    for _ in $(seq 20); do
+        wait_count "$PROMPT" $PROMPTS && wait_quiet
+        if ! tail -n 12 "$LOG_FILE" | grep -q '^HE '; then break; fi
+        say 'STAT'
+    done
+    say 'MEM'
+    say 'RUN NOPE'
 
     # A BASIC session: the console changes hands, a program goes in and
     # runs, and Ctrl-C -- which never enters the queue; SERV raises the
     # kernel's break flag -- stops a loop that prints nothing and reads
     # nothing. Each line is paced on BASIC's own READY count, the way the
     # standalone test paces on its prompt.
-    wait_count "$PROMPT" 8 && wait_quiet && printf 'BASIC\r' >&3
+    say 'BASIC'
     wait_for 'TINY BASIC UNDER REX' || true
     wait_count 'READY' 1 && wait_quiet && printf '10 FOR I=1 TO 3\r' >&3
     wait_count 'READY' 2 && wait_quiet && printf '20 PRINT "SQ";I*I\r' >&3
@@ -207,17 +255,17 @@ if wait_for 'REX 703 UP'; then
     # Back at the shell: BASIC's node shows OFF, and a second session
     # finds the program still in the heap -- BYE parks the task, it does
     # not reset it.
-    wait_count "$PROMPT" 9 && wait_quiet && printf 'STAT\r' >&3
-    wait_count "$PROMPT" 10 && wait_quiet && printf 'BASIC\r' >&3
+    say 'STAT'
+    say 'BASIC'
     wait_count 'READY' 7 && wait_quiet && printf 'LIST\r' >&3
     wait_count 'READY' 8 && wait_quiet && printf 'BYE\r' >&3
 
     # One task back on its feet, and only that one.
-    wait_count "$PROMPT" 11 && wait_quiet && printf 'START B\r' >&3
+    say 'START B'
     wait_for 'BBB' || true
 
-    wait_count "$PROMPT" 12 && printf 'STOP\r' >&3
-    wait_count "$PROMPT" 13 && wait_quiet && printf 'HALT\r' >&3
+    say_now 'STOP'
+    say 'HALT'
     wait_for 'REX 703 DOWN' || true
     wait_for 'stopping, Halted' || true
 fi
@@ -230,9 +278,11 @@ wait "$EMU_PID" || true
 # What the shell had to have printed: STAT's uptime and task table with the
 # tasks stopped and the shell itself running, the command list, ECHO's line
 # on a line of its own (the terminal's echo of the command that asked for it
-# begins with the prompt instead), the refusal, and B alone back at work --
-# and, since A and C stay stopped through all of it, that the two letters
-# they would otherwise have printed never appear after the START.
+# begins with the prompt instead), the refusal, hello's line and its node in
+# a STAT, the catalogue's refusal, every MEM agreeing (the pool is whole
+# again after each load), and B alone back at work -- and, since A and C
+# stay stopped through all of it, that the two letters they would otherwise
+# have printed never appear after the START.
 if grep -q 'REX 703 UP' "$LOG_FILE" \
     && (( BACKGROUND_RAN )) \
     && grep -q 'UPTIME [0-9][0-9]* SEC' "$LOG_FILE" \
@@ -243,6 +293,11 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && grep -q '^COMMANDS HELP STAT UPTIME' "$LOG_FILE" \
     && grep -q '^SHELL OUTPUT OK' "$LOG_FILE" \
     && grep -q '^WHAT' "$LOG_FILE" \
+    && grep -q '^HELLO FROM WORD [0-9]' "$LOG_FILE" \
+    && grep -q '^HE ' "$LOG_FILE" \
+    && grep -q '^NO SUCH FILE' "$LOG_FILE" \
+    && (( $(grep -c '^FREE [0-9]' "$LOG_FILE") >= 3 )) \
+    && (( $(grep '^FREE [0-9]' "$LOG_FILE" | sort -u | wc -l) == 1 )) \
     && grep -q 'TINY BASIC UNDER REX' "$LOG_FILE" \
     && grep -q '^SQ9' "$LOG_FILE" \
     && grep -q 'BREAK AT 50' "$LOG_FILE" \
