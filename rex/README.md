@@ -9,6 +9,8 @@ tests it.
 
     rex.asm            the executive: scheduler, drivers, queues, the shell
     brex.asm           the wrapper that makes Tiny BASIC a REX task
+    rexapi.asm         the kernel interface a module is assembled against
+    hello.asm          a module: prints where it landed, sleeps, exits
     run_rex_test.sh    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
@@ -24,6 +26,7 @@ anything here.
     make -C rex                                                  # -> rex/build/rex.bin
     ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io  # a usable shell
     make -C rex test                                             # the scripted session
+    make -C rex modules reloc-check                              # the modules, and the relocation check
 
 `--fast-io` makes the teletype instant; without it the Model 33 takes its real
 tenth of a second per character, and the scheduling slices are real machine
@@ -138,3 +141,30 @@ so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
 at ten characters a second has to be read as a whole field, not matched on
 its first digit.
+
+## Modules
+
+A module is a program assembled from word 0 against `rexapi.asm` and
+written by `asm703.py --object` as relocatable object text -- the record
+format of the 1968 relocating loader (DN 390682C), whose transcript is
+`../test/703/listings/`. The assembler's docstring lists the codes. Every
+memory reference in a module is a page offset the loader relocates, so a
+module must fit one 2048-word page (one 1024-word byte page if it
+byte-addresses directly); a data word holding an address is relocated as a
+whole; and an absolute address -- a kernel entry, an exported cell -- is
+reached only through a page selection in front of it, since the module's
+own page is not known until it is placed.
+
+`rexapi.asm` is the whole of what a module may know about the kernel: a
+jump vector at words X'10'-X'1F', exported cells at X'20'-X'2F', the shape
+of a task node and the state values, all as EQUs. A module calls an entry
+with an adjacent `SMB`/`JSX` pair and reads a cell with an adjacent
+`SMB`/`LDW` pair; nothing is linked at load time.
+
+`hello.asm` is the smallest module that exercises every kind of word the
+format carries. `make -C rex reloc-check` assembles it absolute at two
+bases, one in each half of a word page, and holds the reference loader's
+placement of the object (`../tools/reload703.py`) to those images word for
+word -- the check that the assembler's records and the loader's semantics
+agree, with no emulator in the loop. Nothing in the executive loads a
+module yet.

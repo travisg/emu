@@ -19,6 +19,7 @@ to-do list; the detail is in the documents it points at.
     ../../tools/sync-transcript.sh   the per-page files back into the master
     ../../tools/xraylist.py          transcript -> source, object, core image
     ../../tools/asm703.py            a SYM II assembler, enough to rebuild both decks
+    ../../tools/reload703.py         a reference loader for the relocatable object text asm703.py --object writes
 
 The **master transcripts are the source of everything** and live here:
 

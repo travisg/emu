@@ -7,11 +7,12 @@
 # stay under test/ and do not depend on anything here.
 
 ASM703    := ../tools/asm703.py
+RELOAD703 := ../tools/reload703.py
 MKDISC703 := ../tools/mkdisc703.py
 BCORE     := ../test/703/bcore.asm
 BUILD     := build
 
-.PHONY: all test clean
+.PHONY: all modules reloc-check test clean
 
 all: $(BUILD)/rex.bin
 
@@ -20,6 +21,28 @@ all: $(BUILD)/rex.bin
 $(BUILD)/rex.bin: rex.asm brex.asm $(BCORE) $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM703) rex.asm brex.asm $(BCORE) -o $@ -l $(BUILD)/rex.lst
+
+# --- modules --------------------------------------------------------------
+# What loads under REX: relocatable objects in the 1968 loader's record
+# format, each a deck that begins with rexapi.asm.
+modules: $(BUILD)/hello.obj
+
+$(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm hello.asm --object $@ -l $(BUILD)/hello.lst
+
+# The relocation check: assemble a module absolute at a base, place its
+# object at that base with the reference loader, and every word must
+# agree. Two bases to a module, one in each half of a word page, so a
+# loader that took the byte page from >>11 instead of >>10 would be caught
+# on the second.
+HELLO_BASES := 0x1080 0x1C40
+
+reloc-check: $(BUILD)/hello.obj
+	@for base in $(HELLO_BASES); do \
+	    $(ASM703) --org $$base rexapi.asm hello.asm -m $(BUILD)/hello-$$base.map || exit 1; \
+	    $(RELOAD703) $(BUILD)/hello.obj --base $$base --check $(BUILD)/hello-$$base.map || exit 1; \
+	done
 
 # The scripted session. EMU_BIN in the environment names another emulator
 # binary; the default is the debug build.

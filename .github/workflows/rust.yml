@@ -43,7 +43,7 @@ jobs:
     # REX, the 703 executive, is its own project under rex/ with its own
     # makefile; its scripted session runs on the same harness as the above.
     - name: REX
-      run: make -C rex all test
+      run: make -C rex all modules reloc-check test
 
     # Re-assembles a 1968 listing transcript and diffs it against the object
     # code printed beside it. Pure python; the X-RAY half is a known fail and
