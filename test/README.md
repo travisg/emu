@@ -27,12 +27,12 @@ for the guest's own report of success.
     make -C test ray703-basic-test   # a scripted Tiny BASIC session
     make -C test ray703-disc-test    # the 74601 disc, over two interrupt levels
     make -C test ray703-boot-test    # the disc controller's LOAD button
-    make -C test ray703-rex-test     # REX: scheduling, sleep, queues, and its shell
 
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
-All but the first need nothing outside the repo, and CI runs them. The 6809 one
+All but the first need nothing outside the repo, and CI runs them. REX's
+session is `make -C rex test`, under its own directory. The 6809 one
 boots Microsoft BASIC, so it needs `roms/6809/BASIC.HEX` in place
 (`tools/fetch-roms.py`) and runs only locally.
 

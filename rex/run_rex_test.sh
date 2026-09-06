@@ -27,8 +27,8 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 EMU_BIN="${EMU_BIN:-$ROOT_DIR/target/debug/emu}"
-ROM_FILE="$ROOT_DIR/roms/703/rex.bin"
-LOG_FILE="${1:-$SCRIPT_DIR/ray703_rex_test.log}"
+ROM_FILE="$SCRIPT_DIR/build/rex.bin"
+LOG_FILE="${1:-$SCRIPT_DIR/build/rex_test.log}"
 
 if [[ ! -x "$EMU_BIN" ]]; then
     echo "error: emulator binary not found at $EMU_BIN" >&2
@@ -38,7 +38,7 @@ fi
 
 if [[ ! -f "$ROM_FILE" ]]; then
     echo "error: rex image not found at $ROM_FILE" >&2
-    echo "build it with: make -C test ray703-rex" >&2
+    echo "build it with: make -C rex" >&2
     exit 1
 fi
 
@@ -147,6 +147,7 @@ after_start() {
 
 FIFO=$(mktemp -u)
 mkfifo "$FIFO"
+mkdir -p "$(dirname "$LOG_FILE")"
 : > "$LOG_FILE"
 trap 'rm -f "$FIFO"' EXIT
 
@@ -249,9 +250,9 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && (( $(after_start | tr -cd 'AC' | wc -c) == 0 )) \
     && grep -q 'REX 703 DOWN' "$LOG_FILE" \
     && grep -q 'stopping, Halted' "$LOG_FILE"; then
-    echo "PASS: ray703 rex test ($EMU_BIN)"
+    echo "PASS: rex test ($EMU_BIN)"
     exit 0
 fi
 
-echo "FAIL: ray703 rex test (see $LOG_FILE)" >&2
+echo "FAIL: rex test (see $LOG_FILE)" >&2
 exit 1

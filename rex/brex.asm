@@ -2,8 +2,8 @@
 ;
 ; Tiny BASIC under REX -- the wrapper that makes the interpreter a task.
 ;
-; This file sits between rex.asm and bcore.asm in the deck that builds
-; rex.bin.  bcore.asm's header lists what a wrapper owes the core; this
+; This file sits between rex.asm and test/703/bcore.asm in the deck that
+; builds rex.bin.  bcore.asm's header lists what a wrapper owes the core; this
 ; one pays those debts with the executive's services instead of a driver
 ; of its own:
 ;

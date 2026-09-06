@@ -23,6 +23,9 @@ __pycache__/
 /test/6809/*.bin
 /test/703/*.lst
 
+# REX builds into its own directory
+/rex/build/
+
 # ROM and disk images are not tracked; see tools/rom-manifest.txt
 /roms/*
 !/roms/README.md

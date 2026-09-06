@@ -1,0 +1,140 @@
+# REX
+
+REX -- Raytheon EXec -- is a round-robin executive for the Raytheon 703,
+preemptive and cooperative at once, running on the emulator's invented 60 Hz
+line clock. It is new software written for a 1967 machine, not a
+transcription, and this directory is its own project: the executive, the
+glue that puts Tiny BASIC aboard it as a task, and the scripted session that
+tests it.
+
+    rex.asm            the executive: scheduler, drivers, queues, the shell
+    brex.asm           the wrapper that makes Tiny BASIC a REX task
+    run_rex_test.sh    the end-to-end test
+    makefile           builds everything into build/, which is gitignored
+
+Two things it depends on stay where they are, reached by relative path from
+the makefile: the interpreter itself is `../test/703/bcore.asm`, shared with
+the standalone Tiny BASIC guest the emulator's own tests boot, and the
+assembler is `../tools/asm703.py`. The emulator's tests do not depend on
+anything here.
+
+## Build, run, test
+
+    cargo build                                                  # the emulator
+    make -C rex                                                  # -> rex/build/rex.bin
+    ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io  # a usable shell
+    make -C rex test                                             # the scripted session
+
+`--fast-io` makes the teletype instant; without it the Model 33 takes its real
+tenth of a second per character, and the scheduling slices are real machine
+time either way. The shell's commands:
+
+    HELP or ?    the command list
+    STAT         every task's state, and how long each sleeper has left
+    UPTIME, UP   seconds since the executive came up
+    STOP  [A-C]  suspend a letter task, or all three
+    START [A-C]  release one, or all three
+    ECHO text    print the rest of the line
+    BASIC        the console goes to Tiny BASIC, until its BYE
+    HALT         park the tasks, drain the printer and stop the machine
+
+`START` sets the letter tasks going and they tick along behind whatever is
+typed -- a BASIC session included, letters interleaving with `PRINT`'s output
+on the one printer. The Model 33 echoes what is typed in hardware here
+(`DOT 14,11`), so typing interleaves with the tasks' output character by
+character, the way two users on one printer did. Unlike standalone Tiny
+BASIC it has type-ahead: input goes through a queue, so a burst typed while
+it is busy is held and run in order, and only a burst deeper than the queue
+is lost.
+
+## What it is
+
+Five tasks share the processor, their control blocks a ring of linked
+nodes: everything that names a task -- the current-task cell, the printer's
+owner, a queue's waiter -- holds a node's address, a field is the indexed
+displacement off it, every scan walks the `T.NXT` links, and what a task *is*
+is data in its node, so `STOP`, `START`, `STAT` and `HALT` act on whatever
+the walk finds and adding a task is linking a node in under `MSK` -- the
+doorway a loader would use, though nothing loads dynamically yet. Three
+nodes run the one shared letter body (`LTASK`, which reads its letter, nap
+and mailbox out of its own node via `CURT`): print, sleep, repeat -- stopped
+at power-on, so the machine comes up quiet and `START` sets them going. One
+is the shell. And one is Tiny BASIC behind the `brex.asm` glue, which pays
+bcore's wrapper debts with the executive's services: output through the
+task's own mailbox, input through the console queue, `T.BRK` aliased to the
+kernel's break cell, `BYE` routed to a hand-back. The idle task is a sixth
+node off the ring, the scans' explicit fallback.
+
+A context is four words, ACR, IXR and the hardware-saved PC and status, so
+the switch is a handful of word copies and an `INR 2`; the status word
+carries EXR, the indicators and the addressing mode, which is why a task can
+be preempted between an `SMB` and its reference, or a compare and its skip,
+and resume intact. A node also carries a state and a delay, which is the
+whole of sleep: a task marks itself sleeping and calls `SWTCH`, the
+scheduler counts the delay down every tick and marks it runnable at zero,
+and the scan passes over it meanwhile. `SWTCH` is the cooperative half of
+the switch -- the machine has no yield instruction, so a task hands the
+processor on by staging the incoming context in *level 3's* interrupt block
+and executing `INR 3`, which is this machine's only instruction that loads a
+program counter and a status word together. It must be level 3 and not
+level 2: a tick's entry sequence writes level 2's block before any scheduler
+instruction runs, so a switch staged there would be overwritten by the very
+tick that deferred to it. Scheduling then happens at both ends -- the tick
+takes the processor away from a task that has had it long enough, and a
+service routine that made a task runnable returns as that task instead of
+leaving it to wait for the next tick, so a character posted to the console
+queue reaches its reader in the time it takes to return from the interrupt.
+Both switching paths first test that the block they are about to park holds
+a task's frame and not a driver's, which is the same range test. Nothing in
+it holds the processor to wait for a device: a task that has handed a
+character to the printer marks itself waiting and stands down until the
+completion interrupt wakes it, exactly as the shell waits on its input
+queue. So when every task is asleep or waiting the idle node -- a branch to
+self -- has the processor, which in a traced run with the letters going is
+~97% of the time, and the same ~97% whether or not `--fast-io` is on, which
+is the sign that nothing is spinning on I/O.
+
+## The rules
+
+Each is stated once in `rex.asm`'s header, which is the reference; the
+machine facts they rest on -- the interrupt blocks, EXR, the entry sequence
+that does not reload it -- are in AGENTS.md's 703 section.
+
+The scheduler **defers** whenever the saved PC lies inside the range holding
+the service routines and the switch: a tick there either interrupted the
+driver or found a switch half made, and both want the same answer. Every
+service routine **leads with `SMB`**, because the entry sequence does not
+reload EXR. **`SWTCH` is for tasks** -- a service routine that called it
+would walk away from its own `INR` and leave its level Active for good,
+which silently holds off every level at or below it. **Input goes through a
+queue**: the service routine posts a character and wakes the waiter -- only
+out of its wait, so a keystroke cannot restart a stopped task -- the reader
+blocks in `Q.GET` rather than polling, and one waiter to a queue means one
+reader. And **the console has one reader at a time**, named by the `CONBSY`
+cell: the shell's `BASIC` command sets the task running and raises the cell
+in one masked window, then waits on it -- reading no queue -- until BASIC's
+`BYE` clears it, wakes the shell and parks the task `OFF`, heap intact for
+the next session. Ctrl-C never enters the queue at all: the service routine
+raises the kernel's `BRKREQ` instead (BASIC's break check reads it through
+the `T.BRK` alias), so a running program that reads nothing can still be
+broken, and the grant clears the flag so a stray break cannot land on the
+session that follows. `STOP`/`START` cannot name the shell or BASIC -- only
+nodes with a letter -- because stopping the console's owner would leave the
+shell waiting on a grant nobody can return.
+
+## The test
+
+`make -C rex test` runs `run_rex_test.sh`: boot, `STAT`, `START` and watch
+the letters interleave, `STOP`, the rest of the commands, then two BASIC
+sessions in the middle -- a program entered and RUN, a silent `GOTO` loop
+broken with Ctrl-C through the kernel's flag, `BYE` handing the console
+back, and a second session LISTing the program the heap kept -- and `HALT`.
+It runs `--fast-io` (the slices stay real machine time; the clock ignores
+the flag) with a `-l` instruction-limit hang guard, and paces every command
+on the prompt count and then on the printer falling quiet, which is the
+rule for driving any 703 guest from a script. Two things that make it hard
+to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
+so a burst of input outruns any consumer and proves nothing about the
+scheduling -- measure a switch in a `--trace` instead; and a number printed
+at ten characters a second has to be read as a whole field, not matched on
+its first digit.

@@ -38,12 +38,10 @@ end-to-end test drives; `bcore.asm`, a Tiny BASIC interpreter running on
 the hardware multiply/divide option, with `basic.asm` the wrapper that
 makes it a standalone machine; `disc.asm`, the 74601 disc exerciser;
 `boot.asm`, the one-sector program the controller's LOAD button reads;
-`tape.asm`, the image the PTB bootstrap loads off paper tape; and
-`rex.asm`, REX, a round-robin executive with a shell -- preemptive and
-cooperative at once -- running on the emulator's invented 60 Hz line
-clock, with `brex.asm` the wrapper that puts the same interpreter aboard
-it as a task. AGENTS.md's Test section describes the harness each of
-them runs under.
+and `tape.asm`, the image the PTB bootstrap loads off paper tape.
+AGENTS.md's Test section describes the harness each of them runs under.
+REX, the executive that puts the same interpreter aboard as a task, is its
+own project under `../../rex/`.
 
 ## Running the period software
 

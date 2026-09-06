@@ -186,9 +186,11 @@
 ;              LTASK, the one letter-task body all three letter nodes run
 ;   0800-      page 1: the shell -- banner, prompt, commands, line buffer
 ;
-; Build with asm703.py; see the makefile's ray703-rex target.  Run:
+; Build with make -C rex: asm703.py over this file, brex.asm and the
+; interpreter in test/703/bcore.asm, into rex/build.  Run, from the repo
+; root:
 ;
-;   ./target/debug/emu -s ray703 -r roms/703/rex.bin --fast-io
+;   ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io
 
 ; ---------------------------------------------------------------- levels 0-3
                 ORG     0
