@@ -8,6 +8,7 @@
 
 ASM703    := ../tools/asm703.py
 RELOAD703 := ../tools/reload703.py
+APICHECK  := ../tools/apicheck703.py
 MKDISC703 := ../tools/mkdisc703.py
 BCORE     := ../test/703/bcore.asm
 BUILD     := build
@@ -18,9 +19,12 @@ all: $(BUILD)/rex.bin
 
 # REX with Tiny BASIC aboard as a task: a three-file deck -- the executive,
 # the glue that makes the interpreter a task, and the interpreter itself.
-$(BUILD)/rex.bin: rex.asm brex.asm $(BCORE) $(ASM703)
+# rexapi.asm states the kernel's vector, cells and node layout as EQUs for
+# the modules; the check holds rex.asm's own labels to them.
+$(BUILD)/rex.bin: rex.asm brex.asm $(BCORE) rexapi.asm $(ASM703) $(APICHECK)
 	@mkdir -p $(BUILD)
 	$(ASM703) rex.asm brex.asm $(BCORE) -o $@ -l $(BUILD)/rex.lst
+	$(APICHECK) rexapi.asm $(BUILD)/rex.lst
 
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record

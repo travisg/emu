@@ -180,6 +180,8 @@
 ;   0000-000F  interrupt blocks: level 0 (teletype), level 1 unused,
 ;              level 2 (line clock), level 3 (never signalled -- SWTCH
 ;              stages a switch in it and loads it with INR 3)
+;   0010-002F  the kernel interface for what loads under it: the jump
+;              vector, then the exported cells (rexapi.asm)
 ;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
 ;              KICK, PICK, SWTCH and Q.PUT; then the kernel cells, the
 ;              console queue, the TCB nodes, Q.GET, the idle task and
@@ -207,6 +209,41 @@
                 WORD    0               ; counter and a status here and
                 WORD    0               ; loads them with INR 3 -- see the
                 WORD    0               ; header. Level 3 is never enabled.
+
+; ---------------------------------------------------------------- the api
+; Words X'10'-X'3F' are the blocks of levels 4-15, which nothing on this
+; machine signals, so the kernel's interface to what loads under it lives
+; there: a jump vector, then the cells a module may read.  rexapi.asm
+; states the same addresses as EQUs for the modules, and the build holds
+; the two to each other (tools/apicheck703.py over the listing).  A
+; module reaches an entry with an SMB/JSX pair: the JSX leaves its link
+; in IXR and forces global, and the JMP here carries it into the routine,
+; whose SUBR takes the link as from any caller.  An entry with nothing
+; behind it is a zero word, so a call to it halts.
+                ORG     X'10'
+K.ALLOC         WORD    0               ; ACR = words wanted -> the block, or 0
+K.ALLCW         WORD    0               ; ...inside one 2048-word page
+K.ALLCB         WORD    0               ; ...inside one 1024-word byte page
+K.FREE          WORD    0               ; ACR = a block from K.ALLOC
+K.EXIT          WORD    0               ; the task is over; never returns
+K.SWTCH         JMP     SWTCH           ; hand the processor on
+K.KICK          JMP     KICK            ; start the printer
+K.QGET          JMP     Q.GET           ; ACR = a queue descriptor -> the next word
+K.DREAD         WORD    0               ; ACR = sector, DRBUF = buffer -> status
+                WORD    0,0,0,0,0,0,0   ; X'19'-X'1F'
+
+                ORG     X'20'
+CURT            WORD    SHTCB           ; the current task's node: the kernel
+                                        ; becomes the shell, so it starts on
+                                        ; the shell's own
+BRKREQ          WORD    0               ; Ctrl-C arrived; set by SERV, cleared
+                                        ; by whoever owns the console
+CONBSY          WORD    0               ; the console belongs to BASIC: set by
+                                        ; the shell as it grants, cleared by
+                                        ; BASIC as it hands back, and the
+                                        ; cell the shell waits on meanwhile
+KCONSQ          WORD    QCONS           ; the console queue's descriptor
+DRBUF           WORD    0               ; K.DREAD's buffer, a word address
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
@@ -236,6 +273,8 @@ T.CHR           EQU     8               ; a letter task's letter, and what
                                         ; tasks STOP/START may not touch
 T.NAP           EQU     9               ; a letter task's sleep, in ticks
 T.NAM           EQU     10              ; two characters, for STAT
+T.CON           EQU     11              ; nonzero: this task holds the console
+T.LEN           EQU     12              ; words in a node
 
 SRUN           EQU     0
 SSLP           EQU     1
@@ -664,15 +703,6 @@ LASTS           WORD    ATCB            ; last node served, for fairness
 KCAND           WORD    0               ; KICK's scan scratch
 KTRY            WORD    0
 SHUTREQ         WORD    0               ; set by the shell's HALT, read by tasks
-BRKREQ          WORD    0               ; Ctrl-C arrived; set by SERV, cleared
-                                        ; by whoever owns the console
-CONBSY          WORD    0               ; the console belongs to BASIC: set by
-                                        ; the shell as it grants, cleared by
-                                        ; BASIC as it hands back, and the
-                                        ; cell the shell waits on meanwhile
-CURT            WORD    SHTCB           ; the current task's node: the kernel
-                                        ; becomes the shell, so it starts on
-                                        ; the shell's own
 RESCHD          WORD    0               ; a wake happened: reschedule at the
                                         ; next service routine exit that is
                                         ; standing on a task's frame
@@ -691,7 +721,6 @@ K1              WORD    1
 K60             WORD    60
 KM1             WORD    X'FFFF'
 KWAIT           WORD    SWAI
-KCONSQ          WORD    QCONS
 
 ; The console queue: what the teletype's service routine puts characters
 ; into and the shell takes them out of.  The service routine fills it at
@@ -723,13 +752,13 @@ KISRE           WORD    ISREND
 ; their EXR is therefore plain zero.  A zero status word would resume a
 ; task in local mode pointed at page 0.
 ;
-;                    STA    NXT   ACR IXR PCR    MST            DLY MBX CHR NAP NAM
-ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80',         0,  0,  'A',30, 'A '
-BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80',         0,  0,  'B',45, 'B '
-CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80',         0,  0,  'C',60, 'C '
-SHTCB           WORD SRUN, BATCB,0,  0,  0,     0,             0,  0,  0,  0,  'SH'
-BATCB           WORD SOFF, ATCB, 0,  0,  BASENT,(BASENT*2)+X'80',0,0,  0,  0,  'BA'
-IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80',         0,  0,  0,  0,  'ID'
+;                    STA    NXT   ACR IXR PCR    MST            DLY MBX CHR NAP NAM  CON
+ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80',         0,  0,  'A',30, 'A ',0
+BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80',         0,  0,  'B',45, 'B ',0
+CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80',         0,  0,  'C',60, 'C ',0
+SHTCB           WORD SRUN, BATCB,0,  0,  0,     0,             0,  0,  0,  0,  'SH',0
+BATCB           WORD SOFF, ATCB, 0,  0,  BASENT,(BASENT*2)+X'80',0,0,  0,  0,  'BA',0
+IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80',         0,  0,  0,  0,  'ID',0
 
 ; What the machine runs when every task is asleep.  A branch to self is a
 ; legal idle here -- the levels are enabled and unmasked, so the tick that
@@ -916,7 +945,9 @@ SHPUP           SUBR
 SHSTAT          JSX     SHPUP
                 LDW     SHKRNG
                 STW     SHTO            ; the node being printed
-                LDW     SHKNB           ; the ring, and idle
+                SMB     KNRING          ; the ring as it stands, and idle
+                LDW     KNRING
+                ADD     SHK1
                 STW     SHTI
 SHSTL           LDX     SHTO
                 LDW     *T.NAM          ; its two-character name
@@ -1393,7 +1424,6 @@ SHKOFF          WORD    SOFF
 SHKWAI          WORD    SWAI
 SHKUPM          WORD    X'FFDF'         ; folds a letter to upper case
 SHKCQ           WORD    QCONS           ; the queue the keyboard fills
-SHKNB           WORD    NRING+1         ; nodes STAT prints, idle included
 SHKRNG          WORD    ATCB            ; the ring, where the shell's walks
 SHKIDL          WORD    IDTCB           ; start, and the idle node past it
 SHKLBB          WORD    LBUF*2          ; the line, and the last byte its
