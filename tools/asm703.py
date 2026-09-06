@@ -9,12 +9,38 @@
 """A small two-pass assembler for the Raytheon 703.
 
 The 703 predates anything this tree could reuse, and its own assembler (SYM II)
-exists only as scans, so the demo image needs something to build it. This is
-deliberately minimal -- no macros, no relocation, no object format -- because
-the only thing it has to produce is an absolute core image.
+exists only as scans, so the guests need something to build them. This is
+deliberately small -- no macros, no linking -- and produces two things:
 
-Output is a flat binary of big-endian words starting at word 0, which is what
-`emu -s ray703` loads into core.
+  - an absolute core image (`-o`): a flat binary of big-endian words starting
+    at word 0, which is what `emu -s ray703` loads into core;
+  - a relocatable module (`--object`): the deck assembled from word 0 and
+    written as loader text in the record format of the 1968 relocating
+    loader (DN 390682C), for an executive's loader to place wherever its
+    allocator finds room. The codes, each a byte:
+
+        8n  n+1 words whose 11-bit M field is a location  (W11)
+        9n  n+1 words holding a word address              (W15)
+        An  n+1 words holding a byte address              (B16)
+        Bn  n+1 byte references whose M field is a location (B11)
+        Cn  n+1 absolute words                            (A)
+        03  a page selection of a location: one word, the address, and
+            the loader builds the SML/SMU from where the module lands
+        04  a reserved run: one word, the count
+        06  the end, with one word naming the entry
+        0A  the module's size in words, first of all; 0B the same for a
+            module that byte-addresses directly and so must sit inside
+            one 1024-word byte page rather than one 2048-word page
+
+    The text is cut into records of a zero marker, ninety-two bytes and a
+    checksum -- the byte sum folded, (sum >> 8) + sum -- which is one
+    47-word disc sector each; the marker and the checksum are framing the
+    loader strips, and the text runs on across them. What relocates is decided by the relocation count an expression
+    carries (see Expr); a direct reference to an absolute address needs a
+    page selection in front of it, since a module's own page is unknown
+    until it is loaded, and a module must fit one page, since its M fields
+    are page offsets. tools/reload703.py is the reference loader for this
+    text, and rex/ has the one that runs on the machine.
 
 Several source files may be named at once and are assembled strictly in order
 as one deck -- one location counter, one symbol table, one image -- exactly as
@@ -247,6 +273,13 @@ class Expr:
 
     Recursive descent rather than eval(), so a typo in the source is an
     assembler error rather than a Python traceback.
+
+    Every term carries a relocation count beside its value -- a label counts
+    one, a literal none, and the arithmetic combines them: SYM+1 is one,
+    SYM*2 is two, SYM-SYM is none. Absolute assembly reads only the value.
+    The object writer classifies each word by the count, and a byte
+    instruction's operand doubles the counted symbols along with their
+    values, which is how SYM II told a location from a constant.
     """
 
     TOKEN = re.compile(r"""
@@ -260,7 +293,7 @@ class Expr:
         )
     """, re.VERBOSE)
 
-    def __init__(self, text, symbols, here, lineno):
+    def __init__(self, text, symbols, here, lineno, counts=None, here_count=1):
         self.tokens = []
         pos = 0
         while pos < len(text):
@@ -274,7 +307,9 @@ class Expr:
             pos = m.end()
         self.pos = 0
         self.symbols = symbols
+        self.counts = counts if counts is not None else {}
         self.here = here
+        self.here_count = here_count
         self.lineno = lineno
 
     def peek(self):
@@ -286,30 +321,41 @@ class Expr:
         return tok
 
     def value(self):
-        v = self.sum()
+        return self.reloc()[0]
+
+    def reloc(self):
+        """The expression's value and its relocation count."""
+        v, c = self.sum()
         if self.peek() is not None:
             raise AsmError(self.lineno, f'trailing {self.peek()!r} in expression')
-        return v
+        return v, c
 
     def sum(self):
-        v = self.product()
+        v, c = self.product()
         while self.peek() in ('+', '-'):
             op = self.take()
-            rhs = self.product()
-            v = v + rhs if op == '+' else v - rhs
-        return v
+            rv, rc = self.product()
+            if op == '+':
+                v, c = v + rv, c + rc
+            else:
+                v, c = v - rv, c - rc
+        return v, c
 
     def product(self):
-        v = self.unary()
+        v, c = self.unary()
         while self.peek() == '*':
             self.take()
-            v *= self.unary()
-        return v
+            rv, rc = self.unary()
+            if c and rc:
+                raise AsmError(self.lineno, 'the product of two locations has no meaning')
+            v, c = v * rv, c * rv + rc * v
+        return v, c
 
     def unary(self):
         if self.peek() == '-':
             self.take()
-            return -self.unary()
+            v, c = self.unary()
+            return -v, -c
         return self.atom()
 
     def atom(self):
@@ -317,23 +363,23 @@ class Expr:
         if tok is None:
             raise AsmError(self.lineno, 'expression ended early')
         if tok == '(':
-            v = self.sum()
+            v, c = self.sum()
             if self.take() != ')':
                 raise AsmError(self.lineno, 'unbalanced parentheses')
-            return v
+            return v, c
         if tok.startswith("X'"):
-            return int(tok[2:-1], 16)
+            return int(tok[2:-1], 16), 0
         if tok.lower().startswith('0x'):
-            return int(tok, 16)
+            return int(tok, 16), 0
         if tok.startswith("'"):
-            return char_literal(self.lineno, tok[1:-1])
+            return char_literal(self.lineno, tok[1:-1]), 0
         if tok[0].isdigit():
-            return int(tok, 10)
+            return int(tok, 10), 0
         if tok == '$':
-            return self.here
+            return self.here, self.here_count
         if tok not in self.symbols:
             raise UndefinedSymbol(self.lineno, f'undefined symbol {tok!r}')
-        return self.symbols[tok]
+        return self.symbols[tok], self.counts.get(tok, 0)
 
 
 def unescape(text, lineno):
@@ -514,17 +560,50 @@ def string_body(lineno, arg):
 
 
 def encode(lineno, op, arg, symbols, here, address_syms=None,
-           prev_selects_page=False):
+           prev_selects_page=False, counts=None, relocatable=False):
     """Assemble one instruction into a single word.
 
     `prev_selects_page` says the statement emitted immediately before this one
     was SML/SMU/SMB, whose page selection governs exactly this instruction's
     memory reference -- which is what licenses a direct operand outside the
     instruction's own page.
+
+    Returns the word, or `(word, kind)` when `relocatable` -- see KINDS.
+    `address_syms` is accepted for older callers and ignored: which symbols
+    are locations is what `counts` says.
     """
+    word, kind = encode2(lineno, op, arg, symbols, here, prev_selects_page,
+                         counts, relocatable)
+    return (word, kind) if relocatable else word
+
+
+# What the object writer needs to know about each assembled word, and the
+# relocating loader's code for it:
+#
+#   A     absolute, stored verbatim               Cn
+#   W11   a memory reference whose 11-bit M field is a location  8n
+#   W15   a data word holding a word address       9n
+#   B16   a data word holding a byte address       An
+#   B11   a byte reference whose M field is a location (direct)   Bn
+#   B11I  the same, indexed -- relocated alike, but it does not ask for a
+#         byte page, since an indexed byte reference is flat
+#   SMB   a page selection of a location: the loader manufactures the
+#         instruction from the final address       3
+#   ILOC  a reserved word                          4
+KINDS = {'A': 4, 'W11': 0, 'W15': 1, 'B16': 2, 'B11': 3, 'B11I': 3}
+
+
+def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
+            counts=None, relocatable=False):
+    """encode(), always returning `(word, kind)`."""
+    if counts is None:
+        counts = {}
+
+    def reloc(text):
+        return Expr(text, symbols, here, lineno, counts).reloc()
 
     def value(text, limit=None):
-        v = Expr(text, symbols, here, lineno).value()
+        v = reloc(text)[0]
         if limit is not None and not 0 <= v <= limit:
             raise AsmError(lineno, f'{text.strip()} = {v} does not fit in {limit + 1} values')
         return v
@@ -538,7 +617,8 @@ def encode(lineno, op, arg, symbols, here, address_syms=None,
             text = text[1:]
         if text.startswith('/'):
             # the PTB listing's "STB /TEST": the byte address of a word label
-            addr = value(text[1:]) * 2
+            addr, cnt = reloc(text[1:])
+            addr, cnt = addr * 2, cnt * 2
         elif op in BYTE_REF:
             # A byte instruction's operand is a byte address, and SYM II
             # converts the symbols in it for you: the relocating loader writes
@@ -547,17 +627,19 @@ def encode(lineno, op, arg, symbols, here, address_syms=None,
             # byte. `STB * BUF3+NAMESIZE+NAMESIZE+6` is the same rule with four
             # terms and settles that it is per symbol rather than applied to
             # the whole expression, which would have doubled the constants too.
-            # ...but only the symbols that are *addresses*. `STB * BUF3+
+            # ...but only the symbols that are *locations*. `STB * BUF3+
             # NAMESIZE+NAMESIZE+6` doubles BUF3, a location, and leaves
             # NAMESIZE, which is `EQU 2`, alone: byte B7A + 2 + 2 + 6 = B84,
             # which is what the listing prints. SYM II is a relocating
-            # assembler and had to know the difference; so does this.
-            addrs = symbols if address_syms is None else address_syms
-            doubled = {name: v * 2 if name in addrs else v
+            # assembler and had to know the difference; so does this, and the
+            # relocation count is the difference.
+            doubled = {name: v * 2 if counts.get(name) else v
                        for name, v in symbols.items()}
-            addr = Expr(text, doubled, here * 2, lineno).value()
+            dcounts = {name: c * 2 for name, c in counts.items()}
+            addr, cnt = Expr(text, doubled, here * 2, lineno, dcounts,
+                             here_count=2).reloc()
         else:
-            addr = value(text)
+            addr, cnt = reloc(text)
         # An indexed operand's M is a bare base or displacement under IXR, not
         # a paged address, so it keeps the old rules: byte bases wrap within
         # the eleven-bit field -- the relocating loader writes `STB * BUF3+...`
@@ -573,10 +655,26 @@ def encode(lineno, op, arg, symbols, here, address_syms=None,
         # else would silently reference the wrong page at run time -- which
         # was assembled without complaint before this check existed, for
         # operands that happened to fit the field.
+        #
+        # A module has no page of its own until the loader gives it one, so
+        # the object writer's rules differ: a location is relocated by the
+        # loader (the module is held to one page, so it is always in reach),
+        # and an absolute address is reachable only through a page selection
+        # in front of it.
         unit = 'byte' if op in BYTE_REF else 'word'
+        kind = 'A'
         if indexed:
             if op in BYTE_REF:
                 addr &= 0x7ff
+            if relocatable and cnt:
+                if op in BYTE_REF and cnt == 2:
+                    kind = 'B11I'
+                else:
+                    raise AsmError(
+                        lineno,
+                        f'indexed {unit} base {text.strip()!r} is a location; an '
+                        f'indexed M is a displacement under IXR, so put the '
+                        f'address in a cell and load it into the index register')
             if not 0 <= addr <= 0x7ff:
                 raise AsmError(
                     lineno,
@@ -584,68 +682,128 @@ def encode(lineno, op, arg, symbols, here, address_syms=None,
         else:
             if addr < 0:
                 raise AsmError(lineno, f'{unit} address {addr} is negative')
-            ipage = here >> 10 if op in BYTE_REF else here >> 11
-            tpage = addr >> 11
-            if tpage != ipage and not prev_selects_page:
-                raise AsmError(
-                    lineno,
-                    f'{unit} address {addr:#x} is in {unit} page {tpage} and this '
-                    f'instruction runs in {unit} page {ipage}, so the reference '
-                    f'would land in the wrong page -- put SMB in front, or go '
-                    f'through the index register')
+            if relocatable:
+                if cnt == 0:
+                    if not prev_selects_page:
+                        raise AsmError(
+                            lineno,
+                            f'{unit} address {addr:#x} is absolute and no page is '
+                            f'selected; a module runs in whatever page the loader '
+                            f'puts it, so put SMB in front, or go through the '
+                            f'index register')
+                elif cnt == (2 if op in BYTE_REF else 1):
+                    kind = 'B11' if op in BYTE_REF else 'W11'
+                else:
+                    raise AsmError(
+                        lineno,
+                        f'{unit} address {text.strip()!r} relocates {cnt} times '
+                        f'over; a direct operand is one location or none')
+            else:
+                ipage = here >> 10 if op in BYTE_REF else here >> 11
+                tpage = addr >> 11
+                if tpage != ipage and not prev_selects_page:
+                    raise AsmError(
+                        lineno,
+                        f'{unit} address {addr:#x} is in {unit} page {tpage} and this '
+                        f'instruction runs in {unit} page {ipage}, so the reference '
+                        f'would land in the wrong page -- put SMB in front, or go '
+                        f'through the index register')
             addr &= 0x7ff
-        return (MEMREF[op] << 12) | (0x0800 if indexed else 0) | addr
+        return (MEMREF[op] << 12) | (0x0800 if indexed else 0) | addr, kind
 
     if op in GEN_ALIAS:
         if arg:
             raise AsmError(lineno, f'{op} takes no operand')
-        return GEN_ALIAS[op]
+        return GEN_ALIAS[op], 'A'
 
     if op in GEN_NONE:
         if arg:
             raise AsmError(lineno, f'{op} takes no operand')
-        return GEN_NONE[op]
+        return GEN_NONE[op], 'A'
 
     if op in GEN_LEVEL:
-        return GEN_LEVEL[op] | value(arg, 15)
+        return GEN_LEVEL[op] | value(arg, 15), 'A'
 
     if op in GEN_PAGE:
-        return GEN_PAGE[op] | value(arg, 15)
+        return GEN_PAGE[op] | value(arg, 15), 'A'
 
     if op == SELECT_BASE:
         # EXR holds a five-bit byte page. A word address's byte page is the
         # top five bits of twice it, so word >> 10; SML reaches the lower
         # sixteen pages and SMU the upper sixteen.
-        page = (value(arg) >> 10) & 0x1f
+        target, cnt = reloc(arg)
+        if relocatable and cnt:
+            if cnt != 1:
+                raise AsmError(lineno, f'SMB {arg.strip()!r} is not one location')
+            # The page is not known until the loader places the module; the
+            # object carries the address and the loader builds the word.
+            return target & 0x7fff, 'SMB'
+        page = (target >> 10) & 0x1f
         if page < 16:
-            return GEN_PAGE['SML'] | page
-        return GEN_PAGE['SMU'] | (page - 16)
+            return GEN_PAGE['SML'] | page, 'A'
+        return GEN_PAGE['SMU'] | (page - 16), 'A'
 
     if op in GEN_LITERAL:
         v = value(arg)
         if not -128 <= v <= 255:
             raise AsmError(lineno, f'{op} literal {v} does not fit in a byte')
-        return GEN_LITERAL[op] | (v & 0xff)
+        return GEN_LITERAL[op] | (v & 0xff), 'A'
 
     if op in GEN_DIO:
         if arg is None or ',' not in arg:
             raise AsmError(lineno, f'{op} needs "device,function"')
         dev, func = arg.split(',', 1)
-        return GEN_DIO[op] | (value(dev, 15) << 4) | value(func, 15)
+        return GEN_DIO[op] | (value(dev, 15) << 4) | value(func, 15), 'A'
 
     if op in GEN_SKIP:
         if arg:
             raise AsmError(lineno, f'{op} takes no operand')
-        return GEN_SKIP[op]
+        return GEN_SKIP[op], 'A'
 
     if op in GEN_SHIFT:
-        return GEN_SHIFT[op] | value(arg, 15)
+        return GEN_SHIFT[op] | value(arg, 15), 'A'
 
     raise AsmError(lineno, f'unknown mnemonic {op!r}')
 
 
-def assemble(paths):
-    """Assemble one file, or a list of files as a single deck in order."""
+def data_kind(lineno, cnt, relocatable, what):
+    """The kind of a data word from its relocation count."""
+    if cnt == 0:
+        return 'A'
+    if cnt == 1:
+        return 'W15'
+    if cnt == 2:
+        return 'B16'
+    if not relocatable:
+        return 'A'
+    raise AsmError(lineno, f'{what} relocates {cnt} times over; a data word holds '
+                           f'a number, a word address or a byte address')
+
+
+def assemble(paths, origin=0):
+    """Assemble one file, or a list of files as a single deck in order, into
+    an absolute core image: `(image, listing, symbols, core)`.
+
+    `origin` is where the location counter starts, for a deck with no ORG of
+    its own -- a module source assembled absolute at a chosen base.
+    """
+    r = _assemble(paths, origin=origin, relocatable=False)
+    return r['image'], r['listing'], r['symbols'], r['core']
+
+
+def assemble_object(paths):
+    """Assemble a deck as a relocatable module: `(stream, listing, symbols,
+    core, size)`, where `stream` is the loader text in the relocating
+    loader's record format (see the module docstring) and `core` is the
+    module at base 0 -- with each page selection of a location holding the
+    address the loader will build the instruction from.
+    """
+    r = _assemble(paths, origin=0, relocatable=True)
+    stream = object_stream(r['core'], r['kinds'], r['size'], r['entry'], r['sizeb'])
+    return stream, r['listing'], r['symbols'], r['core'], r['size']
+
+
+def _assemble(paths, origin=0, relocatable=False):
     if isinstance(paths, str):
         paths = [paths]
     seq = itertools.count()
@@ -669,7 +827,7 @@ def assemble(paths):
     # Pass 1: place every statement and collect the labels.
     symbols = {}
     placed = []
-    here = 0
+    here = origin
     # Errors from both passes, reported together at the end: on a long file
     # the first bad card should not hide the rest.
     errors = []
@@ -677,12 +835,14 @@ def assemble(paths):
     cond = []
     # EQUs whose operand named something not yet defined; settled after the pass.
     deferred = []
-    # Which symbols name a location rather than a plain number. A byte
-    # instruction's operand is a byte address, and SYM II converts the
-    # locations in it while leaving the constants alone -- so the two have to
-    # be told apart. A label is a location; an EQU is one only if what it was
-    # equated to is.
-    address_syms = set()
+    # Each symbol's relocation count: a label is one location, an EQU is
+    # whatever its expression comes to. A byte instruction's operand is a
+    # byte address, and SYM II converts the locations in it while leaving the
+    # constants alone -- so the two have to be told apart -- and the object
+    # writer relocates by the same count.
+    counts = {}
+    # The END card's operand, which names a module's entry.
+    end_card = None
     for idx, (lineno, label, op, arg, text) in enumerate(statements):
         try:
             if op in CONDITIONALS:
@@ -707,6 +867,7 @@ def assemble(paths):
                 continue
             if op == 'END':
                 placed.append((lineno, here, op, arg, text))
+                end_card = (lineno, arg)
                 # Trailing cards in the same file are dropped, as they always
                 # were; a whole later file after the END is a deck mistake.
                 tail = {s[0].path for s in statements[idx + 1:]
@@ -719,10 +880,9 @@ def assemble(paths):
             if op == 'EQU':
                 if not label:
                     raise AsmError(lineno, 'EQU needs a label')
-                if '$' in (arg or '') or any(n in address_syms for n in NAMES.findall(arg or '')):
-                    address_syms.add(label)
                 try:
-                    symbols[label] = Expr(arg or '', symbols, here, lineno).value()
+                    symbols[label], counts[label] = Expr(arg or '', symbols, here,
+                                                         lineno, counts).reloc()
                 except UndefinedSymbol:
                     # SYM II allowed an EQU to name a symbol defined further down
                     # the deck -- the X-RAY listing's card 298 is
@@ -739,9 +899,18 @@ def assemble(paths):
                 # SUBR lays down a return slot and then the STX that fills it; the
                 # name belongs to the STX, so that callers jump to code.
                 symbols[label] = here + 1 if op == 'SUBR' else here
-                address_syms.add(label)
+                counts[label] = 1
             if op in ('ORG', 'ORIG'):
-                here = Expr(arg or '', symbols, here, lineno).value()
+                target, cnt = Expr(arg or '', symbols, here, lineno, counts).reloc()
+                # A module is one contiguous stream from word 0, placed by the
+                # loader; the one ORG it may carry is the no-op that names where
+                # it already is (bcore.asm's `ORG B.CORE`).
+                if relocatable and (target, cnt) != (here, 1):
+                    raise AsmError(
+                        lineno,
+                        f'{op} {arg.strip()!r} in a module: the loader decides where '
+                        f'a module goes, so its words are one stream from word 0')
+                here = target
                 placed.append((lineno, here, op, arg, text))
                 continue
             placed.append((lineno, here, op, arg, text))
@@ -779,7 +948,8 @@ def assemble(paths):
         rest = []
         for lineno, label, arg, at in deferred:
             try:
-                symbols[label] = Expr(arg or '', symbols, at, lineno).value()
+                symbols[label], counts[label] = Expr(arg or '', symbols, at,
+                                                     lineno, counts).reloc()
             except UndefinedSymbol as err:
                 rest.append((lineno, label, arg, at, err))
         if len(rest) == len(deferred):
@@ -789,37 +959,51 @@ def assemble(paths):
 
     # Pass 2: emit.
     core = {}
+    kinds = {}
     listing = []
+    entry = None
     # Whether the statement emitted immediately before this one was
     # SML/SMU/SMB, whose page selection licenses the next direct reference to
     # leave its own page. Statements that emit nothing (EQU, ORG, comments)
     # are invisible to the hardware and leave the flag alone.
     prev_selects = False
+
+    def data(part, at, lineno, what):
+        v, c = Expr(part, symbols, at, lineno, counts).reloc()
+        return v & 0xffff, data_kind(lineno, c, relocatable, what)
+
     for lineno, addr, op, arg, text in placed:
         words = []
+        wkinds = []
         try:
             if op in ('WORD', 'DATA', 'D'):
                 for part in operand_list(arg):
-                    words.append(Expr(part, symbols, addr + len(words), lineno).value() & 0xffff)
+                    w, k = data(part, addr + len(words), lineno, part.strip())
+                    words.append(w)
+                    wkinds.append(k)
             elif op == 'TEXT':
                 body = string_body(lineno, arg)
                 words = [(body[i] << 8) | body[i + 1] for i in range(0, len(body), 2)]
+                wkinds = ['A'] * len(words)
             elif op == 'EXCH':
                 words = [EXCH_WORD, EXCH_WORD]
+                wkinds = ['A', 'A']
             elif op == 'SUBR':
                 words = [0x0000, (MEMREF['STX'] << 12) | (addr & 0x07ff)]
+                wkinds = ['A', 'W11']
             elif op == 'EXIT':
                 # `EXIT sym` returns through the subroutine's slot; `EXIT sym,n`
                 # returns n words further on, which is how a subroutine takes an
                 # error return -- the relocating loader's `EXIT RELOAD,1` emits
                 # 963A 2801, a JSX indexed by one rather than zero.
                 parts = operand_list(arg or '')
-                entry = Expr(parts[0], symbols, addr, lineno).value()
+                entry_addr = Expr(parts[0], symbols, addr, lineno).value()
                 skip = Expr(parts[1], symbols, addr, lineno).value() if len(parts) > 1 else 0
                 if not 0 <= skip <= 0x7ff:
                     raise AsmError(lineno, f'EXIT return offset {skip} does not fit')
-                words = [(MEMREF['LDX'] << 12) | ((entry - 1) & 0x07ff),
+                words = [(MEMREF['LDX'] << 12) | ((entry_addr - 1) & 0x07ff),
                          (MEMREF['JSX'] << 12) | 0x0800 | skip]
+                wkinds = ['W11', 'A']
             elif op == 'BYTE':
                 # Two bytes to a word, high half first, as everywhere else on this
                 # machine. An odd count leaves the low half zero.
@@ -828,14 +1012,17 @@ def assemble(paths):
                 if len(vals) % 2:
                     vals.append(0)
                 words = [(vals[i] << 8) | vals[i + 1] for i in range(0, len(vals), 2)]
+                wkinds = ['A'] * len(words)
             elif op == 'RES':
                 words = [0] * Expr(arg or '', symbols, addr, lineno).value()
+                wkinds = ['ILOC'] * len(words)
             elif op == 'JSX' and arg and len(operand_list(arg)) > 1:
                 parts = operand_list(arg)
-                words = [encode(lineno, op, parts[0], symbols, addr, address_syms,
-                                prev_selects_page=prev_selects)]
+                w, k = encode2(lineno, op, parts[0], symbols, addr, prev_selects,
+                               counts, relocatable)
+                words, wkinds = [w], [k]
                 for i, part in enumerate(parts[1:], 1):
-                    value = Expr(part, symbols, addr + i, lineno).value() & 0xffff
+                    w, k = data(part, addr + i, lineno, part.strip())
                     # The last argument carries bit 0 -- this machine's most
                     # significant -- to mark the end of the list. That is the
                     # assembler's doing, not the programmer's: `JSX STAT,LOADFIOT`
@@ -843,13 +1030,15 @@ def assemble(paths):
                     # confirms it from the other side, masking the bit off with
                     # `AND X7FF` under the comment DO NOT TEST SIGN BIT.
                     if i == len(parts) - 1:
-                        value |= 0x8000
-                    words.append(value)
+                        w |= 0x8000
+                    words.append(w)
+                    wkinds.append(k)
             elif op in GEN_TWOWORD:
                 # MPY/DIV: the fixed opcode word, then the operand as a flat
                 # 15-bit word address (section 6). No page arithmetic, no
                 # SMB, and no indexed form -- the second word already reaches
-                # all of core.
+                # all of core, and is the one field on the machine the loader
+                # relocates on its own.
                 if arg is None:
                     raise AsmError(lineno, f'{op} needs an address')
                 if arg.strip().startswith('*'):
@@ -857,27 +1046,61 @@ def assemble(paths):
                         lineno,
                         f'{op} has no indexed form; its second word is a flat '
                         f'15-bit address that already reaches all of core')
-                operand = Expr(arg, symbols, addr + 1, lineno).value()
+                operand, cnt = Expr(arg, symbols, addr + 1, lineno, counts).reloc()
                 if not 0 <= operand <= 0x7fff:
                     raise AsmError(
                         lineno, f'{op} operand {operand:#x} is not a 15-bit word address')
+                if relocatable and cnt not in (0, 1):
+                    raise AsmError(lineno, f'{op} operand {arg.strip()!r} is not one location')
                 words = [GEN_TWOWORD[op], operand]
-            elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', 'END', None):
+                wkinds = ['A', 'W15' if cnt == 1 else 'A']
+            elif op == 'END':
+                if relocatable:
+                    # The entry is the one address the loader hands the
+                    # executive, so a module's END must name it.
+                    if not arg:
+                        raise AsmError(lineno, 'a module\'s END must name its entry')
+                    entry, cnt = Expr(arg, symbols, addr, lineno, counts).reloc()
+                    if cnt != 1:
+                        raise AsmError(lineno, f'entry {arg.strip()!r} is not a location in the module')
+                words = []
+            elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', None):
                 words = []
             else:
-                words = [encode(lineno, op, arg, symbols, addr, address_syms,
-                                prev_selects_page=prev_selects)]
+                w, k = encode2(lineno, op, arg, symbols, addr, prev_selects,
+                               counts, relocatable)
+                words, wkinds = [w], [k]
 
-            for i, w in enumerate(words):
+            for i, (w, k) in enumerate(zip(words, wkinds)):
                 if addr + i in core:
                     raise AsmError(lineno, f'word {addr + i:#x} is assembled twice')
                 core[addr + i] = w
+                kinds[addr + i] = k
         except AsmError as e:
             errors.append(e)
             words = []
         if words:
             prev_selects = op in ('SML', 'SMU', SELECT_BASE)
         listing.append((addr, words, text))
+
+    size = max(core) + 1 if core else 0
+    sizeb = False
+    if relocatable and not errors:
+        # Direct byte references reach only their own 1024-word byte page,
+        # so a module that makes any must be placed inside one; the size
+        # code tells the loader which containment it needs.
+        sizeb = any(k == 'B11' for k in kinds.values())
+        limit = 1024 if sizeb else 2048
+        where = end_card[0] if end_card else 0
+        if size > limit:
+            errors.append(AsmError(
+                where,
+                f'the module is {size} words; a module must fit one {limit}-word '
+                f'page, since its M fields are page offsets'))
+        elif set(core) != set(range(size)):
+            errors.append(AsmError(where, 'a module is one contiguous stream from word 0'))
+        elif entry is None:
+            errors.append(AsmError(where, 'a module needs an END naming its entry'))
 
     if errors:
         # Both passes contribute, so put the report back in deck order.
@@ -889,11 +1112,54 @@ def assemble(paths):
     if not core:
         raise AsmError(0, 'nothing was assembled')
 
-    top = max(core)
     image = bytearray()
-    for word in range(top + 1):
+    for word in range(size):
         image += core.get(word, 0).to_bytes(2, 'big')
-    return bytes(image), listing, symbols, core
+    return {'image': bytes(image), 'listing': listing, 'symbols': symbols,
+            'core': core, 'kinds': kinds, 'size': size, 'entry': entry,
+            'sizeb': sizeb}
+
+
+# The relocating loader's record: a zero marker, ninety-two bytes of text and
+# a checksum, which is one 47-word disc sector.
+RECORD_DATA = 92
+
+
+def object_stream(core, kinds, size, entry, sizeb):
+    """The loader text for a module at base 0, framed into records.
+
+    Repeatable codes carry runs of up to sixteen words of one kind; a page
+    selection and a reserved run each take a control code and one word; the
+    entry closes the stream. Everything after END is padding the loader
+    never reads.
+    """
+    out = bytearray([0x0b if sizeb else 0x0a]) + size.to_bytes(2, 'big')
+    addr = 0
+    while addr < size:
+        kind = kinds[addr]
+        run = addr
+        while run < size and kinds[run] == kind and run - addr < 16:
+            run += 1
+        if kind == 'ILOC':
+            while run < size and kinds[run] == 'ILOC':
+                run += 1
+            out += bytes([0x04]) + (run - addr).to_bytes(2, 'big')
+        elif kind == 'SMB':
+            out += bytes([0x03]) + core[addr].to_bytes(2, 'big')
+            run = addr + 1
+        else:
+            out += bytes([0x80 | (KINDS[kind] << 4) | (run - addr - 1)])
+            for a in range(addr, run):
+                out += core[a].to_bytes(2, 'big')
+        addr = run
+    out += bytes([0x06]) + entry.to_bytes(2, 'big')
+
+    records = bytearray()
+    for i in range(0, len(out), RECORD_DATA):
+        body = bytes([0x00]) + bytes(out[i:i + RECORD_DATA]).ljust(RECORD_DATA, b'\0')
+        total = sum(body)
+        records += body + bytes([((total >> 8) + total) & 0xff])
+    return bytes(records)
 
 
 def punch_tape(image, origin):
@@ -930,7 +1196,12 @@ def main():
     ap = argparse.ArgumentParser(description='Raytheon 703 assembler')
     ap.add_argument('sources', metavar='source', nargs='+',
                     help='source files, assembled in order as one deck')
-    ap.add_argument('-o', '--output', required=True, help='flat big-endian core image')
+    ap.add_argument('-o', '--output', help='flat big-endian core image')
+    ap.add_argument('--object', help='write the deck as a relocatable module, in '
+                                     'the relocating loader\'s record format')
+    ap.add_argument('--org', default='0',
+                    help='where the location counter starts (default 0); an '
+                         'absolute build of a module source at a chosen base')
     ap.add_argument('-l', '--listing', help='write an address/word/source listing')
     # Deliberately the same "addr word" shape that xraylist.py --obj emits, so
     # that reassembling a transcribed listing and diffing it against the object
@@ -945,9 +1216,18 @@ def main():
                          'in src/system/ray703.rs (default 0x100)')
     args = ap.parse_args()
 
+    if not (args.output or args.object or args.map or args.listing):
+        ap.error('nothing to write: give -o, --object, -m or -l')
+    if args.object and args.org != '0':
+        ap.error('--org places an absolute build; a module is placed by the loader')
+
     deck = ' '.join(args.sources)
     try:
-        image, listing, symbols, core = assemble(args.sources)
+        if args.object:
+            stream, listing, symbols, core, size = assemble_object(args.sources)
+            image = b''.join(core[a].to_bytes(2, 'big') for a in range(size))
+        else:
+            image, listing, symbols, core = assemble(args.sources, int(args.org, 0))
     except AsmErrorList as e:
         for err in e.errors:
             print(err, file=sys.stderr)
@@ -963,8 +1243,13 @@ def main():
         print(e, file=sys.stderr)
         return 1
 
-    with open(args.output, 'wb') as f:
-        f.write(image)
+    if args.output:
+        with open(args.output, 'wb') as f:
+            f.write(image)
+
+    if args.object:
+        with open(args.object, 'wb') as f:
+            f.write(stream)
 
     if args.tape:
         try:
@@ -984,7 +1269,11 @@ def main():
     if args.listing:
         write_listing(args.listing, listing, symbols)
 
-    print(f'{deck}: {len(image) // 2} words -> {args.output}')
+    if args.object:
+        records = len(stream) // (RECORD_DATA + 2)
+        print(f'{deck}: {size} words, {records} records -> {args.object}')
+    elif args.output:
+        print(f'{deck}: {len(image) // 2} words -> {args.output}')
     return 0
 
 
