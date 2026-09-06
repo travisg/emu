@@ -22,6 +22,7 @@
 ;   STOP  [A-C]  suspend a letter task, or all three
 ;   START [A-C]  release one, or all three
 ;   ECHO text    print the rest of the line
+;   MEM          the words free in the pool
 ;   BASIC        the console goes to Tiny BASIC, until its BYE
 ;   HALT         park the tasks, drain the printer and stop the machine
 ;
@@ -171,6 +172,18 @@
 ;   page boundary the EXR field is exactly (entry * 2); LTASK and IDLE
 ;   are in page 0, where the field is plain zero.
 ;
+; * THE POOL IS OWNED WORD BY WORD.  Core from POOLB to POOLE is a
+;   first-fit list of free blocks, every block two words of header in
+;   front of its payload: the size, and either the next free block or the
+;   node of the task that asked for it, with bit 0 set to tell the two
+;   apart.  K.ALLOC takes a size; K.ALLCW and K.ALLCB take one that must
+;   lie inside a single word page or byte page, which is what a module
+;   needs, its M fields being page offsets.  The list is walked and cut
+;   only under MSK and only from task context, so no interrupt ever finds
+;   it half linked, and a free block is joined to any free neighbour, so
+;   no two free blocks touch.  The owner tag is what lets everything a
+;   task holds be found again by a walk of the pool.
+;
 ; * EVERYTHING RUNS GLOBAL.  START sets it, the TCB statuses carry it,
 ;   and entry and JSX force it -- EXIT's indexed JSX and every indexed
 ;   reference here assume a flat address.
@@ -187,6 +200,7 @@
 ;              console queue, the TCB nodes, Q.GET, the idle task and
 ;              LTASK, the one letter-task body all three letter nodes run
 ;   0800-      page 1: the shell -- banner, prompt, commands, line buffer
+;   3000-3FFF  the pool, which the allocator hands out
 ;
 ; Build with make -C rex: asm703.py over this file, brex.asm and the
 ; interpreter in test/703/bcore.asm, into rex/build.  Run, from the repo
@@ -221,10 +235,10 @@
 ; whose SUBR takes the link as from any caller.  An entry with nothing
 ; behind it is a zero word, so a call to it halts.
                 ORG     X'10'
-K.ALLOC         WORD    0               ; ACR = words wanted -> the block, or 0
-K.ALLCW         WORD    0               ; ...inside one 2048-word page
-K.ALLCB         WORD    0               ; ...inside one 1024-word byte page
-K.FREE          WORD    0               ; ACR = a block from K.ALLOC
+K.ALLOC         JMP     ALLOC           ; ACR = words wanted -> the block, or 0
+K.ALLCW         JMP     ALLOCW          ; ...inside one 2048-word page
+K.ALLCB         JMP     ALLOCB          ; ...inside one 1024-word byte page
+K.FREE          JMP     FREE            ; ACR = a block from K.ALLOC
 K.EXIT          WORD    0               ; the task is over; never returns
 K.SWTCH         JMP     SWTCH           ; hand the processor on
 K.KICK          JMP     KICK            ; start the printer
@@ -296,6 +310,9 @@ NRING           EQU     5               ; nodes on the ring: A, B, C, the
                                         ; shell and BASIC.  Idle is off it,
                                         ; the scans' explicit fallback.
 
+POOLB           EQU     X'3000'         ; the pool: core the allocator hands
+POOLE           EQU     X'4000'         ; out, above BASIC's heap
+
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
 
@@ -308,6 +325,13 @@ NRING           EQU     5               ; nodes on the ring: A, B, C, the
 ; the shell's block, which is exactly right.
 START           MSK
                 SGM                     ; flat addressing, everywhere, always
+                LDW     KPOOLB          ; the pool: one free block, the lot
+                STW     FREHD
+                CAX
+                LDW     KPOOLN
+                STW     *0
+                CLR
+                STW     *1
                 DOT     14,11           ; connect the keyboard; function 11
                                         ; is the one that echoes, which is
                                         ; the Model 33 printing what its own
@@ -857,6 +881,279 @@ LWDON           UNM
 LQUIT           UNM
 LPARK           JMP     LPARK           ; parked; a legal idle, levels live
 
+; ---------------------------------------------------------------- the pool
+; First fit over a list of free blocks sorted by address, with the block
+; layout the header describes: two words in front of every payload, its
+; size and either the next free block (zero ends the list) or the owning
+; node with bit 0 set.  Three entries share one body: K.ALLOC takes any
+; address, K.ALLCW wants the payload inside one 2048-word page and
+; K.ALLCB inside one 1024-word byte page -- what a module needs, since
+; its M fields are page offsets.  The answer is the payload address, or
+; zero, which is never in the pool.  The whole search is masked, and the
+; link is kept by hand because the stubs fall into the body with IXR
+; still holding it.
+ALLOCW          STW     ALSIZ
+                LDW     K2047
+                JMP     ALCOM
+ALLOCB          STW     ALSIZ
+                LDW     K1023
+                JMP     ALCOM
+ALLOC           STW     ALSIZ
+                CLR
+ALCOM           STW     ALMSK           ; the window less one, or zero for any
+                STX     ALRET
+                MSK
+                CLR
+                STW     ALPRV           ; the free block before F; zero: the head
+                LDW     FREHD
+ALSCN           STW     ALF             ; F, a free block's header
+                SAZ                     ; the end of the list: nothing fits
+                JMP     ALTRY
+                JMP     ALNONE
+ALTRY           CAX
+                LDW     *0
+                STW     ALS             ; S, its payload
+                LDW     ALF
+                ADD     K2
+                STW     ALP             ; P, the candidate payload: F+2
+                LDW     ALMSK
+                SAZ                     ; any containment asked for?
+                JMP     ALCON
+                JMP     ALFIT
+
+; Containment.  E is the first word of the window after P's; a payload
+; that would cross it moves up to E -- or to E+1 when E is F+3, since the
+; header must sit at F+2 or above to leave the leading fragment room for
+; its own header (a fragment may hold zero words, but not minus one).
+; Having moved, it must still lie inside the window it moved into.
+ALCON           LDW     ALP
+                ORI     ALMSK
+                ADD     K1
+                STW     ALE
+                LDW     ALP
+                ADD     ALSIZ
+                CMW     ALE
+                SGR                     ; P+size > E: it would straddle
+                JMP     ALFIT           ; no: P stands
+                LDW     ALE
+                SUB     ALF
+                CMW     K3
+                SNE                     ; E == F+3?
+                JMP     ALBP1
+                LDW     ALE
+                STW     ALP
+                JMP     ALCK2
+ALBP1           LDW     ALE
+                ADD     K1
+                STW     ALP
+ALCK2           LDW     ALE             ; W, the window after E's
+                ADD     ALMSK
+                ADD     K1
+                STW     ALW
+                LDW     ALP
+                ADD     ALSIZ
+                CMW     ALW
+                SGR                     ; still over the edge?
+                JMP     ALFIT
+                JMP     ALNXT
+
+; Does [P, P+size) lie inside the block?  FE is the block's end, F+2+S.
+ALFIT           LDW     ALF
+                ADD     K2
+                ADD     ALS
+                STW     ALFE
+                LDW     ALP
+                ADD     ALSIZ
+                STW     ALEND
+                CMW     ALFE
+                SGR                     ; overruns the block?
+                JMP     ALTAKE
+ALNXT           LDW     ALF             ; on to the next free block
+                STW     ALPRV
+                CAX
+                LDW     *1
+                JMP     ALSCN
+
+; Take it.  H is the new header.  A leading fragment keeps F on the list
+; with a shorter size and becomes the predecessor of whatever follows.  A
+; tail of three words or more becomes a free block of its own at the end
+; of the allocation; a shorter one is simply given to the allocation, since
+; two words of header with nothing behind them serve nobody.
+ALTAKE          LDW     ALP
+                SUB     K2
+                STW     ALH
+                CMW     ALF
+                SEQ                     ; a leading fragment?
+                JMP     ALLEAD
+                JMP     ALTAIL
+ALLEAD          LDW     ALH
+                SUB     ALF
+                SUB     K2
+                LDX     ALF
+                STW     *0              ; [F] = H-F-2, its next as it was
+                LDW     ALF
+                STW     ALPRV
+ALTAIL          LDW     ALFE
+                SUB     ALEND
+                CMW     K3
+                SLS                     ; a tail worth keeping?
+                JMP     ALSPLT
+                LDW     ALFE            ; no: the allocation runs to the end
+                SUB     ALH
+                SUB     K2
+                STW     ALSIZ
+                LDX     ALF
+                LDW     *1
+                STW     ALNX            ; and the list goes on past F
+                JMP     ALLNK
+ALSPLT          LDX     ALEND           ; yes: [END] = FE-END-2, next = F's
+                LDW     ALFE
+                SUB     ALEND
+                SUB     K2
+                STW     *0
+                LDX     ALF
+                LDW     *1
+                LDX     ALEND
+                STW     *1
+                LDW     ALEND
+                STW     ALNX
+ALLNK           LDW     ALPRV           ; PRV's successor, or the head, is NX
+                SAZ
+                JMP     ALLNK1
+                LDW     ALNX
+                STW     FREHD
+                JMP     ALHDR
+ALLNK1          CAX
+                LDW     ALNX
+                STW     *1
+ALHDR           LDX     ALH             ; the header: size, and the owner
+                LDW     ALSIZ
+                STW     *0
+                LDW     CURT
+                ORI     K8000
+                STW     *1
+                LDW     ALP
+                JMP     ALOUT
+ALNONE          CLR
+ALOUT           UNM
+                LDX     ALRET
+                JSX     *0
+
+; Give a block back.  FREEI does the work with the mask held by its
+; caller, which is FREE for a task and the exit path for a task's whole
+; estate; MSK and UNM do not nest, so a routine that is already masked
+; comes here directly.  The block goes into the list where its address
+; falls and is joined to a neighbour on either side that touches it, so
+; the list never holds two adjacent free blocks.  A size field only ever
+; grows here: the freed block's own may grow to swallow the one above it,
+; and the one below it may grow to swallow this one, so a walk of the
+; pool by size strides stays right through a block just freed.
+FREE            SUBR
+                MSK
+                JSX     FREEI
+                UNM
+                EXIT    FREE
+
+FREEI           SUBR
+                SUB     K2
+                STW     FRH             ; H, the block's header
+                CLR
+                STW     FRPRV           ; the free block below it; zero: none
+                LDW     FREHD
+FRSCN           STW     FRNX            ; NX, the first free block above it, or zero
+                SAZ
+                JMP     FRSC1
+                JMP     FRLNK
+FRSC1           CMW     FRH
+                SGR                     ; NX > H: found the place
+                JMP     FRSC2
+                JMP     FRLNK
+FRSC2           STW     FRPRV
+                CAX
+                LDW     *1
+                JMP     FRSCN
+FRLNK           LDX     FRH             ; PRV -> H -> NX
+                LDW     FRNX
+                STW     *1
+                LDW     FRPRV
+                SAZ
+                JMP     FRLK1
+                LDW     FRH
+                STW     FREHD
+                JMP     FRJN
+FRLK1           CAX
+                LDW     FRH
+                STW     *1
+FRJN            LDW     FRNX            ; does H run up to NX?
+                SAZ
+                JMP     FRJN1
+                JMP     FRJP
+FRJN1           LDX     FRH
+                LDW     *0
+                ADD     FRH
+                ADD     K2
+                CMW     FRNX
+                SEQ
+                JMP     FRJP
+                LDX     FRNX            ; [H] += [NX]+2, and NX's next is H's
+                LDW     *0
+                ADD     K2
+                LDX     FRH
+                ADD     *0
+                STW     *0
+                LDX     FRNX
+                LDW     *1
+                LDX     FRH
+                STW     *1
+FRJP            LDW     FRPRV           ; does PRV run up to H?
+                SAZ
+                JMP     FRJP1
+                JMP     FRDN
+FRJP1           CAX
+                LDW     *0
+                ADD     FRPRV
+                ADD     K2
+                CMW     FRH
+                SEQ
+                JMP     FRDN
+                LDX     FRH             ; [PRV] += [H]+2, and H's next is PRV's
+                LDW     *0
+                ADD     K2
+                LDX     FRPRV
+                ADD     *0
+                STW     *0
+                LDX     FRH
+                LDW     *1
+                LDX     FRPRV
+                STW     *1
+FRDN            EXIT    FREEI
+
+; The allocator's cells and constants.
+FREHD           WORD    0               ; the first free block
+ALSIZ           WORD    0               ; the request: words...
+ALMSK           WORD    0               ; ...and the window less one, or zero
+ALRET           WORD    0               ; the caller's link
+ALPRV           WORD    0               ; the search: the free block before F
+ALF             WORD    0               ; F, and its payload S
+ALS             WORD    0
+ALP             WORD    0               ; the candidate payload, and its end
+ALEND           WORD    0
+ALE             WORD    0               ; the next window's first word
+ALW             WORD    0               ; and the one after that
+ALFE            WORD    0               ; the block's end
+ALH             WORD    0               ; the new header
+ALNX            WORD    0               ; what follows it on the list
+FRH             WORD    0               ; the block being freed
+FRPRV           WORD    0               ; the free blocks on either side
+FRNX            WORD    0
+K2              WORD    2
+K3              WORD    3
+K1023           WORD    1023
+K2047           WORD    2047
+K8000           WORD    X'8000'
+KPOOLB          WORD    POOLB           ; the pool: [POOLB, POOLE)
+KPOOLN          WORD    POOLE-POOLB-2   ; as one free block's payload
+
 ; ---------------------------------------------------------------- the shell
 ; Prints the banner and then reads a line and runs it, forever.  It is
 ; the only task running when the machine comes up.  Everything it prints goes
@@ -1103,6 +1400,32 @@ SHBWD           UNM
 ; window, so once their mailboxes -- found the way STOP finds the tasks,
 ; by T.CHR -- are empty and the printer is idle, nothing of theirs can
 ; appear inside the down-message.
+; The words free in the pool: the free list's sizes added up, under the
+; mask that every walk of the list holds.
+SHMEM           MSK
+                CLR
+                STW     SHMTOT
+                SMB     FREHD
+                LDW     FREHD
+SHMEML          SAZ                     ; the end of the list?
+                JMP     SHMEM1
+                JMP     SHMEMD
+SHMEM1          CAX
+                LDW     *0
+                ADD     SHMTOT
+                STW     SHMTOT
+                LDW     *1
+                JMP     SHMEML
+SHMEMD          UNM
+                LDW     SHMFRE
+                JSX     SHMSG
+                LDW     SHKSP
+                JSX     SHPUTC
+                LDW     SHMTOT
+                JSX     SHDEC
+                JSX     SHNL
+                JMP     SHLOOP
+
 SHHALT          LDW     SHK1
                 SMB     SHUTREQ
                 STW     SHUTREQ
@@ -1404,6 +1727,7 @@ STOK1           WORD    0
 STKN            WORD    0               ; how many of them are still wanted
 SHW2            WORD    0               ; scratch
 SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
+SHMTOT          WORD    0               ; MEM's running total
 SHSP            WORD    0               ; SHPRT's cursor and limit, bytes
 SHSE            WORD    0
 SHV             WORD    0               ; SHDEC's running value...
@@ -1448,6 +1772,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'ST','AR',SHSTRT
                 WORD    'EC','HO',SHECHO
                 WORD    'BA','SI',SHBAS
+                WORD    'M','EM',SHMEM
                 WORD    'HA','LT',SHHALT
                 WORD    0,0,0
 
@@ -1457,6 +1782,7 @@ SHMPRM          WORD    SHPRM
 SHMWHT          WORD    SHWHT
 SHMHL1          WORD    SHHL1
 SHMHL2          WORD    SHHL2
+SHMFRE          WORD    SHFRE
 SHMUPM          WORD    SHUPM
 SHMSEC          WORD    SHSEC
 SHMDWN          WORD    SHDWN
@@ -1468,6 +1794,7 @@ SHPRM           WORD    SHPRMT*2,SHPRME*2
 SHWHT           WORD    SHWHTT*2,SHWHTE*2
 SHHL1           WORD    SHHL1T*2,SHHL1E*2
 SHHL2           WORD    SHHL2T*2,SHHL2E*2
+SHFRE           WORD    SHFRET*2,SHFREE*2
 SHUPM           WORD    SHUPMT*2,SHUPME*2
 SHSEC           WORD    SHSECT*2,SHSECE*2
 SHDWN           WORD    SHDWNT*2,SHDWNE*2
@@ -1481,10 +1808,12 @@ SHPRMT          TEXT    "REX>  "
 SHPRME          EQU     $
 SHWHTT          TEXT    "WHAT\r\n"
 SHWHTE          EQU     $
-SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO BASIC HALT\r\n"
+SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO MEM BASIC HALT\r\n"
 SHHL1E          EQU     $
 SHHL2T          TEXT    "STOP AND START TAKE A B OR C\r\n"
 SHHL2E          EQU     $
+SHFRET          TEXT    "FREE"
+SHFREE          EQU     $
 SHUPMT          TEXT    "UPTIME"
 SHUPME          EQU     $
 SHSECT          TEXT    " SEC\r\n"

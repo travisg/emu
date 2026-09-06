@@ -39,7 +39,8 @@ REXGLUE         EQU     1               ; BYE hands the console back
 W.LBUF          EQU     X'1800'         ; input line buffer, 41 words
 W.LBUFSZ        EQU     79              ; typed bytes; byte 80 holds the CR
 W.HEAP          EQU     X'1830'         ; program line heap...
-W.HEAPTOP       EQU     X'4000'         ; ...up to here -- 10,192 words
+W.HEAPTOP       EQU     X'3000'         ; ...up to here -- 6,096 words; the
+                                        ; kernel's pool has the rest to X'4000'
 W.ARRAY         EQU     X'4000'         ; @(0..1023)
 W.VARS          EQU     X'4400'         ; A-Z, 26 words
 W.ESTK          EQU     X'4420'         ; expression operand stack, 16 words
