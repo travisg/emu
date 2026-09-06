@@ -53,6 +53,7 @@
 ;                   it long enough.  Word 8.
 ;   a service exit  SERV returns as a task it has just made runnable,
 ;                   rather than leaving it until the next tick.  Word 0.
+;                   DSERV, the disc's, does the same at word 4.
 ;   a task          SWTCH, called to sleep or to wait on a queue, hands
 ;                   it on there and then.  Word 12, level 3's block,
 ;                   which nothing interrupts -- see the rule below.
@@ -64,11 +65,13 @@
 ;   BLOCK, so it may only be made when the block holds a task's frame,
 ;   and the test for that is the saved program counter: outside
 ;   [ISRBEG, ISREND), the contiguous block holding SCHED, SERV, KICK,
-;   PICK, SWTCH and Q.PUT, it interrupted a task; inside, it did not.
+;   PICK, SWTCH, Q.PUT and DSERV, it interrupted a task; inside, it did
+;   not.
 ;   Q.GET is deliberately outside it: a task blocks in there, and a tick
-;   that finds one has every business switching away from it.  Both
-;   switching paths make it -- the tick at word 8, the teletype's service
-;   routine at word 0 -- and both simply return when it fails.  Inside
+;   that finds one has every business switching away from it.  Every
+;   switching path makes it -- the tick at word 8, the teletype's service
+;   routine at word 0, the disc's at word 4 -- and each simply returns
+;   when it fails.  Inside
 ;   the range there are two cases and they want the same answer: an
 ;   interrupt landing in the driver would otherwise strand its INR and
 ;   park half a driver in a TCB, and one landing on SWTCH's single
@@ -87,8 +90,8 @@
 ;
 ; * THE SMB LEAD.  The entry sequence does not reload EXR, so a service
 ;   routine's first memory reference resolves in the page of whatever it
-;   interrupted.  Both service routines therefore open with SMB before
-;   they touch anything.  (The named core test:
+;   interrupted.  Every service routine therefore opens with SMB before
+;   it touches anything.  (The named core test:
 ;   interrupt_entry_leaves_exr_for_the_service_routines_first_reference.)
 ;
 ; * KICK IS NOT RE-ENTRANT, like every 703 subroutine -- one static link
@@ -190,15 +193,16 @@
 ;
 ; Memory map, everything below X'4000':
 ;
-;   0000-000F  interrupt blocks: level 0 (teletype), level 1 unused,
+;   0000-000F  interrupt blocks: level 0 (teletype), level 1 (disc),
 ;              level 2 (line clock), level 3 (never signalled -- SWTCH
 ;              stages a switch in it and loads it with INR 3)
 ;   0010-002F  the kernel interface for what loads under it: the jump
 ;              vector, then the exported cells (rexapi.asm)
 ;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
-;              KICK, PICK, SWTCH and Q.PUT; then the kernel cells, the
-;              console queue, the TCB nodes, Q.GET, the idle task and
-;              LTASK, the one letter-task body all three letter nodes run
+;              KICK, PICK, SWTCH, Q.PUT and DSERV; then the kernel cells,
+;              the console queue, the TCB nodes, Q.GET, DREAD, the idle
+;              task, LTASK -- the one letter-task body all three letter
+;              nodes run -- and the allocator
 ;   0800-      page 1: the shell -- banner, prompt, commands, line buffer
 ;   3000-3FFF  the pool, which the allocator hands out
 ;
@@ -214,7 +218,10 @@
                 WORD    SERV            ; level 0 linkage address
                 WORD    0               ; level 0 machine status save
                 WORD    0
-                WORD    0,0,0,0         ; level 1: never enabled
+                WORD    0               ; word 4: level 1 PCR save
+                WORD    DSERV           ; level 1 linkage address (the disc)
+                WORD    0               ; word 6: level 1 machine status save
+                WORD    0
                 WORD    0               ; word 8: level 2 PCR save
                 WORD    SCHED           ; level 2 linkage address
                 WORD    0               ; word 10: level 2 machine status save
@@ -243,7 +250,7 @@ K.EXIT          WORD    0               ; the task is over; never returns
 K.SWTCH         JMP     SWTCH           ; hand the processor on
 K.KICK          JMP     KICK            ; start the printer
 K.QGET          JMP     Q.GET           ; ACR = a queue descriptor -> the next word
-K.DREAD         WORD    0               ; ACR = sector, DRBUF = buffer -> status
+K.DREAD         JMP     DREAD           ; ACR = sector, DRBUF = buffer -> status
                 WORD    0,0,0,0,0,0,0   ; X'19'-X'1F'
 
                 ORG     X'20'
@@ -261,6 +268,8 @@ DRBUF           WORD    0               ; K.DREAD's buffer, a word address
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
+L1PC            EQU     4               ; and level 1's, which DSERV edits
+L1ST            EQU     6
 L2PC            EQU     8               ; the level 2 block words SCHED edits:
 L2ST            EQU     10              ; rewriting them before INR 2 is the switch
 L3PC            EQU     12              ; and the level 3 words SWTCH edits,
@@ -338,6 +347,7 @@ START           MSK
                                         ; keyboard sent -- full duplex, and
                                         ; free of the printer's time
                 ENB     0
+                ENB     1
                 ENB     2
                 DOT     2,1             ; connect the line clock
                 UNM
@@ -714,11 +724,83 @@ QPW2            LDX     QPD             ; forget the waiter -- a queue holds
                 STW     *Q.WTR          ; ever needs
 QPX             EXIT    Q.PUT
 
+; ------------------------------------------------------- level 1 service
+; The disc.  A completion: collect the unit's status, mark the transfer
+; over and wake the task that started it -- only out of its wait, SERV's
+; guard -- then return as it if the frame underneath is a task's, exactly
+; as SERV does, so the reader has the processor the moment its sector is
+; in core rather than at the next tick.  The tick outranks this level, so
+; the switch is masked, and a tick landing here defers: the range covers
+; this routine.
+DSERV           SMB     S1SAVA          ; the SMB lead
+                STW     S1SAVA
+                STX     S1SAVX
+                DIN     1,0             ; unit 0's status (5-9.7): zero is clean
+                STW     DSTAT
+                CLR
+                STW     DBUSY
+                LDW     DWTR
+                SAM                     ; anybody's transfer?
+                JMP     DSWK
+                JMP     DEXIT
+DSWK            CAX
+                LDW     *T.STA
+                CMW     KWAIT
+                SEQ                     ; waiting on it?
+                JMP     DEXIT
+                CLR
+                STW     *T.STA
+                LDW     K1
+                STW     RESCHD
+DEXIT           LDW     RESCHD
+                SAZ
+                JMP     DEXSW
+                JMP     DEXPL
+DEXSW           CLR
+                STW     RESCHD
+                MSK
+                LDW     L1PC
+                CMW     KISRB
+                SLS
+                JMP     DEXHI
+                JMP     DEXDO
+DEXHI           CMW     KISRE
+                SLS
+                JMP     DEXDO
+                JMP     DEXPU           ; in the range: not a task's frame
+DEXDO           LDX     CURT
+                LDW     S1SAVA
+                STW     *T.ACR
+                LDW     S1SAVX
+                STW     *T.IXR
+                LDW     L1PC
+                STW     *T.PCR
+                LDW     L1ST
+                STW     *T.MST
+                JSX     PICK
+                LDX     CURT
+                LDW     *T.PCR
+                STW     L1PC
+                LDW     *T.MST
+                STW     L1ST
+                LDW     *T.IXR
+                STW     S1SAVX
+                LDW     *T.ACR
+                LDX     S1SAVX
+                UNM
+                INR     1
+DEXPU           UNM
+DEXPL           LDW     S1SAVA
+                LDX     S1SAVX
+                INR     1
+
 ISREND          EQU     $
 
 ; ---------------------------------------------------------------- kernel data
 S0SAVA          WORD    0               ; level 0's register saves
 S0SAVX          WORD    0
+S1SAVA          WORD    0               ; level 1's
+S1SAVX          WORD    0
 S2SAVA          WORD    0               ; level 2's register saves
 S2SAVX          WORD    0
 OWNER           WORD    X'FFFF'         ; node whose character is printing;
@@ -741,7 +823,15 @@ QITEM           WORD    0               ; what Q.PUT is to put
 QPD             WORD    0               ; and the queue it is putting it in
 QGD             WORD    0               ; Q.GET's queue...
 QGI             WORD    0               ; ...and what it took out
+DSTAT           WORD    0               ; the disc's status at its last completion
+DBUSY           WORD    0               ; a transfer is in flight
+DWTR            WORD    X'FFFF'         ; the node whose transfer it is; -1 = none
+DRSEC           WORD    0               ; DREAD's sector index...
+DRTS            WORD    0               ; ...as track and sector...
+DRRES           WORD    0               ; ...and its answer
 K1              WORD    1
+K47             WORD    47              ; words in a sector, unit 0 in the top bits
+K7F             WORD    X'7F'
 K60             WORD    60
 KM1             WORD    X'FFFF'
 KWAIT           WORD    SWAI
@@ -783,6 +873,67 @@ CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80',         0,  0,  'C',60, '
 SHTCB           WORD SRUN, BATCB,0,  0,  0,     0,             0,  0,  0,  0,  'SH',0
 BATCB           WORD SOFF, ATCB, 0,  0,  BASENT,(BASENT*2)+X'80',0,0,  0,  0,  'BA',0
 IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80',         0,  0,  0,  0,  'ID',0
+
+; Read one sector -- ACR is its index, track*128+sector -- into the 47
+; words at DRBUF, and return the controller's status, zero for a clean
+; transfer.  A task's call: it waits on the transfer the way a task waits
+; on anything here, masked, look, and if not yet, mark itself waiting and
+; hand the processor on, and DSERV wakes it.  DWTR names the node whose
+; transfer is in flight, so a second reader sleeps a tick and looks again.
+; A unit that is not there reads not-ready, and that comes back at once
+; rather than waiting for a completion that would never come.
+DREAD           SUBR
+                STW     DRSEC
+DRCLM           MSK
+                LDW     DWTR
+                SAM                     ; the disc is free?
+                JMP     DRSLP
+                JMP     DRGO
+DRSLP           LDX     CURT            ; no: sleep a tick and look again
+                LDW     K1
+                STW     *T.DLY
+                LDW     KSLP
+                STW     *T.STA
+                JSX     SWTCH
+                JMP     DRCLM
+DRGO            DIN     1,0
+                SAP                     ; not ready?  say so
+                JMP     DRNRD
+                LDW     CURT
+                STW     DWTR
+                LDW     K1
+                STW     DBUSY           ; before the DOT: the completion can be next
+                LDW     DRBUF
+                DOT     1,1             ; the core address (5-9.5.2)
+                LDW     DRSEC
+                AND     K7F
+                STW     DRTS
+                LDW     DRSEC
+                SRL     7
+                SLL     10
+                ORI     DRTS
+                DOT     1,2             ; track in bits 0-5, sector in 7-15 (5-9.5.3)
+                LDW     K47
+                DOT     1,6             ; unit 0, one sector, read (5-9.5.4)
+DRWT            LDW     DBUSY
+                SAZ                     ; over?
+                JMP     DRBLK
+                JMP     DRDN
+DRBLK           LDX     CURT
+                LDW     KWAIT
+                STW     *T.STA
+                JSX     SWTCH           ; until DSERV says so
+                MSK
+                JMP     DRWT
+DRDN            LDW     DSTAT
+                STW     DRRES
+                LDW     KM1
+                STW     DWTR
+                UNM
+                LDW     DRRES
+                EXIT    DREAD
+DRNRD           UNM
+                EXIT    DREAD
 
 ; What the machine runs when every task is asleep.  A branch to self is a
 ; legal idle here -- the levels are enabled and unmasked, so the tick that
