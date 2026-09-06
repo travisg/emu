@@ -23,6 +23,8 @@
 ;   START [A-C]  release one, or all three
 ;   ECHO text    print the rest of the line
 ;   MEM          the words free in the pool
+;   LOAD name    a module off the disc, run behind the prompt
+;   RUN  name    the same, given the console until it exits
 ;   BASIC        the console goes to Tiny BASIC, until its BYE
 ;   HALT         park the tasks, drain the printer and stop the machine
 ;
@@ -167,7 +169,8 @@
 ;   live anywhere in core, and adding a task is linking a node in under
 ;   MSK -- the doorway a loader would use.  What a task IS is data in its
 ;   node: STOP, START, STAT and HALT act on whatever nodes the walk
-;   finds, and a letter task is any node with a letter in T.CHR.
+;   finds, and a letter task is any node with a letter in T.CHR.  SPAWN
+;   is that doorway, and the shell's loader goes through it.
 ;
 ; * A FRESH TASK'S STATUS is GLB plus its entry page.  A zero status word
 ;   would resume the task in local mode with EXR 0 and its first memory
@@ -187,6 +190,14 @@
 ;   no two free blocks touch.  The owner tag is what lets everything a
 ;   task holds be found again by a walk of the pool.
 ;
+; * A TASK ENDS THROUGH K.EXIT, and takes everything with it: its last
+;   character waited out, the console handed back if it held it, the
+;   node unlinked with CURT moved to its predecessor before anything is
+;   freed, every block in the pool tagged with the node given back, and
+;   the processor handed on through the second half of SWTCH with nothing
+;   parked.  The loader tags a module's block and its node with the node
+;   as it makes them, which is what makes the sweep complete.
+;
 ; * EVERYTHING RUNS GLOBAL.  START sets it, the TCB statuses carry it,
 ;   and entry and JSX force it -- EXIT's indexed JSX and every indexed
 ;   reference here assume a flat address.
@@ -203,7 +214,8 @@
 ;              the console queue, the TCB nodes, Q.GET, DREAD, the idle
 ;              task, LTASK -- the one letter-task body all three letter
 ;              nodes run -- and the allocator
-;   0800-      page 1: the shell -- banner, prompt, commands, line buffer
+;   0800-      page 1: the shell -- banner, prompt, commands, line
+;              buffer -- and its loader, with the sector it reads
 ;   3000-3FFF  the pool, which the allocator hands out
 ;
 ; Build with make -C rex: asm703.py over this file, brex.asm and the
@@ -246,7 +258,7 @@ K.ALLOC         JMP     ALLOC           ; ACR = words wanted -> the block, or 0
 K.ALLCW         JMP     ALLOCW          ; ...inside one 2048-word page
 K.ALLCB         JMP     ALLOCB          ; ...inside one 1024-word byte page
 K.FREE          JMP     FREE            ; ACR = a block from K.ALLOC
-K.EXIT          WORD    0               ; the task is over; never returns
+K.EXIT          JMP     TEXIT           ; the task is over; never returns
 K.SWTCH         JMP     SWTCH           ; hand the processor on
 K.KICK          JMP     KICK            ; start the printer
 K.QGET          JMP     Q.GET           ; ACR = a queue descriptor -> the next word
@@ -661,7 +673,8 @@ SWTCH           MSK
                 STW     *T.MST          ; task yields of its own accord, never
                                         ; between a compare and its skip, and
                                         ; an overflow does not survive a yield
-                JSX     PICK
+SWRES           JSX     PICK            ; the resume half: TEXIT enters here,
+                                        ; masked, with nothing to park
                 LDX     CURT
                 LDW     *T.PCR
                 STW     L3PC
@@ -1303,7 +1316,132 @@ K1023           WORD    1023
 K2047           WORD    2047
 K8000           WORD    X'8000'
 KPOOLB          WORD    POOLB           ; the pool: [POOLB, POOLE)
+KPOOLE          WORD    POOLE
 KPOOLN          WORD    POOLE-POOLB-2   ; as one free block's payload
+K7FFF           WORD    X'7FFF'
+KSHELL          WORD    SHTCB           ; the shell's node, for the console's return
+
+; ---------------------------------------------------------------- tasks
+; SPAWN: ACR is a node of T.LEN words with T.PCR, T.NAM and T.CON filled
+; in.  The rest is set here -- the status is what SWTCH builds for any
+; resume, the entry's page and global -- and the node is linked into the
+; ring after the running task, so the next pick finds it first.
+SPAWN           SUBR
+                STW     SPNOD
+                CAX
+                CLR
+                STW     *T.STA
+                STW     *T.ACR
+                STW     *T.IXR
+                STW     *T.DLY
+                STW     *T.MBX
+                STW     *T.CHR
+                STW     *T.NAP
+                LDW     *T.PCR
+                AND     KPGMSK
+                SLL     1
+                ORI     KGLB
+                STW     *T.MST
+                MSK
+                LDX     CURT
+                LDW     *T.NXT
+                LDX     SPNOD
+                STW     *T.NXT
+                LDW     SPNOD
+                LDX     CURT
+                STW     *T.NXT
+                LDW     KNRING
+                ADD     K1
+                STW     KNRING
+                UNM
+                EXIT    SPAWN
+
+; TEXIT: the running task is over, and takes everything with it.  In
+; this order: its last character is waited out, since OWNER must never
+; name a node that is gone; the console is handed back if it held it --
+; CONBSY down, and the shell woken out of its wait, only out of that;
+; the node is unlinked and counted off, and LASTS, where KICK's scan
+; starts, moved off it; CURT is pointed at the predecessor BEFORE
+; anything is freed, since PICK starts from CURT's link; then every block
+; in the pool tagged with the node is given back, its own block among
+; them, and the processor goes to whoever PICK finds, through the second
+; half of SWTCH with nothing parked.  Masked throughout: the one unmasked
+; instruction on the way out is SWTCH's INR 3, inside the range.
+TEXIT           MSK
+                LDX     CURT
+                LDW     *T.MBX
+                SAZ                     ; a character still printing?
+                JMP     TXWT
+                JMP     TXGO
+TXWT            LDW     KWAIT           ; wait for it, and start over
+                STW     *T.STA
+                JSX     SWTCH
+                JMP     TEXIT
+TXGO            LDW     CURT
+                STW     XDEAD
+                LDW     *T.CON
+                SAZ                     ; the console's?
+                JMP     TXCON
+                JMP     TXRING
+TXCON           CLR
+                STW     CONBSY
+                LDX     KSHELL
+                LDW     *T.STA
+                CMW     KWAIT
+                SEQ                     ; waiting on the hand-back?
+                JMP     TXRING
+                CLR
+                STW     *T.STA
+TXRING          LDW     XDEAD           ; the predecessor: whose link names us
+TXPL            STW     XPRED
+                CAX
+                LDW     *T.NXT
+                CMW     XDEAD
+                SEQ
+                JMP     TXPL
+                LDX     XDEAD           ; unlink
+                LDW     *T.NXT
+                LDX     XPRED
+                STW     *T.NXT
+                LDW     KNRING
+                SUB     K1
+                STW     KNRING
+                LDW     LASTS
+                CMW     XDEAD
+                SNE
+                JMP     TXLS
+                JMP     TXCUR
+TXLS            LDW     XPRED
+                STW     LASTS
+TXCUR           LDW     XPRED
+                STW     CURT
+                LDW     KPOOLB          ; the sweep, block by block
+TXSWP           STW     XB
+                CMW     KPOOLE
+                SLS                     ; the end of the pool?
+                JMP     TXSW1
+                JMP     SWRES           ; then on to whoever can run
+TXSW1           CAX
+                LDW     *1
+                SAM                     ; allocated?
+                JMP     TXSNX
+                AND     K7FFF
+                CMW     XDEAD
+                SEQ                     ; ours?
+                JMP     TXSNX
+                LDW     XB
+                ADD     K2
+                JSX     FREEI
+TXSNX           LDX     XB
+                LDW     *0
+                ADD     XB
+                ADD     K2
+                JMP     TXSWP
+
+SPNOD           WORD    0               ; SPAWN's node
+XDEAD           WORD    0               ; TEXIT's: the node going, its
+XPRED           WORD    0               ; predecessor on the ring, and the
+XB              WORD    0               ; sweep's cursor
 
 ; ---------------------------------------------------------------- the shell
 ; Prints the banner and then reads a line and runs it, forever.  It is
@@ -1326,24 +1464,26 @@ SHLOOP          LDW     SHMPRM
                 JSX     SHGETL          ; a line, however long that takes
                 LDW     SHKLBB
                 STW     SHCUR
-                JSX     SHTOK           ; the command word
-                LDW     STOK0
+                JSX     SHTOK           ; the command word: its second half,
+                LDW     STOK1           ; since a short word fills only that
                 SAZ                     ; an empty line is not an error
                 JMP     SHDSP
                 JMP     SHLOOP
 
-; Walk the command table: two words of name, then the handler to jump to.
+; Walk the command table: two words of name, then the handler to jump to,
+; and a zero handler ends it -- a short name leaves its first word zero.
 ; Only the first four characters are matched, which is how the period
 ; interpreters did it -- START and STAT differ inside four, and a longer
 ; word that starts the same is simply taken as the command.
 SHDSP           LDW     SHKTAB
                 STW     SHTP
 SHDL            LDX     SHTP
-                LDW     *0
+                LDW     *2
                 SAZ                     ; the end of the table?
                 JMP     SHDCM
                 JMP     SHDNF
-SHDCM           CMW     STOK0
+SHDCM           LDW     *0
+                CMW     STOK0
                 SEQ
                 JMP     SHDNX
                 LDX     SHTP
@@ -1551,6 +1691,391 @@ SHBWD           UNM
 ; window, so once their mailboxes -- found the way STOP finds the tasks,
 ; by T.CHR -- are empty and the printer is idle, nothing of theirs can
 ; appear inside the down-message.
+; LOAD name and RUN name: a module off the disc, started as a task.  RUN
+; hands it the console and waits for it to be over -- the break flag
+; cleared and CONBSY raised in one masked window, as the grant to BASIC
+; is made, then SHBWT's wait -- and LOAD leaves it to run behind the
+; prompt.  The task's node is linked in by SPAWN under its own mask,
+; after the grant: the task cannot run before it is on the ring, and
+; nothing but a task that holds the console can lower CONBSY.
+SHRUN           LDW     SHK1
+                STW     LDCON
+                JMP     SHLD1
+SHLOAD          CLR
+                STW     LDCON
+SHLD1           JSX     LDMOD
+                SAZ                     ; a node, or an error already named?
+                JMP     SHLD2
+                JMP     SHLOOP
+SHLD2           LDW     LDCON
+                SAZ
+                JMP     SHLDRN
+                LDW     LDNODE
+                SMB     SPAWN
+                JSX     SPAWN
+                JMP     SHLOOP
+SHLDRN          MSK
+                CLR
+                SMB     BRKREQ
+                STW     BRKREQ
+                LDW     SHK1
+                SMB     CONBSY
+                STW     CONBSY
+                UNM
+                LDW     LDNODE
+                SMB     SPAWN
+                JSX     SPAWN
+                JMP     SHBWT
+
+; ---------------------------------------------------------------- the loader
+; Load the module the argument names: find it in the catalogue -- sector
+; 1, entries of a four-character name packed as SHTOK packs one, a first
+; sector and a sector count, a zero first sector ending the table -- and run its
+; object text into a block from the pool, one record to a sector.  The
+; text is the 1968 relocating loader's (tools/asm703.py's docstring lists
+; the codes, tools/reload703.py is the reference reading of them): the
+; SIZE code comes first and sizes the block, whose address is the
+; relocation base; each repeatable code carries a run of words that are
+; stored as they are, or with the base added into the 11-bit M field,
+; the whole word, or twice for a byte address; a page selection is built
+; here from the final address; END names the entry, which gets the base
+; too.  Returns the node, with its entry, name and console flag filled
+; in and both blocks tagged as the task's own, ready for SPAWN -- or
+; zero, an error having been named: no such file, the disc's status (DE),
+; a record failing its checksum (CK), a code this loader does not take or
+; text out of order (LC), no room (MX).  An error path jumps straight out
+; of whatever routine it was in, as RELOADB's does.
+LDMOD           SUBR
+                JSX     SHTOK           ; the name: a short one fills only
+                LDW     STOK1           ; the second word
+                SAZ
+                JMP     LDM1
+                JMP     LDNOF
+LDM1            CLR
+                STW     LDBLK
+                STW     LDNODE
+                STW     LDBASE
+                STW     LDPTR
+                STW     LDLIM
+                LDW     SHKLDB
+                SMB     DRBUF
+                STW     DRBUF
+                LDW     SHK1            ; the catalogue
+                SMB     DREAD
+                JSX     DREAD
+                SAZ
+                JMP     LDEDE
+                LDW     SHKLDB
+                STW     LDCP
+LDCL            LDX     LDCP
+                LDW     *2
+                SAZ                     ; the end of the table: no file
+                JMP     LDC1            ; starts at sector 0, the boot sector
+                JMP     LDNOF
+LDC1            LDW     *0
+                CMW     STOK0
+                SEQ
+                JMP     LDCN
+                LDW     *1
+                CMW     STOK1
+                SEQ
+                JMP     LDCN
+                LDW     *2              ; found: where it starts...
+                STW     LDSEC
+                LDW     *3              ; ...and how many sectors
+                STW     LDNSEC
+                JMP     LDFND
+LDCN            LDW     LDCP
+                ADD     SHK4
+                STW     LDCP
+                JMP     LDCL
+LDFND           LDW     SHKLDN          ; a node from the pool
+                SMB     ALLOC
+                JSX     ALLOC
+                SAZ
+                JMP     LDF1
+                JMP     LDEMX
+LDF1            STW     LDNODE
+                LDW     SHKDBL          ; on the checksum byte: the first
+                STW     LDBP            ; GETBYTE reads the first record
+
+; The text: a code byte, then what it says follows.
+LDPROC          JSX     LDGETB
+                STW     LDCODE
+                SAM                     ; repeatable?
+                JMP     LDCTL
+                SRL     4               ; the class: 8n..Cn
+                SUB     SHK8
+                CMW     SHK4
+                SGR
+                JMP     LDR1
+                JMP     LDELC
+LDR1            STW     LDCLS
+                LDW     LDCODE
+                AND     SHK0F
+                STW     LDREP           ; n: n+1 words follow
+LDRGO           JSX     LDGETW
+                STW     LDW1
+                LDW     LDCLS
+                SAZ
+                JMP     LDRC1
+                LDW     LDW1            ; RELW11
+                JSX     LDRL11
+                JMP     LDRST
+LDRC1           CMW     SHK1
+                SNE
+                JMP     LDRW15
+                CMW     SHK2
+                SNE
+                JMP     LDRB16
+                CMW     SHK3
+                SNE
+                JMP     LDRB11
+                LDW     LDW1            ; ABSO
+                JMP     LDRST
+LDRW15          LDW     LDW1
+                ADD     LDBASE
+                JMP     LDRST
+LDRB16          LDW     LDW1            ; a byte address: the base twice
+                ADD     LDBASE
+                ADD     LDBASE
+                JMP     LDRST
+LDRB11          LDW     LDW1            ; RELO11 twice, for the same reason
+                JSX     LDRL11
+                JSX     LDRL11
+LDRST           JSX     LDSTOR
+                LDW     LDREP
+                SAZ                     ; the last of the run?
+                JMP     LDRMO
+                JMP     LDPROC
+LDRMO           SUB     SHK1
+                STW     LDREP
+                JMP     LDRGO
+
+; The control codes, through a table of where each goes.
+LDCTL           LDW     LDCODE
+                CMW     SHK0C
+                SLS                     ; past the table?
+                JMP     LDELC
+                ADD     SHKCTB
+                CAX
+                LDW     *0
+                CAX
+                JMP     *0
+LDCTAB          WORD    LDPROC,LDNAME,LDELC,LDSMB,LDILOC,LDELC
+                WORD    LDEND,LDELC,LDNAME,LDSIZW,LDSIZW,LDSIZB
+
+LDNAME          JSX     LDGETW          ; a name: four words, not wanted
+                JSX     LDGETW
+                JSX     LDGETW
+                JSX     LDGETW
+                JMP     LDPROC
+LDSMB           JSX     LDGETW          ; SMB: the instruction, from the
+                ADD     LDBASE          ; final address -- RELOADB's own
+                SRL     10              ; ADD BASE / SRL 10 / ORI X'80'
+                ORI     SHK80
+                JSX     LDSTOR
+                JMP     LDPROC
+LDILOC          JSX     LDGETW          ; ILOC: that many zeros
+                STW     LDCNT
+LDIL1           LDW     LDCNT
+                SAZ
+                JMP     LDIL2
+                JMP     LDPROC
+LDIL2           SUB     SHK1
+                STW     LDCNT
+                CLR
+                JSX     LDSTOR
+                JMP     LDIL1
+LDSIZW          LDW     SHKALW          ; SIZE: the block, from the allocator
+                JMP     LDSIZ           ; entry the code names
+LDSIZB          LDW     SHKALB
+LDSIZ           STW     LDALE
+                LDW     LDBASE
+                SAZ                     ; a second SIZE?
+                JMP     LDELC
+                JSX     LDGETW
+                STW     LDSIZE
+                LDX     LDALE
+                JSX     *0
+                SAZ
+                JMP     LDS1
+                JMP     LDEMX
+LDS1            STW     LDBLK
+                STW     LDBASE
+                STW     LDPTR
+                ADD     LDSIZE
+                STW     LDLIM
+                JMP     LDPROC
+LDEND           JSX     LDGETW          ; END: the entry, relocated
+                ADD     LDBASE
+                STW     LDEXEC
+                LDW     LDBLK
+                SAZ                     ; without a SIZE first?
+                JMP     LDDONE
+                JMP     LDELC
+
+; Loaded: fill the node, and tag both blocks as the new task's own, so
+; that its exit finds them.
+LDDONE          LDX     LDNODE
+                LDW     LDEXEC
+                STW     *T.PCR
+                LDW     STOK0
+                STW     *T.NAM
+                LDW     LDCON
+                STW     *T.CON
+                LDW     LDNODE
+                ORI     SHK8000
+                STW     LDTAG
+                LDW     LDNODE
+                SUB     SHK1
+                CAX
+                LDW     LDTAG
+                STW     *0
+                LDW     LDBLK
+                SUB     SHK1
+                CAX
+                LDW     LDTAG
+                STW     *0
+                LDW     LDNODE
+                EXIT    LDMOD
+
+LDNOF           LDW     SHMNOF
+                JMP     LDERR
+LDEDE           LDW     SHMEDE
+                JMP     LDERR
+LDECK           LDW     SHMECK
+                JMP     LDERR
+LDELC           LDW     SHMELC
+                JMP     LDERR
+LDEMX           LDW     SHMEMX
+LDERR           JSX     SHMSG           ; name it, and give back what was taken
+                LDW     LDBLK
+                SAZ
+                JMP     LDER1
+                JMP     LDER2
+LDER1           SMB     FREE
+                JSX     FREE
+LDER2           LDW     LDNODE
+                SAZ
+                JMP     LDER3
+                JMP     LDER4
+LDER3           SMB     FREE
+                JSX     FREE
+LDER4           CLR
+                EXIT    LDMOD
+
+; RELO11: the base added into the M field, the opcode and index bit kept.
+LDRL11          SUBR
+                STW     LDW3
+                ADD     LDBASE
+                AND     SHK7FF
+                STW     LDW4
+                LDW     LDW3
+                AND     SHKF800
+                ORI     LDW4
+                EXIT    LDRL11
+
+; Store the next word of the module, inside the block the SIZE declared.
+LDSTOR          SUBR
+                STW     LDW3
+                LDW     LDBASE
+                SAZ                     ; text before the SIZE?
+                JMP     LDST1
+                JMP     LDELC
+LDST1           LDW     LDPTR
+                CMW     LDLIM
+                SLS                     ; room?
+                JMP     LDEMX
+                CAX
+                LDW     LDW3
+                STW     *0
+                LDW     LDPTR
+                ADD     SHK1
+                STW     LDPTR
+                EXIT    LDSTOR
+
+; A word of text, high byte first; a byte, from the sector buffer, the
+; next record read in when the pointer stands on the checksum byte.
+LDGETW          SUBR
+                JSX     LDGETB
+                SLL     8
+                STW     LDW2
+                JSX     LDGETB
+                ORI     LDW2
+                EXIT    LDGETW
+
+LDGETB          SUBR
+                LDW     LDBP
+                CMW     SHKDBL
+                SNE                     ; on the checksum byte?
+                JSX     LDGCRD
+                LDX     LDBP
+                CLR
+                LDB     *0
+                STW     LDBV
+                LDW     LDBP
+                ADD     SHK1
+                STW     LDBP
+                LDW     LDBV
+                EXIT    LDGETB
+
+; The next record: the next sector of the file, opening on a zero marker
+; and closing on the folded byte sum -- (sum >> 8) + sum -- of everything
+; before it.  Leaves the pointer on the first byte of text.
+LDGCRD          SUBR
+                LDW     LDNSEC
+                SAZ                     ; the file ran out first
+                JMP     LDGC1
+                JMP     LDELC
+LDGC1           SUB     SHK1
+                STW     LDNSEC
+                LDW     LDSEC
+                SMB     DREAD
+                JSX     DREAD
+                SAZ
+                JMP     LDEDE
+                LDW     LDSEC
+                ADD     SHK1
+                STW     LDSEC
+                LDX     SHKDBB
+                CLR
+                LDB     *0
+                SAZ                     ; the marker
+                JMP     LDECK
+                STW     LDSUM
+                LDW     SHKDBB
+                ADD     SHK1
+                STW     LDBP
+LDCKL           LDW     LDBP
+                CMW     SHKDBL
+                SLS
+                JMP     LDCKT
+                CAX
+                CLR
+                LDB     *0
+                ADD     LDSUM
+                STW     LDSUM
+                LDW     LDBP
+                ADD     SHK1
+                STW     LDBP
+                JMP     LDCKL
+LDCKT           LDW     LDSUM
+                SRL     8
+                ADD     LDSUM
+                AND     SHK0FF
+                STW     LDW2
+                LDX     LDBP
+                CLR
+                LDB     *0
+                CMW     LDW2
+                SEQ                     ; the checksum byte agrees?
+                JMP     LDECK
+                LDW     SHKDBB
+                ADD     SHK1
+                STW     LDBP
+                EXIT    LDGCRD
+
 ; The words free in the pool: the free list's sizes added up, under the
 ; mask that every walk of the list holds.
 SHMEM           MSK
@@ -1879,6 +2404,30 @@ STKN            WORD    0               ; how many of them are still wanted
 SHW2            WORD    0               ; scratch
 SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
 SHMTOT          WORD    0               ; MEM's running total
+LDCON           WORD    0               ; the loader's: RUN (1) or LOAD (0)
+LDBLK           WORD    0               ; the module's block, and its node
+LDNODE          WORD    0
+LDBASE          WORD    0               ; the relocation base: the block
+LDPTR           WORD    0               ; where the next word goes, and the limit
+LDLIM           WORD    0
+LDSIZE          WORD    0               ; the SIZE code's word
+LDEXEC          WORD    0               ; the entry
+LDSEC           WORD    0               ; the next sector, and how many are left
+LDNSEC          WORD    0
+LDCP            WORD    0               ; the catalogue cursor
+LDBP            WORD    0               ; the byte pointer into the sector buffer
+LDBV            WORD    0               ; the byte it fetched
+LDSUM           WORD    0               ; the record's byte sum
+LDCODE          WORD    0               ; the code, its class and its count
+LDCLS           WORD    0
+LDREP           WORD    0
+LDCNT           WORD    0               ; ILOC's count
+LDALE           WORD    0               ; the allocator entry the SIZE code names
+LDTAG           WORD    0               ; the owner tag for the task's blocks
+LDW1            WORD    0               ; scratch
+LDW2            WORD    0
+LDW3            WORD    0
+LDW4            WORD    0
 SHSP            WORD    0               ; SHPRT's cursor and limit, bytes
 SHSE            WORD    0
 SHV             WORD    0               ; SHDEC's running value...
@@ -1886,8 +2435,16 @@ SHDP            WORD    0               ; ...and where its next digit goes
 SHDB            RES     3               ; six digits, filled backwards
 
 SHK1            WORD    1
+SHK2            WORD    2
 SHK3            WORD    3
 SHK4            WORD    4
+SHK8            WORD    8
+SHK0C           WORD    12              ; the control codes, 0..B
+SHK0F           WORD    X'000F'
+SHK80           WORD    X'0080'
+SHK7FF          WORD    X'07FF'
+SHKF800         WORD    X'F800'
+SHK8000         WORD    X'8000'
 SHK0FF          WORD    X'00FF'
 SHKTEN          WORD    10
 SHKZER          WORD    '0'
@@ -1906,24 +2463,36 @@ SHKLBE          WORD    LBUF*2+62       ; zero terminator may need
 SHKDBE          WORD    SHDB*2+5        ; the last byte of the digit buffer
 SHKSTA          WORD    SHSTA
 SHKTAB          WORD    SHTAB
+SHKCTB          WORD    LDCTAB
+SHKLDB          WORD    LDBUF           ; the sector buffer, as a word address...
+SHKDBB          WORD    LDBUF*2         ; ...its first byte, the marker...
+SHKDBL          WORD    LDBUF*2+93      ; ...and its last, the checksum
+SHKLDN          WORD    T.LEN           ; words in a node
+SHKALW          WORD    ALLOCW          ; the allocator's page entries, for
+SHKALB          WORD    ALLOCB          ; an indexed JSX
 
 ; Four characters a state, indexed by the state doubled.
 SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT'
 
 LBUF            RES     32              ; the line the shell is reading
+LDBUF           RES     47              ; the loader's sector
 
-; The commands: four characters of name, then where to go. '?' is HELP
-; under another name, and UP is UPTIME under a shorter one.
+; The commands: four characters of name, packed as SHTOK packs a word --
+; a short one lands in the second word, zero-filled above -- then where
+; to go. '?' is HELP under another name, and UP is UPTIME under a shorter
+; one.
 SHTAB           WORD    'HE','LP',SHHELP
-                WORD    X'BF00',0,SHHELP
+                WORD    0,'?',SHHELP
                 WORD    'ST','AT',SHSTAT
                 WORD    'UP','TI',SHUPT
-                WORD    'UP',0,SHUPT
+                WORD    0,'UP',SHUPT
                 WORD    'ST','OP',SHSTOP
                 WORD    'ST','AR',SHSTRT
                 WORD    'EC','HO',SHECHO
                 WORD    'BA','SI',SHBAS
                 WORD    'M','EM',SHMEM
+                WORD    'LO','AD',SHLOAD
+                WORD    'R','UN',SHRUN
                 WORD    'HA','LT',SHHALT
                 WORD    0,0,0
 
@@ -1934,6 +2503,11 @@ SHMWHT          WORD    SHWHT
 SHMHL1          WORD    SHHL1
 SHMHL2          WORD    SHHL2
 SHMFRE          WORD    SHFRE
+SHMNOF          WORD    SHNOF
+SHMEDE          WORD    SHEDE
+SHMECK          WORD    SHECK
+SHMELC          WORD    SHELC
+SHMEMX          WORD    SHEMX
 SHMUPM          WORD    SHUPM
 SHMSEC          WORD    SHSEC
 SHMDWN          WORD    SHDWN
@@ -1946,6 +2520,11 @@ SHWHT           WORD    SHWHTT*2,SHWHTE*2
 SHHL1           WORD    SHHL1T*2,SHHL1E*2
 SHHL2           WORD    SHHL2T*2,SHHL2E*2
 SHFRE           WORD    SHFRET*2,SHFREE*2
+SHNOF           WORD    SHNOFT*2,SHNOFE*2
+SHEDE           WORD    SHEDET*2,SHEDEE*2
+SHECK           WORD    SHECKT*2,SHECKE*2
+SHELC           WORD    SHELCT*2,SHELCE*2
+SHEMX           WORD    SHEMXT*2,SHEMXE*2
 SHUPM           WORD    SHUPMT*2,SHUPME*2
 SHSEC           WORD    SHSECT*2,SHSECE*2
 SHDWN           WORD    SHDWNT*2,SHDWNE*2
@@ -1959,12 +2538,22 @@ SHPRMT          TEXT    "REX>  "
 SHPRME          EQU     $
 SHWHTT          TEXT    "WHAT\r\n"
 SHWHTE          EQU     $
-SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO MEM BASIC HALT\r\n"
+SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO MEM LOAD RUN BASIC HALT \r\n"
 SHHL1E          EQU     $
 SHHL2T          TEXT    "STOP AND START TAKE A B OR C\r\n"
 SHHL2E          EQU     $
 SHFRET          TEXT    "FREE"
 SHFREE          EQU     $
+SHNOFT          TEXT    "NO SUCH FILE\r\n"
+SHNOFE          EQU     $
+SHEDET          TEXT    "LOAD ERROR: DE\r\n"
+SHEDEE          EQU     $
+SHECKT          TEXT    "LOAD ERROR: CK\r\n"
+SHECKE          EQU     $
+SHELCT          TEXT    "LOAD ERROR: LC\r\n"
+SHELCE          EQU     $
+SHEMXT          TEXT    "LOAD ERROR: MX\r\n"
+SHEMXE          EQU     $
 SHUPMT          TEXT    "UPTIME"
 SHUPME          EQU     $
 SHSECT          TEXT    " SEC\r\n"

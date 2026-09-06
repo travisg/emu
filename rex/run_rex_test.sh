@@ -69,7 +69,8 @@ wait_for() {
 wait_count() {
     local pattern="$1" want="$2" tries=0
     while (( tries < 300 )); do
-        if (( $(grep -c -- "$pattern" "$LOG_FILE" 2>/dev/null || echo 0) >= want )); then
+        count=$(grep -c -- "$pattern" "$LOG_FILE" 2>/dev/null || true)
+        if (( ${count:-0} >= want )); then
             return 0
         fi
         sleep 0.1
