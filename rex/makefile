@@ -15,7 +15,7 @@ BUILD     := build
 
 .PHONY: all modules reloc-check disc test clean
 
-all: $(BUILD)/rex.bin
+all: $(BUILD)/rex.bin modules disc
 
 # REX itself: the kernel and the shell, pages 0 and 1. rexapi.asm states
 # the kernel's vector, cells and node layout as EQUs for the modules; the
