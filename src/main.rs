@@ -49,6 +49,8 @@ struct Args {
     /// compose (a real-time CPU with an instant terminal is the useful panel
     /// combination) and fast-io outranks a pacing rate.
     fast_io: bool,
+    /// `--disk PATH`: the disk image, in place of the fixed name under disks/.
+    disk: Option<PathBuf>,
     /// `--debug PATH`: listen on a Unix socket for a debugger.
     debug: Option<PathBuf>,
     /// `--halt`: start halted, waiting for RUN from the panel or the port.
@@ -56,7 +58,7 @@ struct Args {
 }
 
 fn usage(argv0: &str) {
-    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io] [--debug socket] [--halt]");
+    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io] [--disk image] [--debug socket] [--halt]");
     eprintln!();
     eprintln!("valid systems:");
     for s in registry::SYSTEMS {
@@ -78,6 +80,7 @@ fn usage(argv0: &str) {
     eprintln!("note: --no-throttle runs flat out, overriding the real-time default.");
     eprintln!("note: device periods follow the throttle rate, so a slow-motion cpu keeps a real-time terminal.");
     eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
+    eprintln!("note: --disk PATH mounts an image in place of the fixed one under disks/ (the kaypro's floppy; the 703 mounts its four units by name).");
     eprintln!("note: --debug PATH listens on a unix socket for a debugger (halt/run/step, registers, memory, breakpoints, the console); tools/emudbg.py talks to it. HLT then halts to the debugger instead of exiting.");
     eprintln!("note: --halt starts the machine halted; needs a front panel or --debug to start it.");
 }
@@ -96,6 +99,7 @@ fn parse_args() -> Result<Args, ()> {
         trace: None,
         throttle: ThrottleArg::Unset,
         fast_io: false,
+        disk: None,
         debug: None,
         halt: false,
     };
@@ -201,6 +205,11 @@ fn parse_args() -> Result<Args, ()> {
                 println!("devices will complete i/o instantly");
                 args.fast_io = true;
             }
+            "--disk" => {
+                let v = value(&mut i).ok_or(())?;
+                println!("disk option: '{v}'");
+                args.disk = Some(PathBuf::from(v));
+            }
             "--debug" => {
                 let v = value(&mut i).ok_or(())?;
                 args.debug = Some(PathBuf::from(v));
@@ -258,6 +267,7 @@ fn main() -> ExitCode {
     let (_, subsystem) = registry::split_name(&args.system);
     let opts = registry::MachineOpts {
         fast_io: args.fast_io,
+        disk: args.disk,
     };
     let mut machine = match (desc.factory)(&rom, endpoint, subsystem, &opts) {
         Ok(m) => m,

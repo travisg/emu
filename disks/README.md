@@ -5,7 +5,9 @@ tracked**, for the same reason as `roms/` — see that README and
 `tools/rom-manifest.txt`.
 
 - `mbasic-games.img` — the Kaypro II floppy, mounted by `emu -s kaypro`.
-  `tools/fetch-roms.py` puts it here.
+  `tools/fetch-roms.py` puts it here. `--disk PATH` mounts another image
+  in its place; cpmtools' `kpii` format is this geometry, so
+  `cpmcp -f kpii` onto a copy of it is how a CP/M program gets on a disk.
 - `ray703-boot.img` — a 703 disc that boots. `make -C test ray703-boot-disc`
   builds it, putting the boot sector in sector 0 of track 0 where the disc
   controller's LOAD button reads it:

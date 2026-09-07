@@ -17,7 +17,7 @@ use crate::console::{ConsoleEndpoint, Display};
 use crate::cpu::Cpu;
 use crate::system::{altair680, kaypro, ray703, rc2014, sys09};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use crate::emulator::Control;
 
@@ -54,12 +54,16 @@ pub struct ControlChannel {
 /// Build-time options that apply across systems. Every factory receives
 /// them; a machine honors what is meaningful for it and ignores the rest,
 /// so a flag like `--fast-io` needs no per-system plumbing in `main.rs`.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct MachineOpts {
     /// Devices complete I/O instantly instead of at their period rates.
     /// Meaningful only on machines that model device timing at all --
     /// currently the 703's teletype; everywhere else it is already true.
     pub fast_io: bool,
+    /// `--disk PATH`: the image for the machine's disk drive, in place of
+    /// the fixed name under `disks/`. The Kaypro's floppy takes it; the 703
+    /// mounts four units by name and ignores it.
+    pub disk: Option<PathBuf>,
 }
 
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
@@ -221,11 +225,12 @@ fn build_ray703(
     })
 }
 
-fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
+fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
+    let floppy = opts.disk.clone().unwrap_or_else(|| PathBuf::from(kaypro::DEFAULT_FLOPPY));
     let (bus, display) = kaypro::Kaypro::new(
         rom,
         Path::new(kaypro::VIDEO_ROM),
-        Path::new(kaypro::DEFAULT_FLOPPY),
+        &floppy,
         console,
     )?;
     Ok(Machine {
@@ -401,7 +406,7 @@ mod tests {
             tx.send(b'A').unwrap();
             tx.send(b'B').unwrap();
             let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-            let opts = MachineOpts { fast_io };
+            let opts = MachineOpts { fast_io, ..Default::default() };
             let mut m = build_ray703(&rom, console, "", &opts).unwrap();
             std::fs::remove_dir_all(&dir).ok();
 
