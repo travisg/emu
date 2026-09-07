@@ -258,7 +258,18 @@ if wait_for 'REX 703 UP'; then
     wait_count 'READY' 5 && wait_quiet && printf 'RUN\r' >&3
     wait_for 'SQ9' && printf '\003' >&3
     wait_for 'BREAK AT 50' || true
-    wait_count 'READY' 6 && wait_quiet && printf 'BYE\r' >&3
+
+    # A break belongs to a run. This one is typed at the prompt, where
+    # nothing is running, so the interpreter spends it when the next line
+    # goes in and this RUN runs to the loop again instead of breaking at
+    # its first statement -- which is what a kept flag would do, and what
+    # the second SQ9 below would then never see.
+    wait_count 'READY' 6 && wait_quiet && printf '\003' >&3
+    sleep 0.5
+    printf 'RUN\r' >&3
+    wait_count 'SQ9' 2 && printf '\003' >&3
+    wait_for 'BREAK AT 50' || true
+    wait_count 'READY' 7 && wait_quiet && printf 'BYE\r' >&3
 
     # Back at the shell: BYE gave back the module, its node and its
     # workspace, so STAT has no BASIC node, MEM reads as before, and a
@@ -267,8 +278,16 @@ if wait_for 'REX 703 UP'; then
     say 'STAT'
     say 'MEM'
     say 'BASIC'
-    wait_count 'READY' 7 && wait_quiet && printf 'LIST\r' >&3
-    wait_count 'READY' 8 && wait_quiet && printf 'BYE\r' >&3
+    wait_count 'READY' 8 && wait_quiet && printf 'LIST\r' >&3
+    wait_count 'READY' 9 && wait_quiet && printf 'BYE\r' >&3
+
+    # The console has one reader, and LOAD grants it to nobody, so a module
+    # that reads it refuses rather than registering over the shell's place
+    # in the queue. The shell must still be answering afterwards, and the
+    # MEM below is what says the refusal gave its memory back.
+    say 'LOAD BASIC'
+    wait_for 'NEEDS THE CONSOLE' || true
+    say 'MEM'
 
     # One task back on its feet, and only that one.
     say 'START B'
@@ -305,7 +324,7 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && grep -q '^SHELL OUTPUT OK' "$LOG_FILE" \
     && grep -q '^WHAT' "$LOG_FILE" \
     && grep -q '^HELL 2 4' "$LOG_FILE" \
-    && grep -q '^BASI 6 46' "$LOG_FILE" \
+    && grep -q '^BASI 6 47' "$LOG_FILE" \
     && grep -q '^HELLO FROM WORD [0-9]' "$LOG_FILE" \
     && grep -q '^HE ' "$LOG_FILE" \
     && grep -q '^NO SUCH FILE' "$LOG_FILE" \
@@ -313,7 +332,9 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && (( $(grep '^FREE [0-9]' "$LOG_FILE" | sort -u | wc -l) == 1 )) \
     && grep -q 'TINY BASIC UNDER REX' "$LOG_FILE" \
     && grep -q '^SQ9' "$LOG_FILE" \
-    && grep -q 'BREAK AT 50' "$LOG_FILE" \
+    && (( $(grep -c 'BREAK AT 50' "$LOG_FILE") == 2 )) \
+    && (( $(grep -c '^SQ9' "$LOG_FILE") == 2 )) \
+    && grep -q 'THE CONSOLE: USE RUN BASIC' "$LOG_FILE" \
     && (( $(grep -c '20 PRINT "SQ"' "$LOG_FILE") == 1 )) \
     && (( $(after_start | tr -cd 'B' | wc -c) >= 3 )) \
     && (( $(after_start | tr -cd 'AC' | wc -c) == 0 )) \
