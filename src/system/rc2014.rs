@@ -132,6 +132,19 @@ impl Bus for Rc2014 {
         }
     }
 
+    /// The rom window and the ram; the SIO is port-mapped, so nothing in
+    /// the memory space has a read side effect.
+    fn peek8(&self, addr: u32) -> Option<u8> {
+        let addr = (addr & 0xffff) as u16;
+        if addr < ROM_WINDOW {
+            Some(self.rom.peek(addr as u32 + self.rom_bank * ROM_WINDOW as u32))
+        } else if addr >= 0x8000 {
+            Some(self.ram.peek(addr as u32))
+        } else {
+            None
+        }
+    }
+
     fn io_read8(&mut self, port: u16) -> u8 {
         match port & 0xff {
             // SIO/A control port: receive-available, the interrupt condition,
@@ -211,6 +224,17 @@ mod tests {
         std::fs::remove_file(&rom_path).ok();
         std::fs::remove_dir(&dir).ok();
         (machine, tx)
+    }
+
+    /// The debugger's peek follows the guest's decode: the rom window at
+    /// the bottom, ram at the top, nothing in between.
+    #[test]
+    fn peek_is_none_in_the_unmapped_hole() {
+        let (mut m, _tx) = build("peek");
+        assert_eq!(m.peek8(0x0123), Some(0x23), "rom window, bank 0");
+        assert_eq!(m.peek8(0x4000), None, "the hole");
+        m.write8(0x9000, 0x42);
+        assert_eq!(m.peek8(0x9000), Some(0x42), "ram");
     }
 
     /// Port $80 reports "transmit buffer empty" (bit 2) unconditionally,

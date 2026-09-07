@@ -46,6 +46,12 @@ impl Memory {
         }
     }
 
+    /// The byte at `addr`, for readers that hold the bank immutably -- the
+    /// debugger's peek. Same wrap as the device interface.
+    pub fn peek(&self, addr: u32) -> u8 {
+        self.mem[self.index(addr)]
+    }
+
     fn index(&self, addr: u32) -> usize {
         (addr as usize) % self.mem.len()
     }

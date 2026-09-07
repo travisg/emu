@@ -219,6 +219,11 @@ impl Bus for Ray703 {
         self.core.write_byte(addr & 0xffff, val);
     }
 
+    /// Every device is on the DIO channel, so all of core is peekable.
+    fn peek8(&self, addr: u32) -> Option<u8> {
+        Some(self.core.peek(addr & 0xffff))
+    }
+
     /// The DIO address is a device nibble and a function nibble (4-2.1).
     /// Reading a device that isn't there yields zero, as the open input bus
     /// would.
@@ -297,6 +302,18 @@ mod tests {
         let path = std::env::temp_dir().join(format!("emu-ray703-{pid}-{name}"));
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    /// All of core is peekable -- the devices live on the DIO channel --
+    /// and a poke is a plain core write.
+    #[test]
+    fn peek_reads_the_core_and_poke_writes_it() {
+        let rom = scratch_file("peek", &[0x12, 0x34]);
+        let mut m = machine("", &rom).unwrap();
+        assert_eq!((m.peek8(0), m.peek8(1)), (Some(0x12), Some(0x34)));
+        assert_eq!(m.peek8(0xffff), Some(0), "the top of core, empty");
+        m.poke8(0x100, 0xab);
+        assert_eq!(m.read8(0x100), 0xab);
     }
 
     #[test]

@@ -81,4 +81,48 @@ impl Bus for Altair680 {
             _ => {}
         }
     }
+
+    /// The banks only: the ACIA pulls a character on any register read.
+    fn peek8(&self, addr: u32) -> Option<u8> {
+        let addr = (addr & 0xffff) as u16;
+        match addr {
+            0x0000..=0x7fff => Some(self.ram.peek(addr as u32)),
+            0xfc00..=0xfeff => Some(self.rom_vtl.peek((addr - 0xfc00) as u32)),
+            0xff00..=0xffff => Some(self.rom_monitor.peek((addr - 0xff00) as u32)),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn build() -> Altair680 {
+        let path = std::env::temp_dir().join(format!("emu-altair680-{}.bin", std::process::id()));
+        // monitor byte i = i, so reads are recognisable
+        let image: Vec<u8> = (0..MONITOR_ROM_SIZE).map(|i| i as u8).collect();
+        std::fs::write(&path, &image).unwrap();
+        let (_tx, rx) = mpsc::channel();
+        let machine = Altair680::new(&path, ConsoleEndpoint::new(rx, Box::new(Vec::new())));
+        std::fs::remove_file(&path).ok();
+        machine.unwrap()
+    }
+
+    /// The debugger's peek covers ram and both roms and declines the ACIA,
+    /// whose every register read drains the console queue.
+    #[test]
+    fn peek_refuses_the_acia_and_reads_the_banks() {
+        let mut m = build();
+        m.write8(0x0100, 0x42);
+        assert_eq!(m.peek8(0x0100), Some(0x42));
+        assert_eq!(m.peek8(0xff10), Some(0x10), "monitor rom");
+        assert_eq!(m.peek8(0xfc00), Some(0), "vtl rom, empty");
+        assert_eq!(m.peek8(0xf000), None, "ACIA status");
+        assert_eq!(m.peek8(0xf001), None, "ACIA data");
+        assert_eq!(m.peek8(0x8000), None, "unmapped");
+        m.poke8(0x0100, 0x99);
+        assert_eq!(m.read8(0x0100), 0x99, "poke is the guest's own write");
+    }
 }

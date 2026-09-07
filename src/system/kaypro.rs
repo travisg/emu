@@ -173,6 +173,20 @@ impl Bus for Kaypro {
         self.ram.write_byte(addr as u32, val);
     }
 
+    /// The same decode as `read8`, which has no side effects on this
+    /// machine -- the video ram is a locked buffer, the floppy and SIO are
+    /// on ports.
+    fn peek8(&self, addr: u32) -> Option<u8> {
+        let addr = (addr & 0xffff) as u16;
+        Some(if self.bank1() && addr < ROM_SIZE as u16 {
+            self.rom.peek(addr as u32)
+        } else if self.bank1() && (VIDEO_BASE..VIDEO_BASE + VIDEO_RAM_SIZE as u16).contains(&addr) {
+            self.video.read((addr - VIDEO_BASE) as usize)
+        } else {
+            self.ram.peek(addr as u32)
+        })
+    }
+
     fn io_read8(&mut self, port: u16) -> u8 {
         match port & 0xff {
             // serial port A: data, control

@@ -69,6 +69,21 @@ pub trait Bus {
     fn read8(&mut self, addr: u32) -> u8;
     fn write8(&mut self, addr: u32, val: u8);
 
+    /// A read with no side effects, for the debugger. `None` means there is
+    /// nothing at the address, or a device register whose read would change
+    /// what the guest sees -- an ACIA pulls a character on any register
+    /// read -- and the debugger says so rather than reading it: nothing it
+    /// looks at may alter the machine it is looking at.
+    fn peek8(&self, _addr: u32) -> Option<u8> {
+        None
+    }
+
+    /// A debugger write. The default is the guest's own write, device
+    /// registers included -- poking one is the point.
+    fn poke8(&mut self, addr: u32, val: u8) {
+        self.write8(addr, val)
+    }
+
     /// Port IO, z80 systems only. Machines without a separate IO space inherit
     /// these no-ops.
     fn io_read8(&mut self, _port: u16) -> u8 {

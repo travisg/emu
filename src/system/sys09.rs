@@ -97,4 +97,13 @@ impl Bus for System09 {
             dev.write_byte(a, val);
         }
     }
+
+    /// The banks only: the ACIA pulls a character on any register read.
+    fn peek8(&self, addr: u32) -> Option<u8> {
+        match (addr & 0xffff) as u16 {
+            addr @ 0x0000..=0x7fff => Some(self.ram.peek(addr as u32)),
+            addr @ 0xc000..=0xffff => Some(self.rom.peek((addr - 0xc000) as u32)),
+            _ => None,
+        }
+    }
 }
