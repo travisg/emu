@@ -24,6 +24,7 @@
 ;   START [A-C]  release one, or all three
 ;   ECHO text    print the rest of the line
 ;   MEM          the words free in the pool
+;   DIR          the disc's catalogue: name, first sector, sectors
 ;   LOAD name    a module off the disc, run behind the prompt
 ;   RUN  name    the same, given the console until it exits
 ;   BASIC        RUN BASIC
@@ -1749,12 +1750,7 @@ LDM1            CLR
                 STW     LDBASE
                 STW     LDPTR
                 STW     LDLIM
-                LDW     SHKLDB
-                SMB     DRBUF
-                STW     DRBUF
-                LDW     SHK1            ; the catalogue
-                SMB     DREAD
-                JSX     DREAD
+                JSX     LDCAT           ; the catalogue
                 SAZ
                 JMP     LDEDE
                 LDW     SHKLDB
@@ -1960,6 +1956,17 @@ LDER3           SMB     FREE
 LDER4           CLR
                 EXIT    LDMOD
 
+; The catalogue, sector 1, into the sector buffer: zero for a clean read,
+; else the disc's status.
+LDCAT           SUBR
+                LDW     SHKLDB
+                SMB     DRBUF
+                STW     DRBUF
+                LDW     SHK1
+                SMB     DREAD
+                JSX     DREAD
+                EXIT    LDCAT
+
 ; RELO11: the base added into the M field, the opcode and index bit kept.
 LDRL11          SUBR
                 STW     LDW3
@@ -2070,6 +2077,43 @@ LDCKT           LDW     LDSUM
                 ADD     SHK1
                 STW     LDBP
                 EXIT    LDGCRD
+
+; DIR: the catalogue, a line to a file -- its name, its first sector and
+; how many sectors it has.  A name shorter than four characters prints as
+; its letters alone, since a zero byte is nothing to the printer.
+SHDIR           JSX     LDCAT
+                SAZ
+                JMP     SHDRE
+                LDW     SHKLDB
+                STW     LDCP
+SHDRL           LDX     LDCP
+                LDW     *2
+                SAZ                     ; the end of the table?
+                JMP     SHDR1
+                JMP     SHLOOP
+SHDR1           LDW     *0
+                JSX     SHPW2
+                LDX     LDCP
+                LDW     *1
+                JSX     SHPW2
+                LDW     SHKSP
+                JSX     SHPUTC
+                LDX     LDCP
+                LDW     *2
+                JSX     SHDEC
+                LDW     SHKSP
+                JSX     SHPUTC
+                LDX     LDCP
+                LDW     *3
+                JSX     SHDEC
+                JSX     SHNL
+                LDW     LDCP
+                ADD     SHK4
+                STW     LDCP
+                JMP     SHDRL
+SHDRE           LDW     SHMNRD
+                JSX     SHMSG
+                JMP     SHLOOP
 
 ; The words free in the pool: the free list's sizes added up, under the
 ; mask that every walk of the list holds.
@@ -2487,6 +2531,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'EC','HO',SHECHO
                 WORD    'BA','SI',SHBASI
                 WORD    'M','EM',SHMEM
+                WORD    'D','IR',SHDIR
                 WORD    'LO','AD',SHLOAD
                 WORD    'R','UN',SHRUN
                 WORD    'HA','LT',SHHALT
@@ -2500,6 +2545,7 @@ SHMHL1          WORD    SHHL1
 SHMHL2          WORD    SHHL2
 SHMFRE          WORD    SHFRE
 SHMNOF          WORD    SHNOF
+SHMNRD          WORD    SHNRD
 SHMEDE          WORD    SHEDE
 SHMECK          WORD    SHECK
 SHMELC          WORD    SHELC
@@ -2517,6 +2563,7 @@ SHHL1           WORD    SHHL1T*2,SHHL1E*2
 SHHL2           WORD    SHHL2T*2,SHHL2E*2
 SHFRE           WORD    SHFRET*2,SHFREE*2
 SHNOF           WORD    SHNOFT*2,SHNOFE*2
+SHNRD           WORD    SHNRDT*2,SHNRDE*2
 SHEDE           WORD    SHEDET*2,SHEDEE*2
 SHECK           WORD    SHECKT*2,SHECKE*2
 SHELC           WORD    SHELCT*2,SHELCE*2
@@ -2534,7 +2581,7 @@ SHPRMT          TEXT    "REX>  "
 SHPRME          EQU     $
 SHWHTT          TEXT    "WHAT\r\n"
 SHWHTE          EQU     $
-SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO MEM LOAD RUN BASIC HALT \r\n"
+SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO MEM DIR LOAD RUN BASIC HALT \r\n"
 SHHL1E          EQU     $
 SHHL2T          TEXT    "STOP AND START TAKE A B OR C\r\n"
 SHHL2E          EQU     $
@@ -2542,6 +2589,8 @@ SHFRET          TEXT    "FREE"
 SHFREE          EQU     $
 SHNOFT          TEXT    "NO SUCH FILE\r\n"
 SHNOFE          EQU     $
+SHNRDT          TEXT    "DISC NOT READY\r\n"
+SHNRDE          EQU     $
 SHEDET          TEXT    "LOAD ERROR: DE\r\n"
 SHEDEE          EQU     $
 SHECKT          TEXT    "LOAD ERROR: CK\r\n"

@@ -39,6 +39,7 @@ time either way. The shell's commands:
     START [A-C]  release one, or all three
     ECHO text    print the rest of the line
     MEM          the words free in the pool
+    DIR          the disc's catalogue: name, first sector, sectors
     LOAD name    a module off the disc, run behind the prompt
     RUN  name    the same, given the console until it exits
     BASIC        RUN BASIC
@@ -178,8 +179,8 @@ agree, with no emulator in the loop.
 
 Modules live on disc unit 0 under a catalogue in sector 1 (`../tools/
 mkdisc703.py --add`, which `make -C rex disc` runs for the platter the
-emulator mounts from the repo root). The shell's `LOAD` finds one by
-name, runs its text into a block from the kernel's pool -- first fit,
+emulator mounts from the repo root; `DIR` at the shell lists it). The
+shell's `LOAD` finds one by name, runs its text into a block from the kernel's pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields
 need -- gives it a task node and links it into the ring; `RUN` does the
 same and hands it the console until it exits. A task ends through

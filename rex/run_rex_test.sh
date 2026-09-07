@@ -229,6 +229,7 @@ if wait_for 'REX 703 UP'; then
     # ring, and STAT is repeated until it has gone before the pool is
     # counted again. A name not in the catalogue is refused.
     say 'MEM'
+    say 'DIR'
     say 'RUN HELLO'
     wait_for 'HELLO FROM WORD' || true
     say 'MEM'
@@ -287,7 +288,8 @@ wait "$EMU_PID" || true
 # What the shell had to have printed: STAT's uptime and task table with the
 # tasks stopped and the shell itself running, the command list, ECHO's line
 # on a line of its own (the terminal's echo of the command that asked for it
-# begins with the prompt instead), the refusal, hello's line and its node in
+# begins with the prompt instead), the refusal, the catalogue's two lines,
+# hello's line and its node in
 # a STAT, the catalogue's refusal, every MEM agreeing (the pool is whole
 # again after each load, BASIC's included), the program typed once and
 # LISTed never, and B alone back at work -- and, since A and C
@@ -302,6 +304,8 @@ if grep -q 'REX 703 UP' "$LOG_FILE" \
     && grep -q '^COMMANDS HELP STAT UPTIME' "$LOG_FILE" \
     && grep -q '^SHELL OUTPUT OK' "$LOG_FILE" \
     && grep -q '^WHAT' "$LOG_FILE" \
+    && grep -q '^HELL 2 4' "$LOG_FILE" \
+    && grep -q '^BASI 6 46' "$LOG_FILE" \
     && grep -q '^HELLO FROM WORD [0-9]' "$LOG_FILE" \
     && grep -q '^HE ' "$LOG_FILE" \
     && grep -q '^NO SUCH FILE' "$LOG_FILE" \
