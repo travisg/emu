@@ -28,8 +28,11 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 pub mod panel703;
+pub mod paper;
 pub mod sdl;
 pub mod terminal;
+
+pub use paper::Paper;
 
 /// The CPU-thread half of the console: keyboard in, serial out.
 pub struct ConsoleEndpoint {
@@ -57,6 +60,15 @@ impl ConsoleEndpoint {
     pub fn put_char(&mut self, c: u8) {
         let _ = self.out.write_all(&[c]);
         let _ = self.out.flush();
+    }
+
+    /// Replace the output sink. The endpoint is built in `main` -- before
+    /// the factory has parsed the subsystem tokens -- with stdout as its
+    /// sink; a factory that routes the serial output somewhere else (the
+    /// 703's teletype window) swaps its sink in here before the machine
+    /// consumes the endpoint.
+    pub fn set_output(&mut self, out: Box<dyn Write + Send>) {
+        self.out = out;
     }
 }
 
@@ -390,6 +402,19 @@ pub enum Display {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The factory can retarget the serial output sink after `main` has
+    /// built the endpoint around stdout -- this is the seam the teletype
+    /// window hangs off.
+    #[test]
+    fn set_output_redirects_serial_output() {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut ep = ConsoleEndpoint::new(rx, Box::new(std::io::sink()));
+        let paper = Paper::new();
+        ep.set_output(Box::new(paper.clone()));
+        ep.put_char(b'A');
+        paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+    }
 
     #[test]
     fn accumulate_charges_only_set_bits() {
