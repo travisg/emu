@@ -61,10 +61,28 @@ W.SIZE          EQU     W.HEAPTOP       ; the block
 T.BRK           EQU     BRKREQ          ; the break flag is the kernel's cell
 
 ; ---------------------------------------------------------------- entry
+; The console first, because this module reads it and the console has one
+; reader at a time.  RUN grants it -- CONBSY up, the shell parked on the
+; hand-back reading no queue -- and fills in the node's T.CON; LOAD grants
+; nothing and leaves the shell in Q.GET, where this task's registration
+; would land on top of the shell's in the queue's single waiter slot and
+; leave it deaf for good.  So a task that finds T.CON clear was started by
+; LOAD, says so, and goes.  The message goes out before the workspace
+; exists, which is the same ground BKNOCA's does.
+BASENT          SMB     CURT
+                LDX     CURT
+                LDW     *T.CON
+                SAZ                     ; the console?
+                JMP     BECON
+                LDW     BKNCON          ; LOAD grants none: say so and go
+                JSX     M.MSG
+                SMB     K.EXIT
+                JMP     K.EXIT
+
 ; Take the workspace, point the core's address cells at it -- the word
 ; cells get the block's address, the byte cells twice that -- print the
 ; banner, and hand over to the core.
-BASENT          LDW     BKWSZ
+BECON           LDW     BKWSZ
                 SMB     K.ALLOC
                 JSX     K.ALLOC
                 SAZ                     ; a block?
@@ -265,6 +283,7 @@ BKWTAB          WORD    BWWTAB          ; the fix-up tables' addresses
 BKBTAB          WORD    BWBTAB
 BKBANP          WORD    BKBAND
 BKNOCA          WORD    BKNOCD
+BKNCON          WORD    BKNCOD
 
 ; The core's address cells that hold word addresses into the workspace,
 ; and those that hold byte addresses -- the wrapper's own among them.
@@ -279,6 +298,9 @@ BKBANE          EQU     $
 BKNOCD          WORD    BKNOCT*2,BKNOCE*2
 BKNOCT          TEXT    "NO CORE LEFT\r\n"
 BKNOCE          EQU     $
+BKNCOD          WORD    BKNCOT*2,BKNCOE*2
+BKNCOT          TEXT    "NEEDS THE CONSOLE: USE RUN BASIC\r\n"
+BKNCOE          EQU     $
 
 ; The core follows the glue, in the same module.
 B.CORE          EQU     $

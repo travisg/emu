@@ -45,6 +45,15 @@ CURT            EQU     X'20'           ; the running task's node
 BRKREQ          EQU     X'21'           ; Ctrl-C arrived; the console's owner clears it
 CONBSY          EQU     X'22'           ; the console belongs to a task, not the shell
 KCONSQ          EQU     X'23'           ; the console queue's descriptor address
+;                                       ; K.QGET on it is for the console's
+;                                       ; owner alone: the queue holds one
+;                                       ; waiter, so a second reader's
+;                                       ; registration lands on the first's.
+;                                       ; RUN grants the console and fills in
+;                                       ; T.CON; LOAD grants nothing, so a
+;                                       ; module that reads the console tests
+;                                       ; T.CON at entry and refuses when it
+;                                       ; is clear.
 DRBUF           EQU     X'24'           ; K.DREAD's buffer: a word address, 47 words
 
 ; ---------------------------------------------------------------- a task node
@@ -59,7 +68,10 @@ T.MBX           EQU     7               ; the printer mailbox: one character, ze
 T.CHR           EQU     8               ; a letter task's letter, else zero
 T.NAP           EQU     9               ; a letter task's sleep, in ticks
 T.NAM           EQU     10              ; two characters, for STAT
-T.CON           EQU     11              ; nonzero: this task holds the console
+T.CON           EQU     11              ; nonzero: this task holds the console --
+                                        ; RUN set it, LOAD did not, and it is
+                                        ; what says whether reading KCONSQ is
+                                        ; this task's to do
 T.LEN           EQU     12              ; words in a node
 
 SRUN            EQU     0

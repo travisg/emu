@@ -41,7 +41,8 @@ time either way. The shell's commands:
     MEM          the words free in the pool
     DIR          the disc's catalogue: name, first sector, sectors
     LOAD name    a module off the disc, run behind the prompt
-    RUN  name    the same, given the console until it exits
+    RUN  name    the same, given the console until it exits -- the only
+                 way to start a module that reads the console
     BASIC        RUN BASIC
     HALT         park the tasks, drain the printer and stop the machine
 
@@ -121,10 +122,16 @@ blocks in `Q.GET` rather than polling, and one waiter to a queue means one
 reader. And **the console has one reader at a time**, named by the `CONBSY`
 cell: `RUN` raises it in the masked window that clears the break flag,
 then waits on it -- reading no queue -- until the task's `K.EXIT` clears
-it and wakes the shell. Ctrl-C never enters the queue at all: the service
-routine raises the kernel's `BRKREQ` instead (BASIC's break check reads it
-through the `T.BRK` alias), so a running program that reads nothing can
-still be broken. A break belongs to a run: the
+it and wakes the shell. That is also why **only a task `RUN` started may
+read the console**: `LOAD` grants nothing and leaves the shell in `Q.GET`,
+so a module that read the queue behind the prompt would put its own
+registration in the queue's one waiter slot on top of the shell's. A
+module that needs the console tests its node's `T.CON` at entry and
+refuses if it is clear, which is what `brex.asm` does; `hello.asm` only
+prints, which is what `LOAD` is for. Ctrl-C never enters the queue at
+all: the service routine raises the kernel's `BRKREQ` instead (BASIC's
+break check reads it through the `T.BRK` alias), so a running program
+that reads nothing can still be broken. A break belongs to a run: the
 interpreter spends the flag at its `READY` loop, once the line is in, so
 one typed while the prompt was up is not kept for whatever runs next.
 `STOP`/`START` cannot name the shell or
