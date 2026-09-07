@@ -19,6 +19,7 @@
 pub mod bus;
 pub mod console;
 pub mod cpu;
+pub mod debug;
 pub mod dev;
 pub mod emulator;
 pub mod rom;

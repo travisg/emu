@@ -8,9 +8,10 @@
  */
 //! The run loop: a CPU, the bus it drives, and the things that stop it.
 
-use crate::bus::Bus;
+use crate::bus::{Bus, Endian};
 use crate::console::{PanelCommand, PanelState};
 use crate::cpu::{Cpu, StepResult};
+use crate::debug::{DebugEvent, DebugOp, DebugReply, DebugRequest, DebugSink, StopReason};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
@@ -26,6 +27,30 @@ pub enum ExitReason {
     BadOpcode,
     InfiniteLoop,
 }
+
+/// One command on the run loop's control channel. The front panel window
+/// and the debug port share the channel -- a `Receiver` has one consumer,
+/// and the halted wait blocks on it, so anything that wants to move a
+/// halted machine has to arrive here.
+pub enum Control {
+    Panel(PanelCommand),
+    Debug(DebugRequest),
+}
+
+/// What a HLT, a bad opcode or a dead branch-to-self do.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum StopPolicy {
+    /// End the run. The headless machines: there is nothing to resume from.
+    Exit,
+    /// Halt, and wait for RUN from the panel or the debugger. A dead loop
+    /// keeps running -- it is the authentic idle at the end of a program,
+    /// and HALT is the way out.
+    Halt,
+}
+
+/// The most the debugger may read in one request, so a mistyped length
+/// cannot stall the machine.
+const PEEK_LIMIT: u32 = 256;
 
 /// What the throttle wants done after one more instruction. Split out of
 /// [`Throttle::pace`] as a pure function of the numbers so the arithmetic,
@@ -116,10 +141,11 @@ pub struct Emulator {
     cycle_limit: Option<i64>,
     trace: Option<Box<dyn Write + Send>>,
     throttle: Option<Throttle>,
-    /// Commands from a front panel window, when the machine has one. Their
-    /// presence is also what turns a HLT into a halted state instead of an
-    /// exit -- with no panel there is no RUN switch to resume from.
-    control: Option<Receiver<PanelCommand>>,
+    /// Commands from the panel window and the debug port, when the machine
+    /// has either. Without a channel nothing can ever halt the machine, so
+    /// the run loop never waits.
+    control: Option<Receiver<Control>>,
+    stop_policy: StopPolicy,
     /// The panel's shared lamp state, when the machine has one. The run
     /// loop is the only place that knows whether the machine is halted
     /// (HLT and bad opcodes halt to the panel too, not just the switch),
@@ -127,6 +153,17 @@ pub struct Emulator {
     /// indicator's red lens.
     panel: Option<PanelState>,
     run_state: RunState,
+    /// Where stop events and the exit go, when a debug port is attached.
+    sink: Option<DebugSink>,
+    /// PCs, in the core's own units, that halt the machine when reached.
+    breakpoints: Vec<u32>,
+    /// Instructions still owed to a SINGLE COMMAND or a `step N`. While
+    /// this is non-zero a halted machine keeps stepping.
+    pending_steps: u32,
+    /// Instructions executed since the run began.
+    executed: u64,
+    /// Why the machine is halted, for `status`; None while running.
+    stop_reason: Option<StopReason>,
 }
 
 /// Whether the machine is executing instructions or sitting halted at the
@@ -151,23 +188,43 @@ impl Emulator {
             trace: None,
             throttle: None,
             control: None,
+            stop_policy: StopPolicy::Exit,
             panel: None,
             run_state: RunState::Running,
+            sink: None,
+            breakpoints: Vec::new(),
+            pending_steps: 0,
+            executed: 0,
+            stop_reason: None,
         }
     }
 
-    /// Wire in a front panel's command channel. A machine with a panel
-    /// starts halted, as a real one did at power-on: the operator presses
-    /// RUN. Everything else keeps running from reset, as always.
-    pub fn set_panel_control(&mut self, control: Option<Receiver<PanelCommand>>) {
-        let state = if control.is_some() { RunState::Halted } else { RunState::Running };
+    /// Wire in the control channel the panel window and the debug port
+    /// send on. Changes nothing else: whether the machine starts halted
+    /// and what HLT does are `set_halted` and `set_stop_policy`.
+    pub fn set_control(&mut self, control: Option<Receiver<Control>>) {
         self.control = control;
+    }
+
+    pub fn set_stop_policy(&mut self, policy: StopPolicy) {
+        self.stop_policy = policy;
+    }
+
+    /// Start halted. A machine with a panel does, as a real one did at
+    /// power-on: the operator presses RUN. Only meaningful with a control
+    /// channel -- without one nothing could ever press it.
+    pub fn set_halted(&mut self, halted: bool) {
+        let state = if halted { RunState::Halted } else { RunState::Running };
         self.set_run_state(state);
+    }
+
+    pub fn set_debug_sink(&mut self, sink: Option<DebugSink>) {
+        self.sink = sink;
     }
 
     /// Wire in the panel's lamp state so run-state changes reach its HALT
     /// indicator. Publishes the current state immediately, so the order of
-    /// this and `set_panel_control` doesn't matter.
+    /// this and `set_halted` doesn't matter.
     pub fn set_panel_state(&mut self, panel: Option<PanelState>) {
         self.panel = panel;
         self.set_run_state(self.run_state);
@@ -204,6 +261,11 @@ impl Emulator {
     pub fn run(&mut self) -> ExitReason {
         let reason = self.run_inner();
 
+        // the debugger hears why before the flag pulls the process down
+        if let Some(sink) = &self.sink {
+            sink.event(DebugEvent::Exit(reason));
+        }
+
         // wake the frontend, mirroring the C++ cpu thread calling
         // Console::Stop() when its Run() returns for any reason
         self.shutdown.store(true, Ordering::SeqCst);
@@ -217,78 +279,231 @@ impl Emulator {
         reason
     }
 
-    /// Drain pending panel commands. While halted this waits on the channel
-    /// (with a timeout so the shutdown flag stays responsive); while running
-    /// it only picks up what has already arrived. Returns `Ok(true)` when a
-    /// SINGLE COMMAND asks for exactly one instruction, and `Err(())` when
-    /// the frontend has dropped its sender -- without that, a halted wait
-    /// would spin hot on Disconnected until the shutdown flag caught up.
-    fn pump_commands(&mut self) -> Result<bool, ()> {
+    /// Whether the machine is sitting still: halted with no step budget
+    /// left. This is when the run loop waits on the channel instead of
+    /// polling it.
+    fn waiting(&self) -> bool {
+        self.run_state == RunState::Halted && self.pending_steps == 0
+    }
+
+    /// Drain pending commands. While waiting this blocks on the channel
+    /// (with a timeout so the shutdown flag stays responsive); otherwise it
+    /// only picks up what has already arrived. `Err(())` means every sender
+    /// has dropped -- without that, a halted wait would spin hot on
+    /// Disconnected until the shutdown flag caught up.
+    fn pump_commands(&mut self) -> Result<(), ()> {
         loop {
             // The command is moved out of this scoped match before any
             // handler runs, ending the borrow of self.control: a
             // `while let ... recv()` would hold it across the body and
-            // conflict with handle_command's `&mut self`.
+            // conflict with the handlers' `&mut self`.
             let cmd = {
                 let rx = self.control.as_ref().unwrap();
-                match self.run_state {
-                    RunState::Running => match rx.try_recv() {
-                        Ok(c) => Some(c),
-                        Err(TryRecvError::Empty) => None,
-                        Err(TryRecvError::Disconnected) => return Err(()),
-                    },
-                    RunState::Halted => match rx.recv_timeout(Duration::from_millis(100)) {
+                if self.waiting() {
+                    match rx.recv_timeout(Duration::from_millis(100)) {
                         Ok(c) => Some(c),
                         Err(RecvTimeoutError::Timeout) => None,
                         Err(RecvTimeoutError::Disconnected) => return Err(()),
-                    },
+                    }
+                } else {
+                    match rx.try_recv() {
+                        Ok(c) => Some(c),
+                        Err(TryRecvError::Empty) => None,
+                        Err(TryRecvError::Disconnected) => return Err(()),
+                    }
                 }
             };
             match cmd {
-                None => return Ok(false),
-                Some(cmd) => {
-                    if self.handle_command(&cmd) {
-                        return Ok(true);
-                    }
-                }
+                None => return Ok(()),
+                Some(Control::Panel(cmd)) => self.handle_panel(&cmd),
+                Some(Control::Debug(req)) => self.handle_debug(req),
+            }
+            // A step budget executes before the next command is looked at:
+            // two SINGLE COMMANDs queued together are two instructions.
+            if self.pending_steps > 0 {
+                return Ok(());
             }
         }
     }
 
-    /// Apply one panel command. Returns true when exactly one instruction
-    /// should execute now (SINGLE COMMAND).
-    fn handle_command(&mut self, cmd: &PanelCommand) -> bool {
+    /// Every way into the halted state that the debugger should hear
+    /// about: records why, lights the lens, and reports the PC the machine
+    /// stopped in front of.
+    fn stop(&mut self, reason: StopReason) {
+        self.pending_steps = 0;
+        self.set_run_state(RunState::Halted);
+        self.stop_reason = Some(reason);
+        if let Some(sink) = &self.sink {
+            sink.event(DebugEvent::Stopped { reason, pc: self.cpu.pc() });
+        }
+    }
+
+    /// RUN: from halted, or from a step budget, which it supersedes.
+    fn resume(&mut self) {
+        self.pending_steps = 0;
+        self.stop_reason = None;
+        self.set_run_state(RunState::Running);
+    }
+
+    /// HALT. A machine that was moving -- running, or working through a
+    /// step budget -- stops and says so; one already still stays that way
+    /// without a second event.
+    fn halt(&mut self) {
+        if !self.waiting() {
+            self.stop(StopReason::Request);
+        }
+    }
+
+    /// Owe `n` instructions to a halted machine. "Each actuation of the
+    /// switch executes one instruction ... then halts" (5-3) -- pressed
+    /// while running, that means one more instruction and then the halt.
+    fn step(&mut self, n: u32) {
+        self.pending_steps = n;
+        self.stop_reason = None;
+        self.set_run_state(RunState::Halted);
+    }
+
+    /// The master reset (5-3), and back to the halted state: every
+    /// operating procedure is RESET, key the registers, RUN -- a reset
+    /// that left the machine free-running from word 0 would make that
+    /// flow impossible.
+    fn reset_and_halt(&mut self) {
+        self.cpu.reset(&mut *self.bus);
+        self.stop(StopReason::Reset);
+    }
+
+    /// Apply one panel command.
+    fn handle_panel(&mut self, cmd: &PanelCommand) {
         match cmd {
-            PanelCommand::Run => {
-                self.set_run_state(RunState::Running);
-                false
-            }
-            PanelCommand::Halt => {
-                self.set_run_state(RunState::Halted);
-                false
-            }
-            // "Each actuation of the switch executes one instruction ...
-            // then halts" (5-3) -- pressed while running, that means one
-            // more instruction and then the halt.
-            PanelCommand::SingleCommand => {
-                self.set_run_state(RunState::Halted);
-                true
-            }
-            PanelCommand::Reset => {
-                // The master reset (5-3), and back to the halted state:
-                // every operating procedure is RESET, key the registers,
-                // RUN -- a reset that left the machine free-running from
-                // word 0 would make that flow impossible.
-                self.cpu.reset(&mut *self.bus);
-                self.set_run_state(RunState::Halted);
-                false
-            }
+            PanelCommand::Run => self.resume(),
+            PanelCommand::Halt => self.halt(),
+            PanelCommand::SingleCommand => self.step(1),
+            PanelCommand::Reset => self.reset_and_halt(),
             // Everything else is data entry the core owns.
-            cmd => {
-                self.cpu.panel_command(&mut *self.bus, cmd);
-                false
+            cmd => self.cpu.panel_command(&mut *self.bus, cmd),
+        }
+    }
+
+    /// Service one debugger request and send its reply. Memory goes
+    /// through the bus's peek, never its read: nothing the debugger looks
+    /// at may change what the guest sees.
+    fn handle_debug(&mut self, req: DebugRequest) {
+        let reply = match req.op {
+            DebugOp::Status => self.status(),
+            DebugOp::Halt => {
+                self.halt();
+                self.status()
+            }
+            DebugOp::Run => {
+                self.resume();
+                DebugReply::Ok
+            }
+            DebugOp::Step(0) => DebugReply::Err("step count must be at least 1".into()),
+            DebugOp::Step(n) => {
+                self.step(n);
+                DebugReply::Ok
+            }
+            DebugOp::Reset => {
+                self.reset_and_halt();
+                DebugReply::Ok
+            }
+            DebugOp::Regs => DebugReply::Registers(self.cpu.registers()),
+            DebugOp::GetReg(name) => self.register(&name),
+            DebugOp::SetReg(name, value) => {
+                if self.cpu.set_register(&name, value) {
+                    self.register(&name)
+                } else {
+                    DebugReply::Err(format!("unknown register {name}"))
+                }
+            }
+            DebugOp::Peek { addr, len } => self.peek(addr, len),
+            DebugOp::Poke { addr, bytes } => {
+                for (i, &b) in bytes.iter().enumerate() {
+                    self.bus.poke8(addr.wrapping_add(i as u32), b);
+                }
+                DebugReply::Ok
+            }
+            DebugOp::PeekWords { addr, len } => {
+                let unit = self.cpu.addressing();
+                let bytes = addr.wrapping_mul(unit.unit_bytes);
+                match self.peek(bytes, len.saturating_mul(2)) {
+                    DebugReply::Bytes(b) => DebugReply::Words(
+                        b.chunks(2)
+                            .map(|w| match unit.endian {
+                                Endian::Big => u16::from_be_bytes([w[0], w[1]]),
+                                Endian::Little => u16::from_le_bytes([w[0], w[1]]),
+                            })
+                            .collect(),
+                    ),
+                    other => other,
+                }
+            }
+            DebugOp::PokeWords { addr, words } => {
+                let unit = self.cpu.addressing();
+                let mut a = addr.wrapping_mul(unit.unit_bytes);
+                for w in words {
+                    let [first, second] = match unit.endian {
+                        Endian::Big => w.to_be_bytes(),
+                        Endian::Little => w.to_le_bytes(),
+                    };
+                    self.bus.poke8(a, first);
+                    self.bus.poke8(a.wrapping_add(1), second);
+                    a = a.wrapping_add(2);
+                }
+                DebugReply::Ok
+            }
+            DebugOp::AddBreak(pc) => {
+                if !self.breakpoints.contains(&pc) {
+                    self.breakpoints.push(pc);
+                }
+                DebugReply::Ok
+            }
+            DebugOp::RemoveBreak(pc) => match self.breakpoints.iter().position(|&b| b == pc) {
+                Some(i) => {
+                    self.breakpoints.remove(i);
+                    DebugReply::Ok
+                }
+                None => DebugReply::Err(format!("no breakpoint at {pc:04x}")),
+            },
+            DebugOp::Breaks => {
+                let mut b = self.breakpoints.clone();
+                b.sort_unstable();
+                DebugReply::Breaks(b)
+            }
+        };
+        // a client that hung up before its reply arrived is not an error
+        let _ = req.reply.send(reply);
+    }
+
+    fn status(&self) -> DebugReply {
+        DebugReply::Status {
+            halted: self.waiting(),
+            reason: if self.waiting() { self.stop_reason } else { None },
+            pc: self.cpu.pc(),
+            insns: self.executed,
+        }
+    }
+
+    fn register(&self, name: &str) -> DebugReply {
+        match self.cpu.registers().into_iter().find(|r| r.name == name) {
+            Some(r) => DebugReply::Register(r),
+            None => DebugReply::Err(format!("unknown register {name}")),
+        }
+    }
+
+    fn peek(&self, addr: u32, len: u32) -> DebugReply {
+        if len > PEEK_LIMIT {
+            return DebugReply::Err(format!("at most {PEEK_LIMIT} bytes per request"));
+        }
+        let mut bytes = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            let a = addr.wrapping_add(i);
+            match self.bus.peek8(a) {
+                Some(b) => bytes.push(b),
+                None => return DebugReply::Err(format!("no memory at {a:04x}")),
             }
         }
+        DebugReply::Bytes(bytes)
     }
 
     fn run_inner(&mut self) -> ExitReason {
@@ -298,20 +513,19 @@ impl Emulator {
             }
 
             if self.control.is_some() {
-                let step_one = match self.pump_commands() {
-                    Ok(s) => s,
-                    // the frontend is gone; its shutdown store is in flight
-                    Err(()) => return ExitReason::Shutdown,
-                };
-                if self.run_state == RunState::Halted && !step_one {
+                // every sender is gone: the frontend's shutdown store is in flight
+                if self.pump_commands().is_err() {
+                    return ExitReason::Shutdown;
+                }
+                if self.waiting() {
                     // Halted: no limit decrement, no trace line, no step.
                     // Loop to wait on the channel again.
                     continue;
                 }
-                // A single command falls through and executes exactly one
-                // instruction through the ordinary body below -- so traces,
+                // A step budget falls through and executes one instruction
+                // at a time through the ordinary body below -- so traces,
                 // the instruction limit and the throttle see it like any
-                // other step -- and run_state is already Halted again.
+                // other step -- with run_state still Halted.
             }
 
             // Mirrors the C++ decrement-then-test exactly, including its
@@ -333,35 +547,44 @@ impl Emulator {
                 let _ = self.cpu.trace_line(t);
             }
 
-            match self.cpu.step(&mut *self.bus) {
-                StepResult::Ok => {}
-                StepResult::Halted => {
-                    if self.control.is_some() {
-                        // The panel has a RUN switch, so a HLT halts to it
-                        // instead of ending the process.
-                        println!("halted; RUN resumes");
-                        self.set_run_state(RunState::Halted);
-                    } else {
-                        return ExitReason::Halted;
-                    }
+            let result = self.cpu.step(&mut *self.bus);
+            self.executed += 1;
+            let stopped = match (result, self.stop_policy) {
+                (StepResult::Ok, _) => false,
+                (StepResult::Halted, StopPolicy::Exit) => return ExitReason::Halted,
+                (StepResult::Halted, StopPolicy::Halt) => {
+                    // There is a RUN switch, so a HLT halts to it instead
+                    // of ending the process.
+                    println!("halted; RUN resumes");
+                    self.stop(StopReason::Hlt);
+                    true
                 }
-                StepResult::BadOpcode => {
-                    if self.control.is_some() {
-                        // Halting to the panel makes a mistyped hand entry
-                        // recoverable instead of fatal.
-                        println!("bad opcode; halted");
-                        self.set_run_state(RunState::Halted);
-                    } else {
-                        return ExitReason::BadOpcode;
-                    }
+                (StepResult::BadOpcode, StopPolicy::Exit) => return ExitReason::BadOpcode,
+                (StepResult::BadOpcode, StopPolicy::Halt) => {
+                    // Halting makes a mistyped hand entry recoverable
+                    // instead of fatal.
+                    println!("bad opcode; halted");
+                    self.stop(StopReason::BadOpcode);
+                    true
                 }
-                StepResult::InfiniteLoop => {
-                    // With a panel this is the authentic idle at the end of
-                    // a program -- HALT is the way out now. Headless it is
-                    // still the nothing-can-ever-change exit.
-                    if self.control.is_none() {
-                        return ExitReason::InfiniteLoop;
+                // Headless this is the nothing-can-ever-change exit.
+                (StepResult::InfiniteLoop, StopPolicy::Exit) => return ExitReason::InfiniteLoop,
+                (StepResult::InfiniteLoop, StopPolicy::Halt) => false,
+            };
+
+            // A step budget counts down, and a breakpoint is checked on the
+            // PC the machine now stands in front of -- so RUN from a
+            // breakpoint executes the instruction there, no skip needed.
+            if !stopped {
+                if self.pending_steps > 0 {
+                    self.pending_steps -= 1;
+                    if self.pending_steps == 0 {
+                        self.stop(StopReason::Step);
+                    } else if self.at_breakpoint() {
+                        self.stop(StopReason::Break);
                     }
+                } else if self.run_state == RunState::Running && self.at_breakpoint() {
+                    self.stop(StopReason::Break);
                 }
             }
 
@@ -382,6 +605,10 @@ impl Emulator {
         }
     }
 
+    fn at_breakpoint(&self) -> bool {
+        !self.breakpoints.is_empty() && self.breakpoints.contains(&self.cpu.pc())
+    }
+
     pub fn dump(&self) {
         self.cpu.dump();
     }
@@ -391,6 +618,8 @@ impl Emulator {
 mod tests {
     use super::*;
     use crate::bus::Bus;
+    use crate::cpu::Register;
+    use crate::debug::Outbound;
 
     struct NullBus;
     impl Bus for NullBus {
@@ -398,6 +627,29 @@ mod tests {
             0
         }
         fn write8(&mut self, _addr: u32, _val: u8) {}
+    }
+
+    /// Flat memory whose byte at `a` reads `a`, except one address that
+    /// stands in for a device register and refuses to be peeked.
+    struct PeekBus {
+        mem: Vec<u8>,
+    }
+    const UNPEEKABLE: u32 = 0xdead;
+    impl PeekBus {
+        fn new() -> Self {
+            PeekBus { mem: (0..0x10000).map(|a| a as u8).collect() }
+        }
+    }
+    impl Bus for PeekBus {
+        fn read8(&mut self, addr: u32) -> u8 {
+            self.mem[(addr & 0xffff) as usize]
+        }
+        fn write8(&mut self, addr: u32, val: u8) {
+            self.mem[(addr & 0xffff) as usize] = val;
+        }
+        fn peek8(&self, addr: u32) -> Option<u8> {
+            (addr != UNPEEKABLE).then(|| self.mem[(addr & 0xffff) as usize])
+        }
     }
 
     /// Counts steps so we can assert the cycle-limit arithmetic.
@@ -492,15 +744,20 @@ mod tests {
         resets: Arc<std::sync::atomic::AtomicU64>,
         commands: Arc<std::sync::Mutex<Vec<PanelCommand>>>,
         results: Vec<StepResult>,
+        /// A settable register, for the debug request path.
+        v: u32,
     }
 
+    /// The panel rig doubles as the debug rig: the sink's client channel
+    /// is `events`, and `debug()` puts a request on the control channel.
     struct PanelRig {
         emu: Emulator,
-        tx: std::sync::mpsc::Sender<PanelCommand>,
+        tx: std::sync::mpsc::Sender<Control>,
         steps: Arc<std::sync::atomic::AtomicU64>,
         resets: Arc<std::sync::atomic::AtomicU64>,
         commands: Arc<std::sync::Mutex<Vec<PanelCommand>>>,
         panel: PanelState,
+        events: std::sync::mpsc::Receiver<Outbound>,
     }
 
     impl ScriptedCpu {
@@ -513,14 +770,36 @@ mod tests {
                 resets: Arc::clone(&resets),
                 commands: Arc::clone(&commands),
                 results,
+                v: 0,
             };
             let mut emu =
-                Emulator::new(Box::new(cpu), Box::new(NullBus), Arc::new(AtomicBool::new(false)));
+                Emulator::new(Box::new(cpu), Box::new(PeekBus::new()), Arc::new(AtomicBool::new(false)));
             let (tx, rx) = std::sync::mpsc::channel();
-            emu.set_panel_control(Some(rx));
+            emu.set_control(Some(rx));
+            emu.set_stop_policy(StopPolicy::Halt);
+            emu.set_halted(true);
             let panel = PanelState::new();
             emu.set_panel_state(Some(panel.clone()));
-            PanelRig { emu, tx, steps, resets, commands, panel }
+            let sink = DebugSink::new();
+            let (ev_tx, events) = std::sync::mpsc::channel();
+            sink.attach(ev_tx);
+            emu.set_debug_sink(Some(sink));
+            PanelRig { emu, tx, steps, resets, commands, panel, events }
+        }
+    }
+
+    /// Send one debug request; the reply arrives on the returned channel.
+    fn debug(tx: &std::sync::mpsc::Sender<Control>, op: DebugOp) -> std::sync::mpsc::Receiver<DebugReply> {
+        let (reply, rx) = std::sync::mpsc::channel();
+        tx.send(Control::Debug(DebugRequest { op, reply })).unwrap();
+        rx
+    }
+
+    /// The next event from the sink, within a generous bound.
+    fn next_event(events: &std::sync::mpsc::Receiver<Outbound>) -> DebugEvent {
+        match events.recv_timeout(Duration::from_secs(10)).expect("an event") {
+            Outbound::Event(e) => e,
+            other => panic!("expected an event, got {other:?}"),
         }
     }
 
@@ -539,6 +818,198 @@ mod tests {
         fn panel_command(&mut self, _bus: &mut dyn Bus, cmd: &PanelCommand) {
             self.commands.lock().unwrap().push(*cmd);
         }
+        /// Each step advances one unit, so the PC is the step count.
+        fn pc(&self) -> u32 {
+            self.steps.load(Ordering::SeqCst) as u32
+        }
+        fn registers(&self) -> Vec<Register> {
+            vec![Register::new("PC", self.pc(), 16), Register::new("V", self.v, 16)]
+        }
+        fn set_register(&mut self, name: &str, value: u32) -> bool {
+            if name == "V" {
+                self.v = value & 0xffff;
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    // -- the debugger's side of the run loop ----------------------------------
+
+    /// The stop policy is explicit state, not inferred from the channel: a
+    /// machine can carry a control channel and still exit on HLT. The sink
+    /// hears the exit before the flag pulls the process down.
+    #[test]
+    fn hlt_exits_under_the_exit_policy_even_with_a_control_channel() {
+        let PanelRig { mut emu, tx, steps, events, .. } =
+            ScriptedCpu::build(vec![StepResult::Halted]);
+        emu.set_stop_policy(StopPolicy::Exit);
+        emu.set_halted(false);
+        assert_eq!(emu.run(), ExitReason::Halted);
+        assert_eq!(steps.load(Ordering::SeqCst), 1);
+        assert_eq!(next_event(&events), DebugEvent::Exit(ExitReason::Halted));
+        drop(tx);
+    }
+
+    #[test]
+    fn debug_halt_stops_a_running_machine_and_reports_it() {
+        let PanelRig { mut emu, tx, steps, events, .. } = ScriptedCpu::build(vec![]);
+        emu.set_halted(false);
+        let runner = std::thread::spawn(move || emu.run());
+        let reply = debug(&tx, DebugOp::Halt).recv().unwrap();
+        let DebugReply::Status { halted: true, reason: Some(StopReason::Request), pc, insns } = reply
+        else {
+            panic!("halt should reply with a halted status, got {reply:?}");
+        };
+        assert_eq!(pc as u64, insns);
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc });
+        let stopped_at = steps.load(Ordering::SeqCst);
+        // a second halt of a still machine is not a second event
+        assert!(matches!(debug(&tx, DebugOp::Halt).recv().unwrap(), DebugReply::Status { .. }));
+        assert!(events.try_recv().is_err());
+        assert_eq!(steps.load(Ordering::SeqCst), stopped_at, "halted means halted");
+        drop(tx);
+        assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn step_n_executes_n_and_stops() {
+        let PanelRig { mut emu, tx, steps, events, .. } = ScriptedCpu::build(vec![]);
+        let runner = std::thread::spawn(move || emu.run());
+        assert_eq!(debug(&tx, DebugOp::Step(3)).recv().unwrap(), DebugReply::Ok);
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Step, pc: 3 });
+        assert_eq!(steps.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            debug(&tx, DebugOp::Status).recv().unwrap(),
+            DebugReply::Status { halted: true, reason: Some(StopReason::Step), pc: 3, insns: 3 }
+        );
+        assert_eq!(
+            debug(&tx, DebugOp::Step(0)).recv().unwrap(),
+            DebugReply::Err("step count must be at least 1".into())
+        );
+        drop(tx);
+        assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
+    }
+
+    /// A breakpoint stops the machine in front of its instruction -- the
+    /// reported PC is the breakpoint -- and RUN executes that instruction
+    /// and carries on past it.
+    #[test]
+    fn a_breakpoint_halts_before_its_instruction_and_run_executes_it() {
+        let PanelRig { mut emu, tx, steps, events, .. } = ScriptedCpu::build(vec![]);
+        let runner = std::thread::spawn(move || emu.run());
+        assert_eq!(debug(&tx, DebugOp::AddBreak(2)).recv().unwrap(), DebugReply::Ok);
+        assert_eq!(debug(&tx, DebugOp::AddBreak(2)).recv().unwrap(), DebugReply::Ok, "idempotent");
+        assert_eq!(debug(&tx, DebugOp::Breaks).recv().unwrap(), DebugReply::Breaks(vec![2]));
+        assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Break, pc: 2 });
+        assert_eq!(steps.load(Ordering::SeqCst), 2);
+
+        assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
+        let DebugReply::Status { halted: true, reason: Some(StopReason::Request), pc, .. } =
+            debug(&tx, DebugOp::Halt).recv().unwrap()
+        else {
+            panic!("halt should report a halted machine");
+        };
+        assert!(pc > 2, "RUN went past the breakpoint");
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc });
+        assert_eq!(debug(&tx, DebugOp::RemoveBreak(2)).recv().unwrap(), DebugReply::Ok);
+        assert_eq!(
+            debug(&tx, DebugOp::RemoveBreak(2)).recv().unwrap(),
+            DebugReply::Err("no breakpoint at 0002".into())
+        );
+        drop(tx);
+        assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn a_halt_mid_step_budget_cancels_it() {
+        let PanelRig { mut emu, tx, steps, events, .. } = ScriptedCpu::build(vec![]);
+        let runner = std::thread::spawn(move || emu.run());
+        assert_eq!(debug(&tx, DebugOp::Step(u32::MAX)).recv().unwrap(), DebugReply::Ok);
+        let DebugReply::Status { halted: true, reason: Some(StopReason::Request), pc, .. } =
+            debug(&tx, DebugOp::Halt).recv().unwrap()
+        else {
+            panic!("halt should report a halted machine");
+        };
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc });
+        let stopped_at = steps.load(Ordering::SeqCst);
+        assert!(stopped_at < u32::MAX as u64);
+        // the budget is gone: nothing more executes
+        assert!(events.recv_timeout(Duration::from_millis(250)).is_err());
+        assert_eq!(steps.load(Ordering::SeqCst), stopped_at);
+        drop(tx);
+        assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
+    }
+
+    /// A halted machine answers without stepping: the requests are queued
+    /// before the sender drops, and the run ends with nothing executed.
+    #[test]
+    fn debug_requests_are_serviced_while_halted() {
+        let PanelRig { mut emu, tx, steps, .. } = ScriptedCpu::build(vec![]);
+        let regs = debug(&tx, DebugOp::Regs);
+        let one = debug(&tx, DebugOp::GetReg("V".into()));
+        let none = debug(&tx, DebugOp::GetReg("W".into()));
+        drop(tx);
+        assert_eq!(emu.run(), ExitReason::Shutdown);
+        assert_eq!(steps.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            regs.recv().unwrap(),
+            DebugReply::Registers(vec![Register::new("PC", 0u32, 16), Register::new("V", 0u32, 16)])
+        );
+        assert_eq!(one.recv().unwrap(), DebugReply::Register(Register::new("V", 0u32, 16)));
+        assert_eq!(none.recv().unwrap(), DebugReply::Err("unknown register W".into()));
+    }
+
+    /// Registers and memory go through the core's and the bus's debugger
+    /// accessors: a set reads back, a peek refuses a device register, and
+    /// the word forms honour the core's addressing.
+    #[test]
+    fn set_register_and_peek_go_through_the_request_path() {
+        let PanelRig { mut emu, tx, .. } = ScriptedCpu::build(vec![]);
+        let set = debug(&tx, DebugOp::SetReg("V".into(), 0x1234));
+        let bad_set = debug(&tx, DebugOp::SetReg("W".into(), 1));
+        let bytes = debug(&tx, DebugOp::Peek { addr: 0x10, len: 3 });
+        let refused = debug(&tx, DebugOp::Peek { addr: UNPEEKABLE - 2, len: 4 });
+        let too_many = debug(&tx, DebugOp::Peek { addr: 0, len: PEEK_LIMIT + 1 });
+        let poke = debug(&tx, DebugOp::Poke { addr: 0x20, bytes: vec![0xaa, 0xbb] });
+        let poked = debug(&tx, DebugOp::Peek { addr: 0x20, len: 2 });
+        // the scripted core is byte-addressed big-endian, the trait default
+        let words = debug(&tx, DebugOp::PeekWords { addr: 0x30, len: 2 });
+        let pokew = debug(&tx, DebugOp::PokeWords { addr: 0x40, words: vec![0x1122] });
+        let pokedw = debug(&tx, DebugOp::Peek { addr: 0x40, len: 2 });
+        drop(tx);
+        assert_eq!(emu.run(), ExitReason::Shutdown);
+        assert_eq!(set.recv().unwrap(), DebugReply::Register(Register::new("V", 0x1234u32, 16)));
+        assert_eq!(bad_set.recv().unwrap(), DebugReply::Err("unknown register W".into()));
+        assert_eq!(bytes.recv().unwrap(), DebugReply::Bytes(vec![0x10, 0x11, 0x12]));
+        assert_eq!(refused.recv().unwrap(), DebugReply::Err("no memory at dead".into()));
+        assert!(matches!(too_many.recv().unwrap(), DebugReply::Err(_)));
+        assert_eq!(poke.recv().unwrap(), DebugReply::Ok);
+        assert_eq!(poked.recv().unwrap(), DebugReply::Bytes(vec![0xaa, 0xbb]));
+        assert_eq!(words.recv().unwrap(), DebugReply::Words(vec![0x3031, 0x3233]));
+        assert_eq!(pokew.recv().unwrap(), DebugReply::Ok);
+        assert_eq!(pokedw.recv().unwrap(), DebugReply::Bytes(vec![0x11, 0x22]));
+    }
+
+    /// HLT under the halt policy is a stop event the debugger can inspect
+    /// from; a reset is reported the same way and leaves the machine halted.
+    #[test]
+    fn hlt_and_reset_are_reported_as_stops() {
+        let PanelRig { mut emu, tx, resets, events, .. } =
+            ScriptedCpu::build(vec![StepResult::Halted, StepResult::BadOpcode]);
+        let runner = std::thread::spawn(move || emu.run());
+        assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Hlt, pc: 1 });
+        assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::BadOpcode, pc: 2 });
+        assert_eq!(debug(&tx, DebugOp::Reset).recv().unwrap(), DebugReply::Ok);
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Reset, pc: 2 });
+        assert_eq!(resets.load(Ordering::SeqCst), 1);
+        drop(tx);
+        assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
+        assert_eq!(next_event(&events), DebugEvent::Exit(ExitReason::Shutdown));
     }
 
     /// With a control channel the machine starts halted and executes
@@ -561,13 +1032,13 @@ mod tests {
         let PanelRig { mut emu, tx, panel, steps, .. } =
             ScriptedCpu::build(vec![StepResult::Halted]);
         assert!(panel.halted(), "a panel machine powers on halted");
-        emu.handle_command(&PanelCommand::Run);
+        emu.handle_panel(&PanelCommand::Run);
         assert!(!panel.halted(), "RUN douses the lens");
-        emu.handle_command(&PanelCommand::Halt);
+        emu.handle_panel(&PanelCommand::Halt);
         assert!(panel.halted(), "the HALT switch lights it");
 
         // a HLT instruction halts to the panel, and the lens shows it
-        emu.handle_command(&PanelCommand::Run);
+        emu.handle_panel(&PanelCommand::Run);
         assert!(!panel.halted());
         let runner = std::thread::spawn(move || emu.run());
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -583,9 +1054,9 @@ mod tests {
     #[test]
     fn single_command_steps_exactly_once_each() {
         let PanelRig { mut emu, tx, steps, .. } = ScriptedCpu::build(vec![]);
-        tx.send(PanelCommand::Halt).unwrap();
-        tx.send(PanelCommand::SingleCommand).unwrap();
-        tx.send(PanelCommand::SingleCommand).unwrap();
+        tx.send(Control::Panel(PanelCommand::Halt)).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
         drop(tx);
         assert_eq!(emu.run(), ExitReason::Shutdown);
         assert_eq!(steps.load(Ordering::SeqCst), 2);
@@ -597,9 +1068,9 @@ mod tests {
     fn hlt_halts_to_the_panel_and_resumes() {
         let PanelRig { mut emu, tx, steps, .. } =
             ScriptedCpu::build(vec![StepResult::Halted, StepResult::Ok]);
-        tx.send(PanelCommand::Run).unwrap();
-        tx.send(PanelCommand::SingleCommand).unwrap();
-        tx.send(PanelCommand::SingleCommand).unwrap();
+        tx.send(Control::Panel(PanelCommand::Run)).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
         drop(tx);
         assert_eq!(emu.run(), ExitReason::Shutdown);
         assert_eq!(steps.load(Ordering::SeqCst), 2);
@@ -609,9 +1080,9 @@ mod tests {
     fn bad_opcode_halts_to_the_panel() {
         let PanelRig { mut emu, tx, steps, .. } =
             ScriptedCpu::build(vec![StepResult::BadOpcode, StepResult::Ok]);
-        tx.send(PanelCommand::Run).unwrap();
-        tx.send(PanelCommand::SingleCommand).unwrap();
-        tx.send(PanelCommand::SingleCommand).unwrap();
+        tx.send(Control::Panel(PanelCommand::Run)).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
         drop(tx);
         assert_eq!(emu.run(), ExitReason::Shutdown);
         assert_eq!(steps.load(Ordering::SeqCst), 2);
@@ -622,7 +1093,7 @@ mod tests {
     #[test]
     fn infinite_loop_keeps_running_with_a_panel() {
         let PanelRig { mut emu, tx, steps, .. } = ScriptedCpu::build(vec![StepResult::InfiniteLoop; 100]);
-        tx.send(PanelCommand::Run).unwrap();
+        tx.send(Control::Panel(PanelCommand::Run)).unwrap();
         emu.set_cycle_limit(Some(50));
         assert_eq!(emu.run(), ExitReason::CycleLimit);
         assert_eq!(steps.load(Ordering::SeqCst), 49);
@@ -632,7 +1103,7 @@ mod tests {
     #[test]
     fn reset_resets_the_cpu_and_stays_halted() {
         let PanelRig { mut emu, tx, steps, resets, .. } = ScriptedCpu::build(vec![]);
-        tx.send(PanelCommand::Reset).unwrap();
+        tx.send(Control::Panel(PanelCommand::Reset)).unwrap();
         drop(tx);
         assert_eq!(emu.run(), ExitReason::Shutdown);
         assert_eq!(resets.load(Ordering::SeqCst), 1);
@@ -643,8 +1114,8 @@ mod tests {
     #[test]
     fn entry_commands_are_forwarded_to_the_core() {
         let PanelRig { mut emu, tx, steps, commands, .. } = ScriptedCpu::build(vec![]);
-        tx.send(PanelCommand::TogglePcBit(3)).unwrap();
-        tx.send(PanelCommand::Enter).unwrap();
+        tx.send(Control::Panel(PanelCommand::TogglePcBit(3))).unwrap();
+        tx.send(Control::Panel(PanelCommand::Enter)).unwrap();
         drop(tx);
         assert_eq!(emu.run(), ExitReason::Shutdown);
         assert_eq!(steps.load(Ordering::SeqCst), 0);
@@ -662,7 +1133,7 @@ mod tests {
         let handle = std::thread::spawn(move || emu.run());
         // > 3 recv_timeout periods of halted waiting
         std::thread::sleep(Duration::from_millis(350));
-        tx.send(PanelCommand::SingleCommand).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
         drop(tx);
         assert_eq!(handle.join().unwrap(), ExitReason::Shutdown);
         assert_eq!(steps.load(Ordering::SeqCst), 1);

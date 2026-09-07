@@ -42,7 +42,8 @@
 //! textures, image files or font dependencies.
 
 use super::{
-    DiscRackState, LampSnapshot, PanelCommand, PanelDisplay, PanelState, RackSnapshot, Selector,
+    DiscRackState, LampSnapshot, PanelCommand, PanelControl, PanelDisplay, PanelState, RackSnapshot,
+    Selector,
 };
 use crate::console::RACK_UNITS;
 use sdl2::keyboard::Keycode;
@@ -51,7 +52,6 @@ use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
-use std::sync::mpsc::Sender;
 
 const WINDOW_W: u32 = 1120;
 const WINDOW_H: u32 = 480;
@@ -223,7 +223,7 @@ pub(crate) struct PanelWindow {
     panel: PanelState,
     /// Switch actuations to the run loop. Send errors are ignored
     /// throughout: a dead CPU thread means shutdown is already in flight.
-    control: Sender<PanelCommand>,
+    control: PanelControl,
     rack: DiscRackState,
     selector: Selector,
     /// Last frame's accumulator snapshots, one per lamp source (PC + the

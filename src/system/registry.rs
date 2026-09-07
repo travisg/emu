@@ -18,6 +18,8 @@ use crate::cpu::Cpu;
 use crate::system::{altair680, kaypro, ray703, rc2014, sys09};
 use std::io;
 use std::path::Path;
+use std::sync::mpsc;
+use crate::emulator::Control;
 
 /// Everything built for one machine: a core, the bus it drives, and -- if it
 /// has a screen -- the display handle the main-thread frontend renders from.
@@ -32,15 +34,21 @@ pub struct Machine {
     /// leaves the default to the registry's `clock_hz`; the command line
     /// overrides either way.
     pub throttle_hz: Option<u64>,
-    /// The receiving end of a front panel's command channel, for
-    /// `Emulator::set_panel_control`; its presence is also what makes HLT
-    /// halt to the panel instead of exiting.
-    pub panel_control: Option<std::sync::mpsc::Receiver<crate::console::PanelCommand>>,
+    /// The run loop's control channel, both ends, when the machine has a
+    /// front panel: the panel window already holds a clone of the sender
+    /// inside `display`, and `main` hands the receiver to the `Emulator`.
+    pub control: Option<ControlChannel>,
     /// A handle on the panel's shared lamp state, for
     /// `Emulator::set_panel_state` -- the run loop publishes whether the
     /// machine is halted, which lights the HALT indicator's red lens.
     /// The frontend's own handle rides inside `display`.
     pub panel: Option<crate::console::PanelState>,
+}
+
+/// Both ends of the run loop's control channel.
+pub struct ControlChannel {
+    pub tx: mpsc::Sender<Control>,
+    pub rx: mpsc::Receiver<Control>,
 }
 
 /// Build-time options that apply across systems. Every factory receives
@@ -74,7 +82,7 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Mac
         bus: Box::new(altair680::Altair680::new(rom, console)?),
         display: None,
         throttle_hz: None,
-        panel_control: None,
+        control: None,
         panel: None,
     })
 }
@@ -85,7 +93,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Machin
         bus: Box::new(rc2014::Rc2014::new(rom, console)?),
         display: None,
         throttle_hz: None,
-        panel_control: None,
+        control: None,
         panel: None,
     })
 }
@@ -96,7 +104,7 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineO
         bus: Box::new(sys09::System09::new(rom, console, sub)?),
         display: None,
         throttle_hz: None,
-        panel_control: None,
+        control: None,
         panel: None,
     })
 }
@@ -138,7 +146,7 @@ fn build_ray703(
     }
 
     let mut throttle_hz = None;
-    let mut panel_control = None;
+    let mut control = None;
     let mut panel_state = None;
     let mut rack = None;
     let mut panel_display = None;
@@ -148,16 +156,16 @@ fn build_ray703(
         // ...one clone for the run loop's halt reporting...
         panel_state = Some(state.clone());
         // ...and switch actuations flow frontend -> run loop over this channel
-        let (ctl_tx, ctl_rx) = std::sync::mpsc::channel();
+        let (ctl_tx, ctl_rx) = mpsc::channel();
         // the rack lamps under the console, fed by the disc controller
         let rack_state = crate::console::DiscRackState::new();
         rack = Some(rack_state.clone());
         panel_display = Some(crate::console::PanelDisplay {
             panel: state,
-            control: ctl_tx,
+            control: crate::console::PanelControl(ctl_tx.clone()),
             rack: rack_state,
         });
-        panel_control = Some(ctl_rx);
+        control = Some(ControlChannel { tx: ctl_tx, rx: ctl_rx });
         // A live panel is meaningless uncapped -- the lamps would be a
         // uniform blur -- so a panel machine asks for real time even if its
         // registry entry names no clock rate to default to. --no-throttle on
@@ -208,7 +216,7 @@ fn build_ray703(
         bus: Box::new(bus),
         display,
         throttle_hz,
-        panel_control,
+        control,
         panel: panel_state,
     })
 }
@@ -225,7 +233,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Machin
         bus: Box::new(bus),
         display: Some(display),
         throttle_hz: None,
-        panel_control: None,
+        control: None,
         panel: None,
     })
 }
@@ -349,8 +357,11 @@ mod tests {
             panic!("panel display expected");
         };
         panel.control.send(crate::console::PanelCommand::Run).unwrap();
-        let rx = m.panel_control.expect("panel machines carry the control channel");
-        assert_eq!(rx.try_recv().unwrap(), crate::console::PanelCommand::Run);
+        let channel = m.control.expect("panel machines carry the control channel");
+        assert!(matches!(
+            channel.rx.try_recv().unwrap(),
+            Control::Panel(crate::console::PanelCommand::Run)
+        ));
         // ...the rack rides along, wired to the controller: polling the bus
         // advances its duty denominator (what a unit's ONLINE lamp shows
         // depends on which images the working directory happens to hold, so
@@ -362,7 +373,7 @@ mod tests {
         for sub in ["panel-ptb", "ptb-panel"] {
             let m = build_703(sub).unwrap();
             assert!(matches!(m.display, Some(Display::Ray703 { .. })), "{sub}");
-            assert!(m.panel_control.is_some(), "{sub}");
+            assert!(m.control.is_some(), "{sub}");
         }
     }
 
@@ -371,7 +382,7 @@ mod tests {
         let m = build_703("").unwrap();
         assert!(m.display.is_none());
         assert_eq!(m.throttle_hz, None);
-        assert!(m.panel_control.is_none());
+        assert!(m.control.is_none());
     }
 
     /// `--fast-io` reaches the teletype through the factory. The probe is
@@ -424,7 +435,7 @@ mod tests {
         // a teletype window alone does not ask for real time: the device
         // pacing already types at ten characters a second
         assert_eq!(m.throttle_hz, None);
-        assert!(m.panel_control.is_none());
+        assert!(m.control.is_none());
         // DOT 14,E with 'A': the device's write function, straight to paper
         m.bus.io_write16(0xee, 0x8000 | b'A' as u16);
         tty.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));

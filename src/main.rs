@@ -13,7 +13,7 @@ use emu::console::ray703::Ray703Frontend;
 use emu::console::sdl::SdlFrontend;
 use emu::console::terminal::TerminalFrontend;
 use emu::console::{ConsoleEndpoint, ConsoleFrontend};
-use emu::emulator::Emulator;
+use emu::emulator::{Emulator, StopPolicy};
 use emu::system::registry;
 use std::io::BufWriter;
 use std::path::PathBuf;
@@ -297,12 +297,23 @@ fn main() -> ExitCode {
         None => println!("cpu is unthrottled"),
     }
 
-    let has_panel = machine.panel_control.is_some();
+    let has_panel = machine.panel.is_some();
     let mut emu = Emulator::new(machine.cpu, machine.bus, Arc::clone(&shutdown));
     emu.set_cycle_limit(args.limit);
     emu.set_throttle(throttle_hz);
-    emu.set_panel_control(machine.panel_control);
     emu.set_panel_state(machine.panel);
+    if let Some(registry::ControlChannel { tx, rx }) = machine.control {
+        // The panel window holds its own clone of the sender; this one is
+        // dropped so that closing the window disconnects the channel and
+        // ends the run.
+        drop(tx);
+        emu.set_control(Some(rx));
+        // A panel has a RUN switch, so a HLT halts to it instead of ending
+        // the process, and the machine starts halted as a real one did at
+        // power-on.
+        emu.set_stop_policy(StopPolicy::Halt);
+        emu.set_halted(true);
+    }
     if let Some(path) = args.trace {
         match std::fs::File::create(&path) {
             Ok(f) => emu.set_trace(Some(Box::new(BufWriter::new(f)))),

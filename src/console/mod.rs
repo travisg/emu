@@ -24,7 +24,7 @@
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 pub mod panel703;
@@ -529,8 +529,21 @@ pub struct TtyDisplay {
 pub struct PanelDisplay {
     pub panel: PanelState,
     /// Switch actuations to the run loop on the CPU thread.
-    pub control: Sender<PanelCommand>,
+    pub control: PanelControl,
     pub rack: DiscRackState,
+}
+
+/// The panel window's end of the run loop's control channel, which it
+/// shares with the debug port: the window sends panel commands and nothing
+/// else, so this is the only shape of `Control` it can put on the channel.
+#[derive(Clone)]
+pub struct PanelControl(pub Sender<crate::emulator::Control>);
+
+impl PanelControl {
+    /// Err means the run loop is gone -- shutdown is already in flight.
+    pub fn send(&self, cmd: PanelCommand) -> Result<(), SendError<crate::emulator::Control>> {
+        self.0.send(crate::emulator::Control::Panel(cmd))
+    }
 }
 
 #[cfg(test)]
