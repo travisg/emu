@@ -31,6 +31,7 @@ pub mod panel703;
 pub mod paper;
 pub mod sdl;
 pub mod terminal;
+pub mod tty33_font;
 
 pub use paper::Paper;
 
