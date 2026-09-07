@@ -6,14 +6,71 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-//! The debug port: what an outside program can ask of a running machine.
+//! The debug port: a socket an outside program talks to a running machine
+//! through, like a JTAG pod on a real board. `--debug PATH` opens it.
 //!
 //! The types here cross the thread boundary. A [`DebugRequest`] goes from
 //! whoever is talking to the port to the run loop on the CPU thread, which
 //! is the only thread that ever touches the cpu or the bus, and its
 //! [`DebugReply`] comes back on the request's own channel. Everything the
 //! machine volunteers -- serial output, stop events, the run ending --
-//! goes the other way through a [`DebugSink`].
+//! goes the other way through a [`DebugSink`]. [`server`] is the listener
+//! and the connection threads; [`protocol`] is the wire format.
+//!
+//! # The protocol
+//!
+//! Text, one command per `\n`-terminated line (`\r\n` is accepted). The
+//! server answers every command with exactly one line, `ok [text]` or
+//! `err message`, in order. Lines starting with `!` are events the
+//! machine raised on its own and may arrive at any time; lines starting
+//! with `#` are information (the banner on connect, `help`). Addresses and
+//! values are hex, bare or with `0x`; counts are decimal; register names
+//! are case-insensitive. Output hex is bare, lower case and zero-padded
+//! to the register's width, as in `--trace`.
+//!
+//! | command | reply | |
+//! |---|---|---|
+//! | `status` | `ok state=running\|halted [reason=R] pc=HEX insns=N` | `insns` counts instructions since the run began |
+//! | `halt` | the `status` line | plus `! stopped reason=request` if the machine was moving |
+//! | `run` | `ok` | resumes; a step budget in progress is superseded |
+//! | `step [N]` | `ok`, then `! stopped reason=step` | N decimal, default 1 |
+//! | `reset` | `ok`, then `! stopped reason=reset` | the core's reset; the machine stays halted |
+//! | `regs` | `ok NAME=HEX ...` | every register, the trace line's first |
+//! | `reg NAME` | `ok NAME=HEX` | |
+//! | `set NAME HEX` | `ok NAME=HEX` | masked to the register's width |
+//! | `mem ADDR LEN` | `ok B B ...` | bus bytes at byte address ADDR; at most 256; `err no memory at HEX` if any byte is a device register or unmapped |
+//! | `memw ADDR LEN` | `ok W W ...` | 16-bit words at core-unit address ADDR, in the core's byte order (the 703: a word address, big-endian); at most 128 |
+//! | `write ADDR B...` | `ok` | bytes to byte address ADDR, through the guest's own write |
+//! | `writew ADDR W...` | `ok` | words to core-unit address ADDR |
+//! | `break ADDR` / `unbreak ADDR` | `ok` | ADDR in core units, the same as `pc` |
+//! | `breaks` | `ok HEX ...` | |
+//! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
+//! | `backlog` | `ok TEXT` | the last 16 KiB of guest output, escaped |
+//! | `help` | `# ...` lines, then `ok` | |
+//! | `quit` | `ok`, then the connection closes | the machine runs on |
+//! | `kill` | `ok` | shuts the emulator down; `! exit` follows |
+//!
+//! Events: `! stopped reason=(request|step|break|hlt|badop|reset) pc=HEX`
+//! whenever the machine goes from moving to halted; `! out TEXT` for guest
+//! serial output, escaped, consecutive bytes folded into one line; `! exit
+//! reason=(shutdown|limit|halted|badop|loop)` when the run loop returns.
+//!
+//! Escaping, the same both ways: printable ASCII stands for itself, `\\`
+//! `\r` `\n` `\t` for those bytes, `\xHH` for anything else.
+//!
+//! Breakpoints are checked on the PC the machine stands in front of, so
+//! `run` from a breakpoint executes the instruction there. With a debug
+//! port the machine's stop policy is the panel's: HLT and a bad opcode
+//! halt and raise `! stopped` rather than ending the process, so the
+//! state is there to inspect even when nobody was attached yet; a dead
+//! branch-to-self keeps running (`halt` is the way out). The machine
+//! starts running unless `--halt` is given -- a harness that must not
+//! miss the first character of output starts halted, connects, and sends
+//! `run`. One client at a time: a later connection takes the events and
+//! output away from an earlier one.
+
+pub mod protocol;
+pub mod server;
 
 use crate::cpu::Register;
 use crate::emulator::ExitReason;
@@ -116,6 +173,8 @@ pub const BACKLOG_BYTES: usize = 16 * 1024;
 #[derive(Default)]
 struct SinkInner {
     client: Option<Sender<Outbound>>,
+    /// Attachments so far; the current one's number.
+    attachments: u64,
     backlog: VecDeque<u8>,
 }
 
@@ -161,13 +220,22 @@ impl DebugSink {
     }
 
     /// Make `tx` the client. One at a time: a later attach replaces an
-    /// earlier one, whose sender is dropped here.
-    pub fn attach(&self, tx: Sender<Outbound>) {
-        self.0.lock().unwrap().client = Some(tx);
+    /// earlier one, whose sender is dropped here. Returns the attachment's
+    /// number, which is what `detach` takes: a connection going away must
+    /// not detach the client that replaced it.
+    pub fn attach(&self, tx: Sender<Outbound>) -> u64 {
+        let mut inner = self.0.lock().unwrap();
+        inner.client = Some(tx);
+        inner.attachments += 1;
+        inner.attachments
     }
 
-    pub fn detach(&self) {
-        self.0.lock().unwrap().client = None;
+    /// Drop the client, if `attachment` is still the current one.
+    pub fn detach(&self, attachment: u64) {
+        let mut inner = self.0.lock().unwrap();
+        if inner.attachments == attachment {
+            inner.client = None;
+        }
     }
 
     pub fn is_attached(&self) -> bool {
@@ -223,13 +291,28 @@ mod tests {
     fn detaching_drops_output_but_keeps_the_backlog() {
         let sink = DebugSink::new();
         let (tx, rx) = mpsc::channel();
-        sink.attach(tx);
+        let first = sink.attach(tx);
         assert!(sink.is_attached());
-        sink.detach();
+        sink.detach(first);
         assert!(!sink.is_attached());
         TapWriter(sink.clone()).write_all(b"gone").unwrap();
         assert!(rx.try_recv().is_err());
         assert_eq!(sink.backlog(), b"gone");
+    }
+
+    /// A connection that ends after another has attached must not take
+    /// the newer client with it.
+    #[test]
+    fn a_stale_detach_leaves_the_newer_client_attached() {
+        let sink = DebugSink::new();
+        let (tx1, _rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let first = sink.attach(tx1);
+        let _second = sink.attach(tx2);
+        sink.detach(first);
+        assert!(sink.is_attached());
+        sink.output(b"!");
+        assert_eq!(rx2.try_recv().unwrap(), Outbound::Output(b"!".to_vec()));
     }
 
     /// A client that hung up is forgotten on the next delivery, so a dead
