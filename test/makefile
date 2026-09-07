@@ -150,7 +150,7 @@ ray703-blank-disc:
 	$(MKDISC703) $(RAY703_DISKS)/ray703-disc0.img
 
 ray703-test: ray703-demo
-	./run_ray703_demo_test.sh
+	./run_ray703_demo_test.py
 
 ray703-basic-test: ray703-basic
 	./run_ray703_basic_test.sh

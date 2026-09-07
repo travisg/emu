@@ -8,6 +8,7 @@ programs they drive.
 ## Layout
 
     run_*.sh        the end-to-end harnesses -- one per machine and per feature
+    run_*.py        the same, driving the emulator over its debug port
     makefile        builds the guest programs, and has a target per harness
     6809/           guest sources and test data for the 6809
     703/            everything Raytheon 703; see 703/README.md
@@ -19,8 +20,11 @@ it uses to reach `target/` and `roms/`.
 ## Running them
 
 Build the emulator first (`cargo build`); the harnesses run the debug binary
-unless `EMU_BIN` says otherwise. Each writes a log beside itself and greps it
-for the guest's own report of success.
+unless `EMU_BIN` says otherwise. Each writes a log beside itself. The shell
+ones drive the emulator through a pty and grep the log for the guest's own
+report of success; the python one talks to the emulator's debug port
+(`tools/emudbg.py`) instead, reads the guest's output from there and takes
+the halt from the port's stop event, so it needs no pty and no `script(1)`.
 
     make -C test basic6809-test      # boots 6809 BASIC, runs 6809/lang_test.bas
     make -C test ray703-test         # the 703 demo: banner, echo, clean halt
