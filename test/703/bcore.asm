@@ -49,7 +49,10 @@
 ;               anything else advances it; PRINT's comma zones read it
 ;   T.INPP      cell: the line buffer fill pointer, a byte address
 ;   T.BRK       cell: Ctrl-C was seen; B.STEP0 polls it between
-;               statements and B.BREAK clears it
+;               statements, B.BREAK clears it, and so does the READY
+;               loop once a line is in -- a break belongs to a run, so
+;               one that arrived with nothing running is spent there
+;               rather than taken by whatever runs next
 ;   K.LBUFA     cell: W.LBUF*2, the line buffer as a byte address
 ;
 ; Ground rules, program-wide -- the wrapper's driver follows them too
@@ -146,6 +149,16 @@ B.COLD          LDW     K1.HEAP         ; empty program
 B.RLOOP         LDW     K1.RDYD         ; prompt; the scripted harness paces
                 JSX     M.MSG           ; its typing on this string
                 JSX     T.GETL
+                CLR                     ; a break belongs to a run: one that
+                SMB     T.BRK           ; arrived while the prompt was up, or
+                STW     T.BRK           ; while this line was being typed, is
+                                        ; spent here rather than kept for
+                                        ; whatever runs next.  The SMB stays;
+                                        ; see B.STEP0.  S.INPUT's own T.GETL
+                                        ; is deliberately not cleared after:
+                                        ; a program waiting at INPUT is
+                                        ; running, and Ctrl-C must still
+                                        ; break it.
                 LDW     K1.LBUFA
                 STW     L.TXTPTR
                 JSX     P.PEEK

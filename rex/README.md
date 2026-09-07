@@ -124,8 +124,10 @@ then waits on it -- reading no queue -- until the task's `K.EXIT` clears
 it and wakes the shell. Ctrl-C never enters the queue at all: the service
 routine raises the kernel's `BRKREQ` instead (BASIC's break check reads it
 through the `T.BRK` alias), so a running program that reads nothing can
-still be broken, and the grant clears the flag so a stray break cannot
-land on the session that follows. `STOP`/`START` cannot name the shell or
+still be broken. A break belongs to a run: the
+interpreter spends the flag at its `READY` loop, once the line is in, so
+one typed while the prompt was up is not kept for whatever runs next.
+`STOP`/`START` cannot name the shell or
 a loaded task -- only nodes with a letter -- because stopping the console's
 owner would leave the shell waiting on a hand-back nobody can make. **The
 pool is owned word by word**: every block carries the node that asked for
