@@ -16,10 +16,10 @@
 //! Those two are a 256-entry `OpDecode` table plus a handful of shared
 //! operation handlers, because their opcode maps really are a cross product of
 //! (operation x addressing mode x target register). The Z80's is not: the
-//! DD/FD prefix changes what an opcode *means* per-opcode, and whether an
-//! instruction "consumes" the prefix decides whether the run continues at all
-//! (see [`CpuZ80::step`]). A 256-entry table would end up one bespoke entry per
-//! opcode -- a switch statement wearing a table costume.
+//! DD/FD prefix changes what an opcode *means* per-opcode -- an operand slot
+//! here, a register half there, nothing at all elsewhere (see
+//! [`CpuZ80::exec_base`]). A 256-entry table would end up one bespoke entry
+//! per opcode -- a switch statement wearing a table costume.
 //!
 //! What does factor cleanly is the *operation*, once the operand is in hand.
 //! So the decode is the standard `x/y/z/p/q` bit split of the opcode, and the
@@ -46,24 +46,36 @@
 //! included. What is left undecoded on the ED page is genuinely undefined, and
 //! ends the run.
 //!
-//! Deliberate quirks, each marked at its use site: most CB shifts ignore an
-//! active DD/FD prefix and then abort; `HALT` is a `NOP`, because no machine
-//! here can wake a halted CPU and halting would deadlock the run rather than
-//! end it; `RETI` is a plain `RET`, with nothing daisy-chained to notify;
-//! `RLC`/`RES`/`SET` have the undocumented register writeback.
+//! The undocumented side is modelled to the extent an instruction exerciser
+//! can see it: the flag register's bits 3 and 5 (copies of the result's, or
+//! of the operand's for `CP`, of the address's for `BIT n, (HL)`), the
+//! halves of IX/IY as registers, every `DD CB` operation with its register
+//! writeback, the block-I/O flags, the `MEMPTR` register (`wz`) that `BIT n,
+//! (HL)` leaks, and the R refresh counter. A DD/FD prefix on an instruction
+//! that has no use for it is what it is on silicon: four T-states and
+//! nothing else.
+//!
+//! Deliberate quirks, each marked at its use site: `HALT` is a `NOP`, because
+//! no machine here can wake a halted CPU and halting would deadlock the run
+//! rather than end it; `RETI` is a plain `RET`, with nothing daisy-chained to
+//! notify.
 
 use super::{Addressing, Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
 use std::io::Write;
 
-// Flag bits, matching the C++ `Flag` enum. Bits 3 and 5 (F3/F5) exist on real
-// silicon but the C++ never writes them, so neither do we.
+// Flag bits. X and Y (bits 3 and 5) are the undocumented pair: unused by any
+// condition, but written by every flag-setting instruction, so a guest that
+// pushes AF or an exerciser that CRCs it sees them.
 const F_C: u8 = 1 << 0;
 const F_N: u8 = 1 << 1;
 const F_PV: u8 = 1 << 2;
+const F_X: u8 = 1 << 3;
 const F_H: u8 = 1 << 4;
+const F_Y: u8 = 1 << 5;
 const F_Z: u8 = 1 << 6;
 const F_S: u8 = 1 << 7;
+const F_XY: u8 = F_X | F_Y;
 
 /// The eight 8-bit ALU operations, indexed by the opcode's `y` field.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -168,18 +180,6 @@ const ED_CYCLES: [u8; 256] = [
          0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // fx
 ];
 
-/// Which DD/FD prefix an instruction actually made use of.
-///
-/// The C++ carries two `consume_mPrefix*` locals and errors out at the end of
-/// the instruction if a prefix was set but never consumed. Both can be set at
-/// once (`DD FD 21 ...` sets both prefixes, and only one of them can be
-/// consumed), so this stays two independent flags rather than an enum.
-#[derive(Copy, Clone, Default)]
-struct PrefixUse {
-    dd: bool,
-    fd: bool,
-}
-
 #[derive(Clone)]
 pub struct CpuZ80 {
     a: u8,
@@ -211,11 +211,18 @@ pub struct CpuZ80 {
     i: u8,
     r: u8,
 
-    /// Active DD/FD prefix. Struct state rather than locals because
+    /// Active DD/FD prefix, at most one of them: a later prefix byte
+    /// replaces an earlier one. Struct state rather than locals because
     /// [`read_r`](CpuZ80::read_r) and [`write_r`](CpuZ80::write_r) consult it
     /// to remap `H`/`L` onto the halves of IX/IY.
     prefix_dd: bool,
     prefix_fd: bool,
+
+    /// `MEMPTR` -- the internal address latch (WZ), which the silicon leaks
+    /// through `BIT n, (HL)`: that instruction's X and Y come from its high
+    /// byte. Every instruction that puts an address through the latch sets
+    /// it, following the memptr_eng.txt description; nothing else reads it.
+    wz: u16,
 
     /// T-states the last `step()` consumed, for `last_step_cycles`.
     cycles: u32,
@@ -254,6 +261,7 @@ impl Default for CpuZ80 {
             r: 0,
             prefix_dd: false,
             prefix_fd: false,
+            wz: 0,
             cycles: 0,
         }
     }
@@ -347,28 +355,47 @@ impl CpuZ80 {
         }
     }
 
+    /// The HL slot of a register-pair encoding: IX or IY under a prefix.
+    fn hl_or_index(&self) -> u16 {
+        if self.prefix_dd {
+            self.ix
+        } else if self.prefix_fd {
+            self.iy
+        } else {
+            self.hl()
+        }
+    }
+
+    fn write_hl_or_index(&mut self, val: u16) {
+        if self.prefix_dd {
+            self.ix = val;
+        } else if self.prefix_fd {
+            self.iy = val;
+        } else {
+            self.set_hl(val);
+        }
+    }
+
     // ---- 8-bit register file ----
 
     /// The `r` encoding. Under a DD/FD prefix, `H` and `L` are remapped onto
-    /// the halves of IX/IY -- which is what makes the prefix flags struct state
-    /// rather than locals. Note this happens whether or not the instruction
-    /// goes on to *consume* the prefix: the undocumented `ADD A, IXh` reads the
-    /// remapped half and only then aborts the run at end-of-instruction.
+    /// the halves of IX/IY -- the undocumented `IXh`/`IXl` registers, which
+    /// is what makes the prefix flags struct state rather than locals.
     fn read_r(&self, r: u8) -> u8 {
-        if self.prefix_dd {
-            match r {
-                0b100 => return (self.ix >> 8) as u8,
-                0b101 => return self.ix as u8,
-                _ => {}
-            }
-        } else if self.prefix_fd {
-            match r {
-                0b100 => return (self.iy >> 8) as u8,
-                0b101 => return self.iy as u8,
-                _ => {}
-            }
+        match r {
+            0b100 if self.prefix_dd => (self.ix >> 8) as u8,
+            0b101 if self.prefix_dd => self.ix as u8,
+            0b100 if self.prefix_fd => (self.iy >> 8) as u8,
+            0b101 if self.prefix_fd => self.iy as u8,
+            _ => self.read_r_plain(r),
         }
+    }
 
+    /// The `r` encoding with H and L meaning H and L whatever the prefix.
+    /// An instruction whose prefix is spent on an `(IX+d)` operand -- `LD r,
+    /// (IX+d)`, `LD (IX+d), r`, the `DD CB` writebacks -- names the plain
+    /// register with the other operand: `DD 66 d` is `LD H, (IX+d)`.
+    fn read_r_plain(&self, r: u8) -> u8 {
         match r {
             0b000 => self.b,
             0b001 => self.c,
@@ -384,32 +411,16 @@ impl CpuZ80 {
     }
 
     fn write_r(&mut self, r: u8, val: u8) {
-        if self.prefix_dd {
-            match r {
-                0b100 => {
-                    self.ix = (self.ix & 0x00ff) | ((val as u16) << 8);
-                    return;
-                }
-                0b101 => {
-                    self.ix = (self.ix & 0xff00) | val as u16;
-                    return;
-                }
-                _ => {}
-            }
-        } else if self.prefix_fd {
-            match r {
-                0b100 => {
-                    self.iy = (self.iy & 0x00ff) | ((val as u16) << 8);
-                    return;
-                }
-                0b101 => {
-                    self.iy = (self.iy & 0xff00) | val as u16;
-                    return;
-                }
-                _ => {}
-            }
+        match r {
+            0b100 if self.prefix_dd => self.ix = (self.ix & 0x00ff) | ((val as u16) << 8),
+            0b101 if self.prefix_dd => self.ix = (self.ix & 0xff00) | val as u16,
+            0b100 if self.prefix_fd => self.iy = (self.iy & 0x00ff) | ((val as u16) << 8),
+            0b101 if self.prefix_fd => self.iy = (self.iy & 0xff00) | val as u16,
+            _ => self.write_r_plain(r, val),
         }
+    }
 
+    fn write_r_plain(&mut self, r: u8, val: u8) {
         match r {
             0b000 => self.b = val,
             0b001 => self.c = val,
@@ -472,11 +483,25 @@ impl CpuZ80 {
         self.read_n(bus) as i8
     }
 
-    /// `(IX+d)` / `(IY+d)`, picked by whichever prefix is active.
-    fn indexed_addr(&mut self, bus: &mut dyn Bus, use_ix: bool) -> u16 {
-        let base = if use_ix { self.ix } else { self.iy };
+    /// Whether a DD/FD prefix is active.
+    fn indexed(&self) -> bool {
+        self.prefix_dd || self.prefix_fd
+    }
+
+    /// `(IX+d)` / `(IY+d)`, picked by whichever prefix is active: reads the
+    /// displacement, and puts the address through MEMPTR.
+    fn indexed_addr(&mut self, bus: &mut dyn Bus) -> u16 {
+        let base = if self.prefix_dd { self.ix } else { self.iy };
         let d = self.read_d(bus);
-        base.wrapping_add(d as u16)
+        let addr = base.wrapping_add(d as u16);
+        self.wz = addr;
+        addr
+    }
+
+    /// One M1 cycle's worth of refresh: R's low seven bits count opcode
+    /// fetches, prefix bytes included; bit 7 is only ever written by `LD R, A`.
+    fn bump_r(&mut self) {
+        self.r = (self.r & 0x80) | (self.r.wrapping_add(1) & 0x7f);
     }
 
     fn push8(&mut self, bus: &mut dyn Bus, val: u8) {
@@ -524,10 +549,19 @@ impl CpuZ80 {
         self.set_flag(F_Z, val == 0);
     }
 
+    /// The undocumented X and Y flags, copied from bits 3 and 5 of `val` --
+    /// the result for most instructions; the operand for `CP`, the high byte
+    /// of an address for `BIT n, (HL)` and `BIT n, (IX+d)`, and a derived
+    /// byte for the block operations.
+    fn set_xy(&mut self, val: u8) {
+        self.f = (self.f & !F_XY) | (val & F_XY);
+    }
+
     /// The logical-operation flag set: S, Z and parity from the result, H/N/C
     /// cleared. `AND` re-sets H afterwards.
     fn set_logic_flags(&mut self, val: u8) {
         self.set_sz(val);
+        self.set_xy(val);
         self.set_flag(F_PV, parity(val));
         self.set_flag(F_H, false);
         self.set_flag(F_N, false);
@@ -565,6 +599,7 @@ impl CpuZ80 {
                 self.set_flag(F_PV, ((a ^ res) & (val ^ res) & 0x80) != 0);
                 self.set_flag(F_N, false);
                 self.set_flag(F_C, a as u16 + val as u16 > 0xff);
+                self.set_xy(res);
                 self.a = res;
             }
             AluOp::Adc => {
@@ -575,6 +610,7 @@ impl CpuZ80 {
                 self.set_flag(F_PV, ((a ^ res) & (val ^ res) & 0x80) != 0);
                 self.set_flag(F_H, (a ^ res ^ val) & 0x10 != 0);
                 self.set_sz(res);
+                self.set_xy(res);
                 self.a = res;
             }
             AluOp::Sub | AluOp::Cp => {
@@ -585,9 +621,13 @@ impl CpuZ80 {
                 self.set_flag(F_PV, ((a ^ val) & (a ^ res) & 0x80) != 0);
                 self.set_flag(F_N, true);
                 self.set_flag(F_C, a < val);
-                // CP is SUB without the writeback
+                // CP is SUB without the writeback -- and its X/Y come from
+                // the operand, the one place they are not the result's
                 if op == AluOp::Sub {
+                    self.set_xy(res);
                     self.a = res;
+                } else {
+                    self.set_xy(val);
                 }
             }
             AluOp::Sbc => {
@@ -598,6 +638,7 @@ impl CpuZ80 {
                 self.set_flag(F_PV, ((a ^ val) & (a ^ res) & 0x80) != 0);
                 self.set_flag(F_H, (a ^ res ^ val) & 0x10 != 0);
                 self.set_sz(res);
+                self.set_xy(res);
                 self.a = res;
             }
             AluOp::And => {
@@ -638,26 +679,19 @@ impl CpuZ80 {
         self.set_flag(F_N, false);
         self.set_flag(F_PV, parity(res));
         self.set_sz(res);
+        self.set_xy(res);
         res
     }
 
     /// The operand of an 8-bit ALU instruction.
     ///
     /// Fetch stays out of [`alu`](CpuZ80::alu) because this is where the prefix
-    /// rules live: only the `(HL)` slot has an indexed form that consumes the
-    /// prefix. `DD 84` (the undocumented `ADD A, IXh`) takes the last branch,
-    /// reads the remapped register, and then ends the run at the
-    /// end-of-instruction prefix check -- exactly as the C++ does.
-    fn alu_operand(&mut self, bus: &mut dyn Bus, r: u8, used: &mut PrefixUse) -> u8 {
-        if self.prefix_dd && r == 0b110 {
-            let addr = self.indexed_addr(bus, true);
-            used.dd = true;
+    /// rules live: the `(HL)` slot becomes `(IX+d)`, and H and L become the
+    /// index register's halves (`DD 84` is `ADD A, IXh`).
+    fn alu_operand(&mut self, bus: &mut dyn Bus, r: u8) -> u8 {
+        if r == 0b110 && self.indexed() {
+            let addr = self.indexed_addr(bus);
             self.cycles += 8; // the displacement fetch and index add
-            self.mem_read(bus, addr)
-        } else if self.prefix_fd && r == 0b110 {
-            let addr = self.indexed_addr(bus, false);
-            used.fd = true;
-            self.cycles += 8;
             self.mem_read(bus, addr)
         } else {
             self.read_r_or_hl(bus, r)
@@ -665,7 +699,7 @@ impl CpuZ80 {
     }
 
     /// `INC r` and `DEC r`, which differ only in the direction and three flags.
-    fn inc_dec_r(&mut self, bus: &mut dyn Bus, r: u8, used: &mut PrefixUse, inc: bool) {
+    fn inc_dec_r(&mut self, bus: &mut dyn Bus, r: u8, inc: bool) {
         let bump = |v: u8| {
             if inc {
                 v.wrapping_add(1)
@@ -674,19 +708,11 @@ impl CpuZ80 {
             }
         };
 
-        let (old, new) = if self.prefix_dd && r == 0b110 {
-            let addr = self.indexed_addr(bus, true);
+        let (old, new) = if r == 0b110 && self.indexed() {
+            let addr = self.indexed_addr(bus);
             let old = self.mem_read(bus, addr);
             self.mem_write(bus, addr, bump(old));
-            used.dd = true;
             self.cycles += 8; // the displacement fetch and index add
-            (old, bump(old))
-        } else if self.prefix_fd && r == 0b110 {
-            let addr = self.indexed_addr(bus, false);
-            let old = self.mem_read(bus, addr);
-            self.mem_write(bus, addr, bump(old));
-            used.fd = true;
-            self.cycles += 8;
             (old, bump(old))
         } else {
             let old = self.read_r_or_hl(bus, r);
@@ -696,6 +722,7 @@ impl CpuZ80 {
 
         self.set_flag(F_PV, old == if inc { 0x7f } else { 0x80 });
         self.set_sz(new);
+        self.set_xy(new);
         self.set_flag(F_N, !inc);
         self.set_flag(
             F_H,
@@ -716,7 +743,12 @@ impl CpuZ80 {
     /// This page is complete -- every one of the 256 values decodes to
     /// something, so there is no `BadOpcode` path here. `0xcb`, `0xdd`, `0xed`
     /// and `0xfd` never arrive: `step` peels them off first.
-    fn exec_base(&mut self, bus: &mut dyn Bus, op: u8, used: &mut PrefixUse) -> StepResult {
+    ///
+    /// Under a DD/FD prefix the `(HL)` operand slot means `(IX+d)`, H and L
+    /// mean the index register's halves, and the HL register pair means the
+    /// index register -- and an instruction with none of those is simply
+    /// itself, four T-states dearer.
+    fn exec_base(&mut self, bus: &mut dyn Bus, op: u8) -> StepResult {
         let x = op >> 6;
         let y = (op >> 3) & 0b111;
         let z = op & 0b111;
@@ -741,6 +773,7 @@ impl CpuZ80 {
                     self.b = self.b.wrapping_sub(1);
                     if self.b != 0 {
                         self.pc = self.pc.wrapping_add(rel as u16);
+                        self.wz = self.pc;
                         self.cycles += 5; // 13 taken, 8 not
                     }
                 }
@@ -748,12 +781,14 @@ impl CpuZ80 {
                     // JR e
                     let rel = self.read_d(bus);
                     self.pc = self.pc.wrapping_add(rel as u16);
+                    self.wz = self.pc;
                 }
                 // JR cc, e -- NZ, Z, NC, C, which are conditions 0..3
                 _ => {
                     let rel = self.read_d(bus);
                     if self.test_cond(y - 4) {
                         self.pc = self.pc.wrapping_add(rel as u16);
+                        self.wz = self.pc;
                         self.cycles += 5; // 12 taken, 7 not
                     }
                 }
@@ -761,106 +796,74 @@ impl CpuZ80 {
 
             (0, 1) => {
                 if q == 0 {
-                    // LD dd, nn -- only the HL slot has an IX/IY form
-                    if self.prefix_dd && p == 0b10 {
-                        self.ix = self.read_nn(bus);
-                        used.dd = true;
-                    } else if self.prefix_fd && p == 0b10 {
-                        self.iy = self.read_nn(bus);
-                        used.fd = true;
+                    // LD dd, nn -- the HL slot is the index register under a prefix
+                    let nn = self.read_nn(bus);
+                    if p == 0b10 {
+                        self.write_hl_or_index(nn);
                     } else {
-                        let nn = self.read_nn(bus);
                         self.write_dd(p, nn);
                     }
                 } else {
-                    // ADD HL, ss. Only C, N and H are touched.
-                    let mut ss = self.read_dd(p);
-                    let (base, prefixed) = if self.prefix_dd {
-                        used.dd = true;
-                        (self.ix, true)
-                    } else if self.prefix_fd {
-                        used.fd = true;
-                        (self.iy, true)
-                    } else {
-                        (self.hl(), false)
-                    };
-                    if prefixed && p == 0b10 {
-                        ss = base; // ADD IX, IX / ADD IY, IY
-                    }
+                    // ADD HL, ss. Only C, N, H and the X/Y copies are
+                    // touched; S, Z and PV survive. Under a prefix both the
+                    // HL operand and the HL slot of ss are the index
+                    // register (ADD IX, IX), never a mix.
+                    let base = self.hl_or_index();
+                    let ss = if p == 0b10 { base } else { self.read_dd(p) };
                     let res = base as u32 + ss as u32;
+                    self.wz = base.wrapping_add(1);
                     self.set_flag(F_C, res > 0xffff);
                     self.set_flag(F_N, false);
                     self.set_flag(F_H, (base & 0xfff) + (ss & 0xfff) > 0xfff);
-                    if self.prefix_dd {
-                        self.ix = res as u16;
-                    } else if self.prefix_fd {
-                        self.iy = res as u16;
-                    } else {
-                        self.set_hl(res as u16);
-                    }
+                    self.set_xy((res >> 8) as u8);
+                    self.write_hl_or_index(res as u16);
                 }
             }
 
+            // The accumulator and register-pair loads through an address.
+            // MEMPTR takes the address plus one, except that a store of A
+            // puts A in its high byte (the silicon reuses the latch for the
+            // data), with only the low byte incremented.
             (0, 2) => match y {
-                0 => {
-                    // LD (BC), A
-                    let (addr, a) = (self.bc(), self.a);
+                0 | 2 => {
+                    // LD (BC), A / LD (DE), A
+                    let addr = if y == 0 { self.bc() } else { self.de() };
+                    let a = self.a;
                     self.mem_write(bus, addr, a);
+                    self.wz = ((a as u16) << 8) | (addr.wrapping_add(1) & 0xff);
                 }
-                1 => {
-                    // LD A, (BC)
-                    let addr = self.bc();
+                1 | 3 => {
+                    // LD A, (BC) / LD A, (DE)
+                    let addr = if y == 1 { self.bc() } else { self.de() };
                     self.a = self.mem_read(bus, addr);
-                }
-                2 => {
-                    // LD (DE), A
-                    let (addr, a) = (self.de(), self.a);
-                    self.mem_write(bus, addr, a);
-                }
-                3 => {
-                    // LD A, (DE)
-                    let addr = self.de();
-                    self.a = self.mem_read(bus, addr);
+                    self.wz = addr.wrapping_add(1);
                 }
                 4 => {
                     // LD (nn), HL
                     let addr = self.read_nn(bus);
-                    if self.prefix_dd {
-                        bus.write16(addr as u32, self.ix, Endian::Little);
-                        used.dd = true;
-                    } else if self.prefix_fd {
-                        bus.write16(addr as u32, self.iy, Endian::Little);
-                        used.fd = true;
-                    } else {
-                        let (l, h) = (self.l, self.h);
-                        self.mem_write(bus, addr, l);
-                        self.mem_write(bus, addr.wrapping_add(1), h);
-                    }
+                    let val = self.hl_or_index();
+                    bus.write16(addr as u32, val, Endian::Little);
+                    self.wz = addr.wrapping_add(1);
                 }
                 5 => {
                     // LD HL, (nn)
                     let addr = self.read_nn(bus);
-                    if self.prefix_dd {
-                        self.ix = bus.read16(addr as u32, Endian::Little);
-                        used.dd = true;
-                    } else if self.prefix_fd {
-                        self.iy = bus.read16(addr as u32, Endian::Little);
-                        used.fd = true;
-                    } else {
-                        self.l = self.mem_read(bus, addr);
-                        self.h = self.mem_read(bus, addr.wrapping_add(1));
-                    }
+                    let val = bus.read16(addr as u32, Endian::Little);
+                    self.write_hl_or_index(val);
+                    self.wz = addr.wrapping_add(1);
                 }
                 6 => {
                     // LD (nn), A
                     let addr = self.read_nn(bus);
                     let a = self.a;
                     self.mem_write(bus, addr, a);
+                    self.wz = ((a as u16) << 8) | (addr.wrapping_add(1) & 0xff);
                 }
                 _ => {
                     // LD A, (nn)
                     let addr = self.read_nn(bus);
                     self.a = self.mem_read(bus, addr);
+                    self.wz = addr.wrapping_add(1);
                 }
             },
 
@@ -873,84 +876,51 @@ impl CpuZ80 {
                         v.wrapping_sub(1)
                     }
                 };
-                if self.prefix_dd && p == 0b10 {
-                    self.ix = bump(self.ix);
-                    used.dd = true;
-                } else if self.prefix_fd && p == 0b10 {
-                    self.iy = bump(self.iy);
-                    used.fd = true;
+                if p == 0b10 {
+                    let val = self.hl_or_index();
+                    self.write_hl_or_index(bump(val));
                 } else {
                     let val = self.read_dd(p);
                     self.write_dd(p, bump(val));
                 }
             }
 
-            (0, 4) => self.inc_dec_r(bus, y, used, true), // INC r
-            (0, 5) => self.inc_dec_r(bus, y, used, false), // DEC r
+            (0, 4) => self.inc_dec_r(bus, y, true), // INC r
+            (0, 5) => self.inc_dec_r(bus, y, false), // DEC r
 
             (0, 6) => {
-                if y == 0b110 {
-                    // LD (HL), n. The indexed forms read two immediates: the
-                    // displacement first, then the value.
-                    if self.prefix_dd {
-                        let addr = self.indexed_addr(bus, true);
-                        let val = self.read_n(bus);
-                        self.mem_write(bus, addr, val);
-                        used.dd = true;
-                        // +5, not the usual +8: the d and n fetches overlap,
-                        // so the whole thing is 19 = 4 prefix + 10 base + 5
-                        self.cycles += 5;
-                    } else if self.prefix_fd {
-                        let addr = self.indexed_addr(bus, false);
-                        let val = self.read_n(bus);
-                        self.mem_write(bus, addr, val);
-                        used.fd = true;
-                        self.cycles += 5;
-                    } else {
-                        let val = self.read_n(bus);
-                        let addr = self.hl();
-                        self.mem_write(bus, addr, val);
-                    }
-                } else {
-                    // LD r, n. Under a prefix, r = H/L writes the IX/IY half
-                    // and then aborts, since nothing consumes the prefix.
+                if y == 0b110 && self.indexed() {
+                    // LD (IX+d), n reads two immediates: the displacement
+                    // first, then the value.
+                    let addr = self.indexed_addr(bus);
                     let val = self.read_n(bus);
-                    self.write_r(y, val);
+                    self.mem_write(bus, addr, val);
+                    // +5, not the usual +8: the d and n fetches overlap,
+                    // so the whole thing is 19 = 4 prefix + 10 base + 5
+                    self.cycles += 5;
+                } else {
+                    // LD r, n -- and LD IXh, n under a prefix
+                    let val = self.read_n(bus);
+                    self.write_r_or_hl(bus, y, val);
                 }
             }
 
             (0, 7) => match y {
-                0 => {
-                    // RLCA. The accumulator rotates touch only C, H and N.
+                // The accumulator rotates touch only C, H, N and the X/Y
+                // copies of the result; S, Z and PV survive.
+                0..=3 => {
                     let a = self.a;
-                    self.a = a.rotate_left(1);
-                    self.set_flag(F_C, a & 0x80 != 0);
+                    let (res, carry) = match y {
+                        0 => (a.rotate_left(1), a & 0x80 != 0),  // RLCA
+                        1 => (a.rotate_right(1), a & 0x01 != 0), // RRCA
+                        2 => ((a << 1) | self.carry(), a & 0x80 != 0), // RLA
+                        _ => ((a >> 1) | (self.carry() << 7), a & 0x01 != 0), // RRA
+                    };
+                    self.a = res;
+                    self.set_flag(F_C, carry);
                     self.set_flag(F_H, false);
                     self.set_flag(F_N, false);
-                }
-                1 => {
-                    // RRCA
-                    let a = self.a;
-                    self.a = a.rotate_right(1);
-                    self.set_flag(F_C, a & 0x01 != 0);
-                    self.set_flag(F_H, false);
-                    self.set_flag(F_N, false);
-                }
-                2 => {
-                    // RLA
-                    let a = self.a;
-                    self.a = (a << 1) | self.carry();
-                    self.set_flag(F_C, a & 0x80 != 0);
-                    self.set_flag(F_H, false);
-                    self.set_flag(F_N, false);
-                }
-                3 => {
-                    // RRA
-                    let a = self.a;
-                    self.a = (a >> 1) | (self.carry() << 7);
-                    self.set_flag(F_C, a & 0x01 != 0);
-                    self.set_flag(F_H, false);
-                    self.set_flag(F_N, false);
+                    self.set_xy(res);
                 }
                 4 => {
                     // DAA. Every flag decision reads the *old* accumulator
@@ -987,26 +957,36 @@ impl CpuZ80 {
                     );
                     let res = self.a;
                     self.set_sz(res);
+                    self.set_xy(res);
                     self.set_flag(F_PV, parity(res));
                 }
                 5 => {
                     // CPL
                     self.a = !self.a;
+                    let a = self.a;
                     self.set_flag(F_H, true);
                     self.set_flag(F_N, true);
+                    self.set_xy(a);
                 }
+                // SCF and CCF take X and Y from A. (NMOS silicon ORs in
+                // the previous flags when the instruction before did not
+                // set any; that is beyond what an exerciser checks and is
+                // not modelled.)
                 6 => {
                     // SCF
+                    let a = self.a;
                     self.set_flag(F_C, true);
                     self.set_flag(F_H, false);
                     self.set_flag(F_N, false);
+                    self.set_xy(a);
                 }
                 _ => {
                     // CCF -- H takes the *old* carry, then C inverts
-                    let c = self.flag(F_C);
+                    let (a, c) = (self.a, self.flag(F_C));
                     self.set_flag(F_H, c);
                     self.set_flag(F_C, !c);
                     self.set_flag(F_N, false);
+                    self.set_xy(a);
                 }
             },
 
@@ -1015,30 +995,22 @@ impl CpuZ80 {
                 let (dst, src) = (y, z);
                 if dst == 0b110 && src == 0b110 {
                     // HALT, treated as a NOP
-                } else if (self.prefix_dd || self.prefix_fd) && src == 0b110 {
-                    // LD r, (IX+d) / LD r, (IY+d)
-                    let addr = self.indexed_addr(bus, self.prefix_dd);
+                } else if src == 0b110 && self.indexed() {
+                    // LD r, (IX+d). The prefix is spent on the operand: the
+                    // register is the plain one (DD 66 d is LD H, (IX+d)).
+                    let addr = self.indexed_addr(bus);
                     let val = self.mem_read(bus, addr);
-                    // dst can't be (HL): that combination is HALT, above
-                    self.write_r(dst, val);
-                    used.dd = self.prefix_dd;
-                    used.fd = !self.prefix_dd;
+                    self.write_r_plain(dst, val);
                     self.cycles += 8; // the displacement fetch and index add
-                } else if self.prefix_dd && dst == 0b110 {
-                    // LD (IX+d), r -- sign-extended, as everywhere else
-                    let addr = self.indexed_addr(bus, true);
-                    let val = self.read_r(src);
+                } else if dst == 0b110 && self.indexed() {
+                    // LD (IX+d), r -- likewise the plain register
+                    let addr = self.indexed_addr(bus);
+                    let val = self.read_r_plain(src);
                     self.mem_write(bus, addr, val);
-                    used.dd = true;
-                    self.cycles += 8;
-                } else if self.prefix_fd && dst == 0b110 {
-                    // LD (IY+d), r
-                    let addr = self.indexed_addr(bus, false);
-                    let val = self.read_r(src);
-                    self.mem_write(bus, addr, val);
-                    used.fd = true;
                     self.cycles += 8;
                 } else {
+                    // register to register, with H and L remapped under a
+                    // prefix on both sides (DD 65 is LD IXh, IXl)
                     let val = self.read_r_or_hl(bus, src);
                     self.write_r_or_hl(bus, dst, val);
                 }
@@ -1046,7 +1018,7 @@ impl CpuZ80 {
 
             // ALU A, r / (HL) / (IX+d)
             (2, _) => {
-                let val = self.alu_operand(bus, z, used);
+                let val = self.alu_operand(bus, z);
                 self.alu(ALU_OPS[y as usize], val);
             }
 
@@ -1054,26 +1026,27 @@ impl CpuZ80 {
                 // RET cc
                 if self.test_cond(y) {
                     self.pc = self.pop16(bus);
+                    self.wz = self.pc;
                     self.cycles += 6; // 11 taken, 5 not
                 }
             }
 
             (3, 1) => {
                 if q == 0 {
-                    // POP qq -- the pop happens before the prefix is examined
+                    // POP qq
                     let val = self.pop16(bus);
-                    if self.prefix_dd && p == 0b10 {
-                        self.ix = val;
-                        used.dd = true;
-                    } else if self.prefix_fd && p == 0b10 {
-                        self.iy = val;
-                        used.fd = true;
+                    if p == 0b10 {
+                        self.write_hl_or_index(val);
                     } else {
                         self.write_qq(p, val);
                     }
                 } else {
                     match p {
-                        0 => self.pc = self.pop16(bus), // RET
+                        0 => {
+                            // RET
+                            self.pc = self.pop16(bus);
+                            self.wz = self.pc;
+                        }
                         1 => {
                             // EXX -- BC/DE/HL only, AF has its own instruction
                             std::mem::swap(&mut self.b, &mut self.b_alt);
@@ -1083,74 +1056,49 @@ impl CpuZ80 {
                             std::mem::swap(&mut self.h, &mut self.h_alt);
                             std::mem::swap(&mut self.l, &mut self.l_alt);
                         }
-                        2 => {
-                            // JP (HL)
-                            if self.prefix_dd {
-                                self.pc = self.ix;
-                                used.dd = true;
-                            } else if self.prefix_fd {
-                                self.pc = self.iy;
-                                used.fd = true;
-                            } else {
-                                self.pc = self.hl();
-                            }
-                        }
-                        _ => {
-                            // LD SP, HL
-                            if self.prefix_dd {
-                                self.sp = self.ix;
-                                used.dd = true;
-                            } else if self.prefix_fd {
-                                self.sp = self.iy;
-                                used.fd = true;
-                            } else {
-                                self.sp = self.hl();
-                            }
-                        }
+                        2 => self.pc = self.hl_or_index(), // JP (HL) -- MEMPTR untouched
+                        _ => self.sp = self.hl_or_index(), // LD SP, HL
                     }
                 }
             }
 
             (3, 2) => {
-                // JP cc, nn -- the target is always read, taken or not
+                // JP cc, nn -- the target is always read, taken or not, and
+                // MEMPTR takes it either way
                 let addr = self.read_nn(bus);
+                self.wz = addr;
                 if self.test_cond(y) {
                     self.pc = addr;
                 }
             }
 
             (3, 3) => match y {
-                0 => self.pc = self.read_nn(bus), // JP nn
+                0 => {
+                    // JP nn
+                    self.pc = self.read_nn(bus);
+                    self.wz = self.pc;
+                }
                 1 => unreachable!("the cb prefix is peeled off in step"),
                 2 => {
-                    // OUT (n), A
+                    // OUT (n), A -- the port is A:n, and MEMPTR takes A:n+1
                     let port = self.read_n(bus);
                     let a = self.a;
                     bus.io_write8(port as u16, a);
+                    self.wz = ((a as u16) << 8) | (port.wrapping_add(1) as u16);
                 }
                 3 => {
-                    // IN A, (n)
+                    // IN A, (n) -- MEMPTR is A:n + 1, with the A before the read
                     let port = self.read_n(bus);
+                    self.wz = (((self.a as u16) << 8) | port as u16).wrapping_add(1);
                     self.a = bus.io_read8(port as u16);
                 }
                 4 => {
-                    // EX (SP), HL
+                    // EX (SP), HL -- MEMPTR takes the value HL receives
                     let val = self.pop16(bus);
-                    if self.prefix_dd {
-                        let ix = self.ix;
-                        self.push16(bus, ix);
-                        self.ix = val;
-                        used.dd = true;
-                    } else if self.prefix_fd {
-                        let iy = self.iy;
-                        self.push16(bus, iy);
-                        self.iy = val;
-                        used.fd = true;
-                    } else {
-                        let hl = self.hl();
-                        self.push16(bus, hl);
-                        self.set_hl(val);
-                    }
+                    let old = self.hl_or_index();
+                    self.push16(bus, old);
+                    self.write_hl_or_index(val);
+                    self.wz = val;
                 }
                 5 => {
                     // EX DE, HL -- note this ignores the prefix entirely
@@ -1172,8 +1120,9 @@ impl CpuZ80 {
             },
 
             (3, 4) => {
-                // CALL cc, nn
+                // CALL cc, nn -- MEMPTR takes the target, taken or not
                 let addr = self.read_nn(bus);
+                self.wz = addr;
                 if self.test_cond(y) {
                     let pc = self.pc;
                     self.push16(bus, pc);
@@ -1185,18 +1134,8 @@ impl CpuZ80 {
             (3, 5) => {
                 if q == 0 {
                     // PUSH qq
-                    if self.prefix_dd && p == 0b10 {
-                        let ix = self.ix;
-                        self.push16(bus, ix);
-                        used.dd = true;
-                    } else if self.prefix_fd && p == 0b10 {
-                        let iy = self.iy;
-                        self.push16(bus, iy);
-                        used.fd = true;
-                    } else {
-                        let val = self.read_qq(p);
-                        self.push16(bus, val);
-                    }
+                    let val = if p == 0b10 { self.hl_or_index() } else { self.read_qq(p) };
+                    self.push16(bus, val);
                 } else {
                     // CALL nn. The other three q == 1 encodings in this column
                     // are the DD, ED and FD prefixes, already peeled off.
@@ -1204,6 +1143,7 @@ impl CpuZ80 {
                     let pc = self.pc;
                     self.push16(bus, pc);
                     self.pc = addr;
+                    self.wz = addr;
                 }
             }
 
@@ -1218,6 +1158,7 @@ impl CpuZ80 {
                 let pc = self.pc;
                 self.push16(bus, pc);
                 self.pc = (y as u16) * 8;
+                self.wz = self.pc;
             }
 
             _ => unreachable!("x is two bits and z is three"),
@@ -1226,8 +1167,11 @@ impl CpuZ80 {
         StepResult::Ok
     }
 
-    /// `INI` / `INIR` / `IND` / `INDR`.
+    /// `INI` / `INIR` / `IND` / `INDR`. MEMPTR takes BC, with the B from
+    /// before the decrement, plus or minus one.
     fn block_in(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
+        let bc = self.bc();
+        self.wz = if inc { bc.wrapping_add(1) } else { bc.wrapping_sub(1) };
         let val = bus.io_read8(self.c as u16);
         let addr = self.hl();
         self.mem_write(bus, addr, val);
@@ -1237,13 +1181,17 @@ impl CpuZ80 {
             addr.wrapping_sub(1)
         });
         self.b = self.b.wrapping_sub(1);
-        self.finish_block_repeat(repeat);
+        let c = if inc { self.c.wrapping_add(1) } else { self.c.wrapping_sub(1) };
+        self.finish_block_io(val, val as u16 + c as u16, repeat);
     }
 
     /// `OUTI` / `OTIR` / `OUTD` / `OTDR`. Note B is decremented *before* the
-    /// memory read here, unlike the input forms.
+    /// memory read here, unlike the input forms, and MEMPTR takes the
+    /// decremented BC plus or minus one.
     fn block_out(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         self.b = self.b.wrapping_sub(1);
+        let bc = self.bc();
+        self.wz = if inc { bc.wrapping_add(1) } else { bc.wrapping_sub(1) };
         let addr = self.hl();
         let val = self.mem_read(bus, addr);
         bus.io_write8(self.c as u16, val);
@@ -1252,33 +1200,48 @@ impl CpuZ80 {
         } else {
             addr.wrapping_sub(1)
         });
-        self.finish_block_repeat(repeat);
+        let l = self.l;
+        self.finish_block_io(val, val as u16 + l as u16, repeat);
     }
 
-    /// The shared tail of the IN/OUT block ops. The repeating variants force Z
-    /// set and then clear it again when they are about to repeat, which is not
-    /// the same as the single-shot `Z = (b == 0)`: it differs when B is already
-    /// zero on entry.
-    fn finish_block_repeat(&mut self, repeat: bool) {
-        if repeat {
-            self.set_flag(F_Z, true);
-            self.set_flag(F_N, true);
-            if self.b != 0 {
-                self.pc = self.pc.wrapping_sub(2); // repeat the instruction
-                self.set_flag(F_Z, false);
-                self.cycles += 5; // 21 when repeating, 16 on the last
-            }
-        } else {
-            self.set_flag(F_Z, self.b == 0);
-            self.set_flag(F_N, true);
+    /// The shared tail of the IN/OUT block ops: the flags, and the rewind.
+    ///
+    /// Only Z (B reached zero) and N (set) are documented. The rest follow
+    /// The Undocumented Z80 Documented, 4.2: S, Z, X and Y from the
+    /// decremented B; N from bit 7 of the byte transferred; H and C both
+    /// from the carry out of `k`, which is that byte plus C+1 (INI), C-1
+    /// (IND) or the new L (OUTx); PV from the parity of `k`'s low three bits
+    /// xor B. A repeating form recomputes these every iteration, so its
+    /// final flags are the last iteration's.
+    fn finish_block_io(&mut self, val: u8, k: u16, repeat: bool) {
+        let b = self.b;
+        self.set_sz(b);
+        self.set_xy(b);
+        self.set_flag(F_N, val & 0x80 != 0);
+        self.set_flag(F_H, k > 0xff);
+        self.set_flag(F_C, k > 0xff);
+        self.set_flag(F_PV, parity(((k & 7) as u8) ^ b));
+        if repeat && b != 0 {
+            self.pc = self.pc.wrapping_sub(2); // repeat the instruction
+            self.cycles += 5; // 21 when repeating, 16 on the last
         }
+    }
+
+    /// The X and Y of the block moves and compares: bit 1 and bit 3 of a
+    /// byte the silicon happens to have on its bus -- Y from bit 1, X from
+    /// bit 3, not the usual 5 and 3.
+    fn set_block_xy(&mut self, n: u8) {
+        self.set_flag(F_Y, n & 0x02 != 0);
+        self.set_flag(F_X, n & 0x08 != 0);
     }
 
     /// `LDI` / `LDIR` / `LDD` / `LDDR`.
     ///
     /// PV is "BC is still non-zero after the transfer", so it stays *set* while
     /// a repeating form has work left and clears on the final byte -- which is
-    /// how a guest spots the last iteration.
+    /// how a guest spots the last iteration. X and Y come from the byte moved
+    /// plus A. A repeating form that rewinds leaves MEMPTR at the address of
+    /// its own second byte, as the silicon does.
     fn block_move(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         let src = self.hl();
         let val = self.mem_read(bus, src);
@@ -1293,16 +1256,20 @@ impl CpuZ80 {
 
         if repeat && bc != 0 {
             self.pc = self.pc.wrapping_sub(2); // repeat the instruction
+            self.wz = self.pc.wrapping_add(1);
             self.cycles += 5; // 21 when repeating, 16 on the last
         }
 
         self.set_flag(F_H, false);
         self.set_flag(F_PV, bc != 0);
         self.set_flag(F_N, false);
+        self.set_block_xy(val.wrapping_add(self.a));
     }
 
     /// `CPI` / `CPIR` / `CPD` / `CPDR`. The comparison never writes A, and C is
-    /// left alone.
+    /// left alone. X and Y come from the difference less the half borrow.
+    /// MEMPTR steps with HL, except that a rewinding repeat leaves it at the
+    /// address of the instruction's own second byte.
     fn block_cp(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         let addr = self.hl();
         let val = self.mem_read(bus, addr);
@@ -1315,15 +1282,19 @@ impl CpuZ80 {
         } else {
             addr.wrapping_sub(1)
         });
+        self.wz = if inc { self.wz.wrapping_add(1) } else { self.wz.wrapping_sub(1) };
 
+        let half = (a & 0x0f) < (val & 0x0f);
         self.set_flag(F_S, (res & 0x80) != 0);
         self.set_flag(F_Z, res == 0);
-        self.set_flag(F_H, (a & 0x0f) < (val & 0x0f));
+        self.set_flag(F_H, half);
         self.set_flag(F_PV, bc != 0);
         self.set_flag(F_N, true);
+        self.set_block_xy(res.wrapping_sub(half as u8));
 
         if repeat && bc != 0 && res != 0 {
             self.pc = self.pc.wrapping_sub(2);
+            self.wz = self.pc.wrapping_add(1);
             self.cycles += 5; // 21 when repeating, 16 on the last
         }
     }
@@ -1331,6 +1302,7 @@ impl CpuZ80 {
     /// `RRD` and `RLD`, which differ only in which nibble goes where.
     fn rotate_decimal(&mut self, bus: &mut dyn Bus, right: bool) {
         let addr = self.hl();
+        self.wz = addr.wrapping_add(1);
         let mem = self.mem_read(bus, addr);
         let a_low = self.a & 0x0f;
 
@@ -1344,6 +1316,7 @@ impl CpuZ80 {
 
         let a = self.a;
         self.set_sz(a);
+        self.set_xy(a);
         self.set_flag(F_H, false);
         self.set_flag(F_PV, parity(a));
         self.set_flag(F_N, false);
@@ -1351,25 +1324,29 @@ impl CpuZ80 {
 
     /// The ED page.
     ///
-    /// Deliberately full of holes -- see the module comment. It also never
-    /// consumes a DD/FD prefix (the C++ has no prefix handling anywhere in this
-    /// page), so `DD ED xx` executes the instruction and *then* ends the run,
-    /// which is why this takes no `PrefixUse`.
+    /// Deliberately full of holes -- see the module comment. A DD/FD prefix
+    /// in front of it is dropped, as on silicon: `DD ED 60` is `IN H, (C)`,
+    /// with the prefix's four T-states still charged.
     fn exec_ed(&mut self, bus: &mut dyn Bus) -> StepResult {
+        self.prefix_dd = false;
+        self.prefix_fd = false;
         let op = self.read_n(bus);
+        self.bump_r();
         let y = (op >> 3) & 0b111;
         let p = y >> 1;
 
         self.cycles += ED_CYCLES[op as usize] as u32;
 
         match op {
-            // IN r, (C)
+            // IN r, (C) -- the 0x70 encoding sets the flags and keeps the byte
             0x40 | 0x48 | 0x50 | 0x58 | 0x60 | 0x68 | 0x70 | 0x78 => {
+                self.wz = self.bc().wrapping_add(1);
                 let val = bus.io_read8(self.c as u16);
                 if y != 0b110 {
                     self.write_r(y, val);
                 }
                 self.set_sz(val);
+                self.set_xy(val);
                 self.set_flag(F_PV, parity(val));
                 self.set_flag(F_H, false);
                 self.set_flag(F_N, false);
@@ -1377,6 +1354,7 @@ impl CpuZ80 {
 
             // OUT (C), r -- the 0x71 encoding writes zero, undocumented
             0x41 | 0x49 | 0x51 | 0x59 | 0x61 | 0x69 | 0x71 | 0x79 => {
+                self.wz = self.bc().wrapping_add(1);
                 let val = if y == 0b110 { 0 } else { self.read_r(y) };
                 bus.io_write8(self.c as u16, val);
             }
@@ -1387,6 +1365,7 @@ impl CpuZ80 {
                 let hl = self.hl();
                 let c = self.carry() as u32;
                 let res = (hl as u32).wrapping_sub(ss as u32).wrapping_sub(c);
+                self.wz = hl.wrapping_add(1);
 
                 self.set_flag(F_C, hl as i32 - ss as i32 - (c as i32) < 0);
                 self.set_flag(F_N, true);
@@ -1397,6 +1376,7 @@ impl CpuZ80 {
                 );
                 self.set_flag(F_Z, res as u16 == 0);
                 self.set_flag(F_S, (res & 0x8000) != 0);
+                self.set_xy((res >> 8) as u8);
                 self.set_hl(res as u16);
             }
 
@@ -1406,6 +1386,7 @@ impl CpuZ80 {
                 let hl = self.hl();
                 let c = self.carry() as u32;
                 let res = hl as u32 + ss as u32 + c;
+                self.wz = hl.wrapping_add(1);
 
                 self.set_flag(F_C, res > 0xffff);
                 self.set_flag(F_N, false);
@@ -1413,6 +1394,7 @@ impl CpuZ80 {
                 self.set_flag(F_H, (hl & 0xfff) as u32 + (ss & 0xfff) as u32 + c > 0xfff);
                 self.set_flag(F_Z, res as u16 == 0);
                 self.set_flag(F_S, (res & 0x8000) != 0);
+                self.set_xy((res >> 8) as u8);
                 self.set_hl(res as u16);
             }
 
@@ -1421,6 +1403,7 @@ impl CpuZ80 {
                 let val = self.read_dd(p);
                 let addr = self.read_nn(bus);
                 bus.write16(addr as u32, val, Endian::Little);
+                self.wz = addr.wrapping_add(1);
             }
 
             // LD dd, (nn)
@@ -1428,6 +1411,7 @@ impl CpuZ80 {
                 let addr = self.read_nn(bus);
                 let val = bus.read16(addr as u32, Endian::Little);
                 self.write_dd(p, val);
+                self.wz = addr.wrapping_add(1);
             }
 
             // NEG, with the seven undocumented aliases that decode to it on
@@ -1441,17 +1425,22 @@ impl CpuZ80 {
                 self.set_flag(F_PV, old == 0x80);
                 self.set_flag(F_N, true);
                 self.set_flag(F_C, old != 0);
+                self.set_xy(res);
                 self.a = res;
             }
 
             // RETI -- a plain RET, with no interrupt-controller notification.
             // Nothing here daisy-chains, so there is no IEO to release.
-            0x4d => self.pc = self.pop16(bus),
+            0x4d => {
+                self.pc = self.pop16(bus);
+                self.wz = self.pc;
+            }
 
             // RETN and its undocumented aliases: RET, then IFF1 is restored
             // from the copy IFF2 kept when the interrupt was accepted.
             0x45 | 0x55 | 0x5d | 0x65 | 0x6d | 0x75 | 0x7d => {
                 self.pc = self.pop16(bus);
+                self.wz = self.pc;
                 self.iff1 = self.iff2;
             }
 
@@ -1474,6 +1463,7 @@ impl CpuZ80 {
                 let a = self.a;
                 self.set_flag(F_PV, self.iff2);
                 self.set_sz(a);
+                self.set_xy(a);
                 self.set_flag(F_H, false);
                 self.set_flag(F_N, false);
             }
@@ -1513,32 +1503,18 @@ impl CpuZ80 {
     /// The CB page: rotates, shifts and bit operations.
     ///
     /// Complete -- all 256 values decode. Under a DD/FD prefix the
-    /// displacement is read here, before the opcode, and **most of the
-    /// rotates ignore the prefix**: only RLC, BIT, RES and SET have an indexed
-    /// form. The others fall through to the plain `(HL)` path and then end the
-    /// run at the prefix check, having already read the displacement and
-    /// touched `(HL)` -- so the abort is not clean, and a guest that reaches
-    /// one has already had a byte of memory rotated under it.
-    /// `(IX+d)` / `(IY+d)` for the four CB operations that honour the prefix,
-    /// marking it consumed. DD wins when both are set, which leaves FD
-    /// unconsumed and ends the run.
-    fn cb_indexed_addr(&mut self, d: i8, used: &mut PrefixUse) -> Option<u16> {
-        if self.prefix_dd {
-            used.dd = true;
-            Some(self.ix.wrapping_add(d as u16))
-        } else if self.prefix_fd {
-            used.fd = true;
-            Some(self.iy.wrapping_add(d as u16))
+    /// displacement is read here, before the opcode, and every operation
+    /// works on `(IX+d)`: the `z` field then names a register that also
+    /// receives the result (the undocumented writeback, plain H and L
+    /// included), except for `BIT`, which has nothing to write. The fourth
+    /// byte is fetched as an operand rather than an M1 cycle, so it does not
+    /// count refresh.
+    fn exec_cb(&mut self, bus: &mut dyn Bus) -> StepResult {
+        let indexed = if self.indexed() {
+            Some(self.indexed_addr(bus))
         } else {
+            self.bump_r();
             None
-        }
-    }
-
-    fn exec_cb(&mut self, bus: &mut dyn Bus, used: &mut PrefixUse) -> StepResult {
-        let d = if self.prefix_dd || self.prefix_fd {
-            self.read_d(bus)
-        } else {
-            0
         };
         let op = self.read_n(bus);
 
@@ -1547,64 +1523,66 @@ impl CpuZ80 {
         let z = op & 0b111;
 
         match x {
-            0 => {
-                // RLC is the only rotate with an indexed form; y != 0 falls
-                // through to the plain path even under a prefix, and aborts.
-                let addr = if y == 0 {
-                    self.cb_indexed_addr(d, used)
-                } else {
-                    None
-                };
-                match addr {
-                    Some(addr) => {
-                        // 23 T-states with the prefix's 4 already charged
-                        self.cycles += 19;
-                        let val = self.mem_read(bus, addr);
-                        let res = self.rot(RotOp::Rlc, val);
-                        self.mem_write(bus, addr, res);
-                        if z != 0b110 {
-                            self.write_r(z, res); // undocumented writeback
-                        }
-                    }
-                    None => {
-                        self.cycles += if z == 0b110 { 15 } else { 8 };
-                        let val = self.read_r_or_hl(bus, z);
-                        let res = self.rot(ROT_OPS[y as usize], val);
-                        self.write_r_or_hl(bus, z, res);
+            0 => match indexed {
+                Some(addr) => {
+                    self.cycles += 19; // 23 with the prefix's 4
+                    let val = self.mem_read(bus, addr);
+                    let res = self.rot(ROT_OPS[y as usize], val);
+                    self.mem_write(bus, addr, res);
+                    if z != 0b110 {
+                        self.write_r_plain(z, res); // undocumented writeback
                     }
                 }
-            }
+                None => {
+                    self.cycles += if z == 0b110 { 15 } else { 8 };
+                    let val = self.read_r_or_hl(bus, z);
+                    let res = self.rot(ROT_OPS[y as usize], val);
+                    self.write_r_or_hl(bus, z, res);
+                }
+            },
 
             1 => {
-                // BIT b, r. Neither PV nor C is touched, and S is only ever set
-                // by bit 7.
-                let val = match self.cb_indexed_addr(d, used) {
+                // BIT b, r. C is untouched, S is only ever set by bit 7, PV
+                // copies Z. X and Y are the tell: from the register for the
+                // register forms, but from the high byte of the address for
+                // `(IX+d)`, and from MEMPTR's high byte for `(HL)` -- the
+                // one place the internal latch shows through.
+                let (val, xy) = match indexed {
                     Some(addr) => {
                         self.cycles += 16; // 20 with the prefix's 4
-                        self.mem_read(bus, addr)
+                        (self.mem_read(bus, addr), (addr >> 8) as u8)
+                    }
+                    None if z == 0b110 => {
+                        self.cycles += 12;
+                        let addr = self.hl();
+                        (self.mem_read(bus, addr), (self.wz >> 8) as u8)
                     }
                     None => {
-                        self.cycles += if z == 0b110 { 12 } else { 8 };
-                        self.read_r_or_hl(bus, z)
+                        self.cycles += 8;
+                        let val = self.read_r(z);
+                        (val, val)
                     }
                 };
-                self.set_flag(F_Z, (val & (1 << y)) == 0);
+                let zero = (val & (1 << y)) == 0;
+                self.set_flag(F_Z, zero);
+                self.set_flag(F_PV, zero);
                 self.set_flag(F_H, true);
                 self.set_flag(F_N, false);
                 self.set_flag(F_S, y == 7 && (val & 0x80) != 0);
+                self.set_xy(xy);
             }
 
             // RES b, r and SET b, r -- no flags
             _ => {
                 let set = x == 3;
                 let apply = |v: u8| if set { v | (1 << y) } else { v & !(1 << y) };
-                match self.cb_indexed_addr(d, used) {
+                match indexed {
                     Some(addr) => {
                         self.cycles += 19; // 23 with the prefix's 4
                         let val = apply(self.mem_read(bus, addr));
                         self.mem_write(bus, addr, val);
                         if z != 0b110 {
-                            self.write_r(z, val); // undocumented writeback
+                            self.write_r_plain(z, val); // undocumented writeback
                         }
                     }
                     None => {
@@ -1636,7 +1614,6 @@ impl Cpu for CpuZ80 {
         self.prefix_dd = false;
         self.prefix_fd = false;
         self.cycles = 0;
-        let mut used = PrefixUse::default();
 
         // Interrupt entry. The RC2014's SIO is the one thing that drives this:
         // its console input is interrupt-driven and works no other way. IM 0
@@ -1648,24 +1625,27 @@ impl Cpu for CpuZ80 {
             self.iff1 = false;
             self.iff2 = false;
             // The IM 1 acknowledge is 13 T-states; the RST arm below charges
-            // its fetched cost of 11, and no opcode fetch happened here.
+            // its fetched cost of 11, and no opcode fetch happened here --
+            // though the acknowledge cycle is an M1 for refresh.
             self.cycles += 2;
+            self.bump_r();
             0xff // rst 0x38
         } else {
-            // DD and FD can stack. Both stick, and DD wins the register remap
-            // in read_r/write_r; but only one of them can be consumed, so
-            // `DD FD 21 nn nn` loads IX and then ends the run below.
-            // Each prefix byte is its own 4 T-state fetch, so the charge is
-            // per loop iteration -- the flags can't count repeats.
+            // A run of DD/FD prefixes: each is its own 4 T-state M1 cycle,
+            // and the last one is the one that counts -- `DD FD 21 nn nn`
+            // is `LD IY, nn` with a four-cycle DD in front of it.
             loop {
                 let op = self.read_n(bus);
+                self.bump_r();
                 match op {
                     0xdd => {
                         self.prefix_dd = true;
+                        self.prefix_fd = false;
                         self.cycles += 4;
                     }
                     0xfd => {
                         self.prefix_fd = true;
+                        self.prefix_dd = false;
                         self.cycles += 4;
                     }
                     _ => break op,
@@ -1675,24 +1655,11 @@ impl Cpu for CpuZ80 {
 
         let result = match op {
             0xed => self.exec_ed(bus),
-            0xcb => self.exec_cb(bus, &mut used),
-            _ => self.exec_base(bus, op, &mut used),
+            0xcb => self.exec_cb(bus),
+            _ => self.exec_base(bus, op),
         };
         if result != StepResult::Ok {
             return result;
-        }
-
-        // An instruction that saw a DD/FD prefix but did nothing with it ends
-        // the run. This is not a corner case: most DD/FD combinations land
-        // here, several of them after already reading operands and writing
-        // memory, so it decides trace *length* as well as content.
-        if self.prefix_dd && !used.dd {
-            eprintln!("unhandled opcode dd prefix");
-            return StepResult::BadOpcode;
-        }
-        if self.prefix_fd && !used.fd {
-            eprintln!("unhandled opcode fd prefix");
-            return StepResult::BadOpcode;
         }
 
         // Nothing costs less than the 4 T-states of the opcode fetch. A path
@@ -1733,6 +1700,7 @@ impl Cpu for CpuZ80 {
             Register::new("IM", self.im, 2),
             Register::new("IFF1", self.iff1 as u8, 1),
             Register::new("IFF2", self.iff2 as u8, 1),
+            Register::new("WZ", self.wz, 16),
         ]
     }
 
@@ -1757,6 +1725,7 @@ impl Cpu for CpuZ80 {
             "IM" => self.im = lo & 3,
             "IFF1" => self.iff1 = value & 1 != 0,
             "IFF2" => self.iff2 = value & 1 != 0,
+            "WZ" => self.wz = w,
             _ => return false,
         }
         true
@@ -1768,12 +1737,14 @@ impl Cpu for CpuZ80 {
 
     fn dump(&self) {
         println!(
-            "f 0x{:02x} ({}{}{}{}{}{}) a 0x{:02x} b 0x{:02x} c 0x{:02x} d 0x{:02x} e 0x{:02x} h 0x{:02x} l 0x{:02x} sp 0x{:04x} ix 0x{:04x} iy 0x{:04x} pc 0x{:04x}",
+            "f 0x{:02x} ({}{}{}{}{}{}{}{}) a 0x{:02x} b 0x{:02x} c 0x{:02x} d 0x{:02x} e 0x{:02x} h 0x{:02x} l 0x{:02x} sp 0x{:04x} ix 0x{:04x} iy 0x{:04x} pc 0x{:04x}",
             self.f,
             if self.flag(F_C) { 'c' } else { ' ' },
             if self.flag(F_N) { 'n' } else { ' ' },
             if self.flag(F_PV) { 'p' } else { ' ' },
+            if self.flag(F_X) { 'x' } else { ' ' },
             if self.flag(F_H) { 'h' } else { ' ' },
+            if self.flag(F_Y) { 'y' } else { ' ' },
             if self.flag(F_Z) { 'z' } else { ' ' },
             if self.flag(F_S) { 's' } else { ' ' },
             self.a, self.b, self.c, self.d, self.e, self.h, self.l,
@@ -2104,14 +2075,216 @@ mod tests {
     /// run -- not an error path so much as the decode's shape, since it decides
     /// how far a run gets.
     #[test]
-    fn an_unconsumed_index_prefix_stops_the_run() {
-        let (mut cpu, mut bus) = boot(&[0xdd, 0x00]); // dd nop
-        assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
+    /// A DD/FD in front of an instruction that has no use for it is four
+    /// T-states and nothing else; a run of them counts each, and the last
+    /// one decides the index register.
+    fn an_index_prefix_without_a_use_is_only_its_fetch() {
+        let (mut cpu, mut bus) = boot(&[0xdd, 0x00, 0x00]); // dd nop
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.pc, 2);
+        assert_eq!(cpu.last_step_cycles(), 8);
 
-        // both prefixes stick, but only one of them can be consumed
-        let (mut cpu, mut bus) = boot(&[0xdd, 0xfd, 0x21, 0x34, 0x12]); // dd fd ld ix, nn
-        assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
-        assert_eq!(cpu.ix, 0x1234, "the instruction still ran");
+        let (mut cpu, mut bus) = boot(&[0xdd, 0xfd, 0x21, 0x34, 0x12]); // dd fd ld iy, nn
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!((cpu.ix, cpu.iy), (0, 0x1234), "the last prefix wins");
+        assert_eq!(cpu.last_step_cycles(), 18);
+
+        // the ED page drops the prefix: DD ED 60 is IN H, (C), not IN IXh
+        let (mut cpu, mut bus) = boot(&[0x0e, 0x20, 0xdd, 0xed, 0x60]); // ld c, 0x20; dd in h, (c)
+        bus.ports[0x20] = 0x5a;
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!((cpu.h, cpu.ix), (0x5a, 0));
+        assert_eq!(cpu.last_step_cycles(), 16);
+    }
+
+    #[test]
+    fn the_index_register_halves_are_registers_under_a_prefix() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0xdd, 0x21, 0x34, 0x12, // ld ix, 0x1234
+            0xdd, 0x26, 0x56,       // ld ixh, 0x56
+            0xdd, 0x2c,             // inc ixl
+            0xdd, 0x7d,             // ld a, ixl
+            0xdd, 0x84,             // add a, ixh
+            0xfd, 0x65,             // ld iyh, iyl
+            0x26, 0xaa,             // ld h, 0xaa
+        ]);
+        cpu.iy = 0x00bb;
+        run_steps(&mut cpu, &mut bus, 7);
+        assert_eq!(cpu.ix, 0x5635);
+        assert_eq!(cpu.a, 0x56 + 0x35);
+        assert_eq!(cpu.iy, 0xbbbb);
+        assert_eq!(cpu.h, 0xaa, "H itself is untouched by all of it");
+        assert_eq!(cpu.l, 0);
+    }
+
+    /// The prefix on `LD r, (IX+d)` and `LD (IX+d), r` is spent on the
+    /// operand: DD 66 d is LD H, (IX+d), and DD 74 d stores H, never IXh.
+    #[test]
+    fn indexed_loads_name_the_plain_h_and_l() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0xdd, 0x21, 0x00, 0x20, // ld ix, 0x2000
+            0xdd, 0x66, 0x01,       // ld h, (ix+1)
+            0xdd, 0x74, 0x02,       // ld (ix+2), h
+        ]);
+        bus.load(0x2001, &[0x99]);
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(cpu.h, 0x99);
+        assert_eq!(cpu.ix, 0x2000, "ixh untouched");
+        assert_eq!(bus.mem[0x2002], 0x99);
+    }
+
+    /// Every DD CB operation works on (IX+d), and the register the low
+    /// bits name -- plain H and L included -- receives the result.
+    #[test]
+    fn indexed_cb_operations_write_back_to_the_named_register() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0xdd, 0x21, 0x00, 0x20, // ld ix, 0x2000
+            0xdd, 0xcb, 0x01, 0x14, // rl (ix+1), h
+            0xdd, 0xcb, 0x01, 0x3f, // srl (ix+1), a
+            0xdd, 0xcb, 0x01, 0xc5, // set 0, (ix+1), l
+            0xdd, 0xcb, 0x01, 0x4e, // bit 1, (ix+1)
+        ]);
+        bus.load(0x2001, &[0x81]);
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(bus.mem[0x2001], 0x02);
+        assert_eq!(cpu.h, 0x02);
+        assert!(cpu.flag(F_C));
+        assert_eq!(cpu.last_step_cycles(), 23);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((bus.mem[0x2001], cpu.a), (0x01, 0x01));
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((bus.mem[0x2001], cpu.l), (0x01, 0x01));
+        run_steps(&mut cpu, &mut bus, 1);
+        assert!(cpu.flag(F_Z));
+        assert_eq!(cpu.f & F_XY, 0x20 & F_XY, "x/y from the address's high byte, 0x20");
+        assert_eq!(cpu.last_step_cycles(), 20);
+    }
+
+    /// Bits 3 and 5 of F copy the result's, except where they copy
+    /// something else: CP takes the operand's, BIT n, (HL) takes MEMPTR's
+    /// high byte, and the block moves and compares build a byte of their
+    /// own with bit 1 standing in for bit 5.
+    #[test]
+    fn flag_bits_3_and_5_follow_the_result() {
+        // add a, n: result 0x28 has both bits set
+        let (mut cpu, mut bus) = boot(&[0x3e, 0x20, 0xc6, 0x08]); // ld a, 0x20; add a, 8
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, F_XY);
+        // dec a: 0x28 -> 0x27, bit 5 set, bit 3 clear
+        let (mut cpu, mut bus) = boot(&[0x3e, 0x28, 0x3d]); // ld a, 0x28; dec a
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, F_Y);
+        // cp n: the result 0x00 has neither, the operand 0x28 has both
+        let (mut cpu, mut bus) = boot(&[0x3e, 0x28, 0xfe, 0x28]); // ld a, 0x28; cp 0x28
+        run_steps(&mut cpu, &mut bus, 2);
+        assert!(cpu.flag(F_Z));
+        assert_eq!(cpu.f & F_XY, F_XY, "cp takes x/y from the operand");
+        // add hl, bc: from the high byte of the result
+        let (mut cpu, mut bus) = boot(&[0x21, 0x00, 0x20, 0x01, 0x00, 0x08, 0x09]); // ld hl, 0x2000; ld bc, 0x0800; add hl, bc
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(cpu.f & F_XY, F_XY);
+        // scf and ccf copy A's
+        let (mut cpu, mut bus) = boot(&[0x3e, 0x28, 0x37, 0x3f]); // ld a, 0x28; scf; ccf
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, F_XY);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.f & F_XY, F_XY);
+        assert!(!cpu.flag(F_C) && cpu.flag(F_H));
+    }
+
+    #[test]
+    fn bit_on_hl_leaks_memptr() {
+        // ld a, (0x27ff) leaves MEMPTR at 0x2800; bit 0, (hl) then shows 0x28's bits
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x21, 0x00, 0x20,       // ld hl, 0x2000
+            0x3a, 0xff, 0x27,       // ld a, (0x27ff)
+            0xcb, 0x46,             // bit 0, (hl)
+            0x01, 0xff, 0x07,       // ld bc, 0x07ff
+            0x0a,                   // ld a, (bc) -- MEMPTR 0x0800
+            0xcb, 0x46,             // bit 0, (hl)
+        ]);
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(cpu.wz, 0x2800);
+        assert_eq!(cpu.f & F_XY, F_XY);
+        assert!(cpu.flag(F_Z) && cpu.flag(F_PV), "pv copies z");
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(cpu.wz, 0x0800);
+        assert_eq!(cpu.f & F_XY, F_X);
+        // the register form takes them from the register
+        let (mut cpu, mut bus) = boot(&[0x06, 0x28, 0xcb, 0x40]); // ld b, 0x28; bit 0, b
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, F_XY);
+    }
+
+    #[test]
+    fn block_moves_and_compares_build_their_own_x_and_y() {
+        // ldi: n = byte + a = 0x08 + 0x02 = 0x0a -> y from bit 1 (set), x from bit 3 (set)
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x3e, 0x02,             // ld a, 2
+            0x21, 0x00, 0x20,       // ld hl, 0x2000
+            0x11, 0x00, 0x30,       // ld de, 0x3000
+            0x01, 0x02, 0x00,       // ld bc, 2
+            0xed, 0xa0,             // ldi
+            0x3e, 0x10,             // ld a, 0x10
+            0xed, 0xa1,             // cpi: 0x10 - 0x08 = 0x08 with a half borrow -> n = 0x07
+        ]);
+        bus.load(0x2000, &[0x08, 0x08]);
+        run_steps(&mut cpu, &mut bus, 5);
+        assert_eq!(cpu.f & F_XY, F_XY);
+        assert!(cpu.flag(F_PV), "bc still non-zero");
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, F_Y);
+        assert!(!cpu.flag(F_PV), "bc reached zero");
+    }
+
+    /// INI/OUTI flags beyond the documented Z and N, per The Undocumented
+    /// Z80 Documented 4.2: N from bit 7 of the byte, H and C from the
+    /// carry of byte + (C+1) for INI, S/Z/X/Y from the decremented B, PV
+    /// from the parity of (k & 7) ^ B.
+    #[test]
+    fn block_io_sets_the_undocumented_flags() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x01, 0xff, 0x02,       // ld bc, 0x02ff
+            0x21, 0x00, 0x20,       // ld hl, 0x2000
+            0xed, 0xa2,             // ini
+        ]);
+        bus.ports[0xff] = 0x81;
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(bus.mem[0x2000], 0x81);
+        assert_eq!(cpu.b, 1);
+        // k = 0x81 + ((0xff + 1) & 0xff) = 0x81: no carry; n from bit 7 of 0x81
+        assert!(cpu.flag(F_N) && !cpu.flag(F_H) && !cpu.flag(F_C));
+        assert!(!cpu.flag(F_Z) && !cpu.flag(F_S));
+        assert_eq!(cpu.f & F_XY, 0);
+        // pv: parity((0x81 & 7) ^ 1) = parity(0) = even -> set
+        assert!(cpu.flag(F_PV));
+        assert_eq!(cpu.wz, 0x0300, "bc before the decrement, plus one");
+    }
+
+    /// R counts M1 cycles: one per opcode byte and per prefix, but the
+    /// displacement and opcode of a DD CB are operands and count nothing.
+    /// Bit 7 belongs to LD R, A.
+    #[test]
+    fn r_counts_opcode_fetches() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x00,                   // nop: 1
+            0xcb, 0x00,             // rlc b: 2
+            0xed, 0x44,             // neg: 2
+            0xdd, 0xcb, 0x01, 0x06, // rlc (ix+1): 2
+            0xdd, 0xfd, 0x00,       // dd fd nop: 3
+            0xed, 0x5f,             // ld a, r: 2 -- read after its own fetches
+        ]);
+        cpu.r = 0x80;
+        run_steps(&mut cpu, &mut bus, 6);
+        assert_eq!(cpu.r, 0x80 | 12);
+        assert_eq!(cpu.a, 0x80 | 12);
     }
 
     #[test]
@@ -2319,9 +2492,6 @@ mod tests {
     #[test]
     fn every_completed_step_charges_at_least_the_fetch() {
         for op in 0..=0xffu8 {
-            if op == 0xdd || op == 0xfd {
-                continue; // a bare prefix aborts the run by design
-            }
             let (mut cpu, mut bus) = boot(&[op, 0x00, 0x00, 0x00]);
             if cpu.step(&mut bus) == StepResult::Ok {
                 assert!(cpu.last_step_cycles() >= 4, "op {op:#04x}");

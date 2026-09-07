@@ -126,8 +126,9 @@ System metadata: `src/system/registry.rs` holds a static `SYSTEMS` table (`name`
 Known, deliberate quirks preserved from the C++. All are documented at their use sites and each has a named test, which is what makes "fixing" one a visible change rather than a silent one — don't do it casually:
 
 - `HALT` is a `NOP` (`halt_is_a_nop`) — and this one is load-bearing, not just inherited: no machine here can wake a halted Z80, so a real `HALT` would deadlock the run instead of ending it
-- most Z80 CB shifts ignore an active DD/FD prefix and then abort, after already reading the displacement and touching `(HL)`
 - the Z80 `RETI` is a plain `RET` — nothing here daisy-chains, so there is no IEO to release
+
+The Z80's undocumented side is modelled as far as an instruction exerciser can see it, and the exerciser is the reference (see Test): the flag register's bits 3 and 5 (`flag_bits_3_and_5_follow_the_result` — copies of the result's, except that `CP` takes the operand's, `BIT n,(HL)` the high byte of the internal MEMPTR latch, `bit_on_hl_leaks_memptr`, and the block moves and compares a byte of their own), IXh/IXl/IYh/IYl as registers under a prefix, every `DD CB` operation with its register writeback, the block-I/O flags, and R counting M1 cycles. A DD/FD prefix on an instruction that has no use for it is four T-states and nothing else, as on silicon, and the last of a run of prefixes is the one that counts (`an_index_prefix_without_a_use_is_only_its_fetch`).
 
 Two things in the cores are worth knowing before you touch them, because both are easy to break in a way no boot will show you:
 
