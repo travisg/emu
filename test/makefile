@@ -9,7 +9,7 @@ LINKFLAGS := -ni
 # C++ tree; objcopy does the same job for a contiguous image.
 OBJCOPY   := objcopy
 
-.PHONY: all clean basic6809-test
+.PHONY: all clean basic6809-test kaypro-zex-test
 
 # The 6809 sources, all built in place under 6809/. memtest is the only one
 # meant to run; the other two exist to be assembled. README.md says which is
@@ -42,6 +42,12 @@ clean:
 
 basic6809-test:
 	./run_basic6809_lang_test.sh
+
+# The Z80 exercisers on the Kaypro. Needs the Kaypro ROMs, the stock floppy
+# and disks/cpm/zex*.com (all from tools/fetch-roms.py), cpmtools, and the
+# release binary if it is to finish in minutes rather than an hour.
+kaypro-zex-test:
+	./run_kaypro_zex_test.py
 
 # --- Raytheon 703 ---------------------------------------------------------
 # The 703's own assembler (SYM II) survives only as scans, so the demo image is

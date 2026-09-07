@@ -29,3 +29,11 @@ roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed23
 # Kaypro floppy: CP/M 2.2 with MBASIC and games.
 # The original source is a Kaypro II disk image, which has been converted to a raw floppy image.
 disks/mbasic-games.img          e0d3fe74578b5914cdb8e36d028fb0e3ec70f434df3a710ea41ea1534304101b  https://github.com/travisg/emu/releases/download/v0.0.1-assets/mbasic-games.img
+
+# CP/M programs for the Kaypro: Frank Cringle's Z80 instruction exercisers
+# (GPL; the binaries as agn453 publishes them), which test/run_kaypro_zex_test.py
+# puts on a floppy with cpmtools and runs. prelim is the smoke test that
+# precedes them, from superzazu's z80 test set.
+disks/cpm/prelim.com            3b3578f19030a4df7e25ce852f763af26053b12582a576c4dffb014aa7c590d1  https://raw.githubusercontent.com/superzazu/z80/master/roms/prelim.com
+disks/cpm/zexdoc.com            34923a7ed82285d3038b2d54bd64899e12173eebb61f9d07b4fc72e78af2ae8f  https://raw.githubusercontent.com/agn453/ZEXALL/master/zexdoc.com
+disks/cpm/zexall.com            6e2da55147a04f28d303d5da6a1e6b771557ac244653590a0f24a2d39c8537e8  https://raw.githubusercontent.com/agn453/ZEXALL/master/zexall.com
