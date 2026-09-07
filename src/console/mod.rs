@@ -41,11 +41,15 @@ pub use paper::Paper;
 pub struct ConsoleEndpoint {
     rx: Receiver<u8>,
     out: Box<dyn Write + Send>,
+    /// A second sink that sees every byte `out` does -- the debug port's
+    /// view of the serial output. Separate from `out` so that retargeting
+    /// the output (the teletype window) leaves the tap in place.
+    tap: Option<Box<dyn Write + Send>>,
 }
 
 impl ConsoleEndpoint {
     pub fn new(rx: Receiver<u8>, out: Box<dyn Write + Send>) -> Self {
-        ConsoleEndpoint { rx, out }
+        ConsoleEndpoint { rx, out, tap: None }
     }
 
     /// Next queued keystroke, if any. Never blocks -- a UART poll must not
@@ -63,15 +67,25 @@ impl ConsoleEndpoint {
     pub fn put_char(&mut self, c: u8) {
         let _ = self.out.write_all(&[c]);
         let _ = self.out.flush();
+        if let Some(tap) = self.tap.as_mut() {
+            let _ = tap.write_all(&[c]);
+            let _ = tap.flush();
+        }
     }
 
     /// Replace the output sink. The endpoint is built in `main` -- before
     /// the factory has parsed the subsystem tokens -- with stdout as its
     /// sink; a factory that routes the serial output somewhere else (the
     /// 703's teletype window) swaps its sink in here before the machine
-    /// consumes the endpoint.
+    /// consumes the endpoint. The tap, if any, stays.
     pub fn set_output(&mut self, out: Box<dyn Write + Send>) {
         self.out = out;
+    }
+
+    /// Install the tap. Installed in `main` before the factory runs, so a
+    /// factory's `set_output` cannot displace it.
+    pub fn set_tap(&mut self, tap: Box<dyn Write + Send>) {
+        self.tap = Some(tap);
     }
 }
 
@@ -534,6 +548,48 @@ mod tests {
         ep.set_output(Box::new(paper.clone()));
         ep.put_char(b'A');
         paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+    }
+
+    /// A `Write` over a shared buffer, so a test can read back what a sink
+    /// that the endpoint owns was given.
+    #[derive(Clone, Default)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_tap_sees_output_alongside_the_sink() {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let (sink, tap) = (Shared::default(), Shared::default());
+        let mut ep = ConsoleEndpoint::new(rx, Box::new(sink.clone()));
+        ep.set_tap(Box::new(tap.clone()));
+        ep.put_char(b'A');
+        ep.put_char(b'B');
+        assert_eq!(*sink.0.lock().unwrap(), b"AB");
+        assert_eq!(*tap.0.lock().unwrap(), b"AB");
+    }
+
+    /// The teletype window's swap of the sink must not take the debug
+    /// port's tap with it: both are meant to see the paper's text.
+    #[test]
+    fn set_output_leaves_the_tap_in_place() {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let tap = Shared::default();
+        let mut ep = ConsoleEndpoint::new(rx, Box::new(std::io::sink()));
+        ep.set_tap(Box::new(tap.clone()));
+        let paper = Paper::new();
+        ep.set_output(Box::new(paper.clone()));
+        ep.put_char(b'Z');
+        paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'Z'));
+        assert_eq!(*tap.0.lock().unwrap(), b"Z");
     }
 
     /// Rack counters are monotonic and diff to a duty, the LampSnapshot
