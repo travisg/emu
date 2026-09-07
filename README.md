@@ -77,6 +77,7 @@ Run a system:
 ./target/debug/emu -s 6809 -t trace.txt     # log one line of CPU state per instruction
 ./target/debug/emu -s 6809 --no-throttle    # flat out instead of at the real 1.8432 MHz
 ./target/debug/emu -s 6809 --throttle 10000 # slow motion, 10 kHz
+./target/debug/emu -s ray703 -r roms/703/basic.bin --debug /tmp/emu.sock   # a debug port; tools/emudbg.py talks to it
 ```
 
 Every machine runs at the clock rate its real counterpart ran at — the rate `-h` lists, announced at
@@ -175,8 +176,9 @@ cargo test                          # the whole suite: no ROMs, no external bina
 ```
 
 `cargo test` needs nothing outside the repo. The end-to-end scripts do: `run_basic6809_lang_test.sh`
-needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`, and the Raytheon 703 scripts
-(`make -C test ray703-test` and friends) need `script(1)` and python3. `AGENTS.md` covers them all.
+needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`; the Raytheon 703 demo test
+(`make -C test ray703-test`) drives the emulator over its debug port and needs only python3, and the
+other 703 scripts need `script(1)` and python3. `AGENTS.md` covers them all.
 
 ## Project Structure
 
