@@ -67,13 +67,23 @@ impl Drop for RawMode {
 }
 
 pub struct TerminalFrontend {
-    tx: Sender<u8>,
+    /// `None` is the idle mode: when the 703's teletype lives in its own
+    /// window, the terminal stays only as an exit path.
+    tx: Option<Sender<u8>>,
     _raw: Option<RawMode>,
 }
 
 impl TerminalFrontend {
     pub fn new(tx: Sender<u8>) -> Self {
-        TerminalFrontend { tx, _raw: RawMode::enable() }
+        TerminalFrontend { tx: Some(tx), _raw: RawMode::enable() }
+    }
+
+    /// The exit-path-only terminal: raw mode is still engaged -- typed
+    /// characters must neither echo nor be acted on by the line discipline,
+    /// the window is the teletype now -- but every byte except Ctrl-D/EOF
+    /// is discarded rather than forwarded.
+    pub fn new_idle() -> Self {
+        TerminalFrontend { tx: None, _raw: RawMode::enable() }
     }
 }
 
@@ -111,10 +121,12 @@ impl ConsoleFrontend for TerminalFrontend {
                 return;
             }
 
-            if self.tx.send(buf[0]).is_err() {
-                // cpu thread is gone
-                shutdown.store(true, Ordering::SeqCst);
-                return;
+            if let Some(tx) = &self.tx {
+                if tx.send(buf[0]).is_err() {
+                    // cpu thread is gone
+                    shutdown.store(true, Ordering::SeqCst);
+                    return;
+                }
             }
         }
     }

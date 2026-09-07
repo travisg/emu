@@ -29,8 +29,10 @@ use std::sync::{Arc, Mutex};
 
 pub mod panel703;
 pub mod paper;
+pub mod ray703;
 pub mod sdl;
 pub mod terminal;
+pub mod tty703;
 pub mod tty33_font;
 
 pub use paper::Paper;
@@ -491,9 +493,30 @@ pub enum Display {
         /// The character generator rom, 8 bytes per glyph, 256 glyphs.
         font_rom: Vec<u8>,
     },
-    /// The 703's lights-and-switches front panel. `control` carries the
-    /// switch actuations to the run loop on the CPU thread.
-    Panel703 { title: &'static str, panel: PanelState, control: Sender<PanelCommand> },
+    /// The 703's windows, rendered together by one
+    /// [`ray703::Ray703Frontend`]: SDL allows one context and one event
+    /// pump per process, so however many windows the subsystem tokens ask
+    /// for must share a frontend, and the composition lives in this variant
+    /// rather than in `main`. At least one part is `Some` -- a machine with
+    /// no window returns no `Display` at all.
+    Ray703 { title: &'static str, panel: Option<PanelDisplay>, tty: Option<TtyDisplay> },
+}
+
+/// The teletype window's share of [`Display::Ray703`]: the paper the
+/// machine's serial output prints onto (the factory has already made it
+/// the `ConsoleEndpoint`'s sink).
+pub struct TtyDisplay {
+    pub paper: Paper,
+}
+
+/// The front panel window's share of [`Display::Ray703`]: the lamp state
+/// the core publishes, the switch actuations back to the run loop, and the
+/// disc rack lamps drawn below the console.
+pub struct PanelDisplay {
+    pub panel: PanelState,
+    /// Switch actuations to the run loop on the CPU thread.
+    pub control: Sender<PanelCommand>,
+    pub rack: DiscRackState,
 }
 
 #[cfg(test)]

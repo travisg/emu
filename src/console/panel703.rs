@@ -23,37 +23,38 @@
 //! The machine starts halted, as a real one did at power-on: the HALT
 //! lens glows red until RUN is pressed.
 //!
-//! The teletype stays on the terminal: this frontend spawns the ordinary
-//! [`TerminalFrontend`] on a second thread to pump stdin, and guest output
-//! goes to stdout as on every other machine. Keystrokes into the panel
-//! window are deliberately *not* forwarded to the guest -- the real panel
-//! has no keyboard, and a second keyboard would ride SDL's text-input
-//! CR/LF conventions rather than the terminal's raw mode, whose preserved
-//! CR-versus-LF distinction the 703's software depends on.
+//! Below the console sits the disc rack: one bay per 74601 unit with
+//! ONLINE, READ and WRITE lamps, fed by the controller through
+//! [`DiscRackState`]. The styling is invented -- no Raytheon document
+//! describes the disc cabinet -- but the bulbs obey the same thermal
+//! model as the console's own.
+//!
+//! This is one window of the 703's frontend: [`super::ray703`] owns the
+//! SDL context and the event loop and routes this window's events here.
+//! Keystrokes into the panel window are deliberately *not* forwarded to
+//! the guest -- the real panel has no keyboard, and a second keyboard
+//! would ride SDL's text-input CR/LF conventions rather than the raw
+//! mode whose preserved CR-versus-LF distinction the 703's software
+//! depends on.
 //!
 //! Everything is drawn with filled rectangles -- circles as stacks of
 //! horizontal spans, text from a 5x7 font embedded below -- so there are no
 //! textures, image files or font dependencies.
 
-use super::{ConsoleFrontend, Display, LampSnapshot, PanelCommand, PanelState, Selector};
-use crate::console::terminal::TerminalFrontend;
-use sdl2::event::Event;
-use sdl2::keyboard::{Keycode, Mod};
+use super::{
+    DiscRackState, LampSnapshot, PanelCommand, PanelDisplay, PanelState, RackSnapshot, Selector,
+};
+use crate::console::RACK_UNITS;
+use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
-use std::time::Duration;
 
 const WINDOW_W: u32 = 1120;
-const WINDOW_H: u32 = 340;
-/// Roughly 60 Hz. No dirty flag: the program counter lamps change on
-/// every instruction, so the panel redraws every frame unconditionally.
-const FRAME_DELAY: Duration = Duration::from_millis(16);
+const WINDOW_H: u32 = 480;
 
 // -- layout, all in window pixels ------------------------------------------
 
@@ -95,6 +96,24 @@ const DISPLAY_X: i32 = 902;
 /// The CLEAR button at the head of each lamp row (5-1, 5-3).
 const CLEAR_X: i32 = 26;
 const CLEAR_R: i32 = 8;
+
+/// The disc rack band below the console: caption, then one bay per unit
+/// with its three bulbs. Geometry is invented, tuned by eye like the rest
+/// of the file.
+const RACK_CAPTION_Y: i32 = 318;
+const RACK_BAY_Y: i32 = 358;
+const RACK_BAY_H: u32 = 74;
+const RACK_LAMP_Y: i32 = 388;
+const RACK_LAMP_R: i32 = 9;
+const RACK_LAMP_PITCH: i32 = 68;
+/// How many frames a completion wink holds the lamp at full duty -- about
+/// 100 ms, the least an operator could see. This is what makes a
+/// --fast-io transfer visible at all: it charges no cycles.
+const RACK_BLIP_FRAMES: u8 = 6;
+
+fn rack_bay_x(unit: usize) -> i32 {
+    170 + unit as i32 * 254
+}
 
 const PANEL_BG: Color = Color::RGB(0xd6, 0xd2, 0xc9);
 const PANEL_INK: Color = Color::RGB(0x22, 0x22, 0x22);
@@ -199,12 +218,13 @@ fn selector_angle(i: usize) -> f32 {
     (210.0 - 48.0 * i as f32).to_radians()
 }
 
-pub struct Panel703Frontend {
-    tx: Sender<u8>,
+pub(crate) struct PanelWindow {
+    id: u32,
     panel: PanelState,
     /// Switch actuations to the run loop. Send errors are ignored
     /// throughout: a dead CPU thread means shutdown is already in flight.
     control: Sender<PanelCommand>,
+    rack: DiscRackState,
     selector: Selector,
     /// Last frame's accumulator snapshots, one per lamp source (PC + the
     /// six selector positions), so turning the knob always has a fresh
@@ -216,18 +236,24 @@ pub struct Panel703Frontend {
     /// thermal state carries across a selector change.
     pc_filters: [LampFilter; 16],
     sd_filters: [LampFilter; 16],
-    sdl: sdl2::Sdl,
+    /// The rack lamps run the same snapshot-diff-filter pipeline, plus the
+    /// completion-wink counters.
+    prev_rack: RackSnapshot,
+    read_filters: [LampFilter; RACK_UNITS],
+    write_filters: [LampFilter; RACK_UNITS],
+    read_blip: [u8; RACK_UNITS],
+    write_blip: [u8; RACK_UNITS],
     canvas: Canvas<Window>,
 }
 
-impl Panel703Frontend {
-    pub fn new(tx: Sender<u8>, display: Display) -> Result<Self, String> {
-        let Display::Panel703 { title, panel, control } = display else {
-            return Err("Panel703Frontend needs a 703 panel display".to_string());
-        };
-        let sdl = sdl2::init()?;
-        let video_subsystem = sdl.video()?;
-        let window = video_subsystem
+impl PanelWindow {
+    pub(crate) fn new(
+        video: &sdl2::VideoSubsystem,
+        title: &str,
+        display: PanelDisplay,
+    ) -> Result<Self, String> {
+        let PanelDisplay { panel, control, rack } = display;
+        let window = video
             .window(title, WINDOW_W, WINDOW_H)
             .position_centered()
             .build()
@@ -238,18 +264,28 @@ impl Panel703Frontend {
         // MB is the boot-procedure position ("turn the display selector to
         // MB before following the operating procedure" -- the PTB drawing),
         // and it is also the busiest lamp row on an idle machine.
-        Ok(Panel703Frontend {
-            tx,
+        Ok(PanelWindow {
+            id: canvas.window().id(),
             panel,
             control,
+            rack,
             selector: Selector::Mb,
             prev_pc: LampSnapshot::default(),
             prev_sel: [LampSnapshot::default(); 6],
             pc_filters: [LampFilter::default(); 16],
             sd_filters: [LampFilter::default(); 16],
-            sdl,
+            prev_rack: RackSnapshot::default(),
+            read_filters: [LampFilter::default(); RACK_UNITS],
+            write_filters: [LampFilter::default(); RACK_UNITS],
+            read_blip: [0; RACK_UNITS],
+            write_blip: [0; RACK_UNITS],
             canvas,
         })
+    }
+
+    /// The SDL window id the frontend routes events by.
+    pub(crate) fn window_id(&self) -> u32 {
+        self.id
     }
 
     fn cycle_selector(&mut self, dir: i32) {
@@ -445,7 +481,87 @@ impl Panel703Frontend {
         (pc, sd)
     }
 
-    fn render(&mut self) {
+    /// Advance the rack lamps one frame: READ/WRITE duty from the cycle
+    /// accumulators, overridden to full for a few frames whenever a
+    /// completion counter moved (the `--fast-io` wink -- such a transfer
+    /// charges no cycles at all).
+    fn update_rack(&mut self) -> ([f32; RACK_UNITS], [f32; RACK_UNITS]) {
+        let now = self.rack.snapshot();
+        let dc = now.cycles.wrapping_sub(self.prev_rack.cycles);
+        let mut read = [0.0f32; RACK_UNITS];
+        let mut write = [0.0f32; RACK_UNITS];
+        for u in 0..RACK_UNITS {
+            if now.read_ops[u] != self.prev_rack.read_ops[u] {
+                self.read_blip[u] = RACK_BLIP_FRAMES;
+            }
+            if now.write_ops[u] != self.prev_rack.write_ops[u] {
+                self.write_blip[u] = RACK_BLIP_FRAMES;
+            }
+            let duty = |on: u64, prev: u64, blip: &mut u8| {
+                if *blip > 0 {
+                    *blip -= 1;
+                    1.0
+                } else if dc == 0 {
+                    // halted, or no controller poll this frame: nothing
+                    // in flight, the lamp cools
+                    0.0
+                } else {
+                    on.wrapping_sub(prev) as f32 / dc as f32
+                }
+            };
+            let rd = duty(now.read_on[u], self.prev_rack.read_on[u], &mut self.read_blip[u]);
+            let wd = duty(now.write_on[u], self.prev_rack.write_on[u], &mut self.write_blip[u]);
+            read[u] = self.read_filters[u].update(rd);
+            write[u] = self.write_filters[u].update(wd);
+        }
+        self.prev_rack = now;
+        (read, write)
+    }
+
+    /// The invented disc cabinet: a captioned band of four bays, each a
+    /// thin bezel with the unit number and its three bulbs.
+    fn draw_rack(&mut self) {
+        let (read, write) = self.update_rack();
+        let online = self.prev_rack.online;
+
+        self.caption(RACK_CAPTION_Y, "74601 DISC MEMORY");
+        for u in 0..RACK_UNITS {
+            let cx = rack_bay_x(u);
+            let (left, w) = (cx - RACK_LAMP_PITCH - 44, (2 * RACK_LAMP_PITCH + 88) as u32);
+            self.canvas.set_draw_color(LAMP_BEZEL);
+            for (bx, by, bw, bh) in [
+                (left, RACK_BAY_Y, w, 1u32),
+                (left, RACK_BAY_Y + RACK_BAY_H as i32, w, 1),
+                (left, RACK_BAY_Y, 1, RACK_BAY_H),
+                (left + w as i32, RACK_BAY_Y, 1, RACK_BAY_H + 1),
+            ] {
+                let _ = self.canvas.fill_rect(Rect::new(bx, by, bw, bh));
+            }
+            self.text_centered(cx, RACK_BAY_Y + 7, 1, &format!("UNIT {u}"), PANEL_INK);
+            for (i, (label, t)) in [
+                // ONLINE is a steady state, not a duty: spindles don't flicker
+                ("ONLINE", if online[u] { 1.0 } else { 0.0 }),
+                ("READ", read[u]),
+                ("WRITE", write[u]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let x = cx + (i as i32 - 1) * RACK_LAMP_PITCH;
+                let t = perceived(t);
+                if t > 0.25 {
+                    let alpha = (90.0 * (t - 0.25) / 0.75) as u8;
+                    let glow = Color::RGBA(LAMP_GLOW.r, LAMP_GLOW.g, LAMP_GLOW.b, alpha);
+                    self.circle(x, RACK_LAMP_Y, RACK_LAMP_R + 5, glow);
+                }
+                self.circle(x, RACK_LAMP_Y, RACK_LAMP_R + 3, LAMP_BEZEL);
+                self.circle(x, RACK_LAMP_Y, RACK_LAMP_R, lamp_color(t));
+                self.text_centered(x, RACK_LAMP_Y + RACK_LAMP_R + 8, 1, label, PANEL_INK);
+            }
+        }
+    }
+
+    pub(crate) fn render(&mut self) {
         let (pc, sd) = self.update_lamps();
 
         self.canvas.set_draw_color(PANEL_BG);
@@ -460,6 +576,7 @@ impl Panel703Frontend {
         self.draw_buttons();
         self.draw_toggles();
         self.draw_selector();
+        self.draw_rack();
 
         self.text(LAMPS_X - LAMP_R, WINDOW_H as i32 - 34, 2, "703  CENTRAL PROCESSOR", PANEL_INK);
         self.text_centered(
@@ -475,7 +592,7 @@ impl Panel703Frontend {
 
     // -- input -------------------------------------------------------------
 
-    fn click(&mut self, x: i32, y: i32, button: MouseButton) {
+    pub(crate) fn click(&mut self, x: i32, y: i32, button: MouseButton) {
         let hit_circle = |cx: i32, cy: i32, r: i32| {
             let (dx, dy) = (x - cx, y - cy);
             dx * dx + dy * dy <= r * r
@@ -564,73 +681,19 @@ impl Panel703Frontend {
         }
     }
 
-    fn event_loop(&mut self, shutdown: &Arc<AtomicBool>) {
-        let mut pump = match self.sdl.event_pump() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Panel703Frontend: failed to create event pump: {e}");
-                return;
-            }
-        };
-
-        println!("Panel703Frontend: entering event loop");
-        loop {
-            if shutdown.load(Ordering::SeqCst) {
-                println!("Panel703Frontend: stop requested, exiting");
-                return;
-            }
-
-            for event in pump.poll_iter() {
-                match event {
-                    Event::Quit { .. } => {
-                        println!("Panel703Frontend: quit event received");
-                        return;
-                    }
-                    Event::MouseButtonDown { x, y, mouse_btn, .. } => {
-                        self.click(x, y, mouse_btn);
-                    }
-                    Event::KeyDown { keycode: Some(key), keymod, .. } => match key {
-                        Keycode::D if keymod.intersects(Mod::LCTRLMOD | Mod::RCTRLMOD) => {
-                            println!("ctrl-d hit on the panel, exiting");
-                            return;
-                        }
-                        Keycode::Tab => self.cycle_selector(1),
-                        Keycode::Num1 => self.panel.toggle_sense(0),
-                        Keycode::Num2 => self.panel.toggle_sense(1),
-                        Keycode::Num3 => self.panel.toggle_sense(2),
-                        Keycode::Num4 => self.panel.toggle_sense(3),
-                        // everything else is deliberately ignored: the guest's
-                        // keyboard is the terminal, not this window
-                        _ => {}
-                    },
-                    _ => {}
-                }
-            }
-
-            self.render();
-            std::thread::sleep(FRAME_DELAY);
+    /// A key pressed with this window focused. Ctrl-D is the frontend's
+    /// business and never arrives here; everything unhandled is
+    /// deliberately ignored -- the guest's keyboard is the teletype, not
+    /// this window.
+    pub(crate) fn key_down(&mut self, key: Keycode) {
+        match key {
+            Keycode::Tab => self.cycle_selector(1),
+            Keycode::Num1 => self.panel.toggle_sense(0),
+            Keycode::Num2 => self.panel.toggle_sense(1),
+            Keycode::Num3 => self.panel.toggle_sense(2),
+            Keycode::Num4 => self.panel.toggle_sense(3),
+            _ => {}
         }
-    }
-}
-
-impl ConsoleFrontend for Panel703Frontend {
-    fn run(&mut self, shutdown: Arc<AtomicBool>) {
-        // The teletype keeps the terminal: the ordinary raw-mode frontend
-        // runs on its own thread, feeding the same keystroke channel. Its
-        // 100 ms poll notices the shutdown flag, and its RawMode guard
-        // restores termios when its run() returns.
-        let pump_tx = self.tx.clone();
-        let pump_shutdown = Arc::clone(&shutdown);
-        let pump = std::thread::spawn(move || {
-            TerminalFrontend::new(pump_tx).run(pump_shutdown);
-        });
-
-        self.event_loop(&shutdown);
-
-        // Join the pump before returning so the terminal is restored before
-        // main prints its exit messages -- whichever side quit first.
-        shutdown.store(true, Ordering::SeqCst);
-        let _ = pump.join();
     }
 }
 

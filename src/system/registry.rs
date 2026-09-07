@@ -101,13 +101,23 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineO
     })
 }
 
-fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
+fn build_ray703(
+    rom: &Path,
+    mut console: ConsoleEndpoint,
+    sub: &str,
+    opts: &MachineOpts,
+) -> io::Result<Machine> {
     // The subsystem is a set of tokens: "panel" opens the front panel
-    // window, "ptb" keys in the bootstrap, in either order. Strip "panel"
-    // here and hand the rest to the machine, which knows nothing about
-    // displays.
+    // window, "tty" the teletype window, "ptb" keys in the bootstrap, in
+    // any order. Strip the window tokens here and hand the rest to the
+    // machine, which knows nothing about displays. A duplicated window
+    // token leaves a copy behind for the match below to reject.
+    let take = |tokens: &mut Vec<&str>, name: &str| {
+        tokens.iter().position(|&t| t == name).map(|i| tokens.remove(i)).is_some()
+    };
     let mut tokens: Vec<&str> = sub.split('-').filter(|t| !t.is_empty()).collect();
-    let panel = tokens.iter().position(|&t| t == "panel").map(|i| tokens.remove(i)).is_some();
+    let panel = take(&mut tokens, "panel");
+    let tty = take(&mut tokens, "tty");
     let sub = match tokens.as_slice() {
         [] => "",
         [one] => *one,
@@ -127,10 +137,11 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
         cpu.set_index(ixr);
     }
 
-    let mut display = None;
     let mut throttle_hz = None;
     let mut panel_control = None;
     let mut panel_state = None;
+    let mut rack = None;
+    let mut panel_display = None;
     if panel {
         let state = crate::console::PanelState::new();
         cpu.attach_panel(state.clone());
@@ -138,7 +149,14 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
         panel_state = Some(state.clone());
         // ...and switch actuations flow frontend -> run loop over this channel
         let (ctl_tx, ctl_rx) = std::sync::mpsc::channel();
-        display = Some(Display::Panel703 { title: "Raytheon 703", panel: state, control: ctl_tx });
+        // the rack lamps under the console, fed by the disc controller
+        let rack_state = crate::console::DiscRackState::new();
+        rack = Some(rack_state.clone());
+        panel_display = Some(crate::console::PanelDisplay {
+            panel: state,
+            control: ctl_tx,
+            rack: rack_state,
+        });
         panel_control = Some(ctl_rx);
         // A live panel is meaningless uncapped -- the lamps would be a
         // uniform blur -- so a panel machine asks for real time even if its
@@ -146,10 +164,32 @@ fn build_ray703(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
         // the command line still overrides.
         throttle_hz = Some(crate::cpu::ray703::CLOCK_HZ);
     }
+    let mut tty_display = None;
+    if tty {
+        // The teletype window replaces stdout as the endpoint's sink: from
+        // here on the guest's serial output prints on this paper and
+        // nowhere else. Deliberately no throttle_hz of its own -- the
+        // device pacing already types at ten characters a second, and
+        // --no-throttle blasts the paper exactly as it blasts the terminal.
+        let paper = crate::console::Paper::new();
+        console.set_output(Box::new(paper.clone()));
+        tty_display = Some(crate::console::TtyDisplay { paper });
+    }
+    let display = (panel || tty).then_some(Display::Ray703 {
+        title: "Raytheon 703",
+        panel: panel_display,
+        tty: tty_display,
+    });
 
     let mut bus = ray703::Ray703::new(rom, console, sub)?;
     if opts.fast_io {
         bus.set_fast_io();
+    }
+    // Attach before the mounting loop lights the ONLINE lamps -- though
+    // attach_rack syncs from whatever is mounted, so the load subsystem's
+    // unit 0 (mounted inside Ray703::new) is caught either way.
+    if let Some(rack) = &rack {
+        bus.attach_disc_rack(rack.clone());
     }
     // The disc images mount like the Kaypro's floppy: fixed names under
     // disks/, non-fatal, gitignored. A file that simply is not there is a
@@ -302,19 +342,26 @@ mod tests {
 
     #[test]
     fn the_panel_subsystem_attaches_a_panel_display() {
-        let m = build_703("panel").unwrap();
+        let mut m = build_703("panel").unwrap();
         assert_eq!(m.throttle_hz, Some(crate::cpu::ray703::CLOCK_HZ));
         // the display's sender delivers to the machine's receiver
-        let Some(Display::Panel703 { control, .. }) = m.display else {
+        let Some(Display::Ray703 { panel: Some(panel), tty: None, .. }) = m.display else {
             panic!("panel display expected");
         };
-        control.send(crate::console::PanelCommand::Run).unwrap();
+        panel.control.send(crate::console::PanelCommand::Run).unwrap();
         let rx = m.panel_control.expect("panel machines carry the control channel");
         assert_eq!(rx.try_recv().unwrap(), crate::console::PanelCommand::Run);
+        // ...the rack rides along, wired to the controller: polling the bus
+        // advances its duty denominator (what a unit's ONLINE lamp shows
+        // depends on which images the working directory happens to hold, so
+        // the cycle counter is the assertion that travels)
+        let before = panel.rack.snapshot().cycles;
+        m.bus.poll_interrupt_lines(100);
+        assert_eq!(panel.rack.snapshot().cycles - before, 100);
         // ...and the tokens compose with ptb in either order
         for sub in ["panel-ptb", "ptb-panel"] {
             let m = build_703(sub).unwrap();
-            assert!(matches!(m.display, Some(Display::Panel703 { .. })), "{sub}");
+            assert!(matches!(m.display, Some(Display::Ray703 { .. })), "{sub}");
             assert!(m.panel_control.is_some(), "{sub}");
         }
     }
@@ -359,5 +406,42 @@ mod tests {
         assert!(build_703("panel-bogus").is_err());
         assert!(build_703("panel-ptb-panel").is_err());
         assert!(build_703("bogus").is_err());
+        // a duplicated window token leaves a copy for the core match to
+        // reject
+        assert!(build_703("tty-tty").is_err());
+        assert!(build_703("panel-tty-tty").is_err());
+    }
+
+    /// The tty token reroutes the endpoint's serial sink onto the paper:
+    /// this drives the whole seam -- factory to endpoint to device to
+    /// display payload -- through one teletype write.
+    #[test]
+    fn the_tty_subsystem_routes_output_onto_the_paper() {
+        let mut m = build_703("tty").unwrap();
+        let Some(Display::Ray703 { panel: None, tty: Some(tty), .. }) = m.display else {
+            panic!("tty display without a panel expected");
+        };
+        // a teletype window alone does not ask for real time: the device
+        // pacing already types at ten characters a second
+        assert_eq!(m.throttle_hz, None);
+        assert!(m.panel_control.is_none());
+        // DOT 14,E with 'A': the device's write function, straight to paper
+        m.bus.io_write16(0xee, 0x8000 | b'A' as u16);
+        tty.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+    }
+
+    #[test]
+    fn the_window_tokens_compose_in_any_order() {
+        for sub in ["panel-tty", "tty-panel", "tty-ptb", "ptb-tty", "panel-tty-ptb"] {
+            let m = build_703(sub);
+            // three tokens exceed the one-non-window-token rule only if a
+            // window token was not stripped; all of these must build
+            let m = m.unwrap_or_else(|e| panic!("{sub}: {e}"));
+            let Some(Display::Ray703 { panel, tty, .. }) = m.display else {
+                panic!("{sub}: display expected");
+            };
+            assert_eq!(panel.is_some(), sub.contains("panel"), "{sub}");
+            assert!(tty.is_some(), "{sub}");
+        }
     }
 }

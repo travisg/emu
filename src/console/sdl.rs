@@ -109,7 +109,7 @@ fn keyboard_code(key: Keycode, keymod: Mod) -> Option<u8> {
 /// The control code for a ctrl-modified key. SDL delivers no text input while
 /// ctrl is down, so without this the guest could never see one -- and CP/M is
 /// driven by them (^C warm start, ^S pause, ^Z end of file).
-fn control_code(key: Keycode, shift: bool) -> Option<u8> {
+pub(crate) fn control_code(key: Keycode, shift: bool) -> Option<u8> {
     let code = key.into_i32();
     if (Keycode::A.into_i32()..=Keycode::Z.into_i32()).contains(&code) {
         // ctrl-a..ctrl-z are 0x01..0x1a

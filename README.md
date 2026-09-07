@@ -114,12 +114,21 @@ leading Ctrl-J.
 
 The front panel from the manual's figure 5-1 opens in a window, and it works: the lamps are
 switch-indicators, so clicking one keys that bit into a register, and they glow at the duty cycle
-of the bit behind them rather than flickering. **A panel machine starts halted, as the real one did
+of the bit behind them rather than flickering. Below the console sits the disc rack — ONLINE,
+READ and WRITE lamps for the four disc units. **A panel machine starts halted, as the real one did
 at power-on — press RUN.**
+
+A `tty` token moves the teletype off the terminal into a window of its own: 72 columns of the
+Model 33's actual typewheel (an OFL-licensed recreation from photographs, in `fonts/`) on
+teletype paper, the mouse wheel rolling the platen back. Letters upcase as the real keyboard
+did, shift-Return is the LINE FEED key, Backspace sends RUBOUT, and the host terminal stays
+only as a Ctrl-D exit path.
 
 ```bash
 ./target/debug/emu -s ray703-panel                    # at its own 571 kHz, so the lamps move
 ./target/debug/emu -s ray703-panel-ptb -r roms/703/tape.tape --throttle 10   # a tape, in slow motion
+./target/debug/emu -s ray703-tty                      # the teletype in its own window
+./target/debug/emu -s ray703-panel-tty -r roms/703/rex.bin --fast-io   # the whole installation
 ./target/debug/emu -s ray703 --fast-io                # skip the teletype's real 10 chars/sec
 ```
 
@@ -175,8 +184,8 @@ needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`, and the Raytheon 703 sc
 - `src/system/`: one file per machine (the bus, address decode, devices, ROM loading) and the
   registry that describes them.
 - `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO, WD1793 floppy controller.
-- `src/console/`: the terminal and SDL2 frontends, and the channel/handles that connect them to
-  the CPU thread.
+- `src/console/`: the terminal and SDL2 frontends — the Kaypro screen, the 703's front panel and
+  teletype-paper windows — and the channel/handles that connect them to the CPU thread.
 - `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
 - `tests/`: the one integration test. `test/`: the end-to-end regression scripts and the guest
   programs they drive, by machine — `test/6809/` and `test/703/` (the latter including a Tiny

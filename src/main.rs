@@ -9,7 +9,7 @@
 //! Entry point: parse args, build the machine, run the CPU on its own thread
 //! while the console frontend owns the main thread.
 
-use emu::console::panel703::Panel703Frontend;
+use emu::console::ray703::Ray703Frontend;
 use emu::console::sdl::SdlFrontend;
 use emu::console::terminal::TerminalFrontend;
 use emu::console::{ConsoleEndpoint, ConsoleFrontend};
@@ -249,8 +249,8 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some(display @ emu::console::Display::Panel703 { .. }) => {
-            match Panel703Frontend::new(tx, display) {
+        Some(display @ emu::console::Display::Ray703 { .. }) => {
+            match Ray703Frontend::new(tx, display) {
                 Ok(f) => Box::new(f),
                 Err(e) => {
                     eprintln!("error initializing SDL: {e}");

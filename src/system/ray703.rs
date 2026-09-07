@@ -168,7 +168,8 @@ impl Ray703 {
                     io::ErrorKind::Unsupported,
                     format!(
                         "unknown ray703 subsystem '{other}'; try 'ray703', 'ray703-ptb' \
-                         or 'ray703-load' (add '-panel' for the front panel window)"
+                         or 'ray703-load' (add '-panel' for the front panel window, \
+                         '-tty' for the teletype window)"
                     ),
                 ));
             }
