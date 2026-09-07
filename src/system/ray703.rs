@@ -188,6 +188,11 @@ impl Ray703 {
         // teletype over unchanged scheduling slices.
     }
 
+    /// Wire the panel window's disc rack lamps into the controller.
+    pub fn attach_disc_rack(&mut self, rack: crate::console::DiscRackState) {
+        self.disc.attach_rack(rack);
+    }
+
     /// Try to mount a disc image on one of the controller's four units.
     /// Policy -- which paths, and that a missing one is fine -- lives in the
     /// factory, the way the registry hands the Kaypro its floppy path.

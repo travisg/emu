@@ -41,6 +41,7 @@
 //! the difference today, so the refinement waits for software that can.
 
 use crate::bus::MemoryDevice;
+use crate::console::DiscRackState;
 use crate::cpu::ray703::CLOCK_HZ;
 use crate::dev::memory::Memory;
 use std::fs::{File, OpenOptions};
@@ -52,6 +53,8 @@ pub const DEV_DISC: u8 = 0x1;
 
 /// "Up to four disc drives may be attached to the disc controller" (5-9).
 pub const DISC_UNITS: usize = 4;
+// The rack display in the panel window draws one bay per unit.
+const _: () = assert!(DISC_UNITS == crate::console::RACK_UNITS);
 
 /// The standard sectoring (5-9.4): "most units use 128 sectors per track and
 /// 47 words per sector so that programming may be standardized". 47 * 16 data
@@ -190,6 +193,8 @@ pub struct Disc74601 {
     /// machine time is being paced at (`set_pacing_hz`).
     access_cycles: u32,
     word_cycles: u32,
+    /// The panel window's rack lamps, when there is a panel to draw them.
+    rack: Option<DiscRackState>,
 }
 
 impl Disc74601 {
@@ -205,7 +210,19 @@ impl Disc74601 {
             fast_io: false,
             access_cycles: AVG_ACCESS_CYCLES,
             word_cycles: CYCLES_PER_WORD,
+            rack: None,
         }
+    }
+
+    /// Wire up the panel window's rack lamps. Syncs the ONLINE lamps from
+    /// whatever is already mounted, because mounting order is not ours to
+    /// dictate: the `load` subsystem mounts unit 0 inside `Ray703::new`,
+    /// before the factory can attach the rack.
+    pub fn attach_rack(&mut self, rack: DiscRackState) {
+        for (unit, u) in self.units.iter().enumerate() {
+            rack.set_online(unit, u.is_some());
+        }
+        self.rack = Some(rack);
     }
 
     /// Run transfers at host speed instead of disc speed (`--fast-io`).
@@ -252,6 +269,9 @@ impl Disc74601 {
         println!("703: mounted disc unit {unit} '{}' ({WORDS_PER_UNIT} words)", path.display());
         self.units[unit] =
             Some(DiscUnit { data, file: Some(file), write_inhibit: None, result: 0 });
+        if let Some(r) = &self.rack {
+            r.set_online(unit, true);
+        }
         true
     }
 
@@ -259,6 +279,9 @@ impl Disc74601 {
     pub fn mount_blank(&mut self, unit: usize) {
         self.units[unit] =
             Some(DiscUnit { data: vec![0; IMAGE_BYTES], file: None, write_inhibit: None, result: 0 });
+        if let Some(r) = &self.rack {
+            r.set_online(unit, true);
+        }
     }
 
     /// Set a unit's WRITE INHIBIT switch: `Some(n)` protects tracks 0..=n,
@@ -408,6 +431,17 @@ impl Disc74601 {
     /// `poll_interrupt_lines` is the one place its core and its devices meet,
     /// so that is where a device that addresses memory has to run.
     pub fn poll(&mut self, elapsed: u32, core: &mut Memory) -> u16 {
+        if let Some(r) = &self.rack {
+            // The duty denominator follows machine time whether or not a
+            // transfer is in flight, so an idle lamp decays instead of
+            // freezing; the lamp itself is charged only the time the
+            // transfer actually occupied, hence the min against what was
+            // left of it.
+            r.advance(elapsed);
+            if let Some(a) = &self.active {
+                r.charge(a.unit, matches!(a.op, Op::Write), elapsed.min(a.remaining));
+            }
+        }
         let Some(a) = &mut self.active else { return 0 };
         a.remaining = a.remaining.saturating_sub(elapsed);
         if a.remaining > 0 {
@@ -425,6 +459,12 @@ impl Disc74601 {
     }
 
     fn complete(&mut self, a: &Active, core: &mut Memory) {
+        // The completion count is what lets the frontend wink a lamp for a
+        // transfer whose charged time was too short to see -- zero, under
+        // --fast-io. A verify counts as a read: the heads were reading.
+        if let Some(r) = &self.rack {
+            r.complete(a.unit, matches!(a.op, Op::Write));
+        }
         let unit = self.units[a.unit].as_mut().unwrap();
         // The platter is one linear run of words, track-major: track t,
         // sector s, word w is word (t*128 + s)*47 + w. That linearity *is*
@@ -860,5 +900,74 @@ mod tests {
         let mut m = core();
         command(&mut d, FN_READ, 0x100, 0, 0, 0, 1);
         assert_eq!(finish(&mut d, &mut m), 1 << 3);
+    }
+
+    // -- the rack lamps ----------------------------------------------------
+
+    #[test]
+    fn attach_rack_syncs_already_mounted_units() {
+        use crate::console::DiscRackState;
+        let mut d = Disc74601::new(LEVEL);
+        d.mount_blank(2);
+        let rack = DiscRackState::new();
+        d.attach_rack(rack.clone());
+        let s = rack.snapshot();
+        assert_eq!(s.online, [false, false, true, false]);
+        d.mount_blank(0);
+        assert!(rack.snapshot().online[0], "mounting after attach lights the lamp too");
+    }
+
+    #[test]
+    fn a_transfer_charges_read_or_write_time_to_its_unit() {
+        use crate::console::DiscRackState;
+        let (mut d, mut m) = (disc(), core());
+        let rack = DiscRackState::new();
+        d.attach_rack(rack.clone());
+        command(&mut d, FN_WRITE, 0x100, 0, 0, 0, 10);
+        // two partial polls, then the rest: only in-flight time is charged
+        d.poll(100, &mut m);
+        d.poll(100, &mut m);
+        assert_eq!(finish(&mut d, &mut m), 1 << LEVEL);
+        let s = rack.snapshot();
+        let expected = (d.access_cycles + 10 * d.word_cycles) as u64;
+        assert_eq!(s.write_on[0], expected, "charged exactly the transfer's span");
+        assert_eq!(s.read_on[0], 0);
+        assert!(s.cycles > expected, "the denominator kept counting past completion");
+
+        command(&mut d, FN_READ, 0x100, 0, 0, 0, 10);
+        finish(&mut d, &mut m);
+        assert_eq!(rack.snapshot().read_on[0], expected);
+    }
+
+    /// Under --fast-io a transfer completes with zero cycles charged, inside
+    /// a single poll -- the completion counter is what still lets the
+    /// frontend wink the lamp.
+    #[test]
+    fn fast_io_completion_still_bumps_the_op_counter() {
+        use crate::console::DiscRackState;
+        let (mut d, mut m) = (disc(), core());
+        d.set_fast_io();
+        let rack = DiscRackState::new();
+        d.attach_rack(rack.clone());
+        command(&mut d, FN_WRITE, 0x100, 0, 0, 0, 10);
+        assert_eq!(d.poll(1, &mut m), 1 << LEVEL);
+        let s = rack.snapshot();
+        assert_eq!(s.write_on[0], 0, "no time to charge");
+        assert_eq!(s.write_ops[0], 1, "but the completion still counts");
+        assert_eq!(s.read_ops[0], 0);
+    }
+
+    #[test]
+    fn verify_charges_the_read_lamp() {
+        use crate::console::DiscRackState;
+        let (mut d, mut m) = (disc(), core());
+        let rack = DiscRackState::new();
+        d.attach_rack(rack.clone());
+        command(&mut d, FN_VERIFY, 0x100, 0, 0, 0, 10);
+        assert_eq!(finish(&mut d, &mut m), 1 << LEVEL);
+        let s = rack.snapshot();
+        assert!(s.read_on[0] > 0, "the heads were reading");
+        assert_eq!(s.read_ops[0], 1);
+        assert_eq!(s.write_on[0], 0);
     }
 }

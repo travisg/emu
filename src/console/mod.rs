@@ -345,6 +345,102 @@ impl PanelState {
     }
 }
 
+/// Units in the 74601 disc rack. `dev/disc74601.rs` pins its `DISC_UNITS`
+/// to this at compile time.
+pub const RACK_UNITS: usize = 4;
+
+/// The disc rack's lamps: ONLINE, READ and WRITE for each of the four
+/// 74601 units, drawn below the console in the panel window. Same shape as
+/// [`PanelState`] -- a `Clone` handle over relaxed atomics, written by the
+/// disc controller on the CPU thread, read at frame rate -- and the
+/// activity counters are monotonic on-cycle accumulators for the same
+/// reason: the frontend diffs snapshots, so there is no read-modify-write
+/// race across the thread boundary.
+///
+/// The op counters exist because cycle duty alone cannot show a `--fast-io`
+/// transfer: it completes with zero cycles charged, inside a single poll.
+/// A completion count that moved this frame is the frontend's cue to wink
+/// the lamp anyway.
+#[derive(Clone, Default)]
+pub struct DiscRackState(Arc<DiscRackInner>);
+
+#[derive(Default)]
+struct DiscRackInner {
+    /// A platter is mounted and spinning.
+    online: [AtomicBool; RACK_UNITS],
+    /// Cycles each unit has spent with a read (or verify -- the heads are
+    /// reading) or write in flight. Monotonic.
+    read_on: [AtomicU64; RACK_UNITS],
+    write_on: [AtomicU64; RACK_UNITS],
+    /// Completed operations per unit. Monotonic.
+    read_ops: [AtomicU64; RACK_UNITS],
+    write_ops: [AtomicU64; RACK_UNITS],
+    /// Total cycles seen by the controller: the duty denominator.
+    cycles: AtomicU64,
+}
+
+/// One frame's view of the rack. Duty over an interval is the ratio of the
+/// deltas of two snapshots, exactly as with [`LampSnapshot`].
+#[derive(Copy, Clone, Default)]
+pub struct RackSnapshot {
+    pub online: [bool; RACK_UNITS],
+    pub read_on: [u64; RACK_UNITS],
+    pub write_on: [u64; RACK_UNITS],
+    pub read_ops: [u64; RACK_UNITS],
+    pub write_ops: [u64; RACK_UNITS],
+    pub cycles: u64,
+}
+
+impl DiscRackState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // -- the CPU-thread side, called by the disc controller ----------------
+
+    pub fn set_online(&self, unit: usize, online: bool) {
+        self.0.online[unit].store(online, Ordering::Relaxed);
+    }
+
+    /// Advance the duty denominator: called on every controller poll,
+    /// transfer in flight or not, so an idle lamp's duty decays toward zero
+    /// instead of freezing at its last value.
+    pub fn advance(&self, cycles: u32) {
+        if cycles != 0 {
+            self.0.cycles.fetch_add(cycles as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Charge in-flight time to a unit's READ or WRITE lamp.
+    pub fn charge(&self, unit: usize, write: bool, cycles: u32) {
+        if cycles == 0 {
+            return;
+        }
+        let ctr = if write { &self.0.write_on[unit] } else { &self.0.read_on[unit] };
+        ctr.fetch_add(cycles as u64, Ordering::Relaxed);
+    }
+
+    /// Count a completed operation -- the `--fast-io` wink source.
+    pub fn complete(&self, unit: usize, write: bool) {
+        let ctr = if write { &self.0.write_ops[unit] } else { &self.0.read_ops[unit] };
+        ctr.fetch_add(1, Ordering::Relaxed);
+    }
+
+    // -- the frontend side -------------------------------------------------
+
+    pub fn snapshot(&self) -> RackSnapshot {
+        let mut s = RackSnapshot { cycles: self.0.cycles.load(Ordering::Relaxed), ..Default::default() };
+        for i in 0..RACK_UNITS {
+            s.online[i] = self.0.online[i].load(Ordering::Relaxed);
+            s.read_on[i] = self.0.read_on[i].load(Ordering::Relaxed);
+            s.write_on[i] = self.0.write_on[i].load(Ordering::Relaxed);
+            s.read_ops[i] = self.0.read_ops[i].load(Ordering::Relaxed);
+            s.write_ops[i] = self.0.write_ops[i].load(Ordering::Relaxed);
+        }
+        s
+    }
+}
+
 /// One actuation of a front panel control, sent from the panel window to
 /// the run loop on the CPU thread. The run-state switches (`Run`, `Halt`,
 /// `SingleCommand`, `Reset`) are handled by the `Emulator` itself; the
@@ -414,6 +510,26 @@ mod tests {
         ep.set_output(Box::new(paper.clone()));
         ep.put_char(b'A');
         paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+    }
+
+    /// Rack counters are monotonic and diff to a duty, the LampSnapshot
+    /// convention.
+    #[test]
+    fn rack_accumulators_yield_duty_and_ops_are_monotonic() {
+        let r = DiscRackState::new();
+        let before = r.snapshot();
+        r.advance(100);
+        r.charge(1, false, 25);
+        r.charge(1, true, 10);
+        r.complete(1, false);
+        let after = r.snapshot();
+        assert_eq!(after.cycles - before.cycles, 100);
+        assert_eq!(after.read_on[1] - before.read_on[1], 25);
+        assert_eq!(after.write_on[1] - before.write_on[1], 10);
+        assert_eq!(after.read_ops[1] - before.read_ops[1], 1);
+        assert_eq!(after.read_on[0], 0, "other units untouched");
+        r.advance(0);
+        assert_eq!(r.snapshot().cycles, after.cycles, "zero cycles accrue nothing");
     }
 
     #[test]
