@@ -52,7 +52,7 @@
 //! end it; `RETI` is a plain `RET`, with nothing daisy-chained to notify;
 //! `RLC`/`RES`/`SET` have the undocumented register writeback.
 
-use super::{Cpu, StepResult};
+use super::{Addressing, Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
 use std::io::Write;
 
@@ -1707,6 +1707,65 @@ impl Cpu for CpuZ80 {
         self.cycles
     }
 
+    fn pc(&self) -> u32 {
+        self.pc as u32
+    }
+
+    /// The trace line's registers first, then the alternate set and the
+    /// interrupt state the trace leaves out.
+    fn registers(&self) -> Vec<Register> {
+        let pair = |hi: u8, lo: u8| ((hi as u16) << 8) | lo as u16;
+        vec![
+            Register::new("PC", self.pc, 16),
+            Register::new("AF", self.af(), 16),
+            Register::new("BC", self.bc(), 16),
+            Register::new("DE", self.de(), 16),
+            Register::new("HL", self.hl(), 16),
+            Register::new("IX", self.ix, 16),
+            Register::new("IY", self.iy, 16),
+            Register::new("SP", self.sp, 16),
+            Register::new("AF2", self.af_alt(), 16),
+            Register::new("BC2", pair(self.b_alt, self.c_alt), 16),
+            Register::new("DE2", pair(self.d_alt, self.e_alt), 16),
+            Register::new("HL2", pair(self.h_alt, self.l_alt), 16),
+            Register::new("I", self.i, 8),
+            Register::new("R", self.r, 8),
+            Register::new("IM", self.im, 2),
+            Register::new("IFF1", self.iff1 as u8, 1),
+            Register::new("IFF2", self.iff2 as u8, 1),
+        ]
+    }
+
+    fn set_register(&mut self, name: &str, value: u32) -> bool {
+        let w = value as u16;
+        let (hi, lo) = ((w >> 8) as u8, w as u8);
+        match name {
+            "PC" => self.pc = w,
+            "AF" => self.set_af(w),
+            "BC" => self.set_bc(w),
+            "DE" => self.set_de(w),
+            "HL" => self.set_hl(w),
+            "IX" => self.ix = w,
+            "IY" => self.iy = w,
+            "SP" => self.sp = w,
+            "AF2" => self.set_af_alt(w),
+            "BC2" => (self.b_alt, self.c_alt) = (hi, lo),
+            "DE2" => (self.d_alt, self.e_alt) = (hi, lo),
+            "HL2" => (self.h_alt, self.l_alt) = (hi, lo),
+            "I" => self.i = lo,
+            "R" => self.r = lo,
+            "IM" => self.im = lo & 3,
+            "IFF1" => self.iff1 = value & 1 != 0,
+            "IFF2" => self.iff2 = value & 1 != 0,
+            _ => return false,
+        }
+        true
+    }
+
+    fn addressing(&self) -> Addressing {
+        Addressing { endian: Endian::Little, unit_bytes: 1 }
+    }
+
     fn dump(&self) {
         println!(
             "f 0x{:02x} ({}{}{}{}{}{}) a 0x{:02x} b 0x{:02x} c 0x{:02x} d 0x{:02x} e 0x{:02x} h 0x{:02x} l 0x{:02x} sp 0x{:04x} ix 0x{:04x} iy 0x{:04x} pc 0x{:04x}",
@@ -1734,7 +1793,9 @@ impl Cpu for CpuZ80 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cpu::testbus::{run_steps, TestBus};
+    use crate::cpu::testbus::{
+        check_set_register, registers_as_trace, run_steps, trace_of, TestBus,
+    };
 
     /// Load a hand-assembled program at 0 and reset into it -- the z80 has no
     /// reset vector.
@@ -1744,6 +1805,50 @@ mod tests {
         let mut cpu = CpuZ80::new();
         cpu.reset(&mut bus);
         (cpu, bus)
+    }
+
+    #[test]
+    fn registers_match_the_trace_line() {
+        let (mut cpu, _bus) = boot(&[0x00]);
+        cpu.pc = 0x0100;
+        cpu.set_af(0x12c5);
+        cpu.set_bc(0x3456);
+        cpu.set_de(0x789a);
+        cpu.set_hl(0xbcde);
+        cpu.ix = 0xbeef;
+        cpu.iy = 0xcafe;
+        cpu.sp = 0xfffe;
+        assert_eq!(registers_as_trace(&cpu, 8), trace_of(&cpu));
+        assert_eq!(cpu.pc(), 0x100);
+        assert_eq!(cpu.addressing(), Addressing { endian: Endian::Little, unit_bytes: 1 });
+    }
+
+    #[test]
+    fn set_register_round_trips() {
+        let (mut cpu, _bus) = boot(&[0x00]);
+        check_set_register(
+            &mut cpu,
+            &[
+                ("PC", 0x1234, 0x1234),
+                ("AF", 0x12c5, 0x12c5),
+                ("BC", 0x3456, 0x3456),
+                ("DE", 0x789a, 0x789a),
+                ("HL", 0xbcde, 0xbcde),
+                ("IX", 0xbeef, 0xbeef),
+                ("IY", 0xcafe, 0xcafe),
+                ("SP", 0xfffe, 0xfffe),
+                ("AF2", 0x2211, 0x2211),
+                ("BC2", 0x4433, 0x4433),
+                ("DE2", 0x6655, 0x6655),
+                ("HL2", 0x8877, 0x8877),
+                ("I", 0x1ab, 0xab),
+                ("R", 0x7f, 0x7f),
+                ("IM", 0x6, 0x2),
+                ("IFF1", 1, 1),
+                ("IFF2", 0, 0),
+            ],
+        );
+        assert_eq!((cpu.a, cpu.f, cpu.h_alt, cpu.l_alt), (0x12, 0xc5, 0x88, 0x77));
     }
 
     #[test]

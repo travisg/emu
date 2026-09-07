@@ -36,7 +36,7 @@
 //!   flat 64K byte space, so word access is `read16(waddr << 1, Endian::Big)`
 //!   and the even-byte-is-high-half rule falls out of the composed accessor.
 
-use super::{Cpu, StepResult};
+use super::{Addressing, Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
 // The one cpu -> console dependency in the tree, the same direction the
 // kaypro bus takes for `VideoBuffer`: the panel handle is defined next to
@@ -905,6 +905,77 @@ impl Cpu for Cpu703 {
         self.cycles
     }
 
+    fn pc(&self) -> u32 {
+        self.pcr as u32
+    }
+
+    /// The trace line's five first, then the flip flops and the interrupt
+    /// system, which the trace never shows: INH is the inhibit mask, and
+    /// ENB/PND/ACT are masks over the sixteen levels with bit n level n --
+    /// a stuck executive is usually a level that is enabled but never
+    /// pending, or active with no INR in sight.
+    fn registers(&self) -> Vec<Register> {
+        let mask = |pick: fn(&Level) -> bool| -> u16 {
+            self.levels
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| pick(l))
+                .fold(0, |m, (n, _)| m | (1 << n))
+        };
+        vec![
+            Register::new("PC", self.pcr, 15),
+            Register::new("AC", self.acr, 16),
+            Register::new("IX", self.ixr, 16),
+            Register::new("EX", self.exr, 5),
+            Register::new("ST", self.status(), 16),
+            Register::new("NEG", self.neg as u8, 1),
+            Register::new("EQL", self.eql as u8, 1),
+            Register::new("OVF", self.ovf as u8, 1),
+            Register::new("GLB", self.global as u8, 1),
+            Register::new("INH", self.inhibit as u8, 1),
+            Register::new("ENB", mask(|l| l.enabled), 16),
+            Register::new("PND", mask(|l| l.pending), 16),
+            Register::new("ACT", mask(|l| l.active), 16),
+        ]
+    }
+
+    /// Everything `registers()` lists is settable. Setting PND on an
+    /// enabled level is how the debugger injects an interrupt: the next
+    /// step's entry sequence takes it exactly as a device pulse.
+    fn set_register(&mut self, name: &str, value: u32) -> bool {
+        let bit = value & 1 != 0;
+        match name {
+            "PC" => self.pcr = (value & 0x7fff) as u16,
+            "AC" => self.acr = value as u16,
+            "IX" => self.ixr = value as u16,
+            "EX" => self.exr = (value & 0x1f) as u8,
+            "ST" => self.set_status(value as u16),
+            "NEG" => self.neg = bit,
+            "EQL" => self.eql = bit,
+            "OVF" => self.ovf = bit,
+            "GLB" => self.global = bit,
+            "INH" => self.inhibit = bit,
+            "ENB" | "PND" | "ACT" => {
+                for (n, l) in self.levels.iter_mut().enumerate() {
+                    let on = value & (1 << n) != 0;
+                    match name {
+                        "ENB" => l.enabled = on,
+                        "PND" => l.pending = on,
+                        _ => l.active = on,
+                    }
+                }
+            }
+            _ => return false,
+        }
+        self.publish_panel();
+        true
+    }
+
+    /// Word-addressed, big-endian on its byte bus (1-3.3.2).
+    fn addressing(&self) -> Addressing {
+        Addressing { endian: Endian::Big, unit_bytes: 2 }
+    }
+
     /// The panel's data-entry path (section 5). Runs on the CPU thread
     /// between instructions, halted or not -- the PROGRAM COUNTER row is
     /// "always active for both entry and display" (5-1), and keying the
@@ -991,7 +1062,9 @@ impl Cpu for Cpu703 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cpu::testbus::{run_steps, TestBus};
+    use crate::cpu::testbus::{
+        check_set_register, registers_as_trace, run_steps, trace_of, TestBus,
+    };
 
     /// Assemble words at word address `at` and reset with PC there.
     fn boot_at(at: u16, prog: &[u16]) -> (Cpu703, TestBus) {
@@ -1014,6 +1087,74 @@ mod tests {
 
     fn word(bus: &mut TestBus, waddr: u16) -> u16 {
         bus.read16((waddr as u32) << 1, Endian::Big)
+    }
+
+    // -- the debugger's view ------------------------------------------------
+
+    #[test]
+    fn registers_match_the_trace_line() {
+        let (mut cpu, _bus) = boot(&[0x0100]);
+        cpu.acr = 0x1234;
+        cpu.ixr = 0xbeef;
+        cpu.exr = 0x15;
+        cpu.neg = true;
+        cpu.global = true;
+        assert_eq!(registers_as_trace(&cpu, 5), trace_of(&cpu));
+        assert_eq!(cpu.pc(), 0x40);
+        assert_eq!(cpu.addressing(), Addressing { endian: Endian::Big, unit_bytes: 2 });
+    }
+
+    #[test]
+    fn set_register_round_trips() {
+        let (mut cpu, _bus) = boot(&[0x0100]);
+        check_set_register(
+            &mut cpu,
+            &[
+                ("PC", 0xffff, 0x7fff),
+                ("AC", 0x1234, 0x1234),
+                ("IX", 0xbeef, 0xbeef),
+                ("EX", 0xff, 0x1f),
+                // the status word is EXR and the four flip flops, nothing else
+                ("ST", 0xffff, 0xff80),
+                ("NEG", 0, 0),
+                ("EQL", 1, 1),
+                ("OVF", 0, 0),
+                ("GLB", 1, 1),
+                ("INH", 1, 1),
+                ("ENB", 0x8001, 0x8001),
+                ("PND", 0x0002, 0x0002),
+                ("ACT", 0x4000, 0x4000),
+            ],
+        );
+        assert_eq!(cpu.exr, 0x1f);
+        assert!(cpu.eql && cpu.global && cpu.inhibit && !cpu.neg && !cpu.ovf);
+        assert!(cpu.levels[0].enabled && cpu.levels[15].enabled && !cpu.levels[1].enabled);
+        assert!(cpu.levels[1].pending && cpu.levels[14].active);
+    }
+
+    /// Enabling a level and marking it pending from the debugger is a device
+    /// pulse the hardware never saw: the next step runs the entry sequence.
+    #[test]
+    fn setting_a_pending_level_takes_the_interrupt_on_the_next_step() {
+        let (mut cpu, mut bus) = boot(&[0x0100]);
+        bus.load(0x0d << 1, &0x0200u16.to_be_bytes()); // level 3 linkage
+        assert!(cpu.set_register("ENB", 1 << 3));
+        assert!(cpu.set_register("PND", 1 << 3));
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+        assert_eq!(cpu.pcr, 0x200);
+        assert_eq!(word(&mut bus, 0x0c), 0x40, "the interrupted PC is saved");
+        assert!(cpu.levels[3].active && !cpu.levels[3].pending);
+    }
+
+    /// A register keyed from the debugger shows on the lamps at once, as one
+    /// keyed from the panel does -- nothing else republishes while halted.
+    #[test]
+    fn set_register_republishes_the_panel() {
+        let (mut cpu, _bus) = boot(&[0x0100]);
+        let panel = PanelState::default();
+        cpu.attach_panel(panel.clone());
+        assert!(cpu.set_register("PC", 0x1234));
+        assert_eq!(panel.program_counter(), 0x1234);
     }
 
     /// Reset does what the manual says it does -- disable every level, drop

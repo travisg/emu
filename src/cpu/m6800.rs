@@ -12,7 +12,7 @@
 //! decode table indexed by opcode, then a switch on the addressing mode to
 //! fetch the operand and a switch on the operation to execute it.
 
-use super::{Cpu, StepResult};
+use super::{Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
 use std::io::Write;
 
@@ -1023,6 +1023,36 @@ impl Cpu for Cpu6800 {
         self.cycles
     }
 
+    fn pc(&self) -> u32 {
+        self.pc as u32
+    }
+
+    fn registers(&self) -> Vec<Register> {
+        vec![
+            Register::new("PC", self.pc, 16),
+            Register::new("A", self.a, 8),
+            Register::new("B", self.b, 8),
+            Register::new("X", self.ix, 16),
+            Register::new("S", self.sp, 16),
+            Register::new("CC", self.cc, 8),
+        ]
+    }
+
+    fn set_register(&mut self, name: &str, value: u32) -> bool {
+        let r = match name {
+            "PC" => Reg::Pc,
+            "A" => Reg::A,
+            "B" => Reg::B,
+            "X" => Reg::Ix,
+            "S" => Reg::Sp,
+            "CC" => Reg::Cc,
+            _ => return false,
+        };
+        // put_reg truncates the byte registers itself
+        self.put_reg(r, value as u16);
+        true
+    }
+
     fn dump(&self) {
         println!(
             "A 0x{:02x} B 0x{:02x} X 0x{:04x} S 0x{:04x} CC 0x{:02x} ({}{}{}{}{}) PC 0x{:04x}",
@@ -1053,7 +1083,9 @@ impl Cpu for Cpu6800 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cpu::testbus::{run_steps, TestBus};
+    use crate::cpu::testbus::{
+        check_set_register, registers_as_trace, run_steps, trace_of, TestBus,
+    };
 
     /// Load a hand-assembled program at 0xe000 and reset into it.
     fn boot(prog: &[u8]) -> (Cpu6800, TestBus) {
@@ -1063,6 +1095,34 @@ mod tests {
         let mut cpu = Cpu6800::new();
         cpu.reset(&mut bus);
         (cpu, bus)
+    }
+
+    #[test]
+    fn registers_match_the_trace_line() {
+        let (mut cpu, _bus) = boot(&[0x01]);
+        cpu.a = 0x12;
+        cpu.b = 0x34;
+        cpu.ix = 0xbeef;
+        cpu.sp = 0x01ff;
+        cpu.cc = 0xc5;
+        assert_eq!(registers_as_trace(&cpu, 6), trace_of(&cpu));
+        assert_eq!(cpu.pc(), 0xe000);
+    }
+
+    #[test]
+    fn set_register_round_trips() {
+        let (mut cpu, _bus) = boot(&[0x01]);
+        check_set_register(
+            &mut cpu,
+            &[
+                ("PC", 0x1234, 0x1234),
+                ("A", 0x1ff, 0xff),
+                ("B", 0x42, 0x42),
+                ("X", 0xbeef, 0xbeef),
+                ("S", 0x01ff, 0x01ff),
+                ("CC", 0x1c5, 0xc5),
+            ],
+        );
     }
 
     #[test]

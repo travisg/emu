@@ -122,3 +122,32 @@ pub(crate) fn run_steps(cpu: &mut dyn Cpu, bus: &mut TestBus, n: usize) {
         assert_eq!(cpu.step(bus), StepResult::Ok, "step {i} did not complete");
     }
 }
+
+/// One trace line, without its newline.
+pub(crate) fn trace_of(cpu: &dyn Cpu) -> String {
+    let mut line = Vec::new();
+    cpu.trace_line(&mut line).unwrap();
+    String::from_utf8(line).unwrap().trim_end().to_string()
+}
+
+/// The first `n` of `registers()` in the trace line's `NAME=hex` shape, so a
+/// test can hold the two to each other: the debugger's view of a core and
+/// its trace must not drift apart in name, order or width.
+pub(crate) fn registers_as_trace(cpu: &dyn Cpu, n: usize) -> String {
+    cpu.registers()
+        .iter()
+        .take(n)
+        .map(|r| format!("{}={}", r.name, r.hex()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Set each `(name, value)` and read it straight back, expecting `want`.
+pub(crate) fn check_set_register(cpu: &mut dyn Cpu, cases: &[(&str, u32, u32)]) {
+    for &(name, value, want) in cases {
+        assert!(cpu.set_register(name, value), "{name} is not settable");
+        let got = cpu.registers().into_iter().find(|r| r.name == name);
+        assert_eq!(got.map(|r| r.value), Some(want), "{name} <- {value:x}");
+    }
+    assert!(!cpu.set_register("NOPE", 0), "an unknown register must be refused");
+}
