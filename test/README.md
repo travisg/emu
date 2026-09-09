@@ -28,6 +28,7 @@ the halt from the port's stop event, so it needs no pty and no `script(1)`.
 
     make -C test basic6809-test      # boots 6809 BASIC, runs 6809/lang_test.bas
     make -C test kaypro-zex-test     # the Z80 instruction exercisers under CP/M
+    make -C test rc2014-basic-test   # factory BASIC, every keystroke an interrupt
     make -C test ray703-test         # the 703 demo: banner, echo, clean halt
     make -C test ray703-basic-test   # a scripted Tiny BASIC session
     make -C test ray703-disc-test    # the 74601 disc, over two interrupt levels
@@ -36,10 +37,13 @@ the halt from the port's stop event, so it needs no pty and no `script(1)`.
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
-All but the first two need nothing outside the repo, and CI runs them.
+All but the first three need nothing outside the repo, and CI runs them.
 REX's session is `make -C rex test`, under its own directory. The 6809 one
 boots Microsoft BASIC, so it needs `roms/6809/BASIC.HEX` in place
-(`tools/fetch-roms.py`) and runs only locally. The Kaypro one boots CP/M
+(`tools/fetch-roms.py`) and runs only locally. The RC2014 one boots the
+factory rom's BASIC, `roms/rc2014/24886009.BIN` from the same script, and
+is local likewise; it is also the Z80 core's interrupt test, since every
+character typed at that machine is an SIO interrupt. The Kaypro one boots CP/M
 off the stock floppy with the Kaypro ROMs, needs `cpmtools` to put the
 exercisers (`disks/cpm/`, also from `tools/fetch-roms.py`) on a scratch copy
 of it, and is local for the same reason; it is the Z80 core's reference,
