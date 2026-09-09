@@ -476,6 +476,11 @@ impl Z80Sio {
         vector
     }
 
+    /// Something is under service: the chip is holding IEO low.
+    pub fn under_service(&self) -> bool {
+        self.ius.iter().any(|&b| b)
+    }
+
     /// `RETI`: the highest source under service is released.
     pub fn reti(&mut self) {
         if let Some(slot) = self.ius.iter_mut().find(|b| **b) {

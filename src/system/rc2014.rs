@@ -26,11 +26,14 @@
 //! for an interrupt on every received character; its mode-1 handler at
 //! $0038 reads the data port into a 64-byte ring buffer at $8000 and RST 10h
 //! at $00b3 spins on the buffer's count, so a machine that never interrupts
-//! can never be typed at.
+//! can never be typed at. The CTC module at `0x88`-`0x8b` (`dev/z80ctc`) sits
+//! below the SIO on the interrupt daisy chain; nothing in the factory rom
+//! programs it, and `test/run_rc2014_ctc_test.py` is what does.
 
 use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
 use crate::dev::memory::Memory;
+use crate::dev::z80ctc::Z80Ctc;
 use crate::dev::z80sio::{Ch, Z80Sio};
 use crate::rom;
 use std::io;
@@ -63,6 +66,7 @@ pub struct Rc2014 {
     rom_bank: u32,
     console: ConsoleEndpoint,
     sio: Z80Sio,
+    ctc: Z80Ctc,
 }
 
 impl Rc2014 {
@@ -91,7 +95,7 @@ impl Rc2014 {
         }
         // the console is a terminal on a serial cable, and honours RTS
         sio.set_honours_rts(Ch::A, true);
-        Ok(Rc2014 { ram: Memory::new(BANK_SIZE), rom, rom_bank: 0, console, sio })
+        Ok(Rc2014 { ram: Memory::new(BANK_SIZE), rom, rom_bank: 0, console, sio, ctc: Z80Ctc::new() })
     }
 
     /// `--fast-io`: the serial port completes instantly in both directions.
@@ -162,6 +166,7 @@ impl Bus for Rc2014 {
             // SIO/B: the second serial port, with nothing on its line
             0x82 => self.sio.read_control(Ch::B),
             0x83 => self.sio.read_data(Ch::B),
+            0x88..=0x8b => self.ctc.read((port & 0x03) as usize),
             0x90 | 0x91 => 0xff,
             _ => {
                 eprintln!("in from unknown port {port:#x}");
@@ -170,23 +175,39 @@ impl Bus for Rc2014 {
         }
     }
 
-    /// The SIO's INT, level-held: with the rom's "interrupt on every
+    /// INT is the daisy chain: the SIO, then the CTC below it, so the CTC
+    /// requests only while nothing in the SIO is under service. The SIO's
+    /// request is level-held: with the rom's "interrupt on every
     /// character" it stays asserted until the handler reads the data port.
-    /// The keystrokes reach the line and the frames advance here, once an
-    /// instruction.
+    /// The keystrokes reach the line, the frames advance and the timers
+    /// count here, once an instruction.
     fn poll_interrupts(&mut self, elapsed_cycles: u32) -> IntStatus {
         self.poll_console();
         self.sio.tick(elapsed_cycles);
-        IntStatus { irq: self.sio.int_pending(), nmi: false }
+        self.ctc.tick(elapsed_cycles);
+        let irq = self.sio.int_pending() || (!self.sio.under_service() && self.ctc.int_pending());
+        IntStatus { irq, nmi: false }
     }
 
-    /// The SIO is the only thing on the interrupt daisy chain.
+    /// The acknowledge goes to the first device on the chain that is
+    /// requesting; nothing requesting is the pulled-up bus.
     fn interrupt_acknowledge(&mut self) -> u8 {
-        self.sio.acknowledge()
+        if self.sio.int_pending() {
+            self.sio.acknowledge()
+        } else if self.ctc.int_pending() {
+            self.ctc.acknowledge()
+        } else {
+            0xff
+        }
     }
 
+    /// RETI releases the device under service nearest the cpu.
     fn interrupt_return(&mut self) {
-        self.sio.reti();
+        if self.sio.under_service() {
+            self.sio.reti();
+        } else {
+            self.ctc.reti();
+        }
     }
 
     fn set_device_pacing_hz(&mut self, hz: u64) {
@@ -206,6 +227,7 @@ impl Bus for Rc2014 {
             }
             0x82 => self.sio.write_control(Ch::B, val),
             0x83 => self.sio.write_data(Ch::B, val),
+            0x88..=0x8b => self.ctc.write((port & 0x03) as usize, val),
             0x90 | 0x91 => {}
             _ => eprintln!("out to unknown port {port:#x}"),
         }
@@ -340,6 +362,30 @@ mod tests {
         sys.interrupt_return();
         assert!(sys.poll_interrupts(0).irq);
         assert_eq!(sys.io_read8(0x81), b'b');
+    }
+
+    /// The CTC sits below the SIO on the daisy chain: its request is held
+    /// while the SIO is under service, the acknowledge goes to whichever
+    /// is first, and RETI releases the nearer one.
+    #[test]
+    fn the_ctc_waits_behind_the_sio_on_the_chain() {
+        let (mut sys, tx) = build("chain");
+        init_sio(&mut sys);
+        sys.io_write8(0x88, 0x40); // ctc vector
+        sys.io_write8(0x88, 0xa5); // channel 0: interrupt, prescaler 256, constant follows
+        sys.io_write8(0x88, 1);
+        assert!(sys.poll_interrupts(256).irq, "the timer");
+        assert_eq!(sys.interrupt_acknowledge(), 0x40);
+        tx.send(b'k').unwrap();
+        assert!(sys.poll_interrupts(FRAME).irq, "the SIO outranks the CTC's service");
+        assert_eq!(sys.interrupt_acknowledge(), 0x00, "the SIO's vector, WR2 never written");
+        assert!(!sys.poll_interrupts(256).irq, "the timer's next tick waits");
+        sys.io_read8(0x81);
+        sys.interrupt_return();
+        assert!(!sys.poll_interrupts(0).irq, "the CTC is still under its own service");
+        sys.interrupt_return();
+        assert!(sys.poll_interrupts(0).irq, "and now the held tick");
+        assert_eq!(sys.interrupt_acknowledge(), 0x40);
     }
 
     /// `--fast-io` takes the frame time off both directions.

@@ -40,6 +40,11 @@ jobs:
     - name: 703 end-to-end tests
       run: make -C test ray703-test ray703-basic-test ray703-disc-test ray703-boot-test
 
+    # The RC2014's CTC test writes its guest into RAM over the debug port
+    # under a rom of zeros, so it needs no image either.
+    - name: RC2014 CTC test
+      run: make -C test rc2014-ctc-test
+
     # REX, the 703 executive, is its own project under rex/ with its own
     # makefile; its scripted session runs on the same harness as the above.
     - name: REX
