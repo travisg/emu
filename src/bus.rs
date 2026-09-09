@@ -26,10 +26,11 @@ pub enum Endian {
 /// Interrupt lines as seen by the CPU. The lines live in the machine (which
 /// knows what's wired to them); how they're serviced lives in the CPU.
 ///
-/// Only the RC2014 drives this: its SIO raises IRQ whenever a character is
-/// waiting, which is the only way the factory rom sees a keystroke. Nothing
-/// asserts NMI, and the 6800/6809 machines never interrupt at all, so `irq`
-/// and the z80 are the whole of what this struct does.
+/// The two Z80 machines drive this from their SIO: on the RC2014 a waiting
+/// character is the only way the factory rom sees a keystroke; the Kaypro's
+/// rom programs its SIO to request nothing, so there it is wired and idle.
+/// Nothing asserts NMI, the core ignores `vector` until it has an IM 2, and
+/// the 6800/6809 machines never interrupt at all.
 /// The Raytheon 703 runs interrupts for real too, but its 16 prioritized levels
 /// don't fit an irq/nmi pair -- see `poll_interrupt_lines`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -141,8 +142,10 @@ pub trait Bus {
     ///
     /// `&mut self` for the same reason `MemoryDevice::read_byte` takes it: a
     /// machine may have to pull from its console to learn whether a receiver
-    /// has anything, and that pull mutates.
-    fn poll_interrupts(&mut self) -> IntStatus {
+    /// has anything, and that pull mutates. `elapsed_cycles` is the time
+    /// base, as for `poll_interrupt_lines`: a serial port counts the
+    /// machine's cycles to clock a character in at its baud rate.
+    fn poll_interrupts(&mut self, _elapsed_cycles: u32) -> IntStatus {
         IntStatus::NONE
     }
 

@@ -75,11 +75,11 @@ def type_line(emu, text):
     """Type `text` and Return as one burst, and see each character's
     interrupt through the breakpoint on the handler: the entry must not
     have come from the handler's own `RETI`. Then wait for the line to
-    echo. The SIO here has no baud rate: the latch refills at the poll
-    after the handler's `RETI`, so a burst reaches the rom's 64-byte ring
-    buffer with BASIC getting one instruction per character to drain it,
-    and a second burst on top of the first overflows it and is dropped.
-    The echo is BASIC having consumed the line."""
+    echo, which is BASIC having consumed it. BASIC checks for a break
+    between the lines it prints, and that check eats a waiting character,
+    so a line typed while the previous one is still echoing can lose its
+    head to it -- the SIO's flow control keeps a paste from overrunning
+    the rom's ring buffer, not from being read by the wrong routine."""
     keys = text + '\r'
     emu.key(keys)
     for n, ch in enumerate(keys):

@@ -12,24 +12,26 @@
 //! `#include "ihex.h"` in the C++ file is vestigial, there is no parser behind
 //! it.
 //!
-//! The serial port is hand-rolled here rather than reusing a device: the C++
-//! machine has a single-byte receive latch inline (`mSIORecvByte`), and does
-//! *not* use `dev/z80sio.*`, which despite the generic name is Kaypro-only.
-//! The C++ fills that latch from a console callback on the console thread while
-//! the CPU thread reads it, which is what made the mutex in `753dd4b`
-//! necessary; here the latch is pulled from the channel on the CPU thread at
-//! the point of the read, so there is nothing to synchronize.
+//! The serial port is the SIO/2 module at `$80`-`$83` (`dev/z80sio`), channel
+//! A the console. The C++ had a single-byte receive latch inline instead; the
+//! shared model replaced it. The chip is clocked straight off the 7.3728 MHz
+//! system clock and the factory rom's WR4 divides by 64, which is 115200 baud:
+//! a character every 640 cycles in either direction, and the console never
+//! delivers faster than that. The rom drops RTS when its ring buffer is
+//! nearly full, and the terminal on the other end of the cable honours it,
+//! so a long paste waits rather than overruns.
 //!
-//! The SIO raises IRQ while the latch is full, and it is the only device in
-//! the tree that drives `Bus::poll_interrupts`. That is not decoration: the
-//! factory rom's console input is *entirely* interrupt-driven. Its mode-1
-//! handler at $0038 reads the data port into a 64-byte ring buffer at $8000
-//! and RST 10h at $00b3 spins on the buffer's count, so a machine that never
-//! interrupts can never be typed at, however full the receive latch gets.
+//! The SIO's INT is the IRQ line, and that is not decoration: the factory
+//! rom's console input is *entirely* interrupt-driven. The rom programs WR1
+//! for an interrupt on every received character; its mode-1 handler at
+//! $0038 reads the data port into a 64-byte ring buffer at $8000 and RST 10h
+//! at $00b3 spins on the buffer's count, so a machine that never interrupts
+//! can never be typed at.
 
 use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
 use crate::dev::memory::Memory;
+use crate::dev::z80sio::{Ch, Z80Sio};
 use crate::rom;
 use std::io;
 use std::path::Path;
@@ -43,14 +45,12 @@ use std::path::Path;
 // small computer monitor for everything at offset 0xe000
 pub const DEFAULT_ROM: &str = "roms/rc2014/24886009.BIN";
 
+/// The system clock, which is also the SIO's serial clock input.
+pub const CLOCK_HZ: u64 = 7_372_800;
+
 const BANK_SIZE: usize = 64 * 1024;
 /// Size of the rom window at the bottom of the address space.
 const ROM_WINDOW: u16 = 0x2000;
-
-// SIO/A status bits
-const SIO_RX_AVAILABLE: u8 = 1 << 0;
-const SIO_INT_PENDING: u8 = 1 << 1;
-const SIO_TX_EMPTY: u8 = 1 << 2;
 
 pub struct Rc2014 {
     ram: Memory,
@@ -62,8 +62,7 @@ pub struct Rc2014 {
     /// is written in terms of it, not because it is live.
     rom_bank: u32,
     console: ConsoleEndpoint,
-    /// The single-byte receive latch. `None` is the C++ `!mSIORecvByte_valid`.
-    sio_rx: Option<u8>,
+    sio: Z80Sio,
 }
 
 impl Rc2014 {
@@ -86,7 +85,18 @@ impl Rc2014 {
         let mut rom = Memory::new(BANK_SIZE);
         rom.load_at(0, &image);
 
-        Ok(Rc2014 { ram: Memory::new(BANK_SIZE), rom, rom_bank: 0, console, sio_rx: None })
+        let mut sio = Z80Sio::new(CLOCK_HZ);
+        for ch in [Ch::A, Ch::B] {
+            sio.set_clock_hz(ch, CLOCK_HZ);
+        }
+        // the console is a terminal on a serial cable, and honours RTS
+        sio.set_honours_rts(Ch::A, true);
+        Ok(Rc2014 { ram: Memory::new(BANK_SIZE), rom, rom_bank: 0, console, sio })
+    }
+
+    /// `--fast-io`: the serial port completes instantly in both directions.
+    pub fn set_fast_io(&mut self) {
+        self.sio.set_fast_io();
     }
 
     /// The address decode, shared by reads and writes.
@@ -105,15 +115,11 @@ impl Rc2014 {
         }
     }
 
-    /// Top up the receive latch from the console.
-    ///
-    /// The C++ does this from a console-thread callback the moment a character
-    /// lands in the input queue; doing it lazily on the read side is
-    /// equivalent from the guest's point of view, since the latch is only ever
-    /// observable through these two ports.
+    /// Hand the console's keystrokes to the terminal end of channel A's
+    /// line; the SIO clocks them in at the baud rate from there.
     fn poll_console(&mut self) {
-        if self.sio_rx.is_none() {
-            self.sio_rx = self.console.try_next_char();
+        while let Some(c) = self.console.try_next_char() {
+            self.sio.receive(Ch::A, c);
         }
     }
 }
@@ -147,31 +153,15 @@ impl Bus for Rc2014 {
 
     fn io_read8(&mut self, port: u16) -> u8 {
         match port & 0xff {
-            // SIO/A control port: receive-available, the interrupt condition,
-            // and transmit-buffer-empty.
-            //
-            // TX-empty is unconditional: transmit here is a synchronous write
-            // to the console, so the buffer is always empty by the time the
-            // guest can look. `dev/mc6850` reports its `TDRE` the same way.
-            // The factory rom's output routine at $0116 -- `in a,($80)` /
-            // `rrca` / `bit 1,a` / `jr z,-10` -- polls exactly this bit and
-            // prints nothing without it.
-            0x80 => {
-                self.poll_console();
-                let mut status = SIO_TX_EMPTY;
-                if self.sio_rx.is_some() {
-                    status |= SIO_RX_AVAILABLE | SIO_INT_PENDING;
-                }
-                status
-            }
-            // SIO/A data port: the byte, and the latch clears
-            0x81 => {
-                self.poll_console();
-                self.sio_rx.take().unwrap_or(0)
-            }
-            // SIO/B, and the second serial port on an SC129/SC110 (which may
-            // instead be a CF controller or a CTC on an SC114/SC706)
-            0x82 | 0x83 => 0,
+            // SIO/A control and data. The factory rom's output routine at
+            // $0116 -- `in a,($80)` / `rrca` / `bit 1,a` / `jr z,-10` --
+            // polls RR0's transmit-buffer-empty and prints nothing without
+            // it; the SIO reports it a frame after each write.
+            0x80 => self.sio.read_control(Ch::A),
+            0x81 => self.sio.read_data(Ch::A),
+            // SIO/B: the second serial port, with nothing on its line
+            0x82 => self.sio.read_control(Ch::B),
+            0x83 => self.sio.read_data(Ch::B),
             0x90 | 0x91 => 0xff,
             _ => {
                 eprintln!("in from unknown port {port:#x}");
@@ -180,23 +170,33 @@ impl Bus for Rc2014 {
         }
     }
 
-    /// IRQ is asserted while the receive latch is full. Level-held, not a
-    /// pulse: the guest's handler clears it by reading the data port, which is
-    /// what a real SIO does too.
-    fn poll_interrupts(&mut self) -> IntStatus {
+    /// The SIO's INT, level-held: with the rom's "interrupt on every
+    /// character" it stays asserted until the handler reads the data port.
+    /// The keystrokes reach the line and the frames advance here, once an
+    /// instruction.
+    fn poll_interrupts(&mut self, elapsed_cycles: u32) -> IntStatus {
         self.poll_console();
-        IntStatus { irq: self.sio_rx.is_some(), nmi: false, vector: 0 }
+        self.sio.tick(elapsed_cycles);
+        IntStatus { irq: self.sio.int_pending(), nmi: false, vector: self.sio.vector() }
+    }
+
+    fn set_device_pacing_hz(&mut self, hz: u64) {
+        self.sio.set_pacing_hz(hz);
     }
 
     fn io_write8(&mut self, port: u16, val: u8) {
         match port & 0xff {
             // compact flash controller: accepted and ignored
             0x10..=0x17 => {}
-            // SIO/A control
-            0x80 => {}
-            // SIO/A data: this is the console
-            0x81 => self.console.put_char(val),
-            0x82 | 0x83 => {}
+            0x80 => self.sio.write_control(Ch::A, val),
+            // SIO/A data: this is the console. The byte is out at once and
+            // the SIO charges its frame time.
+            0x81 => {
+                self.console.put_char(val);
+                self.sio.write_data(Ch::A, val);
+            }
+            0x82 => self.sio.write_control(Ch::B, val),
+            0x83 => self.sio.write_data(Ch::B, val),
             0x90 | 0x91 => {}
             _ => eprintln!("out to unknown port {port:#x}"),
         }
@@ -237,42 +237,93 @@ mod tests {
         assert_eq!(m.peek8(0x9000), Some(0x42), "ram");
     }
 
-    /// Port $80 reports "transmit buffer empty" (bit 2) unconditionally,
-    /// alongside receive-available and the interrupt condition. The factory
-    /// rom's output routine at $0116 polls that bit and spins forever without
-    /// it, so the machine prints nothing at all if it goes missing.
-    #[test]
-    fn the_sio_status_always_reports_transmit_empty() {
-        // latch empty: nothing to receive, but the transmitter is ready
-        let (mut sys, tx) = build("txempty");
-        assert_eq!(sys.io_read8(0x80), SIO_TX_EMPTY);
+    // RR0 bits the factory rom looks at
+    const RX_AVAILABLE: u8 = 1 << 0;
+    const INT_PENDING: u8 = 1 << 1;
+    const TX_EMPTY: u8 = 1 << 2;
 
-        // latch full: all three bits
-        tx.send(b'q').unwrap();
-        assert_eq!(sys.io_read8(0x80), SIO_RX_AVAILABLE | SIO_INT_PENDING | SIO_TX_EMPTY);
+    /// The frame time at 115200 baud, 8N1, in cycles of the 7.3728 MHz
+    /// clock.
+    const FRAME: u32 = 640;
 
-        // and it stays set across the read that drains the latch
-        assert_eq!(sys.io_read8(0x81), b'q');
-        assert_eq!(sys.io_read8(0x80), SIO_TX_EMPTY);
+    /// Program channel A the way the factory rom does at $0199: reset,
+    /// x64 clock with one stop bit, an interrupt on every received
+    /// character, eight bits in with the receiver on, eight bits out with
+    /// the transmitter on and RTS up.
+    fn init_sio(sys: &mut Rc2014) {
+        for byte in [0x18, 0x04, 0xc4, 0x01, 0x18, 0x03, 0xe1, 0x05, 0xea] {
+            sys.io_write8(0x80, byte);
+        }
     }
 
-    /// A waiting character asserts IRQ, and reading the data port drops it
-    /// again. The factory rom's console input path is nothing but its mode-1
-    /// handler, so without this the machine prints its prompt and can never be
-    /// typed at.
+    /// Port $80 reports "transmit buffer empty" (bit 2) when idle and a
+    /// frame after each write. The factory rom's output routine at $0116
+    /// polls that bit and spins forever without it, so the machine prints
+    /// nothing at all if it goes missing.
     #[test]
-    fn a_waiting_character_asserts_irq_until_the_data_port_is_read() {
+    fn the_sio_status_reports_transmit_empty_a_frame_after_a_write() {
+        let (mut sys, _tx) = build("txempty");
+        init_sio(&mut sys);
+        assert_ne!(sys.io_read8(0x80) & TX_EMPTY, 0);
+        sys.io_write8(0x81, b'x');
+        assert_eq!(sys.io_read8(0x80) & TX_EMPTY, 0);
+        sys.poll_interrupts(FRAME - 1);
+        assert_eq!(sys.io_read8(0x80) & TX_EMPTY, 0);
+        sys.poll_interrupts(1);
+        assert_ne!(sys.io_read8(0x80) & TX_EMPTY, 0);
+    }
+
+    /// A keystroke takes its frame time to arrive -- the console is a
+    /// terminal at 115200 baud -- and then asserts IRQ until the data port
+    /// is read. The factory rom's console input path is nothing but its
+    /// mode-1 handler, so without the interrupt the machine prints its
+    /// prompt and can never be typed at.
+    #[test]
+    fn a_character_arrives_at_the_baud_rate_and_asserts_irq_until_read() {
         let (mut sys, tx) = build("irq");
-        assert!(!sys.poll_interrupts().irq);
+        init_sio(&mut sys);
+        assert!(!sys.poll_interrupts(0).irq);
 
         tx.send(b'z').unwrap();
-        let ints = sys.poll_interrupts();
+        assert!(!sys.poll_interrupts(FRAME - 1).irq, "still on the wire");
+        assert_eq!(sys.io_read8(0x80) & RX_AVAILABLE, 0);
+        let ints = sys.poll_interrupts(1);
         assert!(ints.irq);
         assert!(!ints.nmi, "nothing here drives NMI");
+        assert_eq!(sys.io_read8(0x80) & (RX_AVAILABLE | INT_PENDING), RX_AVAILABLE | INT_PENDING);
 
         // level-held: still asserted on the next poll, until the guest reads
-        assert!(sys.poll_interrupts().irq);
+        assert!(sys.poll_interrupts(0).irq);
         assert_eq!(sys.io_read8(0x81), b'z');
-        assert!(!sys.poll_interrupts().irq);
+        assert!(!sys.poll_interrupts(0).irq);
+    }
+
+    /// The rom drops RTS (WR5 bit 1) when its ring buffer is nearly full,
+    /// and the terminal honours it: a paste waits on the wire instead of
+    /// overrunning the FIFO.
+    #[test]
+    fn rts_off_holds_the_console() {
+        let (mut sys, tx) = build("rts");
+        init_sio(&mut sys);
+        sys.io_write8(0x80, 0x05);
+        sys.io_write8(0x80, 0xe8); // RTS off, as the rom's handler writes it
+        tx.send(b'w').unwrap();
+        assert!(!sys.poll_interrupts(100 * FRAME).irq);
+        sys.io_write8(0x80, 0x05);
+        sys.io_write8(0x80, 0xea);
+        assert!(sys.poll_interrupts(FRAME).irq);
+        assert_eq!(sys.io_read8(0x81), b'w');
+    }
+
+    /// `--fast-io` takes the frame time off both directions.
+    #[test]
+    fn fast_io_makes_the_console_instant() {
+        let (mut sys, tx) = build("fastio");
+        init_sio(&mut sys);
+        sys.set_fast_io();
+        tx.send(b'f').unwrap();
+        assert!(sys.poll_interrupts(0).irq);
+        sys.io_write8(0x81, b'g');
+        assert_ne!(sys.io_read8(0x80) & TX_EMPTY, 0);
     }
 }

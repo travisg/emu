@@ -91,10 +91,14 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Mac
     })
 }
 
-fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
+fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
+    let mut bus = rc2014::Rc2014::new(rom, console)?;
+    if opts.fast_io {
+        bus.set_fast_io();
+    }
     Ok(Machine {
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
-        bus: Box::new(rc2014::Rc2014::new(rom, console)?),
+        bus: Box::new(bus),
         display: None,
         throttle_hz: None,
         control: None,
@@ -227,12 +231,15 @@ fn build_ray703(
 
 fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
     let floppy = opts.disk.clone().unwrap_or_else(|| PathBuf::from(kaypro::DEFAULT_FLOPPY));
-    let (bus, display) = kaypro::Kaypro::new(
+    let (mut bus, display) = kaypro::Kaypro::new(
         rom,
         Path::new(kaypro::VIDEO_ROM),
         &floppy,
         console,
     )?;
+    if opts.fast_io {
+        bus.set_fast_io();
+    }
     Ok(Machine {
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
         bus: Box::new(bus),
@@ -269,7 +276,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         default_rom: kaypro::DEFAULT_ROM,
         factory: build_kaypro,
         // The stock Kaypro II Z80 rate (the 5 MHz machines came later).
-        clock_hz: Some(2_500_000),
+        clock_hz: Some(kaypro::CLOCK_HZ),
     },
     SystemDescriptor {
         name: "ray703",
@@ -286,7 +293,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // The standard RC2014 crystal, 7.3728 MHz -- chosen so the serial
         // clock divides down to 115200 baud, and the Z80 runs off the same
         // can.
-        clock_hz: Some(7_372_800),
+        clock_hz: Some(rc2014::CLOCK_HZ),
     },
 ];
 

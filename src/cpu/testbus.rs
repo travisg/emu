@@ -109,7 +109,7 @@ impl Bus for TestBus {
         std::mem::take(&mut self.int_lines)
     }
 
-    fn poll_interrupts(&mut self) -> crate::bus::IntStatus {
+    fn poll_interrupts(&mut self, _elapsed_cycles: u32) -> crate::bus::IntStatus {
         crate::bus::IntStatus { irq: self.irq, nmi: false, vector: 0 }
     }
 }

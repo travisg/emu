@@ -1622,7 +1622,7 @@ impl Cpu for CpuZ80 {
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
         self.prefix_dd = false;
         self.prefix_fd = false;
-        self.cycles = 0;
+        let elapsed = std::mem::replace(&mut self.cycles, 0);
 
         // Interrupt entry. The RC2014's SIO is the one thing that drives this:
         // its console input is interrupt-driven and works no other way. IM 0
@@ -1630,7 +1630,7 @@ impl Cpu for CpuZ80 {
         // either, and IM 2 would need a device-supplied vector that nothing on
         // the bus offers. The one instruction after an `EI` is never
         // interrupted (`ei_shadow`).
-        let ints = bus.poll_interrupts();
+        let ints = bus.poll_interrupts(elapsed);
         let shadowed = std::mem::replace(&mut self.ei_shadow, false);
         let op = if ints.irq && self.iff1 && !shadowed {
             self.iff1 = false;

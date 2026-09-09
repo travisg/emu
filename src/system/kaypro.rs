@@ -19,11 +19,11 @@
 //! character generator rom, which the CPU never sees) through the [`Display`]
 //! the factory returns alongside the bus.
 
-use crate::bus::{Bus, MemoryDevice};
+use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::{ConsoleEndpoint, Display, VideoBuffer};
 use crate::dev::memory::Memory;
 use crate::dev::wd1793::Wd1793;
-use crate::dev::z80sio::Z80Sio;
+use crate::dev::z80sio::{Ch, Z80Sio};
 use crate::rom;
 use std::io;
 use std::path::Path;
@@ -35,6 +35,17 @@ pub const VIDEO_ROM: &str = "roms/kaypro/kayproii_u43.bin";
 pub const DEFAULT_FLOPPY: &str = "disks/mbasic-games.img";
 
 pub const WINDOW_TITLE: &str = "Kaypro II Emulator";
+
+/// The Z80's clock.
+pub const CLOCK_HZ: u64 = 2_500_000;
+
+/// The COM8116 baud rate generators on ports `0x00` (serial) and `0x0c`
+/// (keyboard): the rate each four-bit code selects, from the part's table.
+/// The generator's output is sixteen times the baud, which the rom's WR4
+/// (x16) divides back down.
+const COM8116_BAUD: [u64; 16] = [
+    50, 75, 110, 134, 150, 300, 600, 1200, 1800, 2000, 2400, 3600, 4800, 7200, 9600, 19200,
+];
 
 const RAM_SIZE: usize = 64 * 1024;
 const ROM_SIZE: usize = 4 * 1024;
@@ -108,10 +119,17 @@ impl Kaypro {
             video,
             console,
             fdc,
-            sio: Z80Sio::new(),
+            // the keyboard is a one-way serial line with no RTS input;
+            // the rom sets the baud rates before it programs the channels
+            sio: Z80Sio::new(CLOCK_HZ),
             control_latch: LATCH_BANK1,
         };
         Ok((sys, display))
+    }
+
+    /// `--fast-io`: the serial ports complete instantly in both directions.
+    pub fn set_fast_io(&mut self) {
+        self.sio.set_fast_io();
     }
 
     fn bank1(&self) -> bool {
@@ -126,14 +144,11 @@ impl Kaypro {
         self.control_latch & LATCH_DRIVE_B_N == 0
     }
 
-    /// Feed queued keystrokes to the SIO's keyboard channel.
-    ///
-    /// The C++ does this from a console-thread callback the moment a key
-    /// arrives; here it happens on the CPU thread at the point of the SIO
-    /// access, which is the only place the guest could observe the difference.
+    /// Hand queued keystrokes to the keyboard end of SIO channel B's line;
+    /// the SIO clocks them in at the keyboard's 300 baud from there.
     fn poll_keyboard(&mut self) {
         while let Some(c) = self.console.try_next_char() {
-            self.sio.inject_char_b(c);
+            self.sio.receive(Ch::B, c);
         }
     }
 
@@ -176,6 +191,20 @@ impl Bus for Kaypro {
     /// The same decode as `read8`, which has no side effects on this
     /// machine -- the video ram is a locked buffer, the floppy and SIO are
     /// on ports.
+    /// The SIO's INT. The rom programs both channels with WR1 = 0, so the
+    /// line is wired but nothing on this machine ever requests service;
+    /// the keystrokes reach the keyboard's line and the frames advance
+    /// here, once an instruction.
+    fn poll_interrupts(&mut self, elapsed_cycles: u32) -> IntStatus {
+        self.poll_keyboard();
+        self.sio.tick(elapsed_cycles);
+        IntStatus { irq: self.sio.int_pending(), nmi: false, vector: self.sio.vector() }
+    }
+
+    fn set_device_pacing_hz(&mut self, hz: u64) {
+        self.sio.set_pacing_hz(hz);
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
         Some(if self.bank1() && addr < ROM_SIZE as u16 {
@@ -190,17 +219,11 @@ impl Bus for Kaypro {
     fn io_read8(&mut self, port: u16) -> u8 {
         match port & 0xff {
             // serial port A: data, control
-            0x04 => self.sio.read_data_a(),
-            0x06 => self.sio.read_control_a(),
+            0x04 => self.sio.read_data(Ch::A),
+            0x06 => self.sio.read_control(Ch::A),
             // serial port B (keyboard): data, control
-            0x05 => {
-                self.poll_keyboard();
-                self.sio.read_data_b()
-            }
-            0x07 => {
-                self.poll_keyboard();
-                self.sio.read_control_b()
-            }
+            0x05 => self.sio.read_data(Ch::B),
+            0x07 => self.sio.read_control(Ch::B),
             // floppy: status, track, sector, data
             0x10..=0x13 => {
                 self.select_fdc();
@@ -226,12 +249,15 @@ impl Bus for Kaypro {
 
     fn io_write8(&mut self, port: u16, val: u8) {
         match port & 0xff {
-            // baud rate generators A and B: don't care
-            0x00 | 0x0c => {}
-            0x04 => self.sio.write_data_a(val),
-            0x06 => self.sio.write_control_a(val),
-            0x05 => self.sio.write_data_b(val),
-            0x07 => self.sio.write_control_b(val),
+            // baud rate generators: the serial port's and the keyboard's
+            0x00 => self.sio.set_clock_hz(Ch::A, 16 * COM8116_BAUD[(val & 0x0f) as usize]),
+            0x0c => self.sio.set_clock_hz(Ch::B, 16 * COM8116_BAUD[(val & 0x0f) as usize]),
+            // serial port A transmits into the ether; the keyboard channel
+            // has nothing listening either
+            0x04 => self.sio.write_data(Ch::A, val),
+            0x06 => self.sio.write_control(Ch::A, val),
+            0x05 => self.sio.write_data(Ch::B, val),
+            0x07 => self.sio.write_control(Ch::B, val),
             // PIO 1: unmodelled
             0x08..=0x0b => {}
             0x10..=0x13 => {
@@ -351,17 +377,53 @@ mod tests {
         assert_eq!(title, WINDOW_TITLE);
     }
 
+    /// Program the keyboard channel the way the rom's table at $05c2 does:
+    /// reset, 300 baud on the generator, x16 clock with one stop bit, eight
+    /// bits in with the receiver on, RTS off, and no interrupts.
+    fn init_keyboard(sys: &mut Kaypro) {
+        sys.io_write8(0x07, 0x18);
+        sys.io_write8(0x0c, 0x05);
+        for byte in [0x04, 0x44, 0x03, 0xc1, 0x05, 0xe8, 0x01, 0x00] {
+            sys.io_write8(0x07, byte);
+        }
+    }
+
+    /// A keystroke arrives on SIO channel B a frame time after it is typed
+    /// -- 300 baud, ten bits, 83,333 cycles of the 2.5 MHz clock -- and
+    /// asks for no interrupt, the rom's WR1 being zero. The keyboard has no
+    /// RTS input, so the rom's RTS-off does not hold it.
     #[test]
-    fn keyboard_arrives_on_sio_channel_b() {
+    fn keyboard_arrives_on_sio_channel_b_at_300_baud() {
         let fx = Fixture::new("kbd");
         let (tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
         let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, console).unwrap();
+        init_keyboard(&mut sys);
         assert_eq!(sys.io_read8(0x07) & 0x01, 0);
         tx.send(b'x').unwrap();
+        assert!(!sys.poll_interrupts(83_332).irq);
+        assert_eq!(sys.io_read8(0x07) & 0x01, 0, "still on the wire");
+        assert!(!sys.poll_interrupts(1).irq, "no interrupt asked for");
         assert_ne!(sys.io_read8(0x07) & 0x01, 0);
         assert_eq!(sys.io_read8(0x05), b'x');
         assert_eq!(sys.io_read8(0x07) & 0x01, 0);
+    }
+
+    /// The baud rate generator's code sets the rate: 9600 is 260 cycles a
+    /// character.
+    #[test]
+    fn the_baud_rate_generator_code_sets_the_keyboards_rate() {
+        let fx = Fixture::new("baud");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, console).unwrap();
+        init_keyboard(&mut sys);
+        sys.io_write8(0x0c, 0x0e);
+        tx.send(b'y').unwrap();
+        sys.poll_interrupts(2_603);
+        assert_eq!(sys.io_read8(0x07) & 0x01, 0);
+        sys.poll_interrupts(1);
+        assert_ne!(sys.io_read8(0x07) & 0x01, 0);
     }
 
     /// The system port reads back the byte as written, the motor bit
