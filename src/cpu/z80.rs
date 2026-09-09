@@ -208,6 +208,12 @@ pub struct CpuZ80 {
     im: u8,
     iff1: bool,
     iff2: bool,
+    /// Set by `EI`, cleared by the next `step`'s interrupt poll, which it
+    /// suppresses: a maskable interrupt is not accepted until the instruction
+    /// after `EI` has run. That is what makes the `EI; RETI` a handler ends
+    /// with atomic -- the RC2014 factory rom's is -- and consecutive `EI`s
+    /// each renew it.
+    ei_shadow: bool,
     i: u8,
     r: u8,
 
@@ -257,6 +263,7 @@ impl Default for CpuZ80 {
             im: 1,
             iff1: false,
             iff2: false,
+            ei_shadow: false,
             i: 0,
             r: 0,
             prefix_dd: false,
@@ -1112,9 +1119,11 @@ impl CpuZ80 {
                     self.iff2 = false;
                 }
                 7 => {
-                    // EI
+                    // EI: enabled, but not sampled until after the next
+                    // instruction (`ei_shadow`)
                     self.iff1 = true;
                     self.iff2 = true;
+                    self.ei_shadow = true;
                 }
                 _ => unreachable!("y is three bits"),
             },
@@ -1619,9 +1628,11 @@ impl Cpu for CpuZ80 {
         // its console input is interrupt-driven and works no other way. IM 0
         // and IM 2 fall back to IM 1's `rst 0x38` -- no machine here selects
         // either, and IM 2 would need a device-supplied vector that nothing on
-        // the bus offers.
+        // the bus offers. The one instruction after an `EI` is never
+        // interrupted (`ei_shadow`).
         let ints = bus.poll_interrupts();
-        let op = if ints.irq && self.iff1 {
+        let shadowed = std::mem::replace(&mut self.ei_shadow, false);
+        let op = if ints.irq && self.iff1 && !shadowed {
             self.iff1 = false;
             self.iff2 = false;
             // The IM 1 acknowledge is 13 T-states; the RST arm below charges
@@ -2478,11 +2489,45 @@ mod tests {
     #[test]
     fn im1_acceptance_reports_thirteen() {
         let (mut cpu, mut bus) = boot(&[0xfb, 0x00]); // ei; nop
-        run_steps(&mut cpu, &mut bus, 1);
         bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 2); // ei, and the nop its shadow covers
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(cpu.pc, 0x38);
         assert_eq!(cpu.last_step_cycles(), 13);
+    }
+
+    /// A maskable interrupt is not accepted until the instruction after
+    /// `EI` has run, and every `EI` renews that shadow. A handler that ends
+    /// `EI; RETI` -- the RC2014 factory rom's does -- relies on it: without
+    /// the shadow a line still asserted is taken at the `RETI` and the
+    /// handler nests once per character.
+    #[test]
+    fn an_interrupt_waits_for_the_instruction_after_ei() {
+        // ei; inc a; inc a -- with the line held from the start
+        let (mut cpu, mut bus) = boot(&[0xfb, 0x3c, 0x3c]);
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1); // ei: iff1 was clear at the poll
+        assert!(cpu.iff1);
+        run_steps(&mut cpu, &mut bus, 1); // the shadowed instruction runs
+        assert_eq!((cpu.pc, cpu.a), (2, 1), "inc a ran before the interrupt");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.a), (0x38, 1), "accepted after it");
+        assert!(!cpu.iff1 && !cpu.iff2);
+
+        // ei; ei; inc a: the second ei is under the first's shadow and
+        // casts its own
+        let (mut cpu, mut bus) = boot(&[0xfb, 0xfb, 0x3c]);
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!((cpu.pc, cpu.a), (3, 1), "both eis and the inc ran");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x38);
+
+        // di under the shadow: the shadow lapses, the line stays masked
+        let (mut cpu, mut bus) = boot(&[0xfb, 0xf3, 0x3c]);
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!((cpu.pc, cpu.a), (3, 1));
     }
 
     /// Every opcode value that completes charges at least the 4 T-states of
