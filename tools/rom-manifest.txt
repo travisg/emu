@@ -30,6 +30,12 @@ roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed23
 # The original source is a Kaypro II disk image, which has been converted to a raw floppy image.
 disks/mbasic-games.img          e0d3fe74578b5914cdb8e36d028fb0e3ec70f434df3a710ea41ea1534304101b  https://github.com/travisg/emu/releases/download/v0.0.1-assets/mbasic-games.img
 
+# RC2014 compact flash card: CP/M 2.2 with Grant Searle's CBIOS for the SIO/2,
+# as the RC2014 project publishes it -- sixteen 8 MB drives (P: is 2 MB),
+# DOWNLOAD.COM on A: and the CP/M utilities on C:. A 128 MB image out of a
+# 186 KB zip; `emu -s rc2014-cpm` mounts it, and writes go through to it.
+disks/rc2014-cf.img             5166111260c5d8397c952a0a7381e14384cdf5db68485ecf6d3204ba318f26b3  https://raw.githubusercontent.com/RC2014Z80/RC2014/master/CPM/CPM%20Inc%20Transient%20Apps%20SIO2.img.zip#CPM%20Inc%20Transient%20Apps%20SIO2.img
+
 # CP/M programs for the Kaypro: Frank Cringle's Z80 instruction exercisers
 # (GPL; the binaries as agn453 publishes them), which test/run_kaypro_zex_test.py
 # puts on a floppy with cpmtools and runs. prelim is the smoke test that

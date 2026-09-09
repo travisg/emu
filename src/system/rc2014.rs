@@ -10,7 +10,19 @@
 //!
 //! Port of `system/system_rc2014.cpp`. The rom is a flat 64K binary -- the
 //! `#include "ihex.h"` in the C++ file is vestigial, there is no parser behind
-//! it.
+//! it -- of which one 8K page is at the bottom of the address space.
+//!
+//! Two builds of the machine, by subsystem. `rc2014` is the classic: page 0
+//! of the rom (32K BASIC for the SIO/2) and a 32K RAM module at `0x8000`,
+//! with a hole between them. `rc2014-cpm` is the Pro shape: the pageable
+//! rom module showing page 4, Grant Searle's CP/M monitor, over a 64K RAM
+//! module; a write to port `0x38` pages the rom out and the RAM under it
+//! in, until reset (the monitor copies itself up, pages out, and copies
+//! itself back down to run from RAM); and the compact flash module at
+//! `0x10`-`0x17` (`dev/cf`), which is where CP/M lives -- the monitor's `X`
+//! reads the first 24 sectors into `0xd000` and jumps through the vector
+//! at `0xfffe`. The CTC module at `0x88`-`0x8b` (`dev/z80ctc`) is on both,
+//! below the SIO on the interrupt daisy chain.
 //!
 //! The serial port is the SIO/2 module at `$80`-`$83` (`dev/z80sio`), channel
 //! A the console. The C++ had a single-byte receive latch inline instead; the
@@ -26,12 +38,11 @@
 //! for an interrupt on every received character; its mode-1 handler at
 //! $0038 reads the data port into a 64-byte ring buffer at $8000 and RST 10h
 //! at $00b3 spins on the buffer's count, so a machine that never interrupts
-//! can never be typed at. The CTC module at `0x88`-`0x8b` (`dev/z80ctc`) sits
-//! below the SIO on the interrupt daisy chain; nothing in the factory rom
-//! programs it, and `test/run_rc2014_ctc_test.py` is what does.
+//! can never be typed at.
 
 use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
+use crate::dev::cf::CompactFlash;
 use crate::dev::memory::Memory;
 use crate::dev::z80ctc::Z80Ctc;
 use crate::dev::z80sio::{Ch, Z80Sio};
@@ -47,6 +58,9 @@ use std::path::Path;
 // CP/M monitor for pageable rom for SIO/2 at offset 0x8000
 // small computer monitor for everything at offset 0xe000
 pub const DEFAULT_ROM: &str = "roms/rc2014/24886009.BIN";
+/// The compact flash card `rc2014-cpm` mounts: CP/M 2.2 as the RC2014
+/// project publishes it. Not a rom, so not tracked -- see disks/README.md.
+pub const DEFAULT_CF: &str = "disks/rc2014-cf.img";
 
 /// The system clock, which is also the SIO's serial clock input.
 pub const CLOCK_HZ: u64 = 7_372_800;
@@ -54,23 +68,42 @@ pub const CLOCK_HZ: u64 = 7_372_800;
 const BANK_SIZE: usize = 64 * 1024;
 /// Size of the rom window at the bottom of the address space.
 const ROM_WINDOW: u16 = 0x2000;
+/// The rom page the CP/M monitor is on: offset 0x8000 of the factory image.
+const CPM_MONITOR_PAGE: u32 = 4;
 
 pub struct Rc2014 {
     ram: Memory,
     rom: Memory,
-    /// Which 8K page of the rom image is visible at 0x0000.
-    ///
-    /// Nothing ever changes this: the C++ has no IO port that writes it, so it
-    /// stays 0 for the machine's whole life. Kept as a field because the decode
-    /// is written in terms of it, not because it is live.
+    /// Which 8K page of the rom image is visible at 0x0000: the module's
+    /// jumpers, set by the subsystem and fixed for the machine's life.
     rom_bank: u32,
+    /// Where RAM begins: 0x8000 for the 32K module, 0 for the 64K one.
+    ram_base: u16,
+    /// The pageable rom module: a write to port 0x38 takes the rom out.
+    pageable: bool,
+    rom_paged_out: bool,
     console: ConsoleEndpoint,
     sio: Z80Sio,
     ctc: Z80Ctc,
+    /// The compact flash module, with a slot only on the cpm build.
+    cf: CompactFlash,
+    has_cf: bool,
 }
 
 impl Rc2014 {
-    pub fn new(rom_path: &Path, console: ConsoleEndpoint) -> io::Result<Self> {
+    /// `sub` is the subsystem: empty for the classic, `cpm` for the Pro
+    /// shape, anything else an error.
+    pub fn new(rom_path: &Path, console: ConsoleEndpoint, sub: &str) -> io::Result<Self> {
+        let cpm = match sub {
+            "" => false,
+            "cpm" => true,
+            other => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown rc2014 subsystem '{other}' (try 'cpm')"),
+                ))
+            }
+        };
         let image = rom::load_binary(rom_path)?;
         // The C++ requires a full-size read: a short rom is an error, not a
         // partial load.
@@ -95,7 +128,30 @@ impl Rc2014 {
         }
         // the console is a terminal on a serial cable, and honours RTS
         sio.set_honours_rts(Ch::A, true);
-        Ok(Rc2014 { ram: Memory::new(BANK_SIZE), rom, rom_bank: 0, console, sio, ctc: Z80Ctc::new() })
+        Ok(Rc2014 {
+            ram: Memory::new(BANK_SIZE),
+            rom,
+            rom_bank: if cpm { CPM_MONITOR_PAGE } else { 0 },
+            ram_base: if cpm { 0 } else { 0x8000 },
+            pageable: cpm,
+            rom_paged_out: false,
+            console,
+            sio,
+            ctc: Z80Ctc::new(),
+            cf: CompactFlash::new(),
+            has_cf: cpm,
+        })
+    }
+
+    /// Whether this build has the compact flash module.
+    pub fn has_compact_flash(&self) -> bool {
+        self.has_cf
+    }
+
+    /// Put a card in the compact flash slot. Reported, not fatal: a file
+    /// that is not there is an empty slot.
+    pub fn mount_compact_flash(&mut self, path: &Path) -> bool {
+        self.cf.mount(path)
     }
 
     /// `--fast-io`: the serial port completes instantly in both directions.
@@ -105,14 +161,13 @@ impl Rc2014 {
 
     /// The address decode, shared by reads and writes.
     ///
-    ///   `0x0000..=0x1fff` rom, at `rom_bank * 0x2000`
-    ///   `0x2000..=0x7fff` unmapped
-    ///   `0x8000..=0xffff` ram, at offset 0 -- i.e. the *top* half of the 64K
-    ///                     buffer, which is what the address itself indexes
+    ///   `0x0000..=0x1fff` rom, at `rom_bank * 0x2000`, unless paged out
+    ///   `ram_base..`      ram, indexed by the address itself
+    ///   the rest          unmapped: the classic's hole under its 32K module
     fn device_at(&mut self, addr: u16) -> Option<(&mut dyn MemoryDevice, u32)> {
-        if addr < ROM_WINDOW {
+        if addr < ROM_WINDOW && !self.rom_paged_out {
             Some((&mut self.rom, addr as u32 + self.rom_bank * ROM_WINDOW as u32))
-        } else if addr >= 0x8000 {
+        } else if addr >= self.ram_base {
             Some((&mut self.ram, addr as u32))
         } else {
             None
@@ -136,19 +191,24 @@ impl Bus for Rc2014 {
         }
     }
 
+    /// A write to the rom window is dropped, as an EPROM drops it.
     fn write8(&mut self, addr: u32, val: u8) {
-        if let Some((dev, a)) = self.device_at((addr & 0xffff) as u16) {
+        let addr = (addr & 0xffff) as u16;
+        if addr < ROM_WINDOW && !self.rom_paged_out {
+            return;
+        }
+        if let Some((dev, a)) = self.device_at(addr) {
             dev.write_byte(a, val);
         }
     }
 
-    /// The rom window and the ram; the SIO is port-mapped, so nothing in
-    /// the memory space has a read side effect.
+    /// The rom window and the ram; everything else is port-mapped, so
+    /// nothing in the memory space has a read side effect.
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
-        if addr < ROM_WINDOW {
+        if addr < ROM_WINDOW && !self.rom_paged_out {
             Some(self.rom.peek(addr as u32 + self.rom_bank * ROM_WINDOW as u32))
-        } else if addr >= 0x8000 {
+        } else if addr >= self.ram_base {
             Some(self.ram.peek(addr as u32))
         } else {
             None
@@ -157,6 +217,8 @@ impl Bus for Rc2014 {
 
     fn io_read8(&mut self, port: u16) -> u8 {
         match port & 0xff {
+            // compact flash: an empty slot reads as the floating bus
+            0x10..=0x17 => self.cf.read((port & 0x07) as u8),
             // SIO/A control and data. The factory rom's output routine at
             // $0116 -- `in a,($80)` / `rrca` / `bit 1,a` / `jr z,-10` --
             // polls RR0's transmit-buffer-empty and prints nothing without
@@ -216,8 +278,14 @@ impl Bus for Rc2014 {
 
     fn io_write8(&mut self, port: u16, val: u8) {
         match port & 0xff {
-            // compact flash controller: accepted and ignored
-            0x10..=0x17 => {}
+            0x10..=0x17 => self.cf.write((port & 0x07) as u8, val),
+            // the pageable rom module: any write takes the rom out, and
+            // only a reset brings it back
+            0x38 => {
+                if self.pageable {
+                    self.rom_paged_out = true;
+                }
+            }
             0x80 => self.sio.write_control(Ch::A, val),
             // SIO/A data: this is the console. The byte is out at once and
             // the SIO charges its frame time.
@@ -242,6 +310,10 @@ mod tests {
     /// Build a machine over a synthetic full-size rom, and hand back the
     /// keystroke channel so a test can feed the SIO.
     fn build(name: &str) -> (Rc2014, std::sync::mpsc::Sender<u8>) {
+        build_sub(name, "")
+    }
+
+    fn build_sub(name: &str, sub: &str) -> (Rc2014, std::sync::mpsc::Sender<u8>) {
         let dir = std::env::temp_dir().join(format!("emu-rc2014-test-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rom_path = dir.join("rom.bin");
@@ -251,7 +323,7 @@ mod tests {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-        let machine = Rc2014::new(&rom_path, console).unwrap();
+        let machine = Rc2014::new(&rom_path, console, sub).unwrap();
         std::fs::remove_file(&rom_path).ok();
         std::fs::remove_dir(&dir).ok();
         (machine, tx)
@@ -266,6 +338,68 @@ mod tests {
         assert_eq!(m.peek8(0x4000), None, "the hole");
         m.write8(0x9000, 0x42);
         assert_eq!(m.peek8(0x9000), Some(0x42), "ram");
+        // the classic's rom is not pageable, and it has no card slot
+        m.io_write8(0x38, 0);
+        assert_eq!(m.peek8(0x0123), Some(0x23));
+        assert!(!m.has_compact_flash());
+        assert_eq!(m.io_read8(0x17), 0xff);
+    }
+
+    /// The cpm build: the monitor's page at the bottom, 64K of RAM, and a
+    /// write to port 0x38 pages the rom out to reveal the RAM under it --
+    /// which is how the monitor gets itself into RAM at 0.
+    #[test]
+    fn the_cpm_build_pages_the_monitor_out_over_64k() {
+        let (mut m, _tx) = build_sub("cpm", "cpm");
+        assert_eq!(m.peek8(0x0123), Some(0x23), "page 4 of the image: byte 0x8123");
+        assert_eq!(m.read8(0x0123), 0x23);
+        m.write8(0x4000, 0x55);
+        assert_eq!(m.peek8(0x4000), Some(0x55), "no hole");
+        m.write8(0x0123, 0x99);
+        assert_eq!(m.read8(0x0123), 0x23, "rom writes are dropped");
+        m.io_write8(0x38, 0);
+        assert_eq!(m.read8(0x0123), 0x00, "the RAM under the rom, untouched");
+        assert_eq!(m.peek8(0x0123), Some(0x00));
+        m.write8(0x0123, 0x99);
+        assert_eq!(m.read8(0x0123), 0x99);
+        assert!(m.has_compact_flash());
+    }
+
+    #[test]
+    fn junk_subsystems_are_rejected() {
+        let dir = std::env::temp_dir().join(format!("emu-rc2014-test-{}-junk", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom_path = dir.join("rom.bin");
+        std::fs::File::create(&rom_path).unwrap().write_all(&vec![0; BANK_SIZE]).unwrap();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+        let err = Rc2014::new(&rom_path, console, "obc").err().expect("rejected");
+        assert!(err.to_string().contains("obc"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The CTC sits below the SIO on the daisy chain: its request is held
+    /// while the SIO is under service, the acknowledge goes to whichever
+    /// is first, and RETI releases the nearer one.
+    #[test]
+    fn the_ctc_waits_behind_the_sio_on_the_chain() {
+        let (mut sys, tx) = build("chain");
+        init_sio(&mut sys);
+        sys.io_write8(0x88, 0x40); // ctc vector
+        sys.io_write8(0x88, 0xa5); // channel 0: interrupt, prescaler 256, constant follows
+        sys.io_write8(0x88, 1);
+        assert!(sys.poll_interrupts(256).irq, "the timer");
+        assert_eq!(sys.interrupt_acknowledge(), 0x40);
+        tx.send(b'k').unwrap();
+        assert!(sys.poll_interrupts(FRAME).irq, "the SIO outranks the CTC's service");
+        assert_eq!(sys.interrupt_acknowledge(), 0x00, "the SIO's vector, WR2 never written");
+        assert!(!sys.poll_interrupts(256).irq, "the timer's next tick waits");
+        sys.io_read8(0x81);
+        sys.interrupt_return();
+        assert!(!sys.poll_interrupts(0).irq, "the CTC is still under its own service");
+        sys.interrupt_return();
+        assert!(sys.poll_interrupts(0).irq, "and now the held tick");
+        assert_eq!(sys.interrupt_acknowledge(), 0x40);
     }
 
     // RR0 bits the factory rom looks at
@@ -362,30 +496,6 @@ mod tests {
         sys.interrupt_return();
         assert!(sys.poll_interrupts(0).irq);
         assert_eq!(sys.io_read8(0x81), b'b');
-    }
-
-    /// The CTC sits below the SIO on the daisy chain: its request is held
-    /// while the SIO is under service, the acknowledge goes to whichever
-    /// is first, and RETI releases the nearer one.
-    #[test]
-    fn the_ctc_waits_behind_the_sio_on_the_chain() {
-        let (mut sys, tx) = build("chain");
-        init_sio(&mut sys);
-        sys.io_write8(0x88, 0x40); // ctc vector
-        sys.io_write8(0x88, 0xa5); // channel 0: interrupt, prescaler 256, constant follows
-        sys.io_write8(0x88, 1);
-        assert!(sys.poll_interrupts(256).irq, "the timer");
-        assert_eq!(sys.interrupt_acknowledge(), 0x40);
-        tx.send(b'k').unwrap();
-        assert!(sys.poll_interrupts(FRAME).irq, "the SIO outranks the CTC's service");
-        assert_eq!(sys.interrupt_acknowledge(), 0x00, "the SIO's vector, WR2 never written");
-        assert!(!sys.poll_interrupts(256).irq, "the timer's next tick waits");
-        sys.io_read8(0x81);
-        sys.interrupt_return();
-        assert!(!sys.poll_interrupts(0).irq, "the CTC is still under its own service");
-        sys.interrupt_return();
-        assert!(sys.poll_interrupts(0).irq, "and now the held tick");
-        assert_eq!(sys.interrupt_acknowledge(), 0x40);
     }
 
     /// `--fast-io` takes the frame time off both directions.

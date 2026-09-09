@@ -33,6 +33,7 @@ import os
 import shutil
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -80,7 +81,9 @@ def fetch_from_archive(archive, relpath, dest, digest):
 
 
 def fetch_from_url(url, dest, digest):
+    # The member may carry %20s: a manifest field cannot hold a space.
     url, _, member = url.partition("#")
+    member = urllib.parse.unquote(member)
     try:
         with urllib.request.urlopen(url) as response:
             body = response.read()

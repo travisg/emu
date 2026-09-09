@@ -332,9 +332,12 @@ class Emu:
 
     # -- waiting --------------------------------------------------------------
 
-    def wait_for_output(self, pattern, timeout=None):
+    def wait_for_output(self, pattern, timeout=None, start=0):
         """Block until `pattern` (bytes, str or a compiled bytes regex)
-        matches the accumulated output; returns the match."""
+        matches the accumulated output at or after byte `start`; returns
+        the match, whose `end()` is where a script that walks the output
+        in order picks up next -- the same prompt comes round again, and
+        without a cursor the first one satisfies every wait for it."""
         if isinstance(pattern, str):
             pattern = pattern.encode('latin-1')
         if isinstance(pattern, bytes):
@@ -342,7 +345,7 @@ class Emu:
         deadline = time.monotonic() + (timeout if timeout is not None else self.timeout)
         with self._changed:
             while True:
-                m = pattern.search(bytes(self.output))
+                m = pattern.search(bytes(self.output), start)
                 if m:
                     return m
                 if self._closed:

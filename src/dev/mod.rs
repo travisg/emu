@@ -8,6 +8,7 @@
  */
 //! Devices.
 
+pub mod cf;
 pub mod disc74601;
 pub mod mc6850;
 pub mod memory;

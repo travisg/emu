@@ -9,7 +9,7 @@ LINKFLAGS := -ni
 # C++ tree; objcopy does the same job for a contiguous image.
 OBJCOPY   := objcopy
 
-.PHONY: all clean basic6809-test kaypro-zex-test rc2014-basic-test rc2014-ctc-test
+.PHONY: all clean basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test
 
 # The 6809 sources, all built in place under 6809/. memtest is the only one
 # meant to run; the other two exist to be assembled. README.md says which is
@@ -54,6 +54,11 @@ kaypro-zex-test:
 # (tools/fetch-roms.py).
 rc2014-basic-test:
 	./run_rc2014_basic_test.py
+
+# CP/M off the compact flash card, on a scratch copy of it. Needs the rom
+# and disks/rc2014-cf.img (tools/fetch-roms.py).
+rc2014-cpm-test:
+	./run_rc2014_cpm_test.py
 
 # IM 2 and the CTC: the harness writes the program into RAM under a rom of
 # zeros it makes itself, so this needs nothing fetched.

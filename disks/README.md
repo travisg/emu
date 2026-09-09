@@ -8,6 +8,12 @@ tracked**, for the same reason as `roms/` — see that README and
   `tools/fetch-roms.py` puts it here. `--disk PATH` mounts another image
   in its place; cpmtools' `kpii` format is this geometry, so
   `cpmcp -f kpii` onto a copy of it is how a CP/M program gets on a disk.
+- `rc2014-cf.img` — the RC2014's compact flash card, mounted by
+  `emu -s rc2014-cpm`: CP/M 2.2 with Grant Searle's CBIOS as the RC2014
+  project publishes it, sixteen drives. `tools/fetch-roms.py` puts it here
+  (128 MB, out of a small zip), `--disk PATH` mounts another card, and
+  writes go through to it — what CP/M saves stays saved, so keep a copy if
+  that matters. `test/run_rc2014_cpm_test.py` works on a scratch copy.
 - `cpm/` — CP/M programs to put on a Kaypro floppy: the Z80 instruction
   exercisers `zexdoc.com` and `zexall.com` and the `prelim.com` in front of
   them, which `test/run_kaypro_zex_test.py` runs. `tools/fetch-roms.py`

@@ -91,10 +91,16 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Mac
     })
 }
 
-fn build_rc2014(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
-    let mut bus = rc2014::Rc2014::new(rom, console)?;
+fn build_rc2014(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
+    let mut bus = rc2014::Rc2014::new(rom, console, sub)?;
     if opts.fast_io {
         bus.set_fast_io();
+    }
+    // The card mounts like the Kaypro's floppy: `--disk` or the fixed name
+    // under disks/, non-fatal, gitignored. Only the cpm build has the slot.
+    if bus.has_compact_flash() {
+        let card = opts.disk.clone().unwrap_or_else(|| PathBuf::from(rc2014::DEFAULT_CF));
+        bus.mount_compact_flash(&card);
     }
     Ok(Machine {
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
