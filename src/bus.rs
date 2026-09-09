@@ -29,20 +29,23 @@ pub enum Endian {
 /// The two Z80 machines drive this from their SIO: on the RC2014 a waiting
 /// character is the only way the factory rom sees a keystroke; the Kaypro's
 /// rom programs its SIO to request nothing, so there it is wired and idle.
-/// Nothing asserts NMI, the core ignores `vector` until it has an IM 2, and
-/// the 6800/6809 machines never interrupt at all.
-/// The Raytheon 703 runs interrupts for real too, but its 16 prioritized levels
-/// don't fit an irq/nmi pair -- see `poll_interrupt_lines`.
+/// The Kaypro's floppy controller drives NMI -- its INTRQ and DRQ are ORed
+/// onto the pin, and the rom's transfer loops sleep in HALT for each one.
+/// The 6800/6809 machines never interrupt at all. The Raytheon 703 runs
+/// interrupts for real too, but its 16 prioritized levels don't fit an
+/// irq/nmi pair -- see `poll_interrupt_lines`.
+///
+/// Both are levels as the wires are. The core makes NMI's edge itself, and
+/// what a maskable interrupt puts on the data bus comes from
+/// `interrupt_acknowledge`, not from here.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct IntStatus {
     pub irq: bool,
     pub nmi: bool,
-    /// vector supplied by the device, for z80 IM2
-    pub vector: u8,
 }
 
 impl IntStatus {
-    pub const NONE: IntStatus = IntStatus { irq: false, nmi: false, vector: 0 };
+    pub const NONE: IntStatus = IntStatus { irq: false, nmi: false };
 }
 
 /// A device mapped into the memory space.
@@ -148,6 +151,20 @@ pub trait Bus {
     fn poll_interrupts(&mut self, _elapsed_cycles: u32) -> IntStatus {
         IntStatus::NONE
     }
+
+    /// The maskable interrupt acknowledge cycle: the core has accepted the
+    /// interrupt and reads the data bus. The requesting device answers with
+    /// its vector (IM 2), or with an instruction (IM 0), and marks itself
+    /// under service until `interrupt_return`. Nothing answering is the
+    /// pulled-up bus, `0xff` -- `rst 0x38` in IM 0, and a vector nothing
+    /// sensible points at in IM 2.
+    fn interrupt_acknowledge(&mut self) -> u8 {
+        0xff
+    }
+
+    /// The core executed `RETI`: the device under service releases the
+    /// daisy chain, and whatever it was holding back may request again.
+    fn interrupt_return(&mut self) {}
 
     /// Prioritized interrupt lines that have *pulsed* since the last call, one
     /// bit per level (bit n = level n). Take-and-clear: a machine returns each

@@ -55,10 +55,15 @@
 //! that has no use for it is what it is on silicon: four T-states and
 //! nothing else.
 //!
-//! Deliberate quirks, each marked at its use site: `HALT` is a `NOP`, because
-//! no machine here can wake a halted CPU and halting would deadlock the run
-//! rather than end it; `RETI` is a plain `RET`, with nothing daisy-chained to
-//! notify.
+//! Interrupts are the silicon's: NMI on the line's rising edge into `0x66`
+//! with IFF1 saved in IFF2, the maskable line accepted only with IFF1 set
+//! and never on the instruction after `EI`, an acknowledge cycle the bus
+//! answers (`Bus::interrupt_acknowledge`) -- `rst` on the bus in IM 0, a
+//! vector through I in IM 2, ignored in IM 1 -- `HALT` sleeping in four-cycle
+//! NOPs until either line wakes it, and `RETI` telling the bus
+//! (`Bus::interrupt_return`) so the device under service can release the
+//! daisy chain. A `HALT` with nothing to wake it sleeps forever, as on the
+//! real part; the machines here can all wake one.
 
 use super::{Addressing, Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
@@ -144,7 +149,7 @@ const MAIN_CYCLES: [u8; 256] = [
          4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 4x: ld r,r' 4, ld r,(hl) 7
          4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 5x
          4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 6x
-         7,  7,  7,  7,  7,  7,  4,  7,  4,  4,  4,  4,  4,  4,  7,  4, // 7x: ld (hl),r 7, halt-as-nop 4
+         7,  7,  7,  7,  7,  7,  4,  7,  4,  4,  4,  4,  4,  4,  7,  4, // 7x: ld (hl),r 7, halt 4
          4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 8x: alu a,r 4, alu a,(hl) 7
          4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // 9x
          4,  4,  4,  4,  4,  4,  7,  4,  4,  4,  4,  4,  4,  4,  7,  4, // ax
@@ -214,6 +219,12 @@ pub struct CpuZ80 {
     /// with atomic -- the RC2014 factory rom's is -- and consecutive `EI`s
     /// each renew it.
     ei_shadow: bool,
+    /// Sleeping in `HALT`: every step is a four-cycle NOP with `pc` held at
+    /// the `HALT` until an interrupt is accepted, which returns past it.
+    halted: bool,
+    /// The NMI line as last sampled, so the step that sees it rise takes
+    /// the interrupt: the pin is edge-triggered.
+    nmi_line: bool,
     i: u8,
     r: u8,
 
@@ -264,6 +275,8 @@ impl Default for CpuZ80 {
             iff1: false,
             iff2: false,
             ei_shadow: false,
+            halted: false,
+            nmi_line: false,
             i: 0,
             r: 0,
             prefix_dd: false,
@@ -507,6 +520,14 @@ impl CpuZ80 {
 
     /// One M1 cycle's worth of refresh: R's low seven bits count opcode
     /// fetches, prefix bytes included; bit 7 is only ever written by `LD R, A`.
+    /// An interrupt accepted while asleep in `HALT` returns past it.
+    fn wake(&mut self) {
+        if self.halted {
+            self.halted = false;
+            self.pc = self.pc.wrapping_add(1);
+        }
+    }
+
     fn bump_r(&mut self) {
         self.r = (self.r & 0x80) | (self.r.wrapping_add(1) & 0x7f);
     }
@@ -1001,7 +1022,11 @@ impl CpuZ80 {
             (1, _) => {
                 let (dst, src) = (y, z);
                 if dst == 0b110 && src == 0b110 {
-                    // HALT, treated as a NOP
+                    // HALT: sleep, with pc back on the instruction. The
+                    // silicon keeps refetching it, and an interrupt accepted
+                    // while asleep pushes the address after it.
+                    self.halted = true;
+                    self.pc = self.pc.wrapping_sub(1);
                 } else if src == 0b110 && self.indexed() {
                     // LD r, (IX+d). The prefix is spent on the operand: the
                     // register is the plain one (DD 66 d is LD H, (IX+d)).
@@ -1438,11 +1463,13 @@ impl CpuZ80 {
                 self.a = res;
             }
 
-            // RETI -- a plain RET, with no interrupt-controller notification.
-            // Nothing here daisy-chains, so there is no IEO to release.
+            // RETI: RET, and the bus is told, so the device under service
+            // releases the daisy chain -- the SIO's IUS is what that means
+            // here. Nothing else distinguishes it from RET.
             0x4d => {
                 self.pc = self.pop16(bus);
                 self.wz = self.pc;
+                bus.interrupt_return();
             }
 
             // RETN and its undocumented aliases: RET, then IFF1 is restored
@@ -1456,9 +1483,7 @@ impl CpuZ80 {
             // IM 0 / IM 1 / IM 2, over all eight encodings -- the mapping is
             // not the regular one it looks like, so check it against silicon
             // rather than the pattern. 0x4e and 0x6e are the "IM 0/1" holes,
-            // undefined on NMOS and taken as IM 0 here, which costs nothing
-            // because IM 0 falls back to IM 1's `rst 0x38` at the interrupt
-            // entry anyway.
+            // undefined on NMOS and taken as IM 0 here.
             0x46 | 0x4e | 0x66 | 0x6e => self.im = 0,
             0x56 | 0x76 => self.im = 1,
             0x5e | 0x7e => self.im = 2,
@@ -1624,23 +1649,63 @@ impl Cpu for CpuZ80 {
         self.prefix_fd = false;
         let elapsed = std::mem::replace(&mut self.cycles, 0);
 
-        // Interrupt entry. The RC2014's SIO is the one thing that drives this:
-        // its console input is interrupt-driven and works no other way. IM 0
-        // and IM 2 fall back to IM 1's `rst 0x38` -- no machine here selects
-        // either, and IM 2 would need a device-supplied vector that nothing on
-        // the bus offers. The one instruction after an `EI` is never
-        // interrupted (`ei_shadow`).
+        // Interrupt entry. NMI on the line's rising edge, ahead of the
+        // maskable line; the maskable line with IFF1 set and not on the one
+        // instruction after an `EI` (`ei_shadow`). Either wakes a `HALT`,
+        // and the address pushed is then the one past it.
         let ints = bus.poll_interrupts(elapsed);
+        let nmi_edge = ints.nmi && !self.nmi_line;
+        self.nmi_line = ints.nmi;
         let shadowed = std::mem::replace(&mut self.ei_shadow, false);
+        if nmi_edge {
+            self.wake();
+            self.iff2 = self.iff1;
+            self.iff1 = false;
+            self.bump_r();
+            self.push16(bus, self.pc);
+            self.pc = 0x66;
+            self.wz = self.pc;
+            self.cycles += 11;
+            return StepResult::Ok;
+        }
         let op = if ints.irq && self.iff1 && !shadowed {
+            self.wake();
             self.iff1 = false;
             self.iff2 = false;
-            // The IM 1 acknowledge is 13 T-states; the RST arm below charges
-            // its fetched cost of 11, and no opcode fetch happened here --
-            // though the acknowledge cycle is an M1 for refresh.
-            self.cycles += 2;
+            // The acknowledge cycle is an M1 for refresh, and what the bus
+            // answers with is the vector (IM 2), the instruction to run (IM
+            // 0), or nothing anyone reads (IM 1).
             self.bump_r();
-            0xff // rst 0x38
+            let bus_byte = bus.interrupt_acknowledge();
+            match self.im {
+                // IM 2: 19 T-states, the vector through I to a table entry
+                2 => {
+                    let table = ((self.i as u16) << 8) | bus_byte as u16;
+                    self.push16(bus, self.pc);
+                    self.pc = bus.read16(table as u32, Endian::Little);
+                    self.wz = self.pc;
+                    self.cycles += 19;
+                    return StepResult::Ok;
+                }
+                // IM 0: the byte on the bus is an instruction, and an `rst`
+                // is the only one anything puts there -- anything else is
+                // taken as the pulled-up bus's `rst 0x38`. IM 1: `rst 0x38`
+                // regardless. Both are 13 T-states: the RST arm below charges
+                // its fetched 11, and no opcode fetch happened here.
+                0 if bus_byte & 0xc7 == 0xc7 => {
+                    self.cycles += 2;
+                    bus_byte
+                }
+                _ => {
+                    self.cycles += 2;
+                    0xff
+                }
+            }
+        } else if self.halted {
+            // asleep: a NOP's worth of refresh, nothing fetched
+            self.bump_r();
+            self.cycles += 4;
+            return StepResult::Ok;
         } else {
             // A run of DD/FD prefixes: each is its own 4 T-state M1 cycle,
             // and the last one is the one that counts -- `DD FD 21 nn nn`
@@ -1712,6 +1777,7 @@ impl Cpu for CpuZ80 {
             Register::new("IFF1", self.iff1 as u8, 1),
             Register::new("IFF2", self.iff2 as u8, 1),
             Register::new("WZ", self.wz, 16),
+            Register::new("HALT", self.halted as u8, 1),
         ]
     }
 
@@ -1737,6 +1803,7 @@ impl Cpu for CpuZ80 {
             "IFF1" => self.iff1 = value & 1 != 0,
             "IFF2" => self.iff2 = value & 1 != 0,
             "WZ" => self.wz = w,
+            "HALT" => self.halted = value & 1 != 0,
             _ => return false,
         }
         true
@@ -1828,6 +1895,7 @@ mod tests {
                 ("IM", 0x6, 0x2),
                 ("IFF1", 1, 1),
                 ("IFF2", 0, 0),
+                ("HALT", 1, 1),
             ],
         );
         assert_eq!((cpu.a, cpu.f, cpu.h_alt, cpu.l_alt), (0x12, 0xc5, 0x88, 0x77));
@@ -1949,14 +2017,121 @@ mod tests {
         assert_eq!(cpu.af_alt(), 0x3400);
     }
 
-    /// HALT is a NOP here -- nothing in the tree drives an interrupt line, so
-    /// halting would deadlock the run rather than end it.
+    /// HALT sleeps: pc stays on it, each step is a four-cycle NOP that
+    /// refreshes and fetches nothing, and an interrupt wakes it with the
+    /// address after the HALT pushed -- the Kaypro's `HALT; INI` disk loops
+    /// depend on exactly that return address.
     #[test]
-    fn halt_is_a_nop() {
-        let (mut cpu, mut bus) = boot(&[0x76, 0x3e, 0x42]); // halt ; ld a, 0x42
+    fn halt_sleeps_until_an_interrupt_returns_past_it() {
+        // ei; halt; ld a, 0x42 -- and rst 0x38 is a plain ret
+        let (mut cpu, mut bus) = boot(&[0xfb, 0x76, 0x3e, 0x42]);
+        bus.load(0x38, &[0xc9]);
         run_steps(&mut cpu, &mut bus, 2);
-        assert_eq!(cpu.a, 0x42);
-        assert_eq!(cpu.pc, 0x0003);
+        assert!(cpu.halted);
+        assert_eq!(cpu.pc, 0x0001, "held on the halt");
+        let r = cpu.r;
+        bus.watch = Some(0x0001);
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!(cpu.pc, 0x0001);
+        assert_eq!(cpu.last_step_cycles(), 4);
+        assert_eq!(cpu.r, r + 3, "refresh goes on");
+        assert_eq!(bus.watch_reads, 0, "nothing is fetched while asleep");
+        assert_eq!(cpu.a, 0, "the ld has not run");
+
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert!(!cpu.halted);
+        assert_eq!(cpu.pc, 0x38);
+        assert_eq!(bus.read16(cpu.sp as u32, Endian::Little), 0x0002, "past the halt");
+        bus.irq = false;
+        run_steps(&mut cpu, &mut bus, 2); // ret; ld a, 0x42
+        assert_eq!((cpu.a, cpu.pc), (0x42, 0x0004));
+    }
+
+    /// NMI is edge-triggered: the step that sees the line rise takes it,
+    /// with IFF1 copied into IFF2 and cleared, and a line still held does
+    /// not take it again. It outranks the maskable line, ignores IFF1, and
+    /// wakes a HALT.
+    #[test]
+    fn nmi_takes_the_rising_edge_and_saves_iff1_in_iff2() {
+        // ei; halt; inc a -- nmi handler at 0x66: retn
+        let (mut cpu, mut bus) = boot(&[0xfb, 0x76, 0x3c]);
+        bus.load(0x66, &[0xed, 0x45]);
+        run_steps(&mut cpu, &mut bus, 2);
+        bus.nmi = true;
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x66, "nmi first, though irq was up too");
+        assert_eq!(cpu.last_step_cycles(), 11);
+        assert!((!cpu.iff1) && cpu.iff2, "iff1 saved in iff2");
+        assert_eq!(bus.read16(cpu.sp as u32, Endian::Little), 0x0002);
+        bus.irq = false;
+        run_steps(&mut cpu, &mut bus, 1); // retn
+        assert!(cpu.iff1, "retn restores it");
+        assert_eq!(cpu.pc, 0x0002);
+        run_steps(&mut cpu, &mut bus, 1); // inc a: the line is still high, no edge
+        assert_eq!((cpu.a, cpu.pc), (1, 0x0003));
+        bus.nmi = false;
+        run_steps(&mut cpu, &mut bus, 1);
+        bus.nmi = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x66, "a fresh edge");
+
+        // with interrupts disabled it is taken all the same
+        let (mut cpu, mut bus) = boot(&[0xf3, 0x00]);
+        run_steps(&mut cpu, &mut bus, 1);
+        bus.nmi = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x66);
+        assert!(!cpu.iff2);
+    }
+
+    /// The acknowledge cycle asks the bus. IM 2 takes its answer as the low
+    /// byte of a table entry under I, 19 T-states; IM 0 executes the `rst`
+    /// it finds there, and takes anything else as the pulled-up bus; IM 1
+    /// ignores it. All three acknowledge, and RETI reports back.
+    #[test]
+    fn interrupt_modes_take_the_bus_byte_as_the_silicon_does() {
+        // im 2 ; ld a, 0x12 ; ld i, a ; ei ; nop ...
+        let prog = [0xed, 0x5e, 0x3e, 0x12, 0xed, 0x47, 0xfb, 0x00, 0x00];
+        let (mut cpu, mut bus) = boot(&prog);
+        bus.load(0x1240, &[0x34, 0x12]); // table entry: handler at 0x1234
+        bus.load(0x1234, &[0xed, 0x4d]); // reti
+        run_steps(&mut cpu, &mut bus, 5);
+        bus.irq = true;
+        bus.vector = 0x40;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x1234);
+        assert_eq!(cpu.last_step_cycles(), 19);
+        assert_eq!(bus.acks, 1);
+        assert_eq!(bus.read16(cpu.sp as u32, Endian::Little), 0x0008);
+        bus.irq = false;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, bus.retis), (0x0008, 1), "reti returns and reports");
+
+        // im 0 with rst 0x10 on the bus
+        let (mut cpu, mut bus) = boot(&[0xed, 0x46, 0xfb, 0x00, 0x00]);
+        run_steps(&mut cpu, &mut bus, 3);
+        bus.irq = true;
+        bus.vector = 0xd7;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.last_step_cycles(), bus.acks), (0x10, 13, 1));
+
+        // im 0 with a byte that is not an rst: the pulled-up bus
+        let (mut cpu, mut bus) = boot(&[0xed, 0x46, 0xfb, 0x00, 0x00]);
+        run_steps(&mut cpu, &mut bus, 3);
+        bus.irq = true;
+        bus.vector = 0x00;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x38);
+
+        // im 1 acknowledges too, and the byte does not matter
+        let (mut cpu, mut bus) = boot(&[0xfb, 0x00, 0x00]);
+        run_steps(&mut cpu, &mut bus, 2);
+        bus.irq = true;
+        bus.vector = 0xd7;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, bus.acks), (0x38, 1));
     }
 
     #[test]
@@ -2401,7 +2576,7 @@ mod tests {
             (&[0xc7],                  11), // rst 00
             (&[0xd3, 0x40],            11), // out (n), a
             (&[0xdb, 0x40],            11), // in a, (n)
-            (&[0x76],                   4), // halt-as-nop
+            (&[0x76],                   4), // halt
             // dd/fd forms: +4 for the prefix, +8 where a displacement is read
             (&[0xdd, 0x21, 0x34, 0x12], 14), // ld ix, nn
             (&[0xdd, 0x7e, 0x02],       19), // ld a, (ix+d)

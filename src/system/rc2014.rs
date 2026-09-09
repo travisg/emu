@@ -177,7 +177,16 @@ impl Bus for Rc2014 {
     fn poll_interrupts(&mut self, elapsed_cycles: u32) -> IntStatus {
         self.poll_console();
         self.sio.tick(elapsed_cycles);
-        IntStatus { irq: self.sio.int_pending(), nmi: false, vector: self.sio.vector() }
+        IntStatus { irq: self.sio.int_pending(), nmi: false }
+    }
+
+    /// The SIO is the only thing on the interrupt daisy chain.
+    fn interrupt_acknowledge(&mut self) -> u8 {
+        self.sio.acknowledge()
+    }
+
+    fn interrupt_return(&mut self) {
+        self.sio.reti();
     }
 
     fn set_device_pacing_hz(&mut self, hz: u64) {
@@ -313,6 +322,24 @@ mod tests {
         sys.io_write8(0x80, 0xea);
         assert!(sys.poll_interrupts(FRAME).irq);
         assert_eq!(sys.io_read8(0x81), b'w');
+    }
+
+    /// The acknowledge cycle puts the SIO's receive source under service,
+    /// which holds the next character back until the handler's RETI --
+    /// the factory rom ends its handler with one for exactly this.
+    #[test]
+    fn a_second_character_waits_for_the_handlers_reti() {
+        let (mut sys, tx) = build("ius");
+        init_sio(&mut sys);
+        tx.send(b'a').unwrap();
+        tx.send(b'b').unwrap();
+        assert!(sys.poll_interrupts(FRAME).irq);
+        sys.interrupt_acknowledge();
+        assert_eq!(sys.io_read8(0x81), b'a');
+        assert!(!sys.poll_interrupts(FRAME).irq, "b has arrived, but the service holds it");
+        sys.interrupt_return();
+        assert!(sys.poll_interrupts(0).irq);
+        assert_eq!(sys.io_read8(0x81), b'b');
     }
 
     /// `--fast-io` takes the frame time off both directions.

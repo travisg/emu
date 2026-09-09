@@ -35,6 +35,14 @@ pub(crate) struct TestBus {
     /// Level-triggered IRQ line for `poll_interrupts`, the ported cores'
     /// interrupt poll. A test sets it and clears it.
     pub irq: bool,
+    /// The NMI line, likewise; the z80 core makes the edge of it.
+    pub nmi: bool,
+    /// What `interrupt_acknowledge` answers with: the pulled-up bus unless a
+    /// test says otherwise.
+    pub vector: u8,
+    /// How many acknowledge cycles and `RETI`s the core has reported.
+    pub acks: u32,
+    pub retis: u32,
     /// Running total of the cycle counts handed to `poll_interrupt_lines`, so
     /// a test can check that a core reports the machine time its devices are
     /// paced by.
@@ -56,6 +64,10 @@ impl TestBus {
             io16_writes: Vec::new(),
             int_lines: 0,
             irq: false,
+            nmi: false,
+            vector: 0xff,
+            acks: 0,
+            retis: 0,
             polled_cycles: 0,
             watch: None,
             watch_reads: 0,
@@ -110,7 +122,16 @@ impl Bus for TestBus {
     }
 
     fn poll_interrupts(&mut self, _elapsed_cycles: u32) -> crate::bus::IntStatus {
-        crate::bus::IntStatus { irq: self.irq, nmi: false, vector: 0 }
+        crate::bus::IntStatus { irq: self.irq, nmi: self.nmi }
+    }
+
+    fn interrupt_acknowledge(&mut self) -> u8 {
+        self.acks += 1;
+        self.vector
+    }
+
+    fn interrupt_return(&mut self) {
+        self.retis += 1;
     }
 }
 

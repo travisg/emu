@@ -128,6 +128,8 @@ impl Kaypro {
     }
 
     /// `--fast-io`: the serial ports complete instantly in both directions.
+    /// The floppy keeps its byte time, which is what the rom's HALT loops
+    /// need -- see `dev/wd1793`.
     pub fn set_fast_io(&mut self) {
         self.sio.set_fast_io();
     }
@@ -191,18 +193,32 @@ impl Bus for Kaypro {
     /// The same decode as `read8`, which has no side effects on this
     /// machine -- the video ram is a locked buffer, the floppy and SIO are
     /// on ports.
-    /// The SIO's INT. The rom programs both channels with WR1 = 0, so the
-    /// line is wired but nothing on this machine ever requests service;
-    /// the keystrokes reach the keyboard's line and the frames advance
-    /// here, once an instruction.
+    /// IRQ is the SIO's INT: the rom programs both channels with WR1 = 0,
+    /// so the line is wired but nothing on this machine ever requests
+    /// service. NMI is the floppy controller's INTRQ or DRQ, and that one
+    /// is the disk system: the rom's transfer loops sleep in HALT for each
+    /// byte's DRQ and for the completion, with a RET planted at 0x0066 to
+    /// return them past the HALT. Keystrokes reach the keyboard's line, and
+    /// the SIO's frames and the floppy's bytes advance here, once an
+    /// instruction.
     fn poll_interrupts(&mut self, elapsed_cycles: u32) -> IntStatus {
         self.poll_keyboard();
         self.sio.tick(elapsed_cycles);
-        IntStatus { irq: self.sio.int_pending(), nmi: false, vector: self.sio.vector() }
+        self.fdc.tick(elapsed_cycles);
+        IntStatus { irq: self.sio.int_pending(), nmi: self.fdc.nmi_line() }
+    }
+
+    fn interrupt_acknowledge(&mut self) -> u8 {
+        self.sio.acknowledge()
+    }
+
+    fn interrupt_return(&mut self) {
+        self.sio.reti();
     }
 
     fn set_device_pacing_hz(&mut self, hz: u64) {
         self.sio.set_pacing_hz(hz);
+        self.fdc.set_pacing_hz(hz);
     }
 
     fn peek8(&self, addr: u32) -> Option<u8> {
@@ -239,9 +255,7 @@ impl Bus for Kaypro {
             // 800ms of machine time -- invisible while the machine ran
             // uncapped, and a two-minute program load under --throttle.
             // Nothing polls INTRQ/DRQ here: the BIOS waits for the disk
-            // with HALT, woken by the lines' NMI gate on real hardware
-            // (and falling through to a busy-poll of the status register
-            // under this core's HALT-is-a-NOP quirk).
+            // with HALT, woken by the lines' NMI gate (`poll_interrupts`).
             0x1c => self.control_latch,
             _ => 0,
         }
@@ -409,6 +423,24 @@ mod tests {
         assert_eq!(sys.io_read8(0x07) & 0x01, 0);
     }
 
+    /// The floppy controller's INTRQ and DRQ are the NMI line: a read
+    /// sector raises it for each byte, a byte time apart, and reading the
+    /// data register drops it again -- the edges the rom's `HALT; INI` loop
+    /// sleeps for.
+    #[test]
+    fn the_floppy_drives_nmi_a_byte_at_a_time() {
+        let fx = Fixture::new("nmi");
+        let (mut sys, _) = fx.build();
+        assert!(!sys.poll_interrupts(0).nmi);
+        sys.io_write8(0x1c, 0x80); // bank in, drive a selected, motors on
+        sys.io_write8(0x10, 0x88); // read sector
+        assert!(!sys.poll_interrupts(79).nmi);
+        assert!(sys.poll_interrupts(1).nmi, "drq");
+        sys.io_read8(0x13);
+        assert!(!sys.poll_interrupts(0).nmi, "taken");
+        assert!(sys.poll_interrupts(80).nmi, "the next");
+    }
+
     /// The baud rate generator's code sets the rate: 9600 is 260 cycles a
     /// character.
     #[test]
@@ -452,6 +484,7 @@ mod tests {
         sys.io_write8(0x1c, 0x82);
         assert_eq!(sys.io_read8(0x10) & 0x80, 0);
         sys.io_write8(0x10, 0x80);
+        sys.poll_interrupts(80); // the first byte's time
         assert_eq!(sys.io_read8(0x13), 0x11);
     }
 

@@ -30,9 +30,12 @@
 //!   a special receive condition, the fixed priority between sources and
 //!   channels, WR2's vector and "status affects vector" (WR1 bit 2 of channel
 //!   B, both channels' sources encoded in bits 3-1), and RR0's
-//!   interrupt-pending bit on channel A. The bus reports the request and
-//!   the vector; an acknowledge cycle, IUS and the daisy chain are not
-//!   modelled, so `RETI` has nothing here to release.
+//!   interrupt-pending bit on channel A. The acknowledge cycle sets the
+//!   requesting source's interrupt-under-service bit, which holds back
+//!   that source and everything below it until `RETI` (or channel A's
+//!   "return from interrupt" command) clears the highest one -- the daisy
+//!   chain as far as one chip goes. Nothing above the SIO on the chain is
+//!   modelled, so IEI is always high.
 //! - **Flow control**, optionally: a channel whose far end honours RTS
 //!   (`set_honours_rts`, a terminal on a modem cable) receives nothing while
 //!   WR5's RTS is off. A keyboard has no such input and ignores it.
@@ -336,6 +339,9 @@ impl Channel {
 
 pub struct Z80Sio {
     chan: [Channel; 2],
+    /// Interrupt under service, by priority rank (`rank`): a source is
+    /// acknowledged into it and `RETI` takes the highest out.
+    ius: [bool; 4],
     /// The rate machine cycles are issued at: the machine's own clock until
     /// `set_pacing_hz` says otherwise.
     pacing_hz: u64,
@@ -349,6 +355,7 @@ impl Z80Sio {
     pub fn new(clock_hz: u64) -> Self {
         Z80Sio {
             chan: [Channel::new(0, false), Channel::new(0, false)],
+            ius: [false; 4],
             pacing_hz: clock_hz,
             fast_io: false,
         }
@@ -411,6 +418,11 @@ impl Z80Sio {
 
     pub fn write_control(&mut self, ch: Ch, val: u8) {
         let (pacing_hz, fast_io) = (self.pacing_hz, self.fast_io);
+        // WR0 command 111, return from interrupt: channel A only, and the
+        // same release RETI performs
+        if ch == Ch::A && self.chan[0].pointer == 0 && (val >> 3) & 0x07 == 0b111 {
+            self.reti();
+        }
         self.chan[ch as usize].write_control(val, pacing_hz, fast_io)
     }
 
@@ -428,18 +440,47 @@ impl Z80Sio {
         }
     }
 
-    /// The highest-priority request across the device: channel A's sources
-    /// above channel B's.
+    /// A source's place in the chip's fixed order: channel A's receive,
+    /// then its transmit, then channel B's; lower is higher priority.
+    fn rank(ch: Ch, source: Source) -> usize {
+        2 * ch as usize + (source == Source::TxEmpty) as usize
+    }
+
+    /// The highest-priority request across the device that outranks every
+    /// source under service: channel A's sources above channel B's,
+    /// receive above transmit.
     fn pending(&self) -> Option<(Ch, Source)> {
-        if let Some(s) = self.chan[0].pending() {
-            return Some((Ch::A, s));
-        }
-        self.chan[1].pending().map(|s| (Ch::B, s))
+        let request = if let Some(s) = self.chan[0].pending() {
+            (Ch::A, s)
+        } else {
+            (Ch::B, self.chan[1].pending()?)
+        };
+        let serving = self.ius.iter().position(|&b| b).unwrap_or(self.ius.len());
+        (Self::rank(request.0, request.1) < serving).then_some(request)
     }
 
     /// The INT line: something is requesting service.
     pub fn int_pending(&self) -> bool {
         self.pending().is_some()
+    }
+
+    /// The acknowledge cycle: the requesting source goes under service and
+    /// the vector is the byte on the bus. With nothing requesting -- the
+    /// core accepted an interrupt this chip was not raising -- the
+    /// unmodified vector, and nothing changes.
+    pub fn acknowledge(&mut self) -> u8 {
+        let vector = self.vector();
+        if let Some((ch, source)) = self.pending() {
+            self.ius[Self::rank(ch, source)] = true;
+        }
+        vector
+    }
+
+    /// `RETI`: the highest source under service is released.
+    pub fn reti(&mut self) {
+        if let Some(slot) = self.ius.iter_mut().find(|b| **b) {
+            *slot = false;
+        }
     }
 
     /// The vector the device would put on the bus: channel B's WR2, with
@@ -700,6 +741,43 @@ mod tests {
         assert_eq!(sio.read_control(Ch::A) & RR0_INT_PENDING, RR0_INT_PENDING);
         sio.write_control(Ch::A, 2);
         assert_eq!(sio.read_control(Ch::A), 0, "RR2 is channel B's only");
+    }
+
+    /// An acknowledged source is under service: it and everything below
+    /// it hold their requests until RETI, while a higher one may nest.
+    /// Channel A's "return from interrupt" command releases the same way.
+    #[test]
+    fn an_acknowledged_source_holds_the_line_until_reti() {
+        let mut sio = Z80Sio::new(1_000_000);
+        program(&mut sio, Ch::A, &[(3, 0xc1), (1, 0x18)]);
+        program(&mut sio, Ch::B, &[(3, 0xc1), (1, 0x1c), (2, 0x40)]);
+        sio.receive(Ch::B, 1);
+        sio.tick(0);
+        assert_eq!(sio.acknowledge(), 0x44, "B rx acknowledged");
+        assert!(!sio.int_pending(), "under service");
+        sio.read_data(Ch::B);
+        sio.receive(Ch::B, 2);
+        sio.tick(0);
+        assert!(!sio.int_pending(), "the next character waits for reti");
+        sio.receive(Ch::A, 3);
+        sio.tick(0);
+        assert!(sio.int_pending(), "channel A outranks the service");
+        assert_eq!(sio.acknowledge(), 0x4c);
+        sio.read_data(Ch::A);
+        assert!(!sio.int_pending());
+        sio.reti();
+        assert!(!sio.int_pending(), "A's service released, B's still holds");
+        sio.reti();
+        assert!(sio.int_pending(), "and now B's character");
+        assert_eq!(sio.acknowledge(), 0x44);
+        sio.write_control(Ch::A, 0b111 << 3); // return from interrupt
+        sio.read_data(Ch::B);
+        assert!(!sio.int_pending());
+        assert_eq!(sio.ius, [false; 4]);
+
+        // an acknowledge nothing here asked for changes nothing
+        assert_eq!(sio.acknowledge(), 0x40);
+        assert_eq!(sio.ius, [false; 4]);
     }
 
     #[test]
