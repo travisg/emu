@@ -1,0 +1,17 @@
+# cpmtools definitions for the RC2014's compact flash card, as Grant Searle's
+# CBIOS lays it out (cbios128.asm): sixteen 8 MB drives of 512 tracks, each
+# track 32 sectors of 512 bytes -- 128 CP/M records -- 4K blocks, 512
+# directory entries, drive n at n x 8 MB. Drive A alone reserves its first
+# track, where the CP/M system sits (the monitor loads sectors 0-23 of it).
+# cpmtools reads a `diskdefs` in the working directory before the system
+# one, which is how test/run_rc2014_zex_test.py uses this.
+diskdef rc2014-a
+  seclen 512
+  tracks 512
+  sectrk 32
+  blocksize 4096
+  maxdir 512
+  skew 0
+  boottrk 1
+  os 2.2
+end

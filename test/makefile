@@ -9,7 +9,7 @@ LINKFLAGS := -ni
 # C++ tree; objcopy does the same job for a contiguous image.
 OBJCOPY   := objcopy
 
-.PHONY: all clean basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test
+.PHONY: all clean basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test
 
 # The 6809 sources, all built in place under 6809/. memtest is the only one
 # meant to run; the other two exist to be assembled. README.md says which is
@@ -64,6 +64,12 @@ rc2014-cpm-test:
 # zeros it makes itself, so this needs nothing fetched.
 rc2014-ctc-test:
 	./run_rc2014_ctc_test.py
+
+# The Z80 exercisers under the RC2014's CP/M: the card, disks/cpm/zex*.com
+# and cpmtools (with diskdefs here for the card's geometry), and the
+# release binary for the same reason as the Kaypro's.
+rc2014-zex-test:
+	./run_rc2014_zex_test.py
 
 # --- Raytheon 703 ---------------------------------------------------------
 # The 703's own assembler (SYM II) survives only as scans, so the demo image is
