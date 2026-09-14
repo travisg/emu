@@ -29,7 +29,8 @@
 //! thread, and goes to the machine over the run loop's control channel as
 //! a [`DiskImage`], for the machine to judge -- a file that is not a disk
 //! for that drive is refused with the reason on the terminal. Nothing here
-//! touches the machine.
+//! touches the machine. The debug port's `disk` and `eject` are the same
+//! doors without the window.
 //!
 //! The `sdl2` crate's context types are `!Send`, so main-thread confinement is
 //! enforced by the compiler; and the shutdown flag is polled inside the

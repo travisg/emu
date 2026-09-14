@@ -481,6 +481,19 @@ impl Emulator {
                 b.sort_unstable();
                 DebugReply::Breaks(b)
             }
+            DebugOp::ChangeDisk { drive, path } => {
+                let image = match path.map(DiskImage::open).transpose() {
+                    Ok(image) => image,
+                    Err(e) => {
+                        let _ = req.reply.send(DebugReply::Err(e));
+                        return;
+                    }
+                };
+                match self.bus.change_disk(drive, image) {
+                    Ok(()) => DebugReply::Ok,
+                    Err(e) => DebugReply::Err(e),
+                }
+            }
         };
         // a client that hung up before its reply arrived is not an error
         let _ = req.reply.send(reply);
@@ -967,22 +980,33 @@ mod tests {
 
     /// A halted machine answers without stepping: the requests are queued
     /// before the sender drops, and the run ends with nothing executed.
-    /// A disk change from the window's door reaches the bus between
-    /// instructions with the opened image; a refusal is heard only on the
-    /// terminal, and the drive keeps what it had.
+    /// A disk change reaches the bus between instructions from either
+    /// door: the window's, which carries an opened image and hears of a
+    /// refusal only on the terminal, and the port's, which names a path
+    /// the run loop opens and gets the refusal back as its reply. A path
+    /// that will not open never reaches the bus.
     #[test]
-    fn disk_changes_reach_the_bus_from_the_window() {
+    fn disk_changes_reach_the_bus_from_the_window_and_the_port() {
         let PanelRig { mut emu, tx, disks, .. } = ScriptedCpu::build(vec![]);
         let dir = std::env::temp_dir().join(format!("emu-disk-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("a.img");
+        let b = dir.join("b.img");
         std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
         tx.send(Control::Drive { drive: 0, image: Some(DiskImage::open(a.clone()).unwrap()) }).unwrap();
         tx.send(Control::Drive { drive: 7, image: None }).unwrap();
-        tx.send(Control::Drive { drive: 0, image: None }).unwrap();
+        let inserted = debug(&tx, DebugOp::ChangeDisk { drive: 0, path: Some(b.clone()) });
+        let missing = debug(&tx, DebugOp::ChangeDisk { drive: 0, path: Some(dir.join("nope.img")) });
+        let refused = debug(&tx, DebugOp::ChangeDisk { drive: 3, path: None });
+        let ejected = debug(&tx, DebugOp::ChangeDisk { drive: 0, path: None });
         drop(tx);
         assert_eq!(emu.run(), ExitReason::Shutdown);
-        assert_eq!(*disks.lock().unwrap(), vec![Some(a), None]);
+        assert_eq!(inserted.recv().unwrap(), DebugReply::Ok);
+        assert!(matches!(missing.recv().unwrap(), DebugReply::Err(e) if e.contains("nope.img")));
+        assert_eq!(refused.recv().unwrap(), DebugReply::Err("no drive 3".into()));
+        assert_eq!(ejected.recv().unwrap(), DebugReply::Ok);
+        assert_eq!(*disks.lock().unwrap(), vec![Some(a), Some(b), None]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

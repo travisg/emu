@@ -141,6 +141,8 @@ fn a_client_drives_a_703_over_the_socket() {
     assert_eq!(c.ask("mem 1c ff"), "err 'ff' is not a count");
     assert_eq!(c.ask("mem 0 300"), "err at most 256 bytes per request");
     assert_eq!(c.ask("bogus"), "err unknown command 'bogus'; try help");
+    assert_eq!(c.ask("eject a"), "err this machine has no removable drive");
+    assert_eq!(c.ask("disk a"), "err disk takes a drive and a path");
     assert_eq!(c.ask("kill"), "ok");
     assert_eq!(c.event(), "! exit reason=shutdown");
 

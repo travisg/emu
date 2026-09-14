@@ -327,6 +327,13 @@ class Emu:
     def backlog(self):
         return unescape(self.command('backlog'))
 
+    def disk(self, drive, path):
+        """Put the image at path in a drive ('a', 'b', or a number)."""
+        self.command('disk %s %s' % (drive, path))
+
+    def eject(self, drive):
+        self.command('eject %s' % drive)
+
     def kill(self):
         self.command('kill')
 

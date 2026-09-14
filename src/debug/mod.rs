@@ -45,6 +45,8 @@
 //! | `break ADDR` / `unbreak ADDR` | `ok` | ADDR in core units, the same as `pc` |
 //! | `breaks` | `ok HEX ...` | |
 //! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
+//! | `disk DRIVE PATH` | `ok` | put the image at PATH (the rest of the line) in DRIVE, a letter or a number; `err` with the reason if the machine refuses it, and the drive keeps what it had |
+//! | `eject DRIVE` | `ok` | empty the drive |
 //! | `backlog` | `ok TEXT` | the last 16 KiB of guest output, escaped |
 //! | `help` | `# ...` lines, then `ok` | |
 //! | `quit` | `ok`, then the connection closes | the machine runs on |
@@ -76,6 +78,7 @@ use crate::cpu::Register;
 use crate::emulator::ExitReason;
 use std::collections::VecDeque;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
@@ -99,6 +102,10 @@ pub enum DebugOp {
     AddBreak(u32),
     RemoveBreak(u32),
     Breaks,
+    /// The image at `path` into `drive`, or `None` to empty it -- the
+    /// window's drive door, from the port. The run loop opens the file
+    /// and the machine judges it.
+    ChangeDisk { drive: usize, path: Option<PathBuf> },
 }
 
 /// A request and the channel its reply goes back on.

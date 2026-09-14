@@ -49,12 +49,33 @@ fn parse_hex_max(s: &str, max: u32, what: &str) -> Result<u32, String> {
     Ok(v)
 }
 
+/// A drive, as CP/M names it (`a`, `B`) or by number (`0`, `1`).
+fn parse_drive(s: &str) -> Result<usize, String> {
+    match s.as_bytes() {
+        [c] if c.is_ascii_alphabetic() => Ok((c.to_ascii_uppercase() - b'A') as usize),
+        _ => s.parse().map_err(|_| format!("'{s}' is not a drive")),
+    }
+}
+
 /// Parse one line, its terminator already stripped.
 pub fn parse(line: &str) -> Result<Command, String> {
     let line = line.trim_start();
     // `key` takes the rest of the line verbatim, spaces included
     if let Some(rest) = line.strip_prefix("key ").or_else(|| line.strip_prefix("KEY ")) {
         return Ok(Command::Key(unescape(rest)?));
+    }
+    // so does `disk`, after the drive: a path may have spaces in it
+    if let Some(rest) = line.strip_prefix("disk ").or_else(|| line.strip_prefix("DISK ")) {
+        let rest = rest.trim_start();
+        let (drive, path) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let path = path.trim();
+        if path.is_empty() {
+            return Err("disk takes a drive and a path".into());
+        }
+        return Ok(Command::Machine(DebugOp::ChangeDisk {
+            drive: parse_drive(drive)?,
+            path: Some(std::path::PathBuf::from(path)),
+        }));
     }
     let mut words = line.split_whitespace();
     let Some(verb) = words.next() else {
@@ -150,6 +171,11 @@ pub fn parse(line: &str) -> Result<Command, String> {
             Command::Machine(DebugOp::Breaks)
         }
         "key" => Command::Key(Vec::new()),
+        "disk" => return Err("disk takes a drive and a path".into()),
+        "eject" => {
+            arity(1)?;
+            Command::Machine(DebugOp::ChangeDisk { drive: parse_drive(args[0])?, path: None })
+        }
         "backlog" => {
             arity(0)?;
             Command::Backlog
@@ -287,6 +313,8 @@ pub const HELP: &[&str] = &[
     "writew ADDR W...       words to core-unit address ADDR",
     "break ADDR | unbreak ADDR | breaks",
     "key TEXT               keystrokes to the guest (\\r \\n \\t \\\\ \\xHH)",
+    "disk DRIVE PATH        put the image at PATH in drive DRIVE (a letter, or a number)",
+    "eject DRIVE            empty the drive",
     "backlog                the last 16 KiB of guest output",
     "quit                   close this connection; the machine runs on",
     "kill                   shut the emulator down",
@@ -321,6 +349,17 @@ mod tests {
             ("key LIST\\r", Command::Key(b"LIST\r".to_vec())),
             ("key  two spaces", Command::Key(b" two spaces".to_vec())),
             ("key", Command::Key(Vec::new())),
+            (
+                "disk a disks/x.img",
+                Command::Machine(DebugOp::ChangeDisk { drive: 0, path: Some("disks/x.img".into()) }),
+            ),
+            (
+                "DISK B /a path/with spaces.img ",
+                Command::Machine(DebugOp::ChangeDisk { drive: 1, path: Some("/a path/with spaces.img".into()) }),
+            ),
+            ("disk 1 x", Command::Machine(DebugOp::ChangeDisk { drive: 1, path: Some("x".into()) })),
+            ("eject a", Command::Machine(DebugOp::ChangeDisk { drive: 0, path: None })),
+            ("eject 1", Command::Machine(DebugOp::ChangeDisk { drive: 1, path: None })),
             ("backlog", Command::Backlog),
             ("help", Command::Help),
             ("quit", Command::Quit),
