@@ -12,11 +12,22 @@
 //! Restore, Seek, Read Sector, Read Address and Force Interrupt do what they
 //! say; Write Sector takes its bytes through DRQ like a real one and drops
 //! them, so a guest's write loop runs to completion and nothing survives it;
-//! the rest complete with an interrupt. The image is opened read-only for
-//! the same reason; nothing here can modify it.
+//! the rest complete with an interrupt. The images are opened read-only for
+//! the same reason; nothing here can modify them.
 //!
 //! The image geometry is fixed to the Kaypro II single-sided format the C++
 //! assumes: 40 tracks x 10 sectors x 512 bytes, sectors numbered from 0.
+//!
+//! Two drives hang off the chip, A and B, and the machine's latch selects
+//! one (or neither: not ready). Either may be empty, and the window's drive
+//! doors swap images at run time through `mount`. The chip has one track
+//! register between them, as the real one does -- the BIOS re-seeks after a
+//! drive change. What the bay window shows -- the image in each slot, and
+//! the drive's front light -- is published through an attached
+//! [`DriveBayState`]. The light is the drive's select line gated by the
+//! motor: the Tandon lights it from DRIVE SELECT, but the Kaypro's BIOS
+//! leaves the last drive selected between accesses and only drops the
+//! motor bit, and on the machine the light goes out with the motors.
 //!
 //! # Timing, and why it is load-bearing
 //!
@@ -42,6 +53,7 @@
 //! the byte time is what makes the guest's loop work, and at 80 cycles it
 //! is already faster than any real drive.
 
+use crate::console::{DiskImage, DriveBayState, DRIVE_BAYS};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -49,6 +61,12 @@ use std::path::Path;
 const TRACKS: u32 = 40;
 const SECTORS_PER_TRACK: u32 = 10;
 const SECTOR_SIZE: usize = 512;
+/// The size of an image in the fixed geometry, which is what a file has
+/// to be to go in a drive.
+pub const IMAGE_SIZE: u64 = TRACKS as u64 * SECTORS_PER_TRACK as u64 * SECTOR_SIZE as u64;
+
+/// Drives on the chip. The bay window draws exactly this many.
+pub const DRIVES: usize = DRIVE_BAYS;
 
 /// Status reads toggle the index pulse bit every this many reads, so a Type I
 /// poll loop sees the disk "spinning".
@@ -79,7 +97,11 @@ pub struct Wd1793 {
     /// The C++ keeps this counter in a function-local `static`; there is only
     /// ever one controller so a field is equivalent.
     index_counter: u32,
-    selected: bool,
+    /// The drive the machine's latch has selected, if any.
+    selected: Option<usize>,
+    /// The latch's motor bit: with it off the selected drive's light is
+    /// out.
+    motor: bool,
 
     sector_index: usize,
     buffer_count: usize,
@@ -94,7 +116,11 @@ pub struct Wd1793 {
     /// The rate machine cycles are issued at, for the times above.
     pacing_hz: u64,
 
-    image: Option<File>,
+    /// The disk in each drive, with the path it came from for the bay's
+    /// label.
+    images: [Option<DiskImage>; DRIVES],
+    /// The bay window's lamps and labels, when there is a window.
+    bay: Option<DriveBayState>,
 }
 
 impl Default for Wd1793 {
@@ -115,7 +141,8 @@ impl Wd1793 {
             drq: false,
             index_pulse: false,
             index_counter: 0,
-            selected: true,
+            selected: Some(0),
+            motor: true,
             sector_index: 0,
             buffer_count: 0,
             sector_bytes: [0; SECTOR_SIZE],
@@ -123,8 +150,19 @@ impl Wd1793 {
             drq_in: 0,
             intrq_in: 0,
             pacing_hz: crate::system::kaypro::CLOCK_HZ,
-            image: None,
+            images: [None, None],
+            bay: None,
         }
+    }
+
+    /// Attach the bay window's state. Syncs the labels from whatever is
+    /// already mounted, so it does not matter whether the images went in
+    /// first.
+    pub fn attach_bay(&mut self, bay: DriveBayState) {
+        for (drive, image) in self.images.iter().enumerate() {
+            bay.set_mounted(drive, image.as_ref().map(|i| i.path.clone()));
+        }
+        self.bay = Some(bay);
     }
 
     /// Pace the byte and step times against `pacing_hz` cycles to the
@@ -144,6 +182,12 @@ impl Wd1793 {
     /// Advance by `elapsed` machine cycles: a byte becomes due, a command
     /// completes.
     pub fn tick(&mut self, elapsed: u32) {
+        if let Some(bay) = &self.bay {
+            bay.advance(elapsed);
+            if let (Some(drive), true) = (self.selected, self.motor) {
+                bay.charge(drive, elapsed);
+            }
+        }
         if self.drq_in > 0 {
             self.drq_in = self.drq_in.saturating_sub(elapsed);
             if self.drq_in == 0 {
@@ -176,26 +220,37 @@ impl Wd1793 {
         }
     }
 
-    /// Attach a disk image. A missing image is not fatal -- as in the C++,
-    /// the controller just reports Not Ready and reads come back as `0xe5`
-    /// filler -- so this reports rather than errors.
-    pub fn load_image(&mut self, path: &Path) -> bool {
+    /// Put a disk image in `drive` at startup. A missing image is not
+    /// fatal -- as in the C++, the drive just reports Not Ready and reads
+    /// come back as `0xe5` filler -- so this reports rather than errors.
+    pub fn load_image(&mut self, drive: usize, path: &Path) -> bool {
         match File::open(path) {
-            Ok(f) => {
-                println!("WD1793: loaded image '{}'", path.display());
-                self.image = Some(f);
+            Ok(file) => {
+                println!("WD1793: drive {}: loaded image '{}'", drive_letter(drive), path.display());
+                self.mount(drive, Some(DiskImage { path: path.to_path_buf(), file }));
                 true
             }
             Err(e) => {
-                println!("WD1793: failed to open image '{}': {e}", path.display());
-                self.image = None;
+                println!("WD1793: drive {}: failed to open image '{}': {e}", drive_letter(drive), path.display());
+                self.mount(drive, None);
                 false
             }
         }
     }
 
-    pub fn has_image(&self) -> bool {
-        self.image.is_some()
+    /// Change the disk in `drive`: `image` goes in, or `None` leaves it
+    /// empty. A transfer in flight keeps the sector it already read; the
+    /// next one finds whatever is in the slot now, as with a real disk
+    /// pulled mid-run.
+    pub fn mount(&mut self, drive: usize, image: Option<DiskImage>) {
+        if let Some(bay) = &self.bay {
+            bay.set_mounted(drive, image.as_ref().map(|i| i.path.clone()));
+        }
+        self.images[drive] = image;
+    }
+
+    pub fn has_image(&self, drive: usize) -> bool {
+        self.images[drive].is_some()
     }
 
     /// The INTRQ output line. On the Kaypro INTRQ and DRQ are ORed onto
@@ -216,8 +271,16 @@ impl Wd1793 {
         self.intrq || self.drq
     }
 
-    pub fn set_selected(&mut self, selected: bool) {
-        self.selected = selected;
+    /// The machine's drive select: which drive's select line is asserted,
+    /// or none, and whether the motors are on. The selected drive's light
+    /// is lit for as long as both hold.
+    pub fn select(&mut self, drive: Option<usize>, motor: bool) {
+        self.selected = drive;
+        self.motor = motor;
+    }
+
+    pub fn selected(&self) -> Option<usize> {
+        self.selected
     }
 
     /// Register read: 0 status, 1 track, 2 sector, 3 data.
@@ -226,8 +289,9 @@ impl Wd1793 {
             0 => {
                 let mut val = self.status;
 
-                // not ready if there's no disk or the drive isn't selected
-                if self.image.is_none() || !self.selected {
+                // not ready if no drive is selected, the selected one is
+                // empty, or the motors are off (READY needs the spindle)
+                if !self.motor || !self.selected.is_some_and(|d| self.images[d].is_some()) {
                     val |= STATUS_NOT_READY;
                 }
 
@@ -366,9 +430,10 @@ impl Wd1793 {
     /// Fill the sector buffer from the image at the current track/sector.
     /// Sectors are numbered from 0 (Kaypro II convention).
     fn read_sector_from_image(&mut self) -> bool {
-        let Some(image) = self.image.as_mut() else {
+        let Some(image) = self.selected.and_then(|d| self.images[d].as_mut()) else {
             return false;
         };
+        let image = &mut image.file;
         let track = self.track as u32;
         if track >= TRACKS {
             return false;
@@ -380,6 +445,11 @@ impl Wd1793 {
         }
         image.read_exact(&mut self.sector_bytes).is_ok()
     }
+}
+
+/// The drive's letter, as CP/M and the bezel name it.
+pub fn drive_letter(drive: usize) -> char {
+    (b'A' + drive as u8) as char
 }
 
 #[cfg(test)]
@@ -451,7 +521,7 @@ mod tests {
     fn read_sector_streams_the_right_bytes_a_byte_time_apart() {
         let p = image_with_pattern("stream");
         let mut fdc = Wd1793::new();
-        assert!(fdc.load_image(&p));
+        assert!(fdc.load_image(0, &p));
 
         fdc.write(1, 3); // track
         fdc.write(2, 4); // sector
@@ -491,7 +561,7 @@ mod tests {
     fn write_sector_takes_the_bytes_and_drops_them() {
         let p = image_with_pattern("write");
         let mut fdc = Wd1793::new();
-        fdc.load_image(&p);
+        fdc.load_image(0, &p);
         fdc.write(1, 1);
         fdc.write(2, 1);
         fdc.write(0, 0xa8);
@@ -527,7 +597,7 @@ mod tests {
     fn out_of_range_track_fills_with_filler() {
         let p = image_with_pattern("range");
         let mut fdc = Wd1793::new();
-        fdc.load_image(&p);
+        fdc.load_image(0, &p);
         fdc.write(1, 40);
         fdc.write(0, 0x80);
         fdc.tick(BYTE);
@@ -567,6 +637,69 @@ mod tests {
         fdc.tick(BYTE);
         assert!(fdc.interrupt_pending());
         assert!(fdc.nmi_line());
+    }
+
+    /// The latch's select picks the slot a read comes from, an empty
+    /// slot or no selection reads not ready, and a mount at run time is
+    /// what the next read finds. The one track register is shared.
+    #[test]
+    fn two_drives_read_their_own_images_and_swap_at_run_time() {
+        let p = image_with_pattern("two");
+        let mut fdc = Wd1793::new();
+        fdc.select(None, true);
+        assert_ne!(fdc.read(0) & STATUS_NOT_READY, 0, "nothing selected");
+        fdc.select(Some(1), true);
+        assert_ne!(fdc.read(0) & STATUS_NOT_READY, 0, "B is empty");
+        let file = File::open(&p).unwrap();
+        fdc.mount(1, Some(DiskImage { path: p.clone(), file }));
+        assert!(fdc.has_image(1));
+        assert!(!fdc.has_image(0));
+        assert_eq!(fdc.read(0) & STATUS_NOT_READY, 0);
+        fdc.write(1, 2);
+        fdc.write(2, 3);
+        fdc.write(0, 0x88);
+        fdc.tick(BYTE);
+        assert_eq!(fdc.read(3), (2 * SECTORS_PER_TRACK + 3) as u8);
+        // A, still empty, reads filler off the same track register
+        fdc.write(0, 0xd0);
+        fdc.select(Some(0), true);
+        assert_eq!(fdc.read(1), 2, "one track register for both drives");
+        fdc.write(0, 0x88);
+        fdc.tick(BYTE);
+        assert_eq!(fdc.read(3), 0xe5);
+        // ejecting B empties it again
+        fdc.write(0, 0xd0);
+        fdc.mount(1, None);
+        fdc.select(Some(1), true);
+        assert_ne!(fdc.read(0) & STATUS_NOT_READY, 0);
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// The bay's light counters follow the select line while the motor is
+    /// on, and its labels the mounts -- including one made before the bay
+    /// was attached.
+    #[test]
+    fn the_bay_sees_the_select_line_and_the_mounted_names() {
+        let p = image_with_pattern("bay");
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p);
+        let bay = DriveBayState::new();
+        fdc.attach_bay(bay.clone());
+        assert_eq!(bay.mounted(0), Some(p.clone()), "attach syncs an earlier mount");
+        assert_eq!(bay.mounted(1), None);
+        fdc.select(Some(1), true);
+        fdc.tick(30);
+        fdc.select(None, true);
+        fdc.tick(50);
+        fdc.select(Some(1), false);
+        fdc.tick(20);
+        let s = bay.snapshot();
+        assert_eq!(s.cycles, 100);
+        assert_eq!(s.select_on, [0, 30], "selected with the motor off is dark");
+        assert_ne!(fdc.read(0) & STATUS_NOT_READY, 0, "and, motor off, not ready");
+        fdc.mount(0, None);
+        assert_eq!(bay.mounted(0), None);
+        std::fs::remove_file(&p).ok();
     }
 
     #[test]

@@ -35,8 +35,9 @@ pub struct Machine {
     /// overrides either way.
     pub throttle_hz: Option<u64>,
     /// The run loop's control channel, both ends, when the machine has a
-    /// front panel: the panel window already holds a clone of the sender
-    /// inside `display`, and `main` hands the receiver to the `Emulator`.
+    /// front panel or drive doors in its window: the window already holds
+    /// a clone of the sender inside `display`, and `main` hands the
+    /// receiver to the `Emulator`.
     pub control: Option<ControlChannel>,
     /// A handle on the panel's shared lamp state, for
     /// `Emulator::set_panel_state` -- the run loop publishes whether the
@@ -237,11 +238,20 @@ fn build_ray703(
 
 fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
     let floppy = opts.disk.clone().unwrap_or_else(|| PathBuf::from(kaypro::DEFAULT_FLOPPY));
+    // The window's drive doors reach the machine over the run loop's
+    // control channel, as the 703's panel switches do: the window holds
+    // the sender inside the display, the run loop gets the receiver.
+    let (ctl_tx, ctl_rx) = mpsc::channel();
+    let drives = crate::console::DriveBayDisplay {
+        state: crate::console::DriveBayState::new(),
+        control: crate::console::DriveControl(ctl_tx.clone()),
+    };
     let (mut bus, display) = kaypro::Kaypro::new(
         rom,
         Path::new(kaypro::VIDEO_ROM),
         &floppy,
         console,
+        drives,
     )?;
     if opts.fast_io {
         bus.set_fast_io();
@@ -251,7 +261,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &Machine
         bus: Box::new(bus),
         display: Some(display),
         throttle_hz: None,
-        control: None,
+        control: Some(ControlChannel { tx: ctl_tx, rx: ctl_rx }),
         panel: None,
     })
 }

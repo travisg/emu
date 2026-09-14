@@ -80,7 +80,7 @@ fn usage(argv0: &str) {
     eprintln!("note: --no-throttle runs flat out, overriding the real-time default.");
     eprintln!("note: device periods follow the throttle rate, so a slow-motion cpu keeps a real-time terminal.");
     eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
-    eprintln!("note: --disk PATH mounts an image in place of the fixed one under disks/ (the kaypro's floppy; the 703 mounts its four units by name).");
+    eprintln!("note: --disk PATH mounts an image in place of the fixed one under disks/ (the kaypro's drive A -- click a drive in the window to change disks; the 703 mounts its four units by name).");
     eprintln!("note: --debug PATH listens on a unix socket for a debugger (halt/run/step, registers, memory, breakpoints, the console); tools/emudbg.py talks to it. HLT then halts to the debugger instead of exiting.");
     eprintln!("note: --halt starts the machine halted; needs a front panel or --debug to start it.");
 }
@@ -349,15 +349,19 @@ fn main() -> ExitCode {
     emu.set_throttle(throttle_hz);
     emu.set_panel_state(machine.panel);
     emu.set_debug_sink(sink.clone());
-    // The run loop's control channel: the factory made one for a panel
-    // (its window holds a clone of the sender inside the display), and
-    // the debug port shares it or gets one of its own.
+    // The run loop's control channel: the factory made one for a window
+    // with controls on it -- a panel, or the Kaypro's drive doors -- and
+    // the window holds a clone of the sender inside the display; the debug
+    // port shares it or gets one of its own.
+    let has_window_controls = machine.control.is_some();
     let (ctl_tx, ctl_rx) = match machine.control {
         Some(registry::ControlChannel { tx, rx }) => (tx, rx),
         None => mpsc::channel(),
     };
-    if has_panel || args.debug.is_some() {
+    if has_window_controls || args.debug.is_some() {
         emu.set_control(Some(ctl_rx));
+    }
+    if has_panel || args.debug.is_some() {
         // Either has a RUN switch, so a HLT halts to it instead of ending
         // the process. A panel machine starts halted, as a real one did at
         // power-on; a debug machine only on request.

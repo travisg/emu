@@ -22,7 +22,9 @@
 //! Nothing is shared, so the equivalent race is unrepresentable rather than
 //! merely avoided.
 
+use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -458,6 +460,117 @@ impl DiscRackState {
     }
 }
 
+/// Drives in the Kaypro's bay: A and B. `dev/wd1793.rs` pins its slot
+/// count to this at compile time.
+pub const DRIVE_BAYS: usize = 2;
+
+/// The Kaypro's drive bay, as the window shows it: which image sits in
+/// each drive, and how long each drive has spent selected -- the Tandon's
+/// front LED is its DRIVE SELECT line. Same shape as [`DiscRackState`]:
+/// a `Clone` handle written by the floppy controller on the CPU thread and
+/// read at frame rate, with monotonic on-cycle accumulators the frontend
+/// diffs, so there is no read-modify-write race across the boundary. The
+/// names sit under a mutex because a `PathBuf` is not an atomic; the
+/// controller takes it on a mount, the frontend once a frame.
+#[derive(Clone, Default)]
+pub struct DriveBayState(Arc<DriveBayInner>);
+
+#[derive(Default)]
+struct DriveBayInner {
+    /// The image in each drive, by the path it was opened from; `None` is
+    /// an empty drive.
+    mounted: Mutex<[Option<PathBuf>; DRIVE_BAYS]>,
+    /// Cycles each drive has spent with its select line asserted.
+    /// Monotonic.
+    select_on: [AtomicU64; DRIVE_BAYS],
+    /// Total cycles seen by the controller: the duty denominator.
+    cycles: AtomicU64,
+}
+
+/// One frame's view of the bay's LEDs. Duty over an interval is the ratio
+/// of the deltas of two snapshots, as with [`LampSnapshot`].
+#[derive(Copy, Clone, Default)]
+pub struct DriveBaySnapshot {
+    pub select_on: [u64; DRIVE_BAYS],
+    pub cycles: u64,
+}
+
+impl DriveBayState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // -- the CPU-thread side, called by the floppy controller --------------
+
+    pub fn set_mounted(&self, drive: usize, path: Option<PathBuf>) {
+        self.0.mounted.lock().unwrap()[drive] = path;
+    }
+
+    /// Advance the duty denominator: called on every controller tick,
+    /// drive selected or not, so an idle LED's duty decays to zero.
+    pub fn advance(&self, cycles: u32) {
+        if cycles != 0 {
+            self.0.cycles.fetch_add(cycles as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Charge selected time to a drive's LED.
+    pub fn charge(&self, drive: usize, cycles: u32) {
+        if cycles != 0 {
+            self.0.select_on[drive].fetch_add(cycles as u64, Ordering::Relaxed);
+        }
+    }
+
+    // -- the frontend side -------------------------------------------------
+
+    pub fn mounted(&self, drive: usize) -> Option<PathBuf> {
+        self.0.mounted.lock().unwrap()[drive].clone()
+    }
+
+    pub fn snapshot(&self) -> DriveBaySnapshot {
+        let mut s = DriveBaySnapshot { cycles: self.0.cycles.load(Ordering::Relaxed), ..Default::default() };
+        for (i, ctr) in self.0.select_on.iter().enumerate() {
+            s.select_on[i] = ctr.load(Ordering::Relaxed);
+        }
+        s
+    }
+}
+
+/// A floppy on its way into a drive: opened and checked by whoever chose
+/// it (the window, on the main thread), so that all the machine does with
+/// it is drop it in the slot.
+pub struct DiskImage {
+    pub path: PathBuf,
+    pub file: File,
+}
+
+impl DiskImage {
+    /// Open `path` read-only. Whether it is a disk the drive can read is
+    /// the machine's judgement, made in `Bus::change_disk`, since only the
+    /// machine knows its geometry.
+    pub fn open(path: PathBuf) -> Result<Self, String> {
+        let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(DiskImage { path, file })
+    }
+}
+
+/// The window's end of the run loop's control channel, for the drive
+/// doors: an insert or an eject, and nothing else.
+#[derive(Clone)]
+pub struct DriveControl(pub Sender<crate::emulator::Control>);
+
+impl DriveControl {
+    /// Put `image` in `drive`, or empty it. Err means the run loop is gone
+    /// -- shutdown is already in flight.
+    pub fn change_disk(
+        &self,
+        drive: usize,
+        image: Option<DiskImage>,
+    ) -> Result<(), SendError<crate::emulator::Control>> {
+        self.0.send(crate::emulator::Control::Drive { drive, image })
+    }
+}
+
 /// One actuation of a front panel control, sent from the panel window to
 /// the run loop on the CPU thread. The run-state switches (`Run`, `Halt`,
 /// `SingleCommand`, `Reset`) are handled by the `Emulator` itself; the
@@ -506,6 +619,8 @@ pub enum Display {
         video: VideoBuffer,
         /// The character generator rom, 8 bytes per glyph, 256 glyphs.
         font_rom: Vec<u8>,
+        /// The drive bay drawn beside the screen.
+        drives: DriveBayDisplay,
     },
     /// The 703's windows, rendered together by one
     /// [`ray703::Ray703Frontend`]: SDL allows one context and one event
@@ -521,6 +636,14 @@ pub enum Display {
 /// the `ConsoleEndpoint`'s sink).
 pub struct TtyDisplay {
     pub paper: Paper,
+}
+
+/// The drive bay's share of [`Display::CharCell`]: the LEDs and the
+/// mounted names the controller publishes, and the doors back to the run
+/// loop.
+pub struct DriveBayDisplay {
+    pub state: DriveBayState,
+    pub control: DriveControl,
 }
 
 /// The front panel window's share of [`Display::Ray703`]: the lamp state
@@ -623,6 +746,26 @@ mod tests {
         assert_eq!(after.read_on[0], 0, "other units untouched");
         r.advance(0);
         assert_eq!(r.snapshot().cycles, after.cycles, "zero cycles accrue nothing");
+    }
+
+    /// Bay counters are monotonic and diff to a duty, and the mounted name
+    /// is whatever was last put in the slot.
+    #[test]
+    fn drive_bay_accumulators_yield_duty_and_names_follow_the_mount() {
+        let b = DriveBayState::new();
+        assert_eq!(b.mounted(0), None);
+        b.set_mounted(1, Some(PathBuf::from("x.img")));
+        assert_eq!(b.mounted(1), Some(PathBuf::from("x.img")));
+        assert_eq!(b.mounted(0), None, "other drive untouched");
+        let before = b.snapshot();
+        b.advance(100);
+        b.charge(1, 40);
+        let after = b.snapshot();
+        assert_eq!(after.cycles - before.cycles, 100);
+        assert_eq!(after.select_on[1] - before.select_on[1], 40);
+        assert_eq!(after.select_on[0], 0);
+        b.set_mounted(1, None);
+        assert_eq!(b.mounted(1), None);
     }
 
     #[test]

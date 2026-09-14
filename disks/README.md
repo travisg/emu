@@ -4,10 +4,13 @@ The disk and floppy images the machines mount. **Nothing in this directory is
 tracked**, for the same reason as `roms/` — see that README and
 `tools/rom-manifest.txt`.
 
-- `mbasic-games.img` — the Kaypro II floppy, mounted by `emu -s kaypro`.
-  `tools/fetch-roms.py` puts it here. `--disk PATH` mounts another image
-  in its place; cpmtools' `kpii` format is this geometry, so
-  `cpmcp -f kpii` onto a copy of it is how a CP/M program gets on a disk.
+- `mbasic-games.img` — the Kaypro II floppy, mounted in drive A by
+  `emu -s kaypro`. `tools/fetch-roms.py` puts it here. `--disk PATH` mounts
+  another image in its place, and clicking a drive in the window ejects it
+  and picks the next one with a file chooser, which starts in this
+  directory; cpmtools' `kpii` format is this geometry, so `cpmcp -f kpii`
+  onto a copy of it is how a CP/M program gets on a disk. An image must be
+  exactly 204,800 bytes (40 tracks x 10 sectors x 512 bytes).
 - `rc2014-cf.img` — the RC2014's compact flash card, mounted by
   `emu -s rc2014-cpm`: CP/M 2.2 with Grant Searle's CBIOS as the RC2014
   project publishes it, sixteen drives. `tools/fetch-roms.py` puts it here

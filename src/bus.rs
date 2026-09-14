@@ -204,6 +204,17 @@ pub trait Bus {
     /// A machine with no device timing to pace ignores this, as does a device
     /// running at host speed under `--fast-io`.
     fn set_device_pacing_hz(&mut self, _hz: u64) {}
+
+    /// Change the disk in a removable drive: `image` goes in `drive`, or
+    /// `None` empties it. Arrives over the run loop's control channel
+    /// from the window's drive doors, so it lands between instructions
+    /// like everything else that reaches the bus from outside. The machine judges the image (its
+    /// geometry is the machine's to know) and refuses one that isn't a
+    /// disk for that drive with the reason, leaving the drive as it was.
+    /// A machine with no removable drive refuses everything.
+    fn change_disk(&mut self, _drive: usize, _image: Option<crate::console::DiskImage>) -> Result<(), String> {
+        Err("this machine has no removable drive".into())
+    }
 }
 
 #[cfg(test)]

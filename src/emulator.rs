@@ -9,7 +9,7 @@
 //! The run loop: a CPU, the bus it drives, and the things that stop it.
 
 use crate::bus::{Bus, Endian};
-use crate::console::{PanelCommand, PanelState};
+use crate::console::{DiskImage, PanelCommand, PanelState};
 use crate::cpu::{Cpu, StepResult};
 use crate::debug::{DebugEvent, DebugOp, DebugReply, DebugRequest, DebugSink, StopReason};
 use std::io::Write;
@@ -35,6 +35,10 @@ pub enum ExitReason {
 pub enum Control {
     Panel(PanelCommand),
     Debug(DebugRequest),
+    /// A drive door: the window put `image` in `drive`, or took the disk
+    /// out. Applied through `Bus::change_disk` between instructions, so
+    /// the window never touches the machine itself.
+    Drive { drive: usize, image: Option<DiskImage> },
 }
 
 /// What a HLT, a bad opcode or a dead branch-to-self do.
@@ -317,6 +321,13 @@ impl Emulator {
                 None => return Ok(()),
                 Some(Control::Panel(cmd)) => self.handle_panel(&cmd),
                 Some(Control::Debug(req)) => self.handle_debug(req),
+                Some(Control::Drive { drive, image }) => {
+                    // the window has no reply channel: a refusal is told
+                    // on the terminal, and the drive keeps what it had
+                    if let Err(e) = self.bus.change_disk(drive, image) {
+                        eprintln!("drive {drive}: {e}");
+                    }
+                }
             }
             // A step budget executes before the next command is looked at:
             // two SINGLE COMMANDs queued together are two instructions.
@@ -633,11 +644,13 @@ mod tests {
     /// stands in for a device register and refuses to be peeked.
     struct PeekBus {
         mem: Vec<u8>,
+        /// One removable drive, 0: what was put in it, in order.
+        disks: Arc<std::sync::Mutex<Vec<Option<std::path::PathBuf>>>>,
     }
     const UNPEEKABLE: u32 = 0xdead;
     impl PeekBus {
         fn new() -> Self {
-            PeekBus { mem: (0..0x10000).map(|a| a as u8).collect() }
+            PeekBus { mem: (0..0x10000).map(|a| a as u8).collect(), disks: Default::default() }
         }
     }
     impl Bus for PeekBus {
@@ -649,6 +662,13 @@ mod tests {
         }
         fn peek8(&self, addr: u32) -> Option<u8> {
             (addr != UNPEEKABLE).then(|| self.mem[(addr & 0xffff) as usize])
+        }
+        fn change_disk(&mut self, drive: usize, image: Option<DiskImage>) -> Result<(), String> {
+            if drive != 0 {
+                return Err(format!("no drive {drive}"));
+            }
+            self.disks.lock().unwrap().push(image.map(|i| i.path));
+            Ok(())
         }
     }
 
@@ -758,6 +778,7 @@ mod tests {
         commands: Arc<std::sync::Mutex<Vec<PanelCommand>>>,
         panel: PanelState,
         events: std::sync::mpsc::Receiver<Outbound>,
+        disks: Arc<std::sync::Mutex<Vec<Option<std::path::PathBuf>>>>,
     }
 
     impl ScriptedCpu {
@@ -772,8 +793,9 @@ mod tests {
                 results,
                 v: 0,
             };
-            let mut emu =
-                Emulator::new(Box::new(cpu), Box::new(PeekBus::new()), Arc::new(AtomicBool::new(false)));
+            let bus = PeekBus::new();
+            let disks = Arc::clone(&bus.disks);
+            let mut emu = Emulator::new(Box::new(cpu), Box::new(bus), Arc::new(AtomicBool::new(false)));
             let (tx, rx) = std::sync::mpsc::channel();
             emu.set_control(Some(rx));
             emu.set_stop_policy(StopPolicy::Halt);
@@ -784,7 +806,7 @@ mod tests {
             let (ev_tx, events) = std::sync::mpsc::channel();
             sink.attach(ev_tx);
             emu.set_debug_sink(Some(sink));
-            PanelRig { emu, tx, steps, resets, commands, panel, events }
+            PanelRig { emu, tx, steps, resets, commands, panel, events, disks }
         }
     }
 
@@ -945,6 +967,25 @@ mod tests {
 
     /// A halted machine answers without stepping: the requests are queued
     /// before the sender drops, and the run ends with nothing executed.
+    /// A disk change from the window's door reaches the bus between
+    /// instructions with the opened image; a refusal is heard only on the
+    /// terminal, and the drive keeps what it had.
+    #[test]
+    fn disk_changes_reach_the_bus_from_the_window() {
+        let PanelRig { mut emu, tx, disks, .. } = ScriptedCpu::build(vec![]);
+        let dir = std::env::temp_dir().join(format!("emu-disk-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.img");
+        std::fs::write(&a, b"a").unwrap();
+        tx.send(Control::Drive { drive: 0, image: Some(DiskImage::open(a.clone()).unwrap()) }).unwrap();
+        tx.send(Control::Drive { drive: 7, image: None }).unwrap();
+        tx.send(Control::Drive { drive: 0, image: None }).unwrap();
+        drop(tx);
+        assert_eq!(emu.run(), ExitReason::Shutdown);
+        assert_eq!(*disks.lock().unwrap(), vec![Some(a), None]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn debug_requests_are_serviced_while_halted() {
         let PanelRig { mut emu, tx, steps, .. } = ScriptedCpu::build(vec![]);
