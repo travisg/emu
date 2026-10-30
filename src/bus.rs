@@ -31,21 +31,24 @@ pub enum Endian {
 /// rom programs its SIO to request nothing, so there it is wired and idle.
 /// The Kaypro's floppy controller drives NMI -- its INTRQ and DRQ are ORed
 /// onto the pin, and the rom's transfer loops sleep in HALT for each one.
-/// The 6800/6809 machines never interrupt at all. The Raytheon 703 runs
-/// interrupts for real too, but its 16 prioritized levels don't fit an
-/// irq/nmi pair -- see `poll_interrupt_lines`.
+/// The 6800 and 6809 cores take IRQ and NMI too, and the 6809 FIRQ, which
+/// only it has. The Raytheon 703 runs interrupts for real too, but its 16
+/// prioritized levels don't fit this set of lines -- see
+/// `poll_interrupt_lines`.
 ///
-/// Both are levels as the wires are. The core makes NMI's edge itself, and
+/// All are levels as the wires are. The core makes NMI's edge itself, and
 /// what a maskable interrupt puts on the data bus comes from
 /// `interrupt_acknowledge`, not from here.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct IntStatus {
     pub irq: bool,
     pub nmi: bool,
+    /// the 6809's fast interrupt; nothing else reads it
+    pub firq: bool,
 }
 
 impl IntStatus {
-    pub const NONE: IntStatus = IntStatus { irq: false, nmi: false };
+    pub const NONE: IntStatus = IntStatus { irq: false, nmi: false, firq: false };
 }
 
 /// A device mapped into the memory space.

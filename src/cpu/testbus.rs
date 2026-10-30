@@ -38,6 +38,8 @@ pub(crate) struct TestBus {
     pub irq: bool,
     /// The NMI line, likewise; the z80 core makes the edge of it.
     pub nmi: bool,
+    /// The 6809's FIRQ line, likewise.
+    pub firq: bool,
     /// What `interrupt_acknowledge` answers with: the pulled-up bus unless a
     /// test says otherwise.
     pub vector: u8,
@@ -67,6 +69,7 @@ impl TestBus {
             int_lines: 0,
             irq: false,
             nmi: false,
+            firq: false,
             vector: 0xff,
             acks: 0,
             retis: 0,
@@ -125,7 +128,7 @@ impl Bus for TestBus {
     }
 
     fn poll_interrupts(&mut self, _elapsed_cycles: u32) -> crate::bus::IntStatus {
-        crate::bus::IntStatus { irq: self.irq, nmi: self.nmi }
+        crate::bus::IntStatus { irq: self.irq, nmi: self.nmi, firq: self.firq }
     }
 
     fn interrupt_acknowledge(&mut self) -> u8 {

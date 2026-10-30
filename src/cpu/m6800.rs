@@ -11,6 +11,11 @@
 //! A direct port of `cpu/cpu6800.cpp`, which is table-driven: a 256-entry
 //! decode table indexed by opcode, then a switch on the addressing mode to
 //! fetch the operand and a switch on the operation to execute it.
+//!
+//! Interrupts are the part's: NMI on the line's edge and IRQ while I is
+//! clear, between instructions, each stacking everything (PC, X, A, B, CC)
+//! and setting I. WAI stacks everything and then waits, so the interrupt
+//! that ends it only vectors. Reset sets I.
 
 use super::{Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
@@ -27,7 +32,9 @@ const CC_H: u8 = 0x20;
 const CC_ONES: u8 = 0xc0;
 
 // Interrupt vectors, each the address of a big-endian pointer.
+const VEC_IRQ: u16 = 0xfff8;
 const VEC_SWI: u16 = 0xfffa;
+const VEC_NMI: u16 = 0xfffc;
 
 const COND_A: u8 = 0x0;
 const COND_HI: u8 = 0x2;
@@ -98,6 +105,7 @@ enum Op {
     Swi,
     Rti,
     Daa,
+    Wai,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -406,6 +414,7 @@ const fn build_ops() -> [OpDecode; 256] {
 
     t[0x3f] = op!("swi", Implied, 1, Swi, Pc);
     t[0x3b] = op!("rti", Implied, 1, Rti, Pc);
+    t[0x3e] = op!("wai", Implied, 1, Wai, Pc);
     t[0x19] = op!("daa", Implied, 1, Daa, A);
 
     t
@@ -425,7 +434,7 @@ const CYCLES: [u8; 256] = [
         0, 2, 0, 0, 0, 0, 2, 2, 4, 4, 2, 2, 2, 2, 2, 2, // 0x: nop, tap/tpa, inx/dex, flag ops
         2, 2, 0, 0, 0, 0, 2, 2, 0, 2, 0, 2, 0, 0, 0, 0, // 1x: sba/cba, tab/tba, daa, aba
         4, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, // 2x: branches
-        4, 4, 4, 4, 4, 4, 4, 4, 0, 5, 0,10, 0, 0, 0,12, // 3x: tsx/ins/pul/des/txs/psh, rts, rti, swi
+        4, 4, 4, 4, 4, 4, 4, 4, 0, 5, 0,10, 0, 0, 9,12, // 3x: tsx/ins/pul/des/txs/psh, rts, rti, wai, swi
         2, 0, 0, 2, 2, 0, 2, 2, 2, 2, 2, 0, 2, 2, 0, 2, // 4x: rmw on A
         2, 0, 0, 2, 2, 0, 2, 2, 2, 2, 2, 0, 2, 2, 0, 2, // 5x: rmw on B
         7, 0, 0, 7, 7, 0, 7, 7, 7, 7, 7, 0, 7, 7, 4, 7, // 6x: rmw indexed, jmp
@@ -447,6 +456,12 @@ pub struct Cpu6800 {
     pc: u16,
     sp: u16,
     cc: u8,
+    /// Waiting for an interrupt after WAI, with everything stacked; a
+    /// waiting step runs no instruction.
+    waiting: bool,
+    /// The NMI line as last sampled, so the step that sees it asserted
+    /// takes the interrupt: the pin is edge-triggered.
+    nmi_line: bool,
     /// Clock cycles the last `step()` consumed, for `last_step_cycles`.
     cycles: u32,
 }
@@ -459,7 +474,7 @@ impl Default for Cpu6800 {
 
 impl Cpu6800 {
     pub fn new() -> Self {
-        Cpu6800 { a: 0, b: 0, ix: 0, pc: 0, sp: 0, cc: 0, cycles: 0 }
+        Cpu6800 { a: 0, b: 0, ix: 0, pc: 0, sp: 0, cc: 0, waiting: false, nmi_line: false, cycles: 0 }
     }
 
     fn get_reg(&self, r: Reg) -> u16 {
@@ -618,6 +633,20 @@ impl Cpu6800 {
         self.push8(bus, cc | CC_ONES);
     }
 
+    /// Take an interrupt through `vector`: stack everything unless a WAI
+    /// already has, and set I. Five cycles beyond the seven bytes it
+    /// stacks -- 12, or 5 out of a WAI.
+    fn interrupt(&mut self, bus: &mut dyn Bus, vector: u16) {
+        self.cycles = 5;
+        if !self.waiting {
+            self.stack_state(bus);
+            self.cycles += 7;
+        }
+        self.waiting = false;
+        self.cc |= CC_I;
+        self.pc = bus.read16(vector as u32, Endian::Big);
+    }
+
     /// Decimal adjust A after a BCD add: +6 for a low digit past 9 or a
     /// half carry, +0x60 for a high digit past 9 (or one that the low
     /// digit's +6 will carry into) or a carry. C is set by a carry out of
@@ -682,6 +711,7 @@ impl Cpu for Cpu6800 {
         self.ix = 0;
         self.sp = 0;
         self.cc = CC_I;
+        self.waiting = false;
         // The C++ defers this to the first Run() iteration via an EXC_RESET
         // bit; doing it here is equivalent and keeps the trace lines aligned,
         // since the C++ emits its first trace line after that fixup.
@@ -689,6 +719,25 @@ impl Cpu for Cpu6800 {
     }
 
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
+        // Interrupts, between instructions: NMI on its edge, then IRQ
+        // while I is clear.
+        let ints = bus.poll_interrupts(self.cycles);
+        let nmi_edge = ints.nmi && !self.nmi_line;
+        self.nmi_line = ints.nmi;
+        if nmi_edge {
+            self.interrupt(bus, VEC_NMI);
+            return StepResult::Ok;
+        }
+        if ints.irq && self.cc & CC_I == 0 {
+            self.interrupt(bus, VEC_IRQ);
+            return StepResult::Ok;
+        }
+        if self.waiting {
+            // a cycle at a time, so a paced run keeps its clock
+            self.cycles = 1;
+            return StepResult::Ok;
+        }
+
         let opcode = bus.read8(self.pc as u32);
         self.pc = self.pc.wrapping_add(1);
 
@@ -1025,7 +1074,9 @@ impl Cpu for Cpu6800 {
 
             Op::Bra => {
                 if self.test_branch_cond(op.cond) {
-                    if arg == -2 {
+                    // a branch to self is how a program waits for an
+                    // interrupt, so it is only a dead end with I set
+                    if arg == -2 && self.cc & CC_I != 0 {
                         eprintln!("infinite loop detected, aborting cpu");
                         result = StepResult::InfiniteLoop;
                     }
@@ -1079,6 +1130,11 @@ impl Cpu for Cpu6800 {
 
             Op::Daa => self.daa(),
 
+            Op::Wai => {
+                self.stack_state(bus);
+                self.waiting = true;
+            }
+
             Op::Bad => unreachable!("handled before operand fetch"),
         }
 
@@ -1101,6 +1157,7 @@ impl Cpu for Cpu6800 {
             Register::new("X", self.ix, 16),
             Register::new("S", self.sp, 16),
             Register::new("CC", self.cc, 8),
+            Register::new("WAI", self.waiting as u8, 1),
         ]
     }
 
@@ -1112,6 +1169,10 @@ impl Cpu for Cpu6800 {
             "X" => Reg::Ix,
             "S" => Reg::Sp,
             "CC" => Reg::Cc,
+            "WAI" => {
+                self.waiting = value & 1 != 0;
+                return true;
+            }
             _ => return false,
         };
         // put_reg truncates the byte registers itself
@@ -1187,6 +1248,7 @@ mod tests {
                 ("X", 0xbeef, 0xbeef),
                 ("S", 0x01ff, 0x01ff),
                 ("CC", 0x1c5, 0xc5),
+                ("WAI", 1, 1),
             ],
         );
     }
@@ -1472,6 +1534,59 @@ mod tests {
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!((cpu.a, cpu.b, cpu.ix), (0x11, 0x22, 0x3344));
         assert_eq!((cpu.pc, cpu.sp, cpu.cc, cpu.last_step_cycles()), (0xe001, 0x80ff, CC_N, 10));
+    }
+
+    /// IRQ is taken while I is clear, NMI on the line's edge whatever I
+    /// says; each stacks everything, sets I and vectors, in 12 cycles.
+    #[test]
+    fn irq_and_nmi_stack_everything_and_set_i() {
+        let (mut cpu, mut bus) = boot(&[0x01, 0x01]); // nop; nop
+        bus.load(0xfff8, &[0x20, 0x00]);
+        bus.load(0xfffc, &[0x30, 0x00]);
+        bus.load(0x3000, &[0x01, 0x01]);
+        cpu.sp = 0x80ff;
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0xe001, "masked out of reset: the nop runs");
+        cpu.cc = 0;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.sp, cpu.cc, cpu.last_step_cycles()), (0x2000, 0x80f8, CC_I, 12));
+        assert_eq!(&bus.mem[0x80f9..0x8100], &[0xc0, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x01]);
+
+        bus.irq = false;
+        bus.nmi = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.sp), (0x3000, 0x80f1), "nmi through I");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x3001, "no new edge");
+    }
+
+    /// WAI stacks everything and waits a cycle at a time; the interrupt
+    /// that ends it only vectors, in 5 cycles.
+    #[test]
+    fn wai_stacks_then_waits_and_the_interrupt_only_vectors() {
+        let (mut cpu, mut bus) = boot(&[0x0e, 0x3e]); // cli; wai
+        bus.load(0xfff8, &[0x20, 0x00]);
+        cpu.sp = 0x80ff;
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!((cpu.pc, cpu.sp, cpu.last_step_cycles()), (0xe002, 0x80f8, 9));
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!((cpu.pc, cpu.last_step_cycles(), cpu.waiting), (0xe002, 1, true));
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.sp, cpu.cc, cpu.last_step_cycles()), (0x2000, 0x80f8, CC_I, 5));
+        assert!(!cpu.waiting);
+    }
+
+    /// A branch to self ends the run only with I set; otherwise it is a
+    /// program waiting for an interrupt.
+    #[test]
+    fn a_branch_to_self_is_a_dead_end_only_while_masked() {
+        let (mut cpu, mut bus) = boot(&[0x20, 0xfe]); // bra *
+        assert_eq!(cpu.step(&mut bus), StepResult::InfiniteLoop);
+        cpu.pc = 0xe000;
+        cpu.cc = 0;
+        assert_eq!(cpu.step(&mut bus), StepResult::Ok);
     }
 
     #[test]

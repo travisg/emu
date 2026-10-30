@@ -18,6 +18,16 @@
 //!   - stack pushes pre-decrement (the 6800 post-decrements)
 //!   - `rmw_write` sets N/Z *after* the write, from the written value
 //!   - `cmp` on a byte sets H as well
+//!
+//! Interrupts are the part's: NMI on the line's falling edge (a rising
+//! one in `IntStatus`, which carries levels as asserted), FIRQ and IRQ
+//! while their CC masks are clear, in that order, between instructions.
+//! NMI and IRQ stack the entire state with E set, FIRQ only PC and CC with
+//! E clear, and RTI reads E to know which. CWAI stacks the entire state
+//! and then waits, so the interrupt that ends it only vectors; SYNC waits
+//! for any line, and a masked one just ends the wait. Reset sets I and F.
+//! Not modelled: NMI being disarmed until the first load of S, since no
+//! board here drives NMI.
 
 use super::{Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
@@ -35,7 +45,10 @@ const CC_E: u8 = 0x80;
 // Interrupt vectors, each the address of a big-endian pointer.
 const VEC_SWI3: u16 = 0xfff2;
 const VEC_SWI2: u16 = 0xfff4;
+const VEC_FIRQ: u16 = 0xfff6;
+const VEC_IRQ: u16 = 0xfff8;
 const VEC_SWI: u16 = 0xfffa;
+const VEC_NMI: u16 = 0xfffc;
 
 const COND_N: u8 = 0x1;
 const COND_HI: u8 = 0x2;
@@ -106,6 +119,8 @@ enum Op {
     Rti,
     Mul,
     Daa,
+    Cwai,
+    Sync,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -477,6 +492,8 @@ const fn build_ops() -> [OpDecode; 256 * 3] {
     t[0x13f] = op!("swi2", Implied, 1, Swi, A, cond = 2);
     t[0x23f] = op!("swi3", Implied, 1, Swi, A, cond = 3);
     t[0x3b]  = op!("rti",  Implied, 1, Rti, A);
+    t[0x3c]  = op!("cwai", Immediate, 1, Cwai, Cc);
+    t[0x13]  = op!("sync", Implied, 1, Sync, A);
 
     t[0x3d] = op!("mul", Implied, 1, Mul, D);
     t[0x19] = op!("daa", Implied, 1, Daa, A);
@@ -554,6 +571,8 @@ const CYCLE_LIST: &[(u16, u8)] = &[
     (0x39, 5),
     // swi 19, swi2/swi3 20; rti 6, charged 9 more when it pulls everything
     (0x3f, 19), (0x13f, 20), (0x23f, 20), (0x3b, 6),
+    // cwai 20 for its stacking, sync 4, each up to where it waits
+    (0x3c, 20), (0x13, 4),
     // mul 11, daa 2
     (0x3d, 11), (0x19, 2),
 ];
@@ -570,6 +589,16 @@ const fn build_cycles() -> [u8; 256 * 3] {
 
 static CYCLES: [u8; 256 * 3] = build_cycles();
 
+/// What the core is waiting for, if anything: an interrupt after CWAI, any
+/// interrupt line after SYNC. A waiting step runs no instruction.
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+enum Wait {
+    #[default]
+    Running,
+    Cwai,
+    Sync,
+}
+
 #[derive(Default)]
 pub struct Cpu6809 {
     // A and B are the halves of D; the C++ overlays them in a union
@@ -582,6 +611,10 @@ pub struct Cpu6809 {
     pc: u16,
     dp: u8,
     cc: u8,
+    wait: Wait,
+    /// The NMI line as last sampled, so the step that sees it asserted
+    /// takes the interrupt: the pin is edge-triggered.
+    nmi_line: bool,
     /// Clock cycles the last `step()` consumed, for `last_step_cycles`.
     cycles: u32,
 }
@@ -769,6 +802,29 @@ impl Cpu6809 {
         self.push8(bus, Reg::S, b);
         self.push8(bus, Reg::S, a);
         self.push8(bus, Reg::S, cc);
+    }
+
+    /// Take an interrupt through `vector`: stack the entire state or only
+    /// PC and CC (FIRQ), unless a CWAI already stacked everything, then
+    /// set `mask` in CC. Seven cycles beyond the bytes it stacks -- 19 for
+    /// NMI and IRQ, 10 for FIRQ, 7 out of a CWAI.
+    fn interrupt(&mut self, bus: &mut dyn Bus, vector: u16, entire: bool, mask: u8) {
+        self.cycles = 7;
+        if self.wait != Wait::Cwai {
+            if entire {
+                self.stack_entire(bus);
+                self.cycles += 12;
+            } else {
+                self.cc &= !CC_E;
+                let (pc, cc) = (self.pc, self.cc);
+                self.push16(bus, Reg::S, pc);
+                self.push8(bus, Reg::S, cc);
+                self.cycles += 3;
+            }
+        }
+        self.wait = Wait::Running;
+        self.cc |= mask;
+        self.pc = bus.read16(vector as u32, Endian::Big);
     }
 
     /// Decimal adjust A after a BCD add: +6 for a low digit past 9 or a
@@ -964,6 +1020,33 @@ impl Cpu for Cpu6809 {
     }
 
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
+        // Interrupts, between instructions: NMI on its edge, then FIRQ and
+        // IRQ while unmasked. SYNC ends on any line, masked or not, and a
+        // masked one just lets the next instruction run.
+        let ints = bus.poll_interrupts(self.cycles);
+        let nmi_edge = ints.nmi && !self.nmi_line;
+        self.nmi_line = ints.nmi;
+        if self.wait == Wait::Sync && (ints.irq || ints.firq || nmi_edge) {
+            self.wait = Wait::Running;
+        }
+        if nmi_edge {
+            self.interrupt(bus, VEC_NMI, true, CC_I | CC_F);
+            return StepResult::Ok;
+        }
+        if ints.firq && !self.cc_set(CC_F) {
+            self.interrupt(bus, VEC_FIRQ, false, CC_I | CC_F);
+            return StepResult::Ok;
+        }
+        if ints.irq && !self.cc_set(CC_I) {
+            self.interrupt(bus, VEC_IRQ, true, CC_I);
+            return StepResult::Ok;
+        }
+        if self.wait != Wait::Running {
+            // a cycle at a time, so a paced run keeps its clock
+            self.cycles = 1;
+            return StepResult::Ok;
+        }
+
         let mut opcode = bus.read8(self.pc as u32) as usize;
         self.pc = self.pc.wrapping_add(1);
 
@@ -1303,7 +1386,9 @@ impl Cpu for Cpu6809 {
 
             Op::Bra => {
                 if self.test_branch_cond(op.cond) {
-                    if arg == -2 {
+                    // a branch to self is how a program waits for an
+                    // interrupt, so it is only a dead end with both masked
+                    if arg == -2 && self.cc & (CC_I | CC_F) == CC_I | CC_F {
                         eprintln!("infinite loop detected, aborting cpu");
                         result = StepResult::InfiniteLoop;
                     }
@@ -1383,6 +1468,15 @@ impl Cpu for Cpu6809 {
 
             Op::Daa => self.daa(),
 
+            // AND the masks with the operand, stack everything, and wait
+            Op::Cwai => {
+                self.cc &= arg as u8;
+                self.stack_entire(bus);
+                self.wait = Wait::Cwai;
+            }
+
+            Op::Sync => self.wait = Wait::Sync,
+
             Op::Ld => {
                 if op.width == 1 {
                     self.set_nz1(arg as u32);
@@ -1434,6 +1528,8 @@ impl Cpu for Cpu6809 {
             Register::new("DP", self.dp, 8),
             Register::new("CC", self.cc, 8),
             Register::new("D", self.d(), 16),
+            Register::new("CWAI", (self.wait == Wait::Cwai) as u8, 1),
+            Register::new("SYNC", (self.wait == Wait::Sync) as u8, 1),
         ]
     }
 
@@ -1449,6 +1545,15 @@ impl Cpu for Cpu6809 {
             "DP" => Reg::Dp,
             "CC" => Reg::Cc,
             "D" => Reg::D,
+            "CWAI" | "SYNC" => {
+                let w = if name == "CWAI" { Wait::Cwai } else { Wait::Sync };
+                if value & 1 != 0 {
+                    self.wait = w;
+                } else if self.wait == w {
+                    self.wait = Wait::Running;
+                }
+                return true;
+            }
             _ => return false,
         };
         // put_reg truncates the byte registers itself
@@ -1545,6 +1650,9 @@ mod tests {
                 ("DP", 0x120, 0x20),
                 ("CC", 0x1d8, 0xd8),
                 ("D", 0x5678, 0x5678),
+                ("CWAI", 1, 1),
+                ("SYNC", 1, 1),
+                ("SYNC", 0, 0),
             ],
         );
         assert_eq!((cpu.a, cpu.b), (0x56, 0x78), "D is A:B");
@@ -1825,6 +1933,99 @@ mod tests {
             cpu.s = 0x8000;
             run_steps(&mut cpu, &mut bus, 1);
             assert_eq!((cpu.pc, cpu.cc, cpu.last_step_cycles()), (0x1234, CC_E, cycles));
+        }
+    }
+
+    /// IRQ stacks the entire state with E set and masks IRQ alone, in 19
+    /// cycles; FIRQ stacks PC and CC with E clear and masks both, in 10,
+    /// and is taken ahead of IRQ. A masked line is not taken at all.
+    #[test]
+    fn irq_stacks_everything_and_firq_only_pc_and_cc() {
+        let (mut cpu, mut bus) = boot(&[0x12, 0x12]); // nop; nop
+        bus.load(0xfff8, &[0x20, 0x00]);
+        bus.load(0xfff6, &[0x30, 0x00]);
+        cpu.s = 0x8000;
+        bus.irq = true;
+        bus.firq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0xe001, "both masked out of reset: the nop runs");
+
+        cpu.cc = 0;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0x3000, 0x8000 - 3, 10), "firq first");
+        assert_eq!(cpu.cc, CC_I | CC_F);
+        assert_eq!(&bus.mem[0x8000 - 3..0x8000], &[0x00, 0xe0, 0x01], "cc with E clear, then pc");
+
+        let (mut cpu, mut bus) = boot(&[0x12]);
+        bus.load(0xfff8, &[0x20, 0x00]);
+        (cpu.s, cpu.cc) = (0x8000, CC_F);
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0x2000, 0x8000 - 12, 19));
+        assert_eq!(cpu.cc, CC_E | CC_I | CC_F, "F was already set; IRQ sets only I");
+        assert_eq!(bus.mem[0x8000 - 12], CC_E | CC_F);
+    }
+
+    /// NMI is taken on the line's edge, masks or not, and once per edge.
+    #[test]
+    fn nmi_takes_the_edge_whatever_the_masks() {
+        let (mut cpu, mut bus) = boot(&[0x12, 0x12]);
+        bus.load(0xfffc, &[0x40, 0x00]);
+        bus.load(0x4000, &[0x12, 0x12]);
+        cpu.s = 0x8000;
+        bus.nmi = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.cc, cpu.last_step_cycles()), (0x4000, CC_E | CC_I | CC_F, 19));
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x4001, "the line is still asserted, but there is no new edge");
+    }
+
+    /// CWAI ANDs CC with its operand, stacks the entire state and waits a
+    /// cycle at a time; the interrupt that ends it only vectors, in 7
+    /// cycles, and RTI returns past the CWAI with everything restored.
+    #[test]
+    fn cwai_stacks_then_waits_and_the_interrupt_only_vectors() {
+        let (mut cpu, mut bus) = boot(&[0x3c, 0xef, 0x12]); // cwai #$ef; nop
+        bus.load(0xfff8, &[0x20, 0x00]);
+        bus.load(0x2000, &[0x3b]); // rti
+        (cpu.s, cpu.a) = (0x8000, 0x5a);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0xe002, 0x8000 - 12, 20));
+        assert_eq!(cpu.cc, CC_E | CC_F, "I cleared by the operand");
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!((cpu.pc, cpu.last_step_cycles(), cpu.wait), (0xe002, 1, Wait::Cwai), "waiting");
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0x2000, 0x8000 - 12, 7), "nothing more stacked");
+        assert_eq!(cpu.wait, Wait::Running);
+        bus.irq = false;
+        cpu.a = 0;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.s, cpu.a), (0xe002, 0x8000, 0x5a));
+    }
+
+    /// SYNC waits for any line, masked or not. An unmasked one is taken as
+    /// usual; a masked one just ends the wait, and the next instruction runs.
+    #[test]
+    fn sync_waits_for_any_line_and_a_masked_one_lets_it_go_on() {
+        let (mut cpu, mut bus) = boot(&[0x13, 0x4c]); // sync; inca
+        run_steps(&mut cpu, &mut bus, 3);
+        assert_eq!((cpu.pc, cpu.wait), (0xe001, Wait::Sync));
+        bus.irq = true; // I is set out of reset
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.a, cpu.wait), (0xe002, 1, Wait::Running));
+    }
+
+    /// A branch to self ends the run only with both interrupts masked;
+    /// otherwise it is a program waiting for one.
+    #[test]
+    fn a_branch_to_self_is_a_dead_end_only_while_masked() {
+        let (mut cpu, mut bus) = boot(&[0x20, 0xfe]); // bra *
+        assert_eq!(cpu.step(&mut bus), StepResult::InfiniteLoop);
+        for cc in [0, CC_I, CC_F] {
+            cpu.pc = 0xe000;
+            cpu.cc = cc;
+            assert_eq!(cpu.step(&mut bus), StepResult::Ok, "cc {cc:#04x}");
         }
     }
 

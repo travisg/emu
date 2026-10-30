@@ -278,7 +278,7 @@ impl Bus for Rc2014 {
         self.sio.tick(elapsed_cycles);
         self.ctc.tick(elapsed_cycles);
         let irq = self.sio.int_pending() || (!self.sio.under_service() && self.ctc.int_pending());
-        IntStatus { irq, nmi: false }
+        IntStatus { irq, ..IntStatus::NONE }
     }
 
     /// The acknowledge goes to the first device on the chain that is

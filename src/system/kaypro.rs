@@ -281,7 +281,7 @@ impl Bus for Kaypro {
         self.poll_serial();
         self.sio.tick(elapsed_cycles);
         self.fdc.tick(elapsed_cycles);
-        IntStatus { irq: self.sio.int_pending(), nmi: self.fdc.nmi_line() }
+        IntStatus { irq: self.sio.int_pending(), nmi: self.fdc.nmi_line(), firq: false }
     }
 
     fn interrupt_acknowledge(&mut self) -> u8 {
