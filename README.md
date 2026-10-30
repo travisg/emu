@@ -183,7 +183,8 @@ cargo test                          # the whole suite: no ROMs, no external bina
 ./test/run_basic6809_lang_test.sh   # end-to-end: boots BASIC and runs a language test program
 ```
 
-`cargo test` needs nothing outside the repo. The end-to-end scripts do: `run_basic6809_lang_test.sh`
+`cargo test` needs nothing outside the repo, except the one test it skips: the Z80 core against
+the SingleStepTests suite, whose data `tools/fetch-sst.py` fetches (`cargo test --release -- --ignored sst`). The end-to-end scripts do: `run_basic6809_lang_test.sh`
 needs `roms/6809/BASIC.HEX` plus `script(1)` and `perl`; the Raytheon 703 demo test
 (`make -C test ray703-test`) drives the emulator over its debug port and needs only python3, and the
 other 703 scripts need `script(1)` and python3. `AGENTS.md` covers them all.

@@ -489,6 +489,18 @@ mod tests {
         assert_eq!(sys.read8(0x0100), 0x99);
     }
 
+    /// The z80 puts A or B on the high half of the port address; the
+    /// board decodes the low byte alone.
+    #[test]
+    fn the_port_decode_takes_the_low_byte_alone() {
+        let fx = Fixture::new("port");
+        let (mut sys, _) = fx.build();
+        sys.io_write8(0xa51c, 0x00); // bank out, with junk on the high byte
+        sys.write8(0x0123, 0x99);
+        assert_eq!(sys.read8(0x0123), 0x99);
+        assert_eq!(sys.io_read8(0x5a1c), 0x00, "the system port reads back");
+    }
+
     #[test]
     fn bank_switch_exposes_ram_underneath() {
         let fx = Fixture::new("bank");

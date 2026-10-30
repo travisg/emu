@@ -366,6 +366,15 @@ mod tests {
 
     /// The debugger's peek follows the guest's decode: the rom window at
     /// the bottom, ram at the top, nothing in between.
+    /// The z80 puts A or B on the high half of the port address; the
+    /// modules decode the low byte alone.
+    #[test]
+    fn the_port_decode_takes_the_low_byte_alone() {
+        let (mut m, _tx) = build_sub("port", "cpm");
+        m.io_write8(0xa538, 0); // the pageable rom, with junk on the high byte
+        assert_eq!(m.read8(0x0123), 0x00, "paged out");
+    }
+
     #[test]
     fn peek_is_none_in_the_unmapped_hole() {
         let (mut m, _tx) = build("peek");

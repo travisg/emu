@@ -19,10 +19,11 @@ use crate::bus::Bus;
 
 pub(crate) struct TestBus {
     pub mem: Vec<u8>,
-    /// Z80 port space. Mirrored every 256 ports; no core here puts anything
-    /// meaningful in the high half of the port address.
+    /// Z80 port space, decoded on the low byte as the machines decode it.
     pub ports: [u8; 256],
-    /// Every `io_write8` in order, so a test can assert on port traffic.
+    /// Every `io_read8` and `io_write8` in order, with the full address, so
+    /// a test can assert on port traffic.
+    pub io_reads: Vec<u16>,
     pub io_writes: Vec<(u16, u8)>,
     /// 703 DIO space: 16 devices x 16 functions, addressed by the instruction's
     /// low byte.
@@ -59,6 +60,7 @@ impl TestBus {
         TestBus {
             mem: vec![0; 0x10000],
             ports: [0; 256],
+            io_reads: Vec::new(),
             io_writes: Vec::new(),
             ports16: [0; 256],
             io16_writes: Vec::new(),
@@ -99,6 +101,7 @@ impl Bus for TestBus {
     }
 
     fn io_read8(&mut self, port: u16) -> u8 {
+        self.io_reads.push(port);
         self.ports[(port & 0xff) as usize]
     }
 

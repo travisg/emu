@@ -41,19 +41,20 @@
 //!
 //! # Faithfulness
 //!
-//! The base page and the CB page are complete (every opcode value decodes), and
-//! so is every ED encoding a real Z80 defines -- aliases and undocumented forms
-//! included. What is left undecoded on the ED page is genuinely undefined, and
-//! ends the run.
+//! Every opcode value decodes, on every page: every ED encoding a real Z80
+//! defines, aliases and undocumented forms included, and the rest of the ED
+//! page as the eight-cycle NOP it is on silicon.
 //!
-//! The undocumented side is modelled to the extent an instruction exerciser
-//! can see it: the flag register's bits 3 and 5 (copies of the result's, or
-//! of the operand's for `CP`, of the address's for `BIT n, (HL)`), the
-//! halves of IX/IY as registers, every `DD CB` operation with its register
+//! The undocumented side is modelled to the extent SingleStepTests can see
+//! it (`z80_sst.rs`): the flag register's bits 3 and 5 (copies of the
+//! result's, or of the operand's for `CP`, of the address's for `BIT n,
+//! (HL)`), the `Q` latch that `SCF` and `CCF` take them through, the halves
+//! of IX/IY as registers, every `DD CB` operation with its register
 //! writeback, the block-I/O flags, the `MEMPTR` register (`wz`) that `BIT n,
-//! (HL)` leaks, and the R refresh counter. A DD/FD prefix on an instruction
-//! that has no use for it is what it is on silicon: four T-states and
-//! nothing else.
+//! (HL)` leaks, the R refresh counter, and the full sixteen-bit port address
+//! -- A:n for `IN A,(n)` and `OUT (n),A`, BC for the rest. A DD/FD prefix on
+//! an instruction that has no use for it is what it is on silicon: four
+//! T-states and nothing else.
 //!
 //! Interrupts are the silicon's: NMI on the line's rising edge into `0x66`
 //! with IFF1 saved in IFF2, the maskable line accepted only with IFF1 set
@@ -162,27 +163,27 @@ const MAIN_CYCLES: [u8; 256] = [
 
 /// T-states per ED-page opcode, both fetches included. Block ops hold their
 /// non-repeating value (+5 is added where the PC rewinds); the aliases
-/// charge like the encodings they decode to. 0 marks the genuinely
-/// undefined values, whose BadOpcode ends the run anyway.
+/// charge like the encodings they decode to, and the undefined values are
+/// the two fetches of the NOP they execute as.
 #[rustfmt::skip]
 const ED_CYCLES: [u8; 256] = [
     //  x0  x1  x2  x3  x4  x5  x6  x7  x8  x9  xa  xb  xc  xd  xe  xf
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 0x
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 1x
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 2x
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 3x
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // 0x
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // 1x
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // 2x
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // 3x
         12, 12, 15, 20,  8, 14,  8,  9, 12, 12, 15, 20,  8, 14,  8,  9, // 4x
         12, 12, 15, 20,  8, 14,  8,  9, 12, 12, 15, 20,  8, 14,  8,  9, // 5x
         12, 12, 15, 20,  8, 14,  8, 18, 12, 12, 15, 20,  8, 14,  8, 18, // 6x: rrd/rld 18
-        12, 12, 15, 20,  8, 14,  8,  0, 12, 12, 15, 20,  8, 14,  8,  0, // 7x
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 8x
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // 9x
-        16, 16, 16, 16,  0,  0,  0,  0, 16, 16, 16, 16,  0,  0,  0,  0, // ax: ldi/cpi/ini/outi
-        16, 16, 16, 16,  0,  0,  0,  0, 16, 16, 16, 16,  0,  0,  0,  0, // bx: ...and the repeaters
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // cx
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // dx
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // ex
-         0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, // fx
+        12, 12, 15, 20,  8, 14,  8,  8, 12, 12, 15, 20,  8, 14,  8,  8, // 7x
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // 8x
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // 9x
+        16, 16, 16, 16,  8,  8,  8,  8, 16, 16, 16, 16,  8,  8,  8,  8, // ax: ldi/cpi/ini/outi
+        16, 16, 16, 16,  8,  8,  8,  8, 16, 16, 16, 16,  8,  8,  8,  8, // bx: ...and the repeaters
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // cx
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // dx
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // ex
+         8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8, // fx
 ];
 
 #[derive(Clone)]
@@ -241,6 +242,14 @@ pub struct CpuZ80 {
     /// it, following the memptr_eng.txt description; nothing else reads it.
     wz: u16,
 
+    /// `Q`: the flags the last instruction wrote, or 0 if it wrote none
+    /// (`POP AF` and `EX AF, AF'` load F rather than write flags). `SCF` and
+    /// `CCF` take X and Y from it, ORed with A, on NMOS silicon.
+    q: u8,
+    /// Whether this step has written a flag, which is what makes `q` the
+    /// new F rather than 0 when it ends.
+    flags_written: bool,
+
     /// T-states the last `step()` consumed, for `last_step_cycles`.
     cycles: u32,
 }
@@ -282,6 +291,8 @@ impl Default for CpuZ80 {
             prefix_dd: false,
             prefix_fd: false,
             wz: 0,
+            q: 0,
+            flags_written: false,
             cycles: 0,
         }
     }
@@ -557,6 +568,7 @@ impl CpuZ80 {
     // ---- flags ----
 
     fn set_flag(&mut self, bit: u8, on: bool) {
+        self.flags_written = true;
         if on {
             self.f |= bit;
         } else {
@@ -582,6 +594,7 @@ impl CpuZ80 {
     /// of an address for `BIT n, (HL)` and `BIT n, (IX+d)`, and a derived
     /// byte for the block operations.
     fn set_xy(&mut self, val: u8) {
+        self.flags_written = true;
         self.f = (self.f & !F_XY) | (val & F_XY);
     }
 
@@ -996,25 +1009,23 @@ impl CpuZ80 {
                     self.set_flag(F_N, true);
                     self.set_xy(a);
                 }
-                // SCF and CCF take X and Y from A. (NMOS silicon ORs in
-                // the previous flags when the instruction before did not
-                // set any; that is beyond what an exerciser checks and is
-                // not modelled.)
+                // SCF and CCF take X and Y from A ORed with the bits of F
+                // the last instruction did not write: (Q ^ F) | A
                 6 => {
                     // SCF
-                    let a = self.a;
+                    let xy = (self.q ^ self.f) | self.a;
                     self.set_flag(F_C, true);
                     self.set_flag(F_H, false);
                     self.set_flag(F_N, false);
-                    self.set_xy(a);
+                    self.set_xy(xy);
                 }
                 _ => {
                     // CCF -- H takes the *old* carry, then C inverts
-                    let (a, c) = (self.a, self.flag(F_C));
+                    let (xy, c) = ((self.q ^ self.f) | self.a, self.flag(F_C));
                     self.set_flag(F_H, c);
                     self.set_flag(F_C, !c);
                     self.set_flag(F_N, false);
-                    self.set_xy(a);
+                    self.set_xy(xy);
                 }
             },
 
@@ -1115,14 +1126,15 @@ impl CpuZ80 {
                     // OUT (n), A -- the port is A:n, and MEMPTR takes A:n+1
                     let port = self.read_n(bus);
                     let a = self.a;
-                    bus.io_write8(port as u16, a);
+                    bus.io_write8(((a as u16) << 8) | port as u16, a);
                     self.wz = ((a as u16) << 8) | (port.wrapping_add(1) as u16);
                 }
                 3 => {
-                    // IN A, (n) -- MEMPTR is A:n + 1, with the A before the read
-                    let port = self.read_n(bus);
-                    self.wz = (((self.a as u16) << 8) | port as u16).wrapping_add(1);
-                    self.a = bus.io_read8(port as u16);
+                    // IN A, (n) -- the port is A:n, with the A before the
+                    // read, and MEMPTR that plus one
+                    let port = ((self.a as u16) << 8) | self.read_n(bus) as u16;
+                    self.wz = port.wrapping_add(1);
+                    self.a = bus.io_read8(port);
                 }
                 4 => {
                     // EX (SP), HL -- MEMPTR takes the value HL receives
@@ -1201,12 +1213,12 @@ impl CpuZ80 {
         StepResult::Ok
     }
 
-    /// `INI` / `INIR` / `IND` / `INDR`. MEMPTR takes BC, with the B from
-    /// before the decrement, plus or minus one.
+    /// `INI` / `INIR` / `IND` / `INDR`. The port is BC with the B from
+    /// before the decrement, and MEMPTR that plus or minus one.
     fn block_in(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         let bc = self.bc();
         self.wz = if inc { bc.wrapping_add(1) } else { bc.wrapping_sub(1) };
-        let val = bus.io_read8(self.c as u16);
+        let val = bus.io_read8(bc);
         let addr = self.hl();
         self.mem_write(bus, addr, val);
         self.set_hl(if inc {
@@ -1220,15 +1232,15 @@ impl CpuZ80 {
     }
 
     /// `OUTI` / `OTIR` / `OUTD` / `OTDR`. Note B is decremented *before* the
-    /// memory read here, unlike the input forms, and MEMPTR takes the
-    /// decremented BC plus or minus one.
+    /// memory read here, unlike the input forms, so the port is the
+    /// decremented BC, and MEMPTR that plus or minus one.
     fn block_out(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         self.b = self.b.wrapping_sub(1);
         let bc = self.bc();
         self.wz = if inc { bc.wrapping_add(1) } else { bc.wrapping_sub(1) };
         let addr = self.hl();
         let val = self.mem_read(bus, addr);
-        bus.io_write8(self.c as u16, val);
+        bus.io_write8(bc, val);
         self.set_hl(if inc {
             addr.wrapping_add(1)
         } else {
@@ -1246,7 +1258,8 @@ impl CpuZ80 {
     /// from the carry out of `k`, which is that byte plus C+1 (INI), C-1
     /// (IND) or the new L (OUTx); PV from the parity of `k`'s low three bits
     /// xor B. A repeating form recomputes these every iteration, so its
-    /// final flags are the last iteration's.
+    /// final flags are the last iteration's; an iteration that rewinds
+    /// changes X, Y, H and PV again.
     fn finish_block_io(&mut self, val: u8, k: u16, repeat: bool) {
         let b = self.b;
         self.set_sz(b);
@@ -1256,8 +1269,19 @@ impl CpuZ80 {
         self.set_flag(F_C, k > 0xff);
         self.set_flag(F_PV, parity(((k & 7) as u8) ^ b));
         if repeat && b != 0 {
-            self.pc = self.pc.wrapping_sub(2); // repeat the instruction
-            self.cycles += 5; // 21 when repeating, 16 on the last
+            self.rewind_block();
+            // and H and PV from one more step of B the rewind computes:
+            // up or down by the carry's direction, as N says
+            let b = if k > 0xff {
+                let down = val & 0x80 != 0;
+                self.set_flag(F_H, b & 0x0f == if down { 0x00 } else { 0x0f });
+                if down { b.wrapping_sub(1) } else { b.wrapping_add(1) }
+            } else {
+                b
+            };
+            if !parity(b & 7) {
+                self.f ^= F_PV;
+            }
         }
     }
 
@@ -1274,8 +1298,7 @@ impl CpuZ80 {
     /// PV is "BC is still non-zero after the transfer", so it stays *set* while
     /// a repeating form has work left and clears on the final byte -- which is
     /// how a guest spots the last iteration. X and Y come from the byte moved
-    /// plus A. A repeating form that rewinds leaves MEMPTR at the address of
-    /// its own second byte, as the silicon does.
+    /// plus A, unless the instruction rewinds (`rewind_block`).
     fn block_move(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         let src = self.hl();
         let val = self.mem_read(bus, src);
@@ -1288,22 +1311,30 @@ impl CpuZ80 {
         let bc = self.bc().wrapping_sub(1);
         self.set_bc(bc);
 
-        if repeat && bc != 0 {
-            self.pc = self.pc.wrapping_sub(2); // repeat the instruction
-            self.wz = self.pc.wrapping_add(1);
-            self.cycles += 5; // 21 when repeating, 16 on the last
-        }
-
         self.set_flag(F_H, false);
         self.set_flag(F_PV, bc != 0);
         self.set_flag(F_N, false);
         self.set_block_xy(val.wrapping_add(self.a));
+
+        if repeat && bc != 0 {
+            self.rewind_block();
+        }
+    }
+
+    /// A repeating block instruction with work left goes round again: PC
+    /// back onto it, MEMPTR at its own second byte, five more T-states (21
+    /// when repeating, 16 on the last), and X and Y from bits 13 and 11 of
+    /// the PC it rewound to -- the silicon's last internal operation.
+    fn rewind_block(&mut self) {
+        self.pc = self.pc.wrapping_sub(2);
+        self.wz = self.pc.wrapping_add(1);
+        self.cycles += 5;
+        self.set_xy((self.pc >> 8) as u8);
     }
 
     /// `CPI` / `CPIR` / `CPD` / `CPDR`. The comparison never writes A, and C is
     /// left alone. X and Y come from the difference less the half borrow.
-    /// MEMPTR steps with HL, except that a rewinding repeat leaves it at the
-    /// address of the instruction's own second byte.
+    /// MEMPTR steps with HL. A rewind (`rewind_block`) overrides both.
     fn block_cp(&mut self, bus: &mut dyn Bus, inc: bool, repeat: bool) {
         let addr = self.hl();
         let val = self.mem_read(bus, addr);
@@ -1327,9 +1358,7 @@ impl CpuZ80 {
         self.set_block_xy(res.wrapping_sub(half as u8));
 
         if repeat && bc != 0 && res != 0 {
-            self.pc = self.pc.wrapping_sub(2);
-            self.wz = self.pc.wrapping_add(1);
-            self.cycles += 5; // 21 when repeating, 16 on the last
+            self.rewind_block();
         }
     }
 
@@ -1356,11 +1385,9 @@ impl CpuZ80 {
         self.set_flag(F_N, false);
     }
 
-    /// The ED page.
-    ///
-    /// Deliberately full of holes -- see the module comment. A DD/FD prefix
-    /// in front of it is dropped, as on silicon: `DD ED 60` is `IN H, (C)`,
-    /// with the prefix's four T-states still charged.
+    /// The ED page. A DD/FD prefix in front of it is dropped, as on silicon:
+    /// `DD ED 60` is `IN H, (C)`, with the prefix's four T-states still
+    /// charged.
     fn exec_ed(&mut self, bus: &mut dyn Bus) -> StepResult {
         self.prefix_dd = false;
         self.prefix_fd = false;
@@ -1375,7 +1402,7 @@ impl CpuZ80 {
             // IN r, (C) -- the 0x70 encoding sets the flags and keeps the byte
             0x40 | 0x48 | 0x50 | 0x58 | 0x60 | 0x68 | 0x70 | 0x78 => {
                 self.wz = self.bc().wrapping_add(1);
-                let val = bus.io_read8(self.c as u16);
+                let val = bus.io_read8(self.bc());
                 if y != 0b110 {
                     self.write_r(y, val);
                 }
@@ -1390,7 +1417,7 @@ impl CpuZ80 {
             0x41 | 0x49 | 0x51 | 0x59 | 0x61 | 0x69 | 0x71 | 0x79 => {
                 self.wz = self.bc().wrapping_add(1);
                 let val = if y == 0b110 { 0 } else { self.read_r(y) };
-                bus.io_write8(self.c as u16, val);
+                bus.io_write8(self.bc(), val);
             }
 
             // SBC HL, ss -- H and PV use 16-bit-specific expressions
@@ -1463,12 +1490,14 @@ impl CpuZ80 {
                 self.a = res;
             }
 
-            // RETI: RET, and the bus is told, so the device under service
+            // RETI: RETN, and the bus is told, so the device under service
             // releases the daisy chain -- the SIO's IUS is what that means
-            // here. Nothing else distinguishes it from RET.
+            // here. It restores IFF1 from IFF2 like RETN does, which after
+            // the usual `EI` in front of it changes nothing.
             0x4d => {
                 self.pc = self.pop16(bus);
                 self.wz = self.pc;
+                self.iff1 = self.iff2;
                 bus.interrupt_return();
             }
 
@@ -1525,10 +1554,9 @@ impl CpuZ80 {
             0xb0 => self.block_move(bus, true, true),  // LDIR
             0xb8 => self.block_move(bus, false, true), // LDDR
 
-            _ => {
-                eprintln!("unhandled ED prefixed-opcode {op:#x}");
-                return StepResult::BadOpcode;
-            }
+            // the rest of the page is undefined, and on the silicon an
+            // eight-cycle NOP: both fetches, both refreshes, nothing else
+            _ => {}
         }
 
         StepResult::Ok
@@ -1647,6 +1675,7 @@ impl Cpu for CpuZ80 {
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
         self.prefix_dd = false;
         self.prefix_fd = false;
+        self.flags_written = false;
         let elapsed = std::mem::replace(&mut self.cycles, 0);
 
         // Interrupt entry. NMI on the line's rising edge, ahead of the
@@ -1666,6 +1695,7 @@ impl Cpu for CpuZ80 {
             self.pc = 0x66;
             self.wz = self.pc;
             self.cycles += 11;
+            self.q = 0;
             return StepResult::Ok;
         }
         let op = if ints.irq && self.iff1 && !shadowed {
@@ -1685,6 +1715,7 @@ impl Cpu for CpuZ80 {
                     self.pc = bus.read16(table as u32, Endian::Little);
                     self.wz = self.pc;
                     self.cycles += 19;
+                    self.q = 0;
                     return StepResult::Ok;
                 }
                 // IM 0: the byte on the bus is an instruction, and an `rst`
@@ -1705,11 +1736,13 @@ impl Cpu for CpuZ80 {
             // asleep: a NOP's worth of refresh, nothing fetched
             self.bump_r();
             self.cycles += 4;
+            self.q = 0;
             return StepResult::Ok;
         } else {
             // A run of DD/FD prefixes: each is its own 4 T-state M1 cycle,
             // and the last one is the one that counts -- `DD FD 21 nn nn`
-            // is `LD IY, nn` with a four-cycle DD in front of it.
+            // is `LD IY, nn` with a four-cycle DD in front of it. A prefix
+            // writes no flags, so it leaves Q at 0 for what follows.
             loop {
                 let op = self.read_n(bus);
                 self.bump_r();
@@ -1718,11 +1751,13 @@ impl Cpu for CpuZ80 {
                         self.prefix_dd = true;
                         self.prefix_fd = false;
                         self.cycles += 4;
+                        self.q = 0;
                     }
                     0xfd => {
                         self.prefix_fd = true;
                         self.prefix_dd = false;
                         self.cycles += 4;
+                        self.q = 0;
                     }
                     _ => break op,
                 }
@@ -1737,6 +1772,7 @@ impl Cpu for CpuZ80 {
         if result != StepResult::Ok {
             return result;
         }
+        self.q = if self.flags_written { self.f } else { 0 };
 
         // Nothing costs less than the 4 T-states of the opcode fetch. A path
         // that forgot to charge must not report 0: the run loop reads that as
@@ -1778,6 +1814,8 @@ impl Cpu for CpuZ80 {
             Register::new("IFF2", self.iff2 as u8, 1),
             Register::new("WZ", self.wz, 16),
             Register::new("HALT", self.halted as u8, 1),
+            Register::new("EI", self.ei_shadow as u8, 1),
+            Register::new("Q", self.q, 8),
         ]
     }
 
@@ -1804,6 +1842,8 @@ impl Cpu for CpuZ80 {
             "IFF2" => self.iff2 = value & 1 != 0,
             "WZ" => self.wz = w,
             "HALT" => self.halted = value & 1 != 0,
+            "EI" => self.ei_shadow = value & 1 != 0,
+            "Q" => self.q = lo,
             _ => return false,
         }
         true
@@ -2372,7 +2412,7 @@ mod tests {
         let (mut cpu, mut bus) = boot(&[0x21, 0x00, 0x20, 0x01, 0x00, 0x08, 0x09]); // ld hl, 0x2000; ld bc, 0x0800; add hl, bc
         run_steps(&mut cpu, &mut bus, 3);
         assert_eq!(cpu.f & F_XY, F_XY);
-        // scf and ccf copy A's
+        // scf and ccf copy A's (through Q: scf_and_ccf_take_x_and_y_through_q)
         let (mut cpu, mut bus) = boot(&[0x3e, 0x28, 0x37, 0x3f]); // ld a, 0x28; scf; ccf
         run_steps(&mut cpu, &mut bus, 2);
         assert_eq!(cpu.f & F_XY, F_XY);
@@ -2484,8 +2524,125 @@ mod tests {
         bus.ports[0x20] = 0xa5;
 
         run_steps(&mut cpu, &mut bus, 3);
-        assert_eq!(bus.io_writes, vec![(0x10, 0x5a)]);
+        assert_eq!(bus.io_writes, vec![(0x5a10, 0x5a)]);
+        assert_eq!(bus.io_reads, vec![0x5a20]);
         assert_eq!(cpu.a, 0xa5);
+    }
+
+    /// The port address is sixteen bits: A:n for the immediate forms, BC
+    /// for the rest -- with the B from before the decrement for the input
+    /// block forms and after it for the output ones.
+    #[test]
+    fn port_addresses_carry_a_or_b_in_the_high_byte() {
+        #[rustfmt::skip]
+        let (mut cpu, mut bus) = boot(&[
+            0x01, 0x34, 0x12,       // ld bc, 0x1234
+            0x21, 0x00, 0x20,       // ld hl, 0x2000
+            0xed, 0x78,             // in  a, (c)
+            0xed, 0x79,             // out (c), a
+            0xed, 0xa2,             // ini
+            0xed, 0xa3,             // outi
+        ]);
+        run_steps(&mut cpu, &mut bus, 6);
+        assert_eq!(bus.io_reads, vec![0x1234, 0x1234]);
+        assert_eq!(bus.io_writes, vec![(0x1234, 0), (0x1034, 0)]);
+    }
+
+    /// The ED page's undefined values are NOPs: both fetches, both
+    /// refreshes, eight T-states, and nothing else.
+    #[test]
+    fn undefined_ed_opcodes_are_eight_cycle_nops() {
+        for op in [0x00, 0x3f, 0x77, 0x7f, 0x80, 0xa4, 0xbf, 0xc0, 0xff] {
+            let (mut cpu, mut bus) = boot(&[0xed, op]);
+            let before = cpu.registers();
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!((cpu.pc, cpu.r, cpu.last_step_cycles()), (2, 2, 8), "ed {op:02x}");
+            let changed: Vec<_> = before
+                .iter()
+                .zip(cpu.registers())
+                .filter(|(a, b)| a.value != b.value)
+                .map(|(a, _)| a.name)
+                .collect();
+            assert_eq!(changed, ["PC", "R"], "ed {op:02x}");
+        }
+    }
+
+    /// `SCF` and `CCF` take X and Y from (Q ^ F) | A: A alone after an
+    /// instruction that wrote the flags (Q is that F), A ORed with F after
+    /// one that did not (Q is 0) -- and a DD/FD prefix is one that did not.
+    #[test]
+    fn scf_and_ccf_take_x_and_y_through_q() {
+        // pop af loads F rather than writing flags: F's X and Y come through
+        let (mut cpu, mut bus) = boot(&[0xf1, 0x37]); // pop af; scf
+        cpu.sp = 0x1000;
+        bus.load(0x1000, &[0x28, 0x00]); // f = x|y, a = 0
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, F_XY, "Q was 0: F's bits survive");
+        assert_eq!(cpu.q, cpu.f, "scf wrote the flags");
+
+        // and cp, which wrote them, makes Q the F it left
+        let (mut cpu, mut bus) = boot(&[0xfe, 0x28, 0x3f]); // cp 0x28 (x|y from the operand); ccf
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, 0, "Q was F: only A's bits, and A is 0");
+
+        // a prefix in between leaves Q at 0
+        let (mut cpu, mut bus) = boot(&[0xfe, 0x28, 0xdd, 0x37]); // cp 0x28; dd scf
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.f & F_XY, F_XY);
+    }
+
+    /// RETI restores IFF1 from IFF2, as RETN does.
+    #[test]
+    fn reti_restores_iff1_from_iff2() {
+        let (mut cpu, mut bus) = boot(&[0xed, 0x4d]);
+        cpu.sp = 0x1000;
+        bus.load(0x1000, &[0x34, 0x12]);
+        cpu.iff2 = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x1234);
+        assert!(cpu.iff1);
+        assert_eq!(bus.retis, 1);
+    }
+
+    /// A block instruction that rewinds takes X and Y from bits 13 and 11
+    /// of its own address, and the I/O forms step H and PV once more by
+    /// B; MEMPTR is the instruction's second byte either way.
+    #[test]
+    fn a_rewinding_block_instruction_takes_x_and_y_from_its_address() {
+        // at 0x2800: ldir with bc = 2 -- the byte moved plus A is 0, so the
+        // non-repeating rule would leave X and Y clear
+        let mut bus = TestBus::new();
+        bus.load(0x2800, &[0xed, 0xb0]);
+        let mut cpu = CpuZ80::new();
+        cpu.reset(&mut bus);
+        cpu.pc = 0x2800;
+        cpu.set_bc(2);
+        cpu.set_hl(0x1000);
+        cpu.set_de(0x1100);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.wz, cpu.last_step_cycles()), (0x2800, 0x2801, 21));
+        assert_eq!(cpu.f & F_XY, F_XY, "0x28 from the pc's high byte");
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x2802, "the last one falls through");
+        assert_eq!(cpu.f & F_XY, 0);
+
+        // at 0x0800: inir, b = 2, reading 0x80 with c = 0x80: k = 0x80 +
+        // 0x81 carries, N is set, so H and PV step B (now 1) down to 0
+        let mut bus = TestBus::new();
+        bus.load(0x0800, &[0xed, 0xb2]);
+        bus.ports[0x80] = 0x80;
+        let mut cpu = CpuZ80::new();
+        cpu.reset(&mut bus);
+        cpu.pc = 0x0800;
+        cpu.set_bc(0x0280);
+        cpu.set_hl(0x1000);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.wz, cpu.b), (0x0800, 0x0801, 1));
+        assert_eq!(cpu.f & F_XY, F_X, "0x08 from the pc's high byte");
+        assert!(!cpu.flag(F_H), "b & 0xf is 1, not 0");
+        // PV: parity((k & 7) ^ b) = parity(1 ^ 1), set; then B - 1 = 0 is
+        // even, so it stays
+        assert!(cpu.flag(F_PV));
     }
 
     #[test]
