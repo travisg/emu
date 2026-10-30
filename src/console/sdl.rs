@@ -59,14 +59,17 @@ pub const COLUMNS: usize = 80;
 pub const ROWS: usize = 24;
 pub const ROW_STRIDE: usize = 128;
 
-/// The character generator is an 8x8 font; the CRT's aspect stretched each
-/// row, so it is drawn at 8x16.
+/// The character generator is an 8x8 font. The tube is 4:3, so 80x24 cells
+/// fill 640x480: each glyph is drawn at 8x16, scanlines doubled, at the top
+/// of an 8x20 cell, the rest of the row blank.
 const GLYPH_W: u32 = 8;
 const GLYPH_H: u32 = 8;
+const TEXT_H: u32 = 16;
 const CELL_W: u32 = 8;
-const CELL_H: u32 = 16;
+const CELL_H: u32 = 20;
 const SCREEN_W: u32 = COLUMNS as u32 * CELL_W;
 const SCREEN_H: u32 = ROWS as u32 * CELL_H;
+const _: () = assert!(SCREEN_W * 3 == SCREEN_H * 4 && TEXT_H <= CELL_H);
 
 /// The drive bay: a column to the right of the screen with the two drives
 /// stacked in it, A above B.
@@ -80,10 +83,11 @@ const WINDOW_H: u32 = SCREEN_H;
 /// the millimetre and a bit.
 const FACE_W: u32 = 152;
 const FACE_H: u32 = 86;
-/// The top of drive A's face, and the pitch down to B's: each face with
+/// The pitch from A's face down to B's, and the top of A's: each face with
 /// its label below it, the pair centred in the column.
-const FACE_Y: i32 = 36;
-const FACE_PITCH: i32 = 174;
+const FACE_PITCH: i32 = 200;
+const FACE_Y: i32 =
+    (WINDOW_H as i32 - (FACE_PITCH + FACE_H as i32 + LABEL_GAP + TEXT_H as i32)) / 2;
 /// The diskette slot, across the upper part of the face.
 const SLOT_Y: i32 = 24;
 const SLOT_H: u32 = 5;
@@ -466,20 +470,20 @@ impl SdlFrontend {
             return;
         }
 
-        let dst = Rect::new(SCREEN_X + x * CELL_W as i32, y * CELL_H as i32, CELL_W, CELL_H);
+        let (px, py) = (SCREEN_X + x * CELL_W as i32, y * CELL_H as i32);
         let inverse = c & 0x80 != 0;
         if inverse {
             self.canvas.set_draw_color(PHOSPHOR);
-            let _ = self.canvas.fill_rect(dst);
+            let _ = self.canvas.fill_rect(Rect::new(px, py, CELL_W, CELL_H));
         }
         let color = if inverse { BLACK } else { PHOSPHOR };
-        self.draw_glyph(font, dst, c & 0x7f, color);
+        self.draw_glyph_at(font, px, py, c, color);
     }
 
     /// A glyph from the machine's own character generator at a pixel
-    /// position, for the bay's labels.
+    /// position, for the screen and the bay's labels.
     fn draw_glyph_at(&mut self, font: &mut Texture, px: i32, py: i32, c: u8, color: Color) {
-        self.draw_glyph(font, Rect::new(px, py, CELL_W, CELL_H), c & 0x7f, color);
+        self.draw_glyph(font, Rect::new(px, py, CELL_W, TEXT_H), c & 0x7f, color);
     }
 
     fn draw_glyph(&mut self, font: &mut Texture, dst: Rect, idx: u8, color: Color) {
@@ -707,8 +711,8 @@ mod tests {
         assert!(a.left() >= SCREEN_X + SCREEN_W as i32);
         assert_eq!(a.left(), b.left());
         assert!(a.right() <= WINDOW_W as i32);
-        assert!(label_y(0) + CELL_H as i32 <= b.top(), "A's label clears B");
-        assert!(label_y(1) + CELL_H as i32 <= WINDOW_H as i32, "B's label fits the window");
+        assert!(label_y(0) + TEXT_H as i32 <= b.top(), "A's label clears B");
+        assert!(label_y(1) + TEXT_H as i32 <= WINDOW_H as i32, "B's label fits the window");
         assert_eq!(drive_at(a.center().x(), a.center().y()), Some(0));
         assert_eq!(drive_at(b.center().x(), b.center().y()), Some(1));
         assert_eq!(drive_at(SCREEN_X + 10, 10), None, "the screen is not a door");
