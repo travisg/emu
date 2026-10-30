@@ -25,17 +25,24 @@
 use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::{ConsoleEndpoint, DiskImage, Display, DriveBayDisplay, VideoBuffer};
 use crate::dev::memory::Memory;
-use crate::dev::wd1793::{drive_letter, Wd1793, DRIVES, IMAGE_SIZE};
+use crate::dev::wd1793::{drive_letter, image_note, Wd1793, DRIVES, IMAGE_SIZE};
 use crate::dev::z80sio::{Ch, Z80Sio};
 use crate::rom;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_ROM: &str = "roms/kaypro/kayproii_u47.bin";
 pub const VIDEO_ROM: &str = "roms/kaypro/kayproii_u43.bin";
 /// Mounted in drive A from `disks/` under the current directory. Not a
 /// rom, so not tracked in the repo -- see disks/README.md. Drive B starts
-/// empty; the window's door fills it.
+/// empty; the window's door fills it. This image is always mounted
+/// copy-on-write, however it reaches a drive: it is a scan of a real disk
+/// rather than a working copy, and `tools/fetch-roms.py` never puts back a
+/// file that is already there, so a write to it would be permanent. A
+/// session on it keeps what it writes until the disk comes out. Not
+/// write-protect: the rom's write loop hangs on a protected disk (see
+/// `dev/wd1793`), which would make an `ERA` on the default floppy the end
+/// of the machine. `--disk` takes a copy to write on for keeps.
 pub const DEFAULT_FLOPPY: &str = "disks/mbasic-games.img";
 
 pub const WINDOW_TITLE: &str = "Kaypro II Emulator";
@@ -75,12 +82,24 @@ pub struct Kaypro {
     console: ConsoleEndpoint,
     fdc: Wd1793,
     sio: Z80Sio,
+    /// The image mounted copy-on-write: `DEFAULT_FLOPPY`, in the machine
+    /// the registry builds. Compared by canonical path when a disk goes in.
+    stock_floppy: PathBuf,
     /// Port `0x1c`, a read/write system port. Bit 7 selects the bank (set =
     /// rom + video ram visible), bits 0-1 are the drive selects, and bit 6
     /// is the active-low drive-motor control. Reset with the rom banked
     /// in. Reads return the byte as written -- the BIOS depends on that,
     /// see `io_read8`.
     control_latch: u8,
+}
+
+/// Whether two paths name the same file. A path that does not resolve is
+/// nobody's file.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// Read a flat rom of exactly `size` bytes; a short file is an error, as in
@@ -99,12 +118,15 @@ fn load_exact(path: &Path, size: usize, what: &str) -> io::Result<Vec<u8>> {
 }
 
 impl Kaypro {
-    /// Build the machine, with `floppy_path` in drive A. Returns the bus
-    /// and the display handle the frontend needs, the drive bay inside it.
+    /// Build the machine, with `floppy_path` in drive A, and
+    /// `stock_floppy` the image to mount copy-on-write wherever it goes.
+    /// Returns the bus and the display handle the frontend needs, the
+    /// drive bay inside it.
     pub fn new(
         rom_path: &Path,
         video_rom_path: &Path,
         floppy_path: &Path,
+        stock_floppy: &Path,
         console: ConsoleEndpoint,
         drives: DriveBayDisplay,
     ) -> io::Result<(Self, Display)> {
@@ -119,7 +141,7 @@ impl Kaypro {
 
         let mut fdc = Wd1793::new();
         fdc.attach_bay(drives.state.clone());
-        fdc.load_image(0, floppy_path);
+        fdc.load_image(0, floppy_path, same_file(floppy_path, stock_floppy));
 
         let video = VideoBuffer::new(VIDEO_RAM_SIZE);
         let display = Display::CharCell { title: WINDOW_TITLE, video: video.clone(), font_rom, drives };
@@ -133,6 +155,7 @@ impl Kaypro {
             // the keyboard is a one-way serial line with no RTS input;
             // the rom sets the baud rates before it programs the channels
             sio: Z80Sio::new(CLOCK_HZ),
+            stock_floppy: stock_floppy.to_path_buf(),
             control_latch: LATCH_BANK1,
         };
         sys.select_fdc();
@@ -249,20 +272,23 @@ impl Bus for Kaypro {
     /// exactly one Kaypro II floppy's worth of bytes, since anything else
     /// is not a disk this drive can read and would only look like one
     /// until the first sector.
-    fn change_disk(&mut self, drive: usize, image: Option<DiskImage>) -> Result<(), String> {
+    fn change_disk(&mut self, drive: usize, mut image: Option<DiskImage>) -> Result<(), String> {
         if drive >= DRIVES {
             return Err(format!("no drive {drive}; the Kaypro II has A and B"));
         }
-        match &image {
+        match &mut image {
             Some(i) => {
-                let len = i.file.metadata().map_err(|e| format!("{}: {e}", i.path.display()))?.len();
+                let len = i.size().map_err(|e| format!("{}: {e}", i.path.display()))?;
                 if len != IMAGE_SIZE {
                     return Err(format!(
                         "{}: {len} bytes is not a Kaypro II image (40 tracks x 10 sectors x 512 bytes = {IMAGE_SIZE})",
                         i.path.display()
                     ));
                 }
-                println!("Kaypro: drive {}: inserted '{}'", drive_letter(drive), i.path.display());
+                if same_file(&i.path, &self.stock_floppy) {
+                    i.copy_on_write()?;
+                }
+                println!("Kaypro: drive {}: inserted '{}'{}", drive_letter(drive), i.path.display(), image_note(i));
             }
             None => println!("Kaypro: drive {}: ejected", drive_letter(drive)),
         }
@@ -350,6 +376,8 @@ mod tests {
         rom: std::path::PathBuf,
         video_rom: std::path::PathBuf,
         floppy: std::path::PathBuf,
+        /// The machine's stock image: a second floppy-sized file, of 0x33s.
+        stock: std::path::PathBuf,
     }
 
     impl Fixture {
@@ -365,13 +393,15 @@ mod tests {
             std::fs::File::create(&rom).unwrap().write_all(&rom_bytes).unwrap();
             std::fs::File::create(&video_rom).unwrap().write_all(&vec![0xaa; VIDEO_ROM_SIZE]).unwrap();
             std::fs::File::create(&floppy).unwrap().write_all(&vec![0x11; 512 * 10 * 40]).unwrap();
-            Fixture { dir, rom, video_rom, floppy }
+            let stock = dir.join("stock.img");
+            std::fs::File::create(&stock).unwrap().write_all(&vec![0x33; 512 * 10 * 40]).unwrap();
+            Fixture { dir, rom, video_rom, floppy, stock }
         }
 
         fn build(&self) -> (Kaypro, Display) {
             let (_tx, rx) = std::sync::mpsc::channel();
             let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-            Kaypro::new(&self.rom, &self.video_rom, &self.floppy, console, bay()).unwrap()
+            Kaypro::new(&self.rom, &self.video_rom, &self.floppy, &self.stock, console, bay()).unwrap()
         }
     }
 
@@ -463,7 +493,7 @@ mod tests {
         let fx = Fixture::new("kbd");
         let (tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, console, bay()).unwrap();
+        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, &fx.stock, console, bay()).unwrap();
         init_keyboard(&mut sys);
         assert_eq!(sys.io_read8(0x07) & 0x01, 0);
         tx.send(b'x').unwrap();
@@ -500,7 +530,7 @@ mod tests {
         let fx = Fixture::new("baud");
         let (tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, console, bay()).unwrap();
+        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, &fx.stock, console, bay()).unwrap();
         init_keyboard(&mut sys);
         sys.io_write8(0x0c, 0x0e);
         tx.send(b'y').unwrap();
@@ -554,7 +584,7 @@ mod tests {
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
         let bay = bay();
         let state = bay.state.clone();
-        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, console, bay).unwrap();
+        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, &fx.stock, console, bay).unwrap();
         assert_eq!(state.mounted(0), Some(fx.floppy.clone()));
         assert_eq!(state.mounted(1), None);
         sys.io_write8(0x1c, 0x82); // select B
@@ -604,7 +634,7 @@ mod tests {
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
         let bay = bay();
         let state = bay.state.clone();
-        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, console, bay).unwrap();
+        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.floppy, &fx.stock, console, bay).unwrap();
         let short = fx.dir.join("short.img");
         std::fs::write(&short, [0u8; 512]).unwrap();
         let err = sys.change_disk(0, Some(DiskImage::open(short).unwrap())).unwrap_err();
@@ -616,20 +646,94 @@ mod tests {
         assert_eq!(state.mounted(1), Some(fx.floppy.clone()));
     }
 
+    /// Write sector `sector` of track 0 on the selected drive with
+    /// `byte`, through the ports and the NMI line, as the rom's loop does;
+    /// returns the status at the end.
+    fn write_sector_through_the_ports(sys: &mut Kaypro, sector: u8, byte: u8) -> u8 {
+        sys.io_write8(0x11, 0); // track
+        sys.io_write8(0x12, sector);
+        sys.io_write8(0x10, 0xa8); // write sector
+        for _ in 0..512 {
+            if !sys.poll_interrupts(80).nmi {
+                break; // refused: no byte was asked for
+            }
+            sys.io_write8(0x13, byte);
+        }
+        sys.poll_interrupts(160);
+        sys.io_read8(0x10)
+    }
+
+    /// A guest's Write Sector reaches the image file in the drive.
+    #[test]
+    fn a_written_sector_lands_in_the_image() {
+        let fx = Fixture::new("write");
+        let (mut sys, _) = fx.build();
+        sys.io_write8(0x1c, 0x81); // bank in, drive a, motors on
+        let status = write_sector_through_the_ports(&mut sys, 3, 0x5a);
+        assert_eq!(status & 0x71, 0, "not busy, no error bits: {status:#04x}");
+        let on_disk = std::fs::read(&fx.floppy).unwrap();
+        assert!(on_disk[3 * 512..4 * 512].iter().all(|&b| b == 0x5a));
+        assert_eq!(on_disk[4 * 512], 0x11, "nothing past it");
+    }
+
+    /// Read sector `sector` of track 0 on the selected drive through the
+    /// ports, and return its first byte.
+    fn first_byte_of_sector(sys: &mut Kaypro, sector: u8) -> u8 {
+        sys.io_write8(0x10, 0xd0);
+        sys.io_write8(0x11, 0);
+        sys.io_write8(0x12, sector);
+        sys.io_write8(0x10, 0x88);
+        sys.poll_interrupts(80);
+        let b = sys.io_read8(0x13);
+        sys.io_write8(0x10, 0xd0);
+        b
+    }
+
+    /// The stock floppy is copy-on-write whichever way it goes in: at
+    /// power-on, and through a door, even when the door opened it for
+    /// writing. The session reads back what it wrote; the file never
+    /// changes. An ordinary image through the same door is written for
+    /// real.
+    #[test]
+    fn the_stock_floppy_is_never_written() {
+        let fx = Fixture::new("stock");
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &fx.stock, &fx.stock, console, bay()).unwrap();
+        sys.io_write8(0x1c, 0x81);
+        assert_eq!(sys.io_read8(0x10) & 0x40, 0, "writable, not protected");
+        let status = write_sector_through_the_ports(&mut sys, 0, 0x5a);
+        assert_eq!(status & 0x71, 0, "{status:#04x}");
+        assert_eq!(first_byte_of_sector(&mut sys, 0), 0x5a, "the session keeps its write");
+        // through a door, opened read-write
+        let image = DiskImage::open(fx.stock.clone()).unwrap();
+        assert!(!image.write_protected && !image.is_copy_on_write(), "the file itself is writable");
+        sys.change_disk(1, Some(image)).unwrap();
+        sys.io_write8(0x1c, 0x82);
+        assert_eq!(first_byte_of_sector(&mut sys, 0), 0x33, "a fresh copy: A's write is not in it");
+        write_sector_through_the_ports(&mut sys, 1, 0x5a);
+        assert_eq!(first_byte_of_sector(&mut sys, 1), 0x5a);
+        assert!(std::fs::read(&fx.stock).unwrap().iter().all(|&b| b == 0x33), "the file is untouched");
+        // and an ordinary image in the same door is written through
+        sys.change_disk(1, Some(DiskImage::open(fx.floppy.clone()).unwrap())).unwrap();
+        write_sector_through_the_ports(&mut sys, 1, 0x5a);
+        assert!(std::fs::read(&fx.floppy).unwrap()[512..1024].iter().all(|&b| b == 0x5a));
+    }
+
     #[test]
     fn missing_roms_are_errors() {
         let fx = Fixture::new("missing");
         let (_tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
         let bad = fx.dir.join("nope.bin");
-        assert!(Kaypro::new(&bad, &fx.video_rom, &fx.floppy, console, bay()).is_err());
+        assert!(Kaypro::new(&bad, &fx.video_rom, &fx.floppy, &fx.stock, console, bay()).is_err());
         let (_tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-        assert!(Kaypro::new(&fx.rom, &bad, &fx.floppy, console, bay()).is_err());
+        assert!(Kaypro::new(&fx.rom, &bad, &fx.floppy, &fx.stock, console, bay()).is_err());
         // a missing floppy is not: the controller just reports not-ready
         let (_tx, rx) = std::sync::mpsc::channel();
         let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
-        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &bad, console, bay()).unwrap();
+        let (mut sys, _) = Kaypro::new(&fx.rom, &fx.video_rom, &bad, &fx.stock, console, bay()).unwrap();
         sys.io_write8(0x1c, 0x81);
         assert_ne!(sys.io_read8(0x10) & 0x80, 0);
     }

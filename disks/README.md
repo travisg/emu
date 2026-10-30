@@ -10,7 +10,12 @@ tracked**, for the same reason as `roms/` — see that README and
   and picks the next one with a file chooser, which starts in this
   directory; cpmtools' `kpii` format is this geometry, so `cpmcp -f kpii`
   onto a copy of it is how a CP/M program gets on a disk. An image must be
-  exactly 204,800 bytes (40 tracks x 10 sectors x 512 bytes).
+  exactly 204,800 bytes (40 tracks x 10 sectors x 512 bytes). Writes go
+  through to any other image, but this one is always mounted copy-on-write,
+  whichever drive it goes in: a session on it keeps what it writes in
+  memory and the file never changes, because it is a scan of a real disk
+  and the fetch script never replaces a file that is already here. To keep
+  what CP/M saves, copy it and mount the copy.
 - `rc2014-cf.img` — the RC2014's compact flash card, mounted by
   `emu -s rc2014-cpm`: CP/M 2.2 with Grant Searle's CBIOS as the RC2014
   project publishes it, sixteen drives. `tools/fetch-roms.py` puts it here

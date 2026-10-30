@@ -9,7 +9,7 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 - **RC2014 (Zilog Z80)**: boots the factory ROM image — Grant Searle's monitor into Microsoft
   BASIC 4.7b — on the terminal, over an interrupt-driven serial port.
 - **Kaypro II (Zilog Z80)**: boots CP/M 2.2 from a floppy image into an SDL2 window, with a
-  keyboard and a read-only floppy.
+  keyboard and two floppy drives that keep what CP/M saves.
 - **Raytheon 703 (1967, 16-bit)**: a machine with no ROM at all, running sixteen levels of real
   interrupts, an interrupt-driven teletype, a fixed-head disc and a working front panel. Not a
   port of anything — it is written from the manufacturer's manuals. See below.

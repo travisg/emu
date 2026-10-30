@@ -8,12 +8,17 @@
  */
 //! Western Digital WD1793 floppy disk controller (Kaypro II).
 //!
-//! Port of `dev/wd1793.{h,cpp}`. This is a *read-only* model of the chip:
-//! Restore, Seek, Read Sector, Read Address and Force Interrupt do what they
-//! say; Write Sector takes its bytes through DRQ like a real one and drops
-//! them, so a guest's write loop runs to completion and nothing survives it;
-//! the rest complete with an interrupt. The images are opened read-only for
-//! the same reason; nothing here can modify them.
+//! Port of `dev/wd1793.{h,cpp}`. Restore, Seek, Read Sector, Write Sector,
+//! Read Address and Force Interrupt do what they say; the rest complete with
+//! an interrupt. A written sector goes through to the image when its last
+//! byte is in -- to the file, or to the in-memory copy of a disk mounted
+//! copy-on-write ([`DiskImage`]). A write-protected disk -- a file that
+//! could only be opened read-only -- shows Write Protect in the status
+//! register, and a Write Sector to it ends at once with that bit set and
+//! nothing transferred, as on the chip. On the Kaypro that is a hang, as
+//! it was on the machine: the rom's write loop sleeps in `HALT` for each
+//! byte's DRQ, the refusal's INTRQ wakes only the first, and the line then
+//! stays high with no edge to come.
 //!
 //! The image geometry is fixed to the Kaypro II single-sided format the C++
 //! assumes: 40 tracks x 10 sectors x 512 bytes, sectors numbered from 0.
@@ -54,8 +59,7 @@
 //! is already faster than any real drive.
 
 use crate::console::{DiskImage, DriveBayState, DRIVE_BAYS};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+
 use std::path::Path;
 
 const TRACKS: u32 = 40;
@@ -82,6 +86,9 @@ const STEP_RATE_MS: [u64; 4] = [6, 12, 20, 30];
 const STATUS_BUSY: u8 = 1 << 0;
 const STATUS_INDEX_OR_DRQ: u8 = 1 << 1;
 const STATUS_TRACK0: u8 = 1 << 2;
+const STATUS_RECORD_NOT_FOUND: u8 = 1 << 4;
+const STATUS_WRITE_FAULT: u8 = 1 << 5;
+const STATUS_WRITE_PROTECT: u8 = 1 << 6;
 const STATUS_NOT_READY: u8 = 1 << 7;
 
 pub struct Wd1793 {
@@ -213,6 +220,12 @@ impl Wd1793 {
     fn next_byte(&mut self) {
         self.drq = false;
         if self.sector_index >= self.buffer_count {
+            if self.writing {
+                if let Err(bit) = self.write_sector_to_image() {
+                    println!("WD1793: Write Sector failed (track {} sector {})", self.track, self.sector);
+                    self.status |= bit;
+                }
+            }
             self.writing = false;
             self.complete_in(2 * self.byte_cycles());
         } else {
@@ -220,14 +233,17 @@ impl Wd1793 {
         }
     }
 
-    /// Put a disk image in `drive` at startup. A missing image is not
-    /// fatal -- as in the C++, the drive just reports Not Ready and reads
-    /// come back as `0xe5` filler -- so this reports rather than errors.
-    pub fn load_image(&mut self, drive: usize, path: &Path) -> bool {
-        match File::open(path) {
-            Ok(file) => {
-                println!("WD1793: drive {}: loaded image '{}'", drive_letter(drive), path.display());
-                self.mount(drive, Some(DiskImage { path: path.to_path_buf(), file }));
+    /// Put a disk image in `drive` at startup, copy-on-write if
+    /// `copy_on_write`. A missing image is not fatal -- as in the C++, the
+    /// drive just reports Not Ready and reads come back as `0xe5` filler --
+    /// so this reports rather than errors.
+    pub fn load_image(&mut self, drive: usize, path: &Path, copy_on_write: bool) -> bool {
+        let path = path.to_path_buf();
+        let image = if copy_on_write { DiskImage::open_copy_on_write(path.clone()) } else { DiskImage::open(path.clone()) };
+        match image {
+            Ok(image) => {
+                println!("WD1793: drive {}: loaded image '{}'{}", drive_letter(drive), path.display(), image_note(&image));
+                self.mount(drive, Some(image));
                 true
             }
             Err(e) => {
@@ -301,6 +317,9 @@ impl Wd1793 {
                     if self.track == 0 {
                         val |= STATUS_TRACK0;
                     }
+                    if self.selected_image().is_some_and(|i| i.write_protected) {
+                        val |= STATUS_WRITE_PROTECT;
+                    }
                     self.index_counter += 1;
                     if self.index_counter > INDEX_PULSE_PERIOD {
                         self.index_pulse = !self.index_pulse;
@@ -346,7 +365,9 @@ impl Wd1793 {
             3 => {
                 self.data = val;
                 if self.drq && self.writing && self.sector_index < self.buffer_count {
-                    // a Write Sector's byte: taken and dropped
+                    // a Write Sector's byte, into the buffer the last one
+                    // flushes
+                    self.sector_bytes[self.sector_index] = val;
                     self.sector_index += 1;
                     self.next_byte();
                 }
@@ -400,8 +421,14 @@ impl Wd1793 {
             }
             self.start_transfer(SECTOR_SIZE, false);
         } else if self.command & 0xe0 == 0xa0 {
-            // Type II: write sector (0xa0..=0xbf), into the void
-            self.start_transfer(SECTOR_SIZE, true);
+            // Type II: write sector (0xa0..=0xbf). A protected disk ends
+            // the command before the first DRQ.
+            if self.selected_image().is_some_and(|i| i.write_protected) {
+                self.status = STATUS_BUSY | STATUS_WRITE_PROTECT;
+                self.complete_in(self.byte_cycles());
+            } else {
+                self.start_transfer(SECTOR_SIZE, true);
+            }
         } else if cmd == 0xc0 {
             // Type III: read address -- hand back a synthetic ID field
             self.sector_bytes[0] = self.track;
@@ -427,23 +454,53 @@ impl Wd1793 {
         }
     }
 
+    fn selected_image(&self) -> Option<&DiskImage> {
+        self.selected.and_then(|d| self.images[d].as_ref())
+    }
+
+    /// Where the current track/sector starts in an image, if the track is
+    /// on the disk. Sectors are numbered from 0 (Kaypro II convention).
+    fn sector_offset(&self) -> Option<u64> {
+        let track = self.track as u32;
+        if track >= TRACKS {
+            return None;
+        }
+        let sector = self.sector as u32 % SECTORS_PER_TRACK;
+        Some((track * SECTORS_PER_TRACK + sector) as u64 * SECTOR_SIZE as u64)
+    }
+
     /// Fill the sector buffer from the image at the current track/sector.
-    /// Sectors are numbered from 0 (Kaypro II convention).
     fn read_sector_from_image(&mut self) -> bool {
+        let Some(offset) = self.sector_offset() else {
+            return false;
+        };
         let Some(image) = self.selected.and_then(|d| self.images[d].as_mut()) else {
             return false;
         };
-        let image = &mut image.file;
-        let track = self.track as u32;
-        if track >= TRACKS {
-            return false;
-        }
-        let sector = self.sector as u32 % SECTORS_PER_TRACK;
-        let offset = (track * SECTORS_PER_TRACK + sector) as u64 * SECTOR_SIZE as u64;
-        if image.seek(SeekFrom::Start(offset)).is_err() {
-            return false;
-        }
-        image.read_exact(&mut self.sector_bytes).is_ok()
+        image.read_at(offset, &mut self.sector_bytes).is_ok()
+    }
+
+    /// Write the sector buffer through to the image at the current
+    /// track/sector. Err is the status bit that says why not: no such
+    /// sector (no disk, or a track off its end), or the file refused it.
+    fn write_sector_to_image(&mut self) -> Result<(), u8> {
+        let offset = self.sector_offset().ok_or(STATUS_RECORD_NOT_FOUND)?;
+        let image = self.selected.and_then(|d| self.images[d].as_mut()).ok_or(STATUS_RECORD_NOT_FOUND)?;
+        image.write_at(offset, &self.sector_bytes).map_err(|e| match e.kind() {
+            std::io::ErrorKind::UnexpectedEof => STATUS_RECORD_NOT_FOUND,
+            _ => STATUS_WRITE_FAULT,
+        })
+    }
+}
+
+/// What the startup and insert messages say about how a disk is mounted.
+pub fn image_note(image: &DiskImage) -> &'static str {
+    if image.is_copy_on_write() {
+        " (copy-on-write: writes are kept in memory, not in the file)"
+    } else if image.write_protected {
+        " (write-protected)"
+    } else {
+        ""
     }
 }
 
@@ -455,6 +512,7 @@ pub fn drive_letter(drive: usize) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
 
     fn image_with_pattern(name: &str) -> std::path::PathBuf {
@@ -521,7 +579,7 @@ mod tests {
     fn read_sector_streams_the_right_bytes_a_byte_time_apart() {
         let p = image_with_pattern("stream");
         let mut fdc = Wd1793::new();
-        assert!(fdc.load_image(0, &p));
+        assert!(fdc.load_image(0, &p, false));
 
         fdc.write(1, 3); // track
         fdc.write(2, 4); // sector
@@ -555,28 +613,106 @@ mod tests {
         std::fs::remove_file(&p).ok();
     }
 
-    /// A write takes its bytes through DRQ at the same pace and drops
-    /// them: the loop runs, the image is untouched.
-    #[test]
-    fn write_sector_takes_the_bytes_and_drops_them() {
-        let p = image_with_pattern("write");
-        let mut fdc = Wd1793::new();
-        fdc.load_image(0, &p);
-        fdc.write(1, 1);
-        fdc.write(2, 1);
+    /// Write sector `sector` of `track` with `byte`, a byte time apart as
+    /// the data register asks, and wait out the completion.
+    fn write_sector(fdc: &mut Wd1793, track: u8, sector: u8, byte: u8) {
+        fdc.write(1, track);
+        fdc.write(2, sector);
         fdc.write(0, 0xa8);
         for _ in 0..SECTOR_SIZE {
             fdc.tick(BYTE);
             assert!(fdc.data_ready());
-            fdc.write(3, 0x99);
+            fdc.write(3, byte);
             assert!(!fdc.data_ready());
         }
+        assert!(!fdc.interrupt_pending());
         fdc.tick(2 * BYTE);
         assert!(fdc.interrupt_pending());
-        assert_eq!(fdc.read(0) & STATUS_BUSY, 0);
+    }
+
+    /// A write takes its bytes through DRQ at the same pace as a read and
+    /// lands in the image file: a read gives them back, the file holds
+    /// them, and the neighbouring sectors are untouched.
+    #[test]
+    fn write_sector_goes_through_to_the_image() {
+        let p = image_with_pattern("write");
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p, false);
+        assert_eq!(fdc.read(0) & STATUS_WRITE_PROTECT, 0);
+        write_sector(&mut fdc, 1, 1, 0x99);
+        assert_eq!(fdc.read(0) & (STATUS_BUSY | STATUS_RECORD_NOT_FOUND | STATUS_WRITE_FAULT), 0);
         fdc.write(0, 0x88);
         fdc.tick(BYTE);
-        assert_eq!(fdc.read(3), (SECTORS_PER_TRACK + 1) as u8, "unchanged");
+        assert_eq!(fdc.read(3), 0x99, "read back");
+        let on_disk = std::fs::read(&p).unwrap();
+        let at = (SECTORS_PER_TRACK + 1) as usize * SECTOR_SIZE;
+        assert!(on_disk[at..at + SECTOR_SIZE].iter().all(|&b| b == 0x99), "in the file");
+        assert_eq!(on_disk[at - 1], SECTORS_PER_TRACK as u8, "the sector before is untouched");
+        assert_eq!(on_disk[at + SECTOR_SIZE], (SECTORS_PER_TRACK + 2) as u8, "and the one after");
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A file that cannot be opened for writing goes in write-protected,
+    /// which shows in Type I status; a Write Sector to it ends after the
+    /// overhead with that bit set, no DRQ ever raised and the file
+    /// untouched.
+    #[test]
+    fn a_read_only_file_is_a_write_protected_disk() {
+        let p = image_with_pattern("protect");
+        let mut perms = std::fs::metadata(&p).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&p, perms).unwrap();
+        let mut fdc = Wd1793::new();
+        assert!(fdc.load_image(0, &p, false), "mounted all the same");
+        assert_ne!(fdc.read(0) & STATUS_WRITE_PROTECT, 0, "type I status shows the tab");
+        fdc.write(1, 1);
+        fdc.write(2, 1);
+        fdc.write(0, 0xa8);
+        fdc.tick(BYTE);
+        assert!(!fdc.data_ready(), "no byte is asked for");
+        assert!(fdc.interrupt_pending());
+        let status = fdc.read(0);
+        assert_ne!(status & STATUS_WRITE_PROTECT, 0);
+        assert_eq!(status & STATUS_BUSY, 0);
+        let on_disk = std::fs::read(&p).unwrap();
+        let at = (SECTORS_PER_TRACK + 1) as usize * SECTOR_SIZE;
+        assert_eq!(on_disk[at], (SECTORS_PER_TRACK + 1) as u8);
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A disk mounted copy-on-write takes writes like any other and gives
+    /// them back on a read, but the file never sees them.
+    #[test]
+    fn a_copy_on_write_disk_keeps_its_writes_out_of_the_file() {
+        let p = image_with_pattern("cow");
+        let before = std::fs::read(&p).unwrap();
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p, true);
+        assert_eq!(fdc.read(0) & STATUS_WRITE_PROTECT, 0, "not protected: writable");
+        write_sector(&mut fdc, 2, 5, 0x77);
+        assert_eq!(fdc.read(0) & (STATUS_RECORD_NOT_FOUND | STATUS_WRITE_FAULT), 0);
+        fdc.write(0, 0x88);
+        fdc.tick(BYTE);
+        assert_eq!(fdc.read(3), 0x77, "the session sees its write");
+        assert_eq!(std::fs::read(&p).unwrap(), before, "the file does not");
+        write_sector(&mut fdc, TRACKS as u8, 0, 0x55);
+        assert_ne!(fdc.read(0) & STATUS_RECORD_NOT_FOUND, 0, "and the copy has the disk's bounds");
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A write to a track off the end of the disk, or with no disk in the
+    /// drive, takes its bytes and ends with Record Not Found.
+    #[test]
+    fn a_write_with_nowhere_to_go_is_record_not_found() {
+        let p = image_with_pattern("rnf");
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p, false);
+        write_sector(&mut fdc, TRACKS as u8, 0, 0x55);
+        assert_ne!(fdc.read(0) & STATUS_RECORD_NOT_FOUND, 0, "off the end");
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), IMAGE_SIZE, "the file did not grow");
+        fdc.mount(0, None);
+        write_sector(&mut fdc, 0, 0, 0x55);
+        assert_ne!(fdc.read(0) & STATUS_RECORD_NOT_FOUND, 0, "no disk");
         std::fs::remove_file(&p).ok();
     }
 
@@ -597,7 +733,7 @@ mod tests {
     fn out_of_range_track_fills_with_filler() {
         let p = image_with_pattern("range");
         let mut fdc = Wd1793::new();
-        fdc.load_image(0, &p);
+        fdc.load_image(0, &p, false);
         fdc.write(1, 40);
         fdc.write(0, 0x80);
         fdc.tick(BYTE);
@@ -650,8 +786,7 @@ mod tests {
         assert_ne!(fdc.read(0) & STATUS_NOT_READY, 0, "nothing selected");
         fdc.select(Some(1), true);
         assert_ne!(fdc.read(0) & STATUS_NOT_READY, 0, "B is empty");
-        let file = File::open(&p).unwrap();
-        fdc.mount(1, Some(DiskImage { path: p.clone(), file }));
+        fdc.mount(1, Some(DiskImage::open(p.clone()).unwrap()));
         assert!(fdc.has_image(1));
         assert!(!fdc.has_image(0));
         assert_eq!(fdc.read(0) & STATUS_NOT_READY, 0);
@@ -682,7 +817,7 @@ mod tests {
     fn the_bay_sees_the_select_line_and_the_mounted_names() {
         let p = image_with_pattern("bay");
         let mut fdc = Wd1793::new();
-        fdc.load_image(0, &p);
+        fdc.load_image(0, &p, false);
         let bay = DriveBayState::new();
         fdc.attach_bay(bay.clone());
         assert_eq!(bay.mounted(0), Some(p.clone()), "attach syncs an earlier mount");

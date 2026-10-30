@@ -250,6 +250,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &Machine
         rom,
         Path::new(kaypro::VIDEO_ROM),
         &floppy,
+        Path::new(kaypro::DEFAULT_FLOPPY),
         console,
         drives,
     )?;

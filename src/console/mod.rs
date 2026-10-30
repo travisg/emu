@@ -22,8 +22,8 @@
 //! Nothing is shared, so the equivalent race is unrepresentable rather than
 //! merely avoided.
 
-use std::fs::File;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
@@ -541,16 +541,92 @@ impl DriveBayState {
 /// it is drop it in the slot.
 pub struct DiskImage {
     pub path: PathBuf,
-    pub file: File,
+    file: File,
+    /// The tab over the notch: the drive refuses to write the disk. Set for
+    /// a file that can only be opened read-only.
+    pub write_protected: bool,
+    /// The whole disk, when it is mounted copy-on-write: reads and writes
+    /// go to this copy, so the session keeps what it writes and the file
+    /// never changes.
+    copy: Option<Vec<u8>>,
 }
 
 impl DiskImage {
-    /// Open `path` read-only. Whether it is a disk the drive can read is
-    /// the machine's judgement, made in `Bus::change_disk`, since only the
-    /// machine knows its geometry.
+    /// Open `path` for reading and writing, or, where the file cannot be
+    /// written, read-only and write-protected. Whether it is a disk the
+    /// drive can read is the machine's judgement, made in
+    /// `Bus::change_disk`, since only the machine knows its geometry.
     pub fn open(path: PathBuf) -> Result<Self, String> {
+        let file = match OpenOptions::new().read(true).write(true).open(&path) {
+            Ok(file) => return Ok(DiskImage { path, file, write_protected: false, copy: None }),
+            Err(_) => File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?,
+        };
+        Ok(DiskImage { path, file, write_protected: true, copy: None })
+    }
+
+    /// Open `path` copy-on-write: see `copy_on_write`.
+    pub fn open_copy_on_write(path: PathBuf) -> Result<Self, String> {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(DiskImage { path, file })
+        let mut image = DiskImage { path, file, write_protected: false, copy: None };
+        image.copy_on_write()?;
+        Ok(image)
+    }
+
+    /// Take the whole disk into memory, so that from here on what is
+    /// written stays in the copy and never reaches the file. Lifts any
+    /// write-protect: the copy is always writable.
+    pub fn copy_on_write(&mut self) -> Result<(), String> {
+        let mut bytes = Vec::new();
+        self.file
+            .seek(SeekFrom::Start(0))
+            .and_then(|_| self.file.read_to_end(&mut bytes))
+            .map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.copy = Some(bytes);
+        self.write_protected = false;
+        Ok(())
+    }
+
+    pub fn is_copy_on_write(&self) -> bool {
+        self.copy.is_some()
+    }
+
+    /// The disk's size in bytes.
+    pub fn size(&self) -> io::Result<u64> {
+        match &self.copy {
+            Some(c) => Ok(c.len() as u64),
+            None => self.file.metadata().map(|m| m.len()),
+        }
+    }
+
+    /// Fill `buf` from `offset`.
+    pub fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        match &self.copy {
+            Some(c) => {
+                let src = c.get(offset as usize..offset as usize + buf.len()).ok_or(io::ErrorKind::UnexpectedEof)?;
+                buf.copy_from_slice(src);
+                Ok(())
+            }
+            None => self.file.seek(SeekFrom::Start(offset)).and_then(|_| self.file.read_exact(buf)),
+        }
+    }
+
+    /// Write `buf` at `offset`, through to the file unless the disk is
+    /// copy-on-write. Never past the end: a disk does not grow.
+    pub fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
+        if offset + buf.len() as u64 > self.size()? {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        match &mut self.copy {
+            Some(c) => {
+                c[offset as usize..offset as usize + buf.len()].copy_from_slice(buf);
+                Ok(())
+            }
+            None => self
+                .file
+                .seek(SeekFrom::Start(offset))
+                .and_then(|_| self.file.write_all(buf))
+                .and_then(|_| self.file.flush()),
+        }
     }
 }
 
