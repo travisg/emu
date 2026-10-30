@@ -32,3 +32,6 @@ __pycache__/
 
 /disks/*
 !/disks/README.md
+
+# the SingleStepTests suite, converted by tools/fetch-sst.py
+/tests/data/

@@ -18,6 +18,8 @@ pub mod z80;
 
 #[cfg(test)]
 mod testbus;
+#[cfg(test)]
+mod z80_sst;
 
 /// Why a `step()` stopped, mapping onto the C++ cores' `Run()` return codes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
