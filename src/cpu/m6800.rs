@@ -22,6 +22,12 @@ const CC_Z: u8 = 0x04;
 const CC_N: u8 = 0x08;
 const CC_I: u8 = 0x10;
 const CC_H: u8 = 0x20;
+/// Bits 6 and 7 of CC are not flags: they read as ones, in TPA and on the
+/// stack, and are never stored.
+const CC_ONES: u8 = 0xc0;
+
+// Interrupt vectors, each the address of a big-endian pointer.
+const VEC_SWI: u16 = 0xfffa;
 
 const COND_A: u8 = 0x0;
 const COND_HI: u8 = 0x2;
@@ -89,6 +95,9 @@ enum Op {
     St,
     SetCc,
     ClrCc,
+    Swi,
+    Rti,
+    Daa,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -395,6 +404,10 @@ const fn build_ops() -> [OpDecode; 256] {
 
     t[0x39] = op!("rts", Implied, 1, Rts, Pc);
 
+    t[0x3f] = op!("swi", Implied, 1, Swi, Pc);
+    t[0x3b] = op!("rti", Implied, 1, Rti, Pc);
+    t[0x19] = op!("daa", Implied, 1, Daa, A);
+
     t
 }
 
@@ -403,16 +416,16 @@ static OPS: [OpDecode; 256] = build_ops();
 /// Clock cycles per opcode, from the M6800 datasheet's instruction table.
 /// The 6800 has no data-dependent timing -- branches cost 4 taken or not --
 /// so one flat table covers everything. 0 marks the opcodes `build_ops`
-/// leaves `Bad` (including DAA/RTI/WAI/SWI, which this core doesn't
-/// implement); `cycles_and_decode_agree_on_what_is_implemented` holds the
-/// two tables to each other.
+/// leaves `Bad`, the ones the 6800 does not define;
+/// `cycles_and_decode_agree_on_what_is_implemented` holds the two tables
+/// to each other.
 #[rustfmt::skip]
 const CYCLES: [u8; 256] = [
     //  x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 xa xb xc xd xe xf
         0, 2, 0, 0, 0, 0, 2, 2, 4, 4, 2, 2, 2, 2, 2, 2, // 0x: nop, tap/tpa, inx/dex, flag ops
-        2, 2, 0, 0, 0, 0, 2, 2, 0, 0, 0, 2, 0, 0, 0, 0, // 1x: sba/cba, tab/tba, aba
+        2, 2, 0, 0, 0, 0, 2, 2, 0, 2, 0, 2, 0, 0, 0, 0, // 1x: sba/cba, tab/tba, daa, aba
         4, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, // 2x: branches
-        4, 4, 4, 4, 4, 4, 4, 4, 0, 5, 0, 0, 0, 0, 0, 0, // 3x: tsx/ins/pul/des/txs/psh, rts
+        4, 4, 4, 4, 4, 4, 4, 4, 0, 5, 0,10, 0, 0, 0,12, // 3x: tsx/ins/pul/des/txs/psh, rts, rti, swi
         2, 0, 0, 2, 2, 0, 2, 2, 2, 2, 2, 0, 2, 2, 0, 2, // 4x: rmw on A
         2, 0, 0, 2, 2, 0, 2, 2, 2, 2, 2, 0, 2, 2, 0, 2, // 5x: rmw on B
         7, 0, 0, 7, 7, 0, 7, 7, 7, 7, 7, 0, 7, 7, 4, 7, // 6x: rmw indexed, jmp
@@ -591,6 +604,41 @@ impl Cpu6800 {
         bus.write8(sp as u32, (val >> 8) as u8);
         sp = sp.wrapping_sub(1);
         self.sp = sp;
+    }
+
+    /// Everything onto the stack, as SWI, WAI and an interrupt stack it:
+    /// PC, X, A, B, then CC on top, with its two unused bits as the ones
+    /// they read as.
+    fn stack_state(&mut self, bus: &mut dyn Bus) {
+        let (pc, ix, a, b, cc) = (self.pc, self.ix, self.a, self.b, self.cc);
+        self.push16(bus, pc);
+        self.push16(bus, ix);
+        self.push8(bus, a);
+        self.push8(bus, b);
+        self.push8(bus, cc | CC_ONES);
+    }
+
+    /// Decimal adjust A after a BCD add: +6 for a low digit past 9 or a
+    /// half carry, +0x60 for a high digit past 9 (or one that the low
+    /// digit's +6 will carry into) or a carry. C is set by a carry out of
+    /// the adjustment and never cleared, since the add before it may have
+    /// carried already; N and Z follow the result and V is cleared.
+    fn daa(&mut self) {
+        let (msn, lsn) = (self.a & 0xf0, self.a & 0x0f);
+        let mut adjust = 0u16;
+        if lsn > 0x09 || self.cc & CC_H != 0 {
+            adjust |= 0x06;
+        }
+        if msn > 0x90 || self.cc & CC_C != 0 || (msn > 0x80 && lsn > 0x09) {
+            adjust |= 0x60;
+        }
+        let r = self.a as u16 + adjust;
+        self.a = r as u8;
+        self.set_nz1(r as u32);
+        self.set_cc(CC_V, false);
+        if r & 0x100 != 0 {
+            self.cc |= CC_C;
+        }
     }
 
     fn pull16(&mut self, bus: &mut dyn Bus) -> u16 {
@@ -934,10 +982,10 @@ impl Cpu for Cpu6800 {
             Op::TfrCc => {
                 let v = if op.target == Reg::A {
                     // tpa: the top two condition-code bits read back as 1
-                    self.get_reg(Reg::Cc) as u8 | 0b1100_0000
+                    self.get_reg(Reg::Cc) as u8 | CC_ONES
                 } else {
                     // tap: only the low six bits are writable
-                    self.get_reg(Reg::A) as u8 & 0b0011_1111
+                    self.get_reg(Reg::A) as u8 & !CC_ONES
                 };
                 self.put_reg(op.target, v as u16);
             }
@@ -1014,6 +1062,22 @@ impl Cpu for Cpu6800 {
 
             Op::SetCc => self.cc |= op.cc_flag,
             Op::ClrCc => self.cc &= !op.cc_flag,
+
+            Op::Swi => {
+                self.stack_state(bus);
+                self.cc |= CC_I;
+                self.pc = bus.read16(VEC_SWI as u32, Endian::Big);
+            }
+
+            Op::Rti => {
+                self.cc = self.pull8(bus) & !CC_ONES;
+                self.b = self.pull8(bus);
+                self.a = self.pull8(bus);
+                self.ix = self.pull16(bus);
+                self.pc = self.pull16(bus);
+            }
+
+            Op::Daa => self.daa(),
 
             Op::Bad => unreachable!("handled before operand fetch"),
         }
@@ -1366,6 +1430,48 @@ mod tests {
 
         run_steps(&mut cpu, &mut bus, 2);
         assert_eq!(cpu.cc, 0x3f, "tap writes only the low six bits");
+    }
+
+    /// DAA after ADCA of two BCD bytes is their decimal sum, over every
+    /// pair of two-digit operands and both carries in: A holds its last
+    /// two digits and C says the sum reached 100.
+    #[test]
+    fn daa_after_an_add_is_the_decimal_sum_for_every_bcd_pair() {
+        let bcd = |n: u32| (((n / 10) << 4) | (n % 10)) as u8;
+        let (mut cpu, mut bus) = boot(&[0x89, 0x00, 0x19]); // adca #n; daa
+        for x in 0..100 {
+            for y in 0..100 {
+                for carry in [false, true] {
+                    bus.mem[0xe001] = bcd(y);
+                    cpu.pc = 0xe000;
+                    cpu.a = bcd(x);
+                    cpu.cc = if carry { CC_C } else { 0 };
+                    run_steps(&mut cpu, &mut bus, 2);
+                    let sum = x + y + carry as u32;
+                    assert_eq!(cpu.a, bcd(sum % 100), "{x} + {y} + {carry}");
+                    assert_eq!(cpu.cc & CC_C != 0, sum >= 100, "{x} + {y} + {carry}: C");
+                    assert_eq!(cpu.cc & CC_Z != 0, sum.is_multiple_of(100), "{x} + {y} + {carry}: Z");
+                }
+            }
+        }
+    }
+
+    /// SWI stacks PC, X, A, B and CC -- CC on top, with its unused bits as
+    /// ones -- sets I and vectors through 0xfffa, in 12 cycles; RTI pulls it
+    /// all back in 10.
+    #[test]
+    fn swi_stacks_everything_and_rti_pulls_it_back() {
+        let (mut cpu, mut bus) = boot(&[0x3f]); // swi
+        bus.load(0xfffa, &[0x12, 0x00]);
+        bus.load(0x1200, &[0x3b]); // rti
+        (cpu.a, cpu.b, cpu.ix, cpu.sp, cpu.cc) = (0x11, 0x22, 0x3344, 0x80ff, CC_N);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.sp, cpu.cc, cpu.last_step_cycles()), (0x1200, 0x80f8, CC_N | CC_I, 12));
+        assert_eq!(&bus.mem[0x80f9..0x8100], &[0xc0 | CC_N, 0x22, 0x11, 0x33, 0x44, 0xe0, 0x01]);
+        (cpu.a, cpu.b, cpu.ix) = (0, 0, 0);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.a, cpu.b, cpu.ix), (0x11, 0x22, 0x3344));
+        assert_eq!((cpu.pc, cpu.sp, cpu.cc, cpu.last_step_cycles()), (0xe001, 0x80ff, CC_N, 10));
     }
 
     #[test]

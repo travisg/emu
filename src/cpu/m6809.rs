@@ -30,6 +30,12 @@ const CC_N: u8 = 0x08;
 const CC_I: u8 = 0x10;
 const CC_H: u8 = 0x20;
 const CC_F: u8 = 0x40;
+const CC_E: u8 = 0x80;
+
+// Interrupt vectors, each the address of a big-endian pointer.
+const VEC_SWI3: u16 = 0xfff2;
+const VEC_SWI2: u16 = 0xfff4;
+const VEC_SWI: u16 = 0xfffa;
 
 const COND_N: u8 = 0x1;
 const COND_HI: u8 = 0x2;
@@ -95,6 +101,11 @@ enum Op {
     Rts,
     Ld,
     St,
+    /// SWI, SWI2 or SWI3, as `cond` says
+    Swi,
+    Rti,
+    Mul,
+    Daa,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -461,6 +472,15 @@ const fn build_ops() -> [OpDecode; 256 * 3] {
 
     t[0x39] = op!("rts", Implied, 1, Rts, A);
 
+    // software interrupts and the return from any interrupt
+    t[0x3f]  = op!("swi",  Implied, 1, Swi, A, cond = 1);
+    t[0x13f] = op!("swi2", Implied, 1, Swi, A, cond = 2);
+    t[0x23f] = op!("swi3", Implied, 1, Swi, A, cond = 3);
+    t[0x3b]  = op!("rti",  Implied, 1, Rti, A);
+
+    t[0x3d] = op!("mul", Implied, 1, Mul, D);
+    t[0x19] = op!("daa", Implied, 1, Daa, A);
+
     t
 }
 
@@ -532,6 +552,10 @@ const CYCLE_LIST: &[(u16, u8)] = &[
     (0x0e, 3), (0x6e, 3), (0x7e, 4),
     (0x9d, 7), (0xad, 7), (0xbd, 8),
     (0x39, 5),
+    // swi 19, swi2/swi3 20; rti 6, charged 9 more when it pulls everything
+    (0x3f, 19), (0x13f, 20), (0x23f, 20), (0x3b, 6),
+    // mul 11, daa 2
+    (0x3d, 11), (0x19, 2),
 ];
 
 const fn build_cycles() -> [u8; 256 * 3] {
@@ -728,6 +752,46 @@ impl Cpu6809 {
         let v = bus.read8(sp as u32);
         self.put_reg(stack, sp.wrapping_add(1));
         v
+    }
+
+    /// The entire state onto S with E set, as SWI, IRQ and NMI stack it --
+    /// PSHS's order, every register: PC, U, Y, X, DP, B, A, then CC on top
+    /// so RTI pulls it first and learns from E how much follows.
+    fn stack_entire(&mut self, bus: &mut dyn Bus) {
+        self.cc |= CC_E;
+        let (pc, u, y, x) = (self.pc, self.u, self.y, self.x);
+        self.push16(bus, Reg::S, pc);
+        self.push16(bus, Reg::S, u);
+        self.push16(bus, Reg::S, y);
+        self.push16(bus, Reg::S, x);
+        let (dp, b, a, cc) = (self.dp, self.b, self.a, self.cc);
+        self.push8(bus, Reg::S, dp);
+        self.push8(bus, Reg::S, b);
+        self.push8(bus, Reg::S, a);
+        self.push8(bus, Reg::S, cc);
+    }
+
+    /// Decimal adjust A after a BCD add: +6 for a low digit past 9 or a
+    /// half carry, +0x60 for a high digit past 9 (or one that the low
+    /// digit's +6 will carry into) or a carry. C is set by a carry out of
+    /// the adjustment and never cleared, since the add before it may have
+    /// carried already; N and Z follow the result and V is cleared.
+    fn daa(&mut self) {
+        let (msn, lsn) = (self.a & 0xf0, self.a & 0x0f);
+        let mut adjust = 0u16;
+        if lsn > 0x09 || self.cc_set(CC_H) {
+            adjust |= 0x06;
+        }
+        if msn > 0x90 || self.cc_set(CC_C) || (msn > 0x80 && lsn > 0x09) {
+            adjust |= 0x60;
+        }
+        let r = self.a as u16 + adjust;
+        self.a = r as u8;
+        self.set_nz1(r as u32);
+        self.set_cc(CC_V, false);
+        if r & 0x100 != 0 {
+            self.cc |= CC_C;
+        }
     }
 
     fn rmw_read(&mut self, bus: &mut dyn Bus, op: &OpDecode, arg: i32) -> u8 {
@@ -1278,6 +1342,47 @@ impl Cpu for Cpu6809 {
                 self.pc = self.pull16(bus, Reg::S);
             }
 
+            // SWI masks both interrupts; SWI2 and SWI3 leave the masks alone
+            Op::Swi => {
+                self.stack_entire(bus);
+                let vector = match op.cond {
+                    1 => {
+                        self.cc |= CC_I | CC_F;
+                        VEC_SWI
+                    }
+                    2 => VEC_SWI2,
+                    _ => VEC_SWI3,
+                };
+                self.pc = bus.read16(vector as u32, Endian::Big);
+            }
+
+            // CC first, then the rest of the entire state if its E says the
+            // entry stacked it -- FIRQ stacks only PC and CC, with E clear
+            Op::Rti => {
+                self.cc = self.pull8(bus, Reg::S);
+                if self.cc_set(CC_E) {
+                    self.a = self.pull8(bus, Reg::S);
+                    self.b = self.pull8(bus, Reg::S);
+                    self.dp = self.pull8(bus, Reg::S);
+                    self.x = self.pull16(bus, Reg::S);
+                    self.y = self.pull16(bus, Reg::S);
+                    self.u = self.pull16(bus, Reg::S);
+                    self.cycles += 9;
+                }
+                self.pc = self.pull16(bus, Reg::S);
+            }
+
+            // D = A * B unsigned; C is bit 7 of the result, which is what
+            // rounds a fixed-point product's high byte
+            Op::Mul => {
+                let d = self.a as u16 * self.b as u16;
+                self.set_d(d);
+                self.set_z2(d as u32);
+                self.set_cc(CC_C, d & 0x80 != 0);
+            }
+
+            Op::Daa => self.daa(),
+
             Op::Ld => {
                 if op.width == 1 {
                     self.set_nz1(arg as u32);
@@ -1645,6 +1750,94 @@ mod tests {
         // 0x01 has no entry on the base page
         let (mut cpu, mut bus) = boot(&[0x01]);
         assert_eq!(cpu.step(&mut bus), StepResult::BadOpcode);
+    }
+
+    /// MUL over every operand pair: D is the unsigned product, Z says it is
+    /// zero, and C is bit 7 of it.
+    #[test]
+    fn mul_is_unsigned_with_c_from_bit_7_for_every_operand_pair() {
+        let (mut cpu, mut bus) = boot(&[0x3d]);
+        for a in 0..=255u8 {
+            for b in 0..=255u8 {
+                cpu.pc = 0xe000;
+                (cpu.a, cpu.b, cpu.cc) = (a, b, 0);
+                run_steps(&mut cpu, &mut bus, 1);
+                let want = a as u16 * b as u16;
+                assert_eq!(cpu.d(), want, "{a} * {b}");
+                assert_eq!(cpu.cc_set(CC_Z), want == 0, "{a} * {b}: Z");
+                assert_eq!(cpu.cc_set(CC_C), want & 0x80 != 0, "{a} * {b}: C");
+                assert_eq!(cpu.last_step_cycles(), 11);
+            }
+        }
+    }
+
+    /// DAA after ADCA of two BCD bytes is their decimal sum, over every
+    /// pair of two-digit operands and both carries in: A holds its last
+    /// two digits and C says the sum reached 100.
+    #[test]
+    fn daa_after_an_add_is_the_decimal_sum_for_every_bcd_pair() {
+        let bcd = |n: u32| (((n / 10) << 4) | (n % 10)) as u8;
+        let (mut cpu, mut bus) = boot(&[0x89, 0x00, 0x19]); // adca #n; daa
+        for x in 0..100 {
+            for y in 0..100 {
+                for carry in [false, true] {
+                    bus.mem[0xe001] = bcd(y);
+                    cpu.pc = 0xe000;
+                    cpu.a = bcd(x);
+                    cpu.cc = if carry { CC_C } else { 0 };
+                    run_steps(&mut cpu, &mut bus, 2);
+                    let sum = x + y + carry as u32;
+                    assert_eq!(cpu.a, bcd(sum % 100), "{x} + {y} + {carry}");
+                    assert_eq!(cpu.cc_set(CC_C), sum >= 100, "{x} + {y} + {carry}: C");
+                    assert_eq!(cpu.cc_set(CC_Z), sum.is_multiple_of(100), "{x} + {y} + {carry}: Z");
+                }
+            }
+        }
+    }
+
+    /// SWI stacks the entire state with E set -- PC, U, Y, X, DP, B, A, CC
+    /// from the top of memory down -- masks IRQ and FIRQ, and vectors
+    /// through 0xfffa; RTI sees E and pulls all of it back in 15 cycles.
+    /// SWI2 and SWI3 vector through 0xfff4 and 0xfff2 and leave the masks.
+    #[test]
+    fn swi_stacks_everything_and_rti_pulls_it_back() {
+        let (mut cpu, mut bus) = boot(&[0x3f]); // swi
+        bus.load(0xfffa, &[0x12, 0x00]);
+        bus.load(0x1200, &[0x3b]); // rti
+        (cpu.a, cpu.b, cpu.dp, cpu.x, cpu.y, cpu.u, cpu.s) = (0x11, 0x22, 0x33, 0x4444, 0x5555, 0x6666, 0x8000);
+        cpu.cc = CC_N;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0x1200, 0x8000 - 12, 19));
+        assert_eq!(cpu.cc, CC_N | CC_E | CC_I | CC_F);
+        #[rustfmt::skip]
+        assert_eq!(&bus.mem[0x8000 - 12..0x8000], &[
+            CC_N | CC_E, 0x11, 0x22, 0x33, 0x44, 0x44, 0x55, 0x55, 0x66, 0x66, 0xe0, 0x01,
+        ]);
+        (cpu.a, cpu.b, cpu.dp, cpu.x, cpu.y, cpu.u) = (0, 0, 0, 0, 0, 0);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.a, cpu.b, cpu.dp, cpu.x, cpu.y, cpu.u), (0x11, 0x22, 0x33, 0x4444, 0x5555, 0x6666));
+        assert_eq!((cpu.pc, cpu.s, cpu.cc, cpu.last_step_cycles()), (0xe001, 0x8000, CC_N | CC_E, 15));
+
+        for (prog, vector, cycles) in [([0x10, 0x3f], 0xfff4u16, 20), ([0x11, 0x3f], 0xfff2, 20)] {
+            let (mut cpu, mut bus) = boot(&prog);
+            bus.load(vector, &[0x12, 0x34]);
+            cpu.cc = 0;
+            cpu.s = 0x8000;
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!((cpu.pc, cpu.cc, cpu.last_step_cycles()), (0x1234, CC_E, cycles));
+        }
+    }
+
+    /// An RTI whose CC has E clear -- what FIRQ stacks -- pulls only CC and
+    /// PC, in 6 cycles.
+    #[test]
+    fn rti_with_e_clear_pulls_only_cc_and_pc() {
+        let (mut cpu, mut bus) = boot(&[0x3b]);
+        cpu.s = 0x7ffd;
+        bus.load(0x7ffd, &[CC_Z, 0x12, 0x34]);
+        cpu.a = 0x99;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!((cpu.pc, cpu.s, cpu.cc, cpu.a, cpu.last_step_cycles()), (0x1234, 0x8000, CC_Z, 0x99, 6));
     }
 
     /// SUB/SBC set N, Z, V and C exactly as the datasheet's
