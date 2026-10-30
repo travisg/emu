@@ -626,12 +626,14 @@ impl Cpu6800 {
 }
 
 impl Cpu for Cpu6800 {
+    /// I set, as the part comes out of reset: nothing interrupts a 6800
+    /// until its software clears the mask.
     fn reset(&mut self, bus: &mut dyn Bus) {
         self.a = 0;
         self.b = 0;
         self.ix = 0;
         self.sp = 0;
-        self.cc = 0;
+        self.cc = CC_I;
         // The C++ defers this to the first Run() iteration via an EXC_RESET
         // bit; doing it here is equivalent and keeps the trace lines aligned,
         // since the C++ emits its first trace line after that fixup.
@@ -1134,7 +1136,18 @@ mod tests {
         cpu.ix = 0xffff;
         cpu.reset(&mut bus);
         assert_eq!(cpu.pc, 0x1234);
-        assert_eq!((cpu.a, cpu.b, cpu.ix, cpu.sp, cpu.cc), (0, 0, 0, 0, 0));
+        assert_eq!((cpu.a, cpu.b, cpu.ix, cpu.sp), (0, 0, 0, 0));
+    }
+
+    /// Reset sets I and nothing else in CC: the part starts with its
+    /// interrupt masked.
+    #[test]
+    fn reset_masks_irq() {
+        let mut bus = TestBus::new();
+        let mut cpu = Cpu6800::new();
+        cpu.cc = 0x3f;
+        cpu.reset(&mut bus);
+        assert_eq!(cpu.cc, CC_I);
     }
 
     /// Smoke test: sum four bytes through an indexed loop and store the result.
@@ -1341,13 +1354,14 @@ mod tests {
     fn tpa_and_tap_mask_the_top_two_condition_code_bits() {
         #[rustfmt::skip]
         let (mut cpu, mut bus) = boot(&[
+            0x0e,                   // cli: reset left I set
             0x0d,                   // sec
             0x07,                   // tpa
             0x86, 0xff,             // lda #0xff
             0x06,                   // tap
         ]);
 
-        run_steps(&mut cpu, &mut bus, 2);
+        run_steps(&mut cpu, &mut bus, 3);
         assert_eq!(cpu.a, 0xc1, "tpa reads back cc | 0xc0");
 
         run_steps(&mut cpu, &mut bus, 2);

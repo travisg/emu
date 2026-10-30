@@ -27,7 +27,9 @@ const CC_C: u8 = 0x01;
 const CC_V: u8 = 0x02;
 const CC_Z: u8 = 0x04;
 const CC_N: u8 = 0x08;
+const CC_I: u8 = 0x10;
 const CC_H: u8 = 0x20;
+const CC_F: u8 = 0x40;
 
 const COND_N: u8 = 0x1;
 const COND_HI: u8 = 0x2;
@@ -889,8 +891,11 @@ impl Cpu6809 {
 }
 
 impl Cpu for Cpu6809 {
+    /// Both interrupt masks set, as the part comes out of reset: nothing
+    /// interrupts a 6809 until its software asks to be interrupted.
     fn reset(&mut self, bus: &mut dyn Bus) {
         *self = Cpu6809::default();
+        self.cc = CC_I | CC_F;
         self.pc = bus.read16(0xfffe, Endian::Big);
     }
 
@@ -1450,7 +1455,18 @@ mod tests {
         cpu.reset(&mut bus);
         assert_eq!(cpu.pc, 0x1234);
         assert_eq!((cpu.a, cpu.b, cpu.x, cpu.y, cpu.u, cpu.s), (0, 0, 0, 0, 0, 0));
-        assert_eq!((cpu.dp, cpu.cc), (0, 0));
+        assert_eq!(cpu.dp, 0);
+    }
+
+    /// Reset sets I and F and nothing else in CC: the part starts with both
+    /// interrupts masked.
+    #[test]
+    fn reset_masks_irq_and_firq() {
+        let mut bus = TestBus::new();
+        let mut cpu = Cpu6809::new();
+        cpu.cc = 0xff;
+        cpu.reset(&mut bus);
+        assert_eq!(cpu.cc, CC_I | CC_F);
     }
 
     /// Smoke test: sum four bytes through a post-increment indexed loop.
