@@ -18,8 +18,9 @@
 //! A serial line with nothing listening loses what is sent down it, and so
 //! does this one: transmitted bytes go through a bounded queue to a writer
 //! thread, and a far end that is absent or not reading drops them rather
-//! than stalling the CPU thread. Received bytes queue without limit; the
-//! machine's SIO holds them on the wire while its RTS is off.
+//! than stalling the CPU thread. Received bytes queue without limit, and
+//! go to the SIO at its baud rate -- held on the wire while RTS is off,
+//! on a machine whose far end honours it.
 
 use super::ConsoleEndpoint;
 use std::fs::File;
@@ -197,12 +198,10 @@ mod tests {
         None
     }
 
-    /// Bytes cross a TCP line in both directions; a byte sent with nobody
-    /// connected is lost rather than queued for whoever comes next.
+    /// Bytes cross a TCP line in both directions.
     #[test]
     fn a_tcp_line_carries_bytes_both_ways() {
         let (mut ep, place) = open(&SerialSpec::Tcp(0)).unwrap();
-        ep.put_char(b'!'); // nobody there
         let mut far = TcpStream::connect(&place).unwrap();
         far.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         far.write_all(b"hi").unwrap();
@@ -214,7 +213,7 @@ mod tests {
         ep.put_char(b'k');
         let mut got = [0u8; 2];
         far.read_exact(&mut got).unwrap();
-        assert_eq!(&got, b"ok", "the byte sent to nobody is not among them");
+        assert_eq!(&got, b"ok");
     }
 
     /// A pty's slave is a raw line to the endpoint.

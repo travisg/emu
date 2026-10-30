@@ -91,6 +91,9 @@ pub struct Kaypro {
     sio: Z80Sio,
     /// The image mounted copy-on-write: `DEFAULT_FLOPPY`, in the machine
     /// the registry builds. Compared by canonical path when a disk goes in.
+    /// `DEFAULT_FLOPPY` is relative, so it names the stock image only when
+    /// the emulator runs from the top of the checkout -- the same
+    /// assumption every default under `roms/` and `disks/` makes.
     stock_floppy: PathBuf,
     /// Port `0x1c`, a read/write system port. Bit 7 selects the bank (set =
     /// rom + video ram visible), bits 0-1 are the drive selects, and bit 6
@@ -170,11 +173,13 @@ impl Kaypro {
         Ok((sys, display))
     }
 
-    /// Plug `line` into the RS-232 port. The far end honours RTS, as a
-    /// terminal or a modem on the cable would.
+    /// Plug `line` into the RS-232 port. The far end does not wait on
+    /// RTS: the rom's init table (at 0x05d7) leaves channel A's WR5 at
+    /// 0xe8, RTS off, and nothing in the rom raises it, so a far end that
+    /// honoured it would never send. What arrives faster than the guest
+    /// reads overruns the SIO's three-deep FIFO, as on the machine.
     pub fn attach_serial(&mut self, line: ConsoleEndpoint) {
         self.serial = Some(line);
-        self.sio.set_honours_rts(Ch::A, true);
     }
 
     /// `--fast-io`: the serial ports complete instantly in both directions.
@@ -547,31 +552,29 @@ mod tests {
     }
 
     /// A line on the RS-232 port, as `--serial` plugs one in: what arrives
-    /// reaches channel A a frame after it is sent, held while RTS is off;
-    /// what the guest writes to port 0x04 goes down the line, and none of
-    /// it reaches the keyboard's channel or the console.
+    /// reaches channel A a frame after it is sent, with the channel
+    /// programmed as the rom's table leaves it -- RTS off, which the far
+    /// end does not wait on; what the guest writes to port 0x04 goes down
+    /// the line. None of it touches the keyboard's channel.
     #[test]
-    fn the_serial_port_is_channel_a_and_honours_rts() {
+    fn the_serial_port_is_channel_a() {
         let fx = Fixture::new("serial");
         let (mut sys, _) = fx.build();
         let (line_tx, line_rx) = std::sync::mpsc::channel();
         let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         sys.attach_serial(ConsoleEndpoint::new(line_rx, Box::new(Shared(sent.clone()))));
-        // 9600 baud, 8N1 -- 2,604 cycles a character -- RTS off to start
+        // the rom's table for channel A, at 9600 baud rather than its 300:
+        // 2,604 cycles a character
         sys.io_write8(0x06, 0x18);
         sys.io_write8(0x00, 0x0e);
-        for byte in [0x04, 0x44, 0x03, 0xc1, 0x05, 0xe8, 0x01, 0x00] {
+        for byte in [0x04, 0x44, 0x03, 0xe1, 0x05, 0xe8, 0x01, 0x00] {
             sys.io_write8(0x06, byte);
         }
         line_tx.send(b'k').unwrap();
-        sys.poll_interrupts(10 * 2_604);
-        assert_eq!(sys.io_read8(0x06) & 0x01, 0, "held while RTS is off");
-        sys.io_write8(0x06, 0x05);
-        sys.io_write8(0x06, 0xea); // RTS on
         sys.poll_interrupts(2_603);
         assert_eq!(sys.io_read8(0x06) & 0x01, 0, "a frame on the wire");
         sys.poll_interrupts(1);
-        assert_ne!(sys.io_read8(0x06) & 0x01, 0);
+        assert_ne!(sys.io_read8(0x06) & 0x01, 0, "here, RTS off notwithstanding");
         assert_eq!(sys.io_read8(0x04), b'k');
         assert_eq!(sys.io_read8(0x07) & 0x01, 0, "nothing on the keyboard's channel");
         sys.io_write8(0x04, b'Z');
