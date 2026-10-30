@@ -312,7 +312,7 @@ mod tests {
         let mut m = machine("", &rom).unwrap();
         assert_eq!((m.peek8(0), m.peek8(1)), (Some(0x12), Some(0x34)));
         assert_eq!(m.peek8(0xffff), Some(0), "the top of core, empty");
-        m.poke8(0x100, 0xab);
+        m.poke8(0x100, 0xab).unwrap();
         assert_eq!(m.read8(0x100), 0xab);
     }
 

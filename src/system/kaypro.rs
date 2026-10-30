@@ -321,6 +321,20 @@ impl Bus for Kaypro {
         Ok(())
     }
 
+    /// A poke into the rom window while the rom is banked in would be
+    /// dropped, as the guest's own write is; the debugger is told instead.
+    /// The rom is in whenever the machine stops in the rom or the BIOS's
+    /// video code, so a client loading a program into low memory stops it
+    /// somewhere in RAM first -- at the BDOS entry, say.
+    fn poke8(&mut self, addr: u32, val: u8) -> Result<(), String> {
+        let a = (addr & 0xffff) as u16;
+        if self.bank1() && a < ROM_SIZE as u16 {
+            return Err(format!("rom at {a:#06x}: the rom bank is in (stop the machine in RAM to write under it)"));
+        }
+        self.write8(addr, val);
+        Ok(())
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
         Some(if self.bank1() && addr < ROM_SIZE as u16 {
@@ -451,6 +465,23 @@ mod tests {
         // and rom writes are dropped
         sys.write8(0x0123, 0x99);
         assert_eq!(sys.read8(0x0123), 0x23);
+    }
+
+    /// A debugger poke under the banked-in rom is refused rather than
+    /// dropped; with the bank out it reaches the RAM, and video RAM takes
+    /// one with the bank in.
+    #[test]
+    fn a_poke_under_the_rom_is_refused_while_the_rom_is_in() {
+        let fx = Fixture::new("poke");
+        let (mut sys, _) = fx.build();
+        let err = sys.poke8(0x0100, 0x99).unwrap_err();
+        assert!(err.contains("rom at 0x0100"), "{err}");
+        assert_eq!(sys.read8(0x0100), 0x00, "the rom is unchanged");
+        sys.poke8(0x3000, b'A').unwrap();
+        assert_eq!(sys.peek8(0x3000), Some(b'A'), "video ram");
+        sys.io_write8(0x1c, 0x01); // bank out
+        sys.poke8(0x0100, 0x99).unwrap();
+        assert_eq!(sys.read8(0x0100), 0x99);
     }
 
     #[test]

@@ -428,12 +428,11 @@ impl Emulator {
                 }
             }
             DebugOp::Peek { addr, len } => self.peek(addr, len),
-            DebugOp::Poke { addr, bytes } => {
-                for (i, &b) in bytes.iter().enumerate() {
-                    self.bus.poke8(addr.wrapping_add(i as u32), b);
-                }
-                DebugReply::Ok
-            }
+            DebugOp::Poke { addr, bytes } => bytes
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, &b)| self.bus.poke8(addr.wrapping_add(i as u32), b))
+                .map_or_else(DebugReply::Err, |_| DebugReply::Ok),
             DebugOp::PeekWords { addr, len } => {
                 let unit = self.cpu.addressing();
                 let bytes = addr.wrapping_mul(unit.unit_bytes);
@@ -452,16 +451,19 @@ impl Emulator {
             DebugOp::PokeWords { addr, words } => {
                 let unit = self.cpu.addressing();
                 let mut a = addr.wrapping_mul(unit.unit_bytes);
+                let mut reply = DebugReply::Ok;
                 for w in words {
                     let [first, second] = match unit.endian {
                         Endian::Big => w.to_be_bytes(),
                         Endian::Little => w.to_le_bytes(),
                     };
-                    self.bus.poke8(a, first);
-                    self.bus.poke8(a.wrapping_add(1), second);
+                    if let Err(e) = self.bus.poke8(a, first).and_then(|_| self.bus.poke8(a.wrapping_add(1), second)) {
+                        reply = DebugReply::Err(e);
+                        break;
+                    }
                     a = a.wrapping_add(2);
                 }
-                DebugReply::Ok
+                reply
             }
             DebugOp::AddBreak(pc) => {
                 if !self.breakpoints.contains(&pc) {

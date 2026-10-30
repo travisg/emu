@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(m.peek8(0xf000), None, "ACIA status");
         assert_eq!(m.peek8(0xf001), None, "ACIA data");
         assert_eq!(m.peek8(0x8000), None, "unmapped");
-        m.poke8(0x0100, 0x99);
+        m.poke8(0x0100, 0x99).unwrap();
         assert_eq!(m.read8(0x0100), 0x99, "poke is the guest's own write");
     }
 }

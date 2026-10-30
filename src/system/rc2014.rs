@@ -221,6 +221,17 @@ impl Bus for Rc2014 {
         }
     }
 
+    /// A poke into the rom window is refused while the rom is in, rather
+    /// than dropped as the guest's write is.
+    fn poke8(&mut self, addr: u32, val: u8) -> Result<(), String> {
+        let a = (addr & 0xffff) as u16;
+        if a < ROM_WINDOW && !self.rom_paged_out {
+            return Err(format!("rom at {a:#06x}"));
+        }
+        self.write8(addr, val);
+        Ok(())
+    }
+
     /// The rom window and the ram; everything else is port-mapped, so
     /// nothing in the memory space has a read side effect.
     fn peek8(&self, addr: u32) -> Option<u8> {
@@ -502,6 +513,19 @@ mod tests {
         sys.io_write8(0x80, 0xea);
         assert!(sys.poll_interrupts(FRAME).irq);
         assert_eq!(sys.io_read8(0x81), b'w');
+    }
+
+    /// A debugger poke into the rom window is refused while the rom is in,
+    /// and lands in RAM once the pageable module has paged it out.
+    #[test]
+    fn a_poke_into_the_rom_window_is_refused_until_it_is_paged_out() {
+        let (mut sys, _tx) = build_sub("poke", "cpm");
+        assert!(sys.poke8(0x0100, 0x99).unwrap_err().contains("rom at 0x0100"));
+        sys.poke8(0x8000, 0x77).unwrap();
+        assert_eq!(sys.read8(0x8000), 0x77);
+        sys.io_write8(0x38, 0x01);
+        sys.poke8(0x0100, 0x99).unwrap();
+        assert_eq!(sys.read8(0x0100), 0x99);
     }
 
     /// `--serial`'s line is channel B: what arrives on it reaches B's

@@ -38,6 +38,14 @@ Interactive mode is a terminal on the guest: what you type goes to its
 keyboard and what it prints comes back, with the machine's events in
 brackets. Ctrl-] opens a `dbg>` prompt for one debugger command (an empty
 line returns to the guest); Ctrl-D leaves, the emulator running on.
+
+Two commands are the client's own, in either mode, moving host files in
+and out of guest memory over `write` and `mem`: `load ADDR FILE` and
+`save ADDR LEN FILE` (addresses hex, as the port's; the length any Python
+integer literal). Halt the machine first. To put a CP/M program on a disk:
+stop the guest in its TPA with a breakpoint on the BDOS entry (`break 5`,
+then Return at the `A>`), `load 100 prog.com`, `unbreak 5`, `run`, then
+type `SAVE n PROG.COM` -- n pages of 256 bytes.
 """
 
 import argparse
@@ -51,6 +59,11 @@ import sys
 import tempfile
 import threading
 import time
+
+
+# The most `mem` reads in one request, and so the chunk the file transfers
+# move in.
+MEM_CHUNK = 256
 
 
 class DebugError(Exception):
@@ -302,6 +315,26 @@ class Emu:
     def mem(self, addr, n):
         return bytes(int(b, 16) for b in self.command('mem %x %d' % (addr, n)).split())
 
+    def load_file(self, addr, path):
+        """Write the file at `path` into memory from `addr`, in the port's
+        bus bytes, and return its length. Stop the machine first: a write
+        lands wherever the address decodes at that moment, and a write the
+        machine would drop -- under a banked-in rom -- is a `DebugError`."""
+        with open(path, 'rb') as f:
+            data = f.read()
+        for off in range(0, len(data), MEM_CHUNK):
+            self.write(addr + off, data[off:off + MEM_CHUNK])
+        return len(data)
+
+    def save_file(self, addr, n, path):
+        """Read `n` bytes of memory from `addr` into the file at `path`, as
+        the address decodes at the moment: on the Kaypro, a machine stopped
+        in its rom reads the rom at the bottom of memory, not the TPA."""
+        data = b''.join(self.mem(addr + off, min(MEM_CHUNK, n - off)) for off in range(0, n, MEM_CHUNK))
+        with open(path, 'wb') as f:
+            f.write(data)
+        return len(data)
+
     def memw(self, addr, n):
         return [int(w, 16) for w in self.command('memw %x %d' % (addr, n)).split()]
 
@@ -405,12 +438,27 @@ class Emu:
 
 # -- the program -------------------------------------------------------------
 
+def _command(emu, line):
+    """One command line: the client's own `load ADDR FILE` and `save ADDR
+    LEN FILE`, or a line for the port."""
+    words = line.split(None, 3)
+    if words and words[0] == 'load':
+        if len(words) != 3:
+            raise DebugError('usage: load ADDR FILE')
+        return '%d bytes' % emu.load_file(int(words[1], 16), words[2])
+    if words and words[0] == 'save':
+        if len(words) != 4:
+            raise DebugError('usage: save ADDR LEN FILE')
+        return '%d bytes' % emu.save_file(int(words[1], 16), int(words[2], 0), words[3])
+    return emu.command(line)
+
+
 def _one_shot(emu, commands):
     status = 0
     for cmd in commands:
         before = len(emu.info)
         try:
-            reply = emu.command(cmd)
+            reply = _command(emu, cmd)
         except DebugError as e:
             print('err %s' % e)
             status = 1
@@ -471,7 +519,7 @@ def _interactive(emu):
                     if line:
                         before = len(emu.info)
                         try:
-                            reply = emu.command(line)
+                            reply = _command(emu, line)
                             for l in emu.info[before:]:
                                 print('# ' + l)
                             print('ok %s' % reply if reply else 'ok')
