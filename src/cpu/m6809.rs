@@ -590,7 +590,10 @@ const fn build_cycles() -> [u8; 256 * 3] {
 static CYCLES: [u8; 256 * 3] = build_cycles();
 
 /// What the core is waiting for, if anything: an interrupt after CWAI, any
-/// interrupt line after SYNC. A waiting step runs no instruction.
+/// interrupt line after SYNC. A waiting step runs no instruction, and PC
+/// is held on the waiting instruction, as the Z80 core holds it on HALT:
+/// a breakpoint there is the one that fires every waiting step, not one on
+/// the instruction after it.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 enum Wait {
     #[default]
@@ -1028,6 +1031,7 @@ impl Cpu for Cpu6809 {
         self.nmi_line = ints.nmi;
         if self.wait == Wait::Sync && (ints.irq || ints.firq || nmi_edge) {
             self.wait = Wait::Running;
+            self.pc = self.pc.wrapping_add(1); // past the SYNC it was held on
         }
         if nmi_edge {
             self.interrupt(bus, VEC_NMI, true, CC_I | CC_F);
@@ -1468,14 +1472,20 @@ impl Cpu for Cpu6809 {
 
             Op::Daa => self.daa(),
 
-            // AND the masks with the operand, stack everything, and wait
+            // AND the masks with the operand, stack everything, and wait,
+            // held on the CWAI: the interrupt that ends it only vectors,
+            // so the PC past it that was stacked is the one RTI returns to
             Op::Cwai => {
                 self.cc &= arg as u8;
                 self.stack_entire(bus);
                 self.wait = Wait::Cwai;
+                self.pc = self.pc.wrapping_sub(2);
             }
 
-            Op::Sync => self.wait = Wait::Sync,
+            Op::Sync => {
+                self.wait = Wait::Sync;
+                self.pc = self.pc.wrapping_sub(1);
+            }
 
             Op::Ld => {
                 if op.width == 1 {
@@ -1990,10 +2000,11 @@ mod tests {
         bus.load(0x2000, &[0x3b]); // rti
         (cpu.s, cpu.a) = (0x8000, 0x5a);
         run_steps(&mut cpu, &mut bus, 1);
-        assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0xe002, 0x8000 - 12, 20));
+        assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0xe000, 0x8000 - 12, 20), "held on the cwai");
         assert_eq!(cpu.cc, CC_E | CC_F, "I cleared by the operand");
+        assert_eq!(&bus.mem[0x8000 - 2..0x8000], &[0xe0, 0x02], "the pc past it is stacked");
         run_steps(&mut cpu, &mut bus, 3);
-        assert_eq!((cpu.pc, cpu.last_step_cycles(), cpu.wait), (0xe002, 1, Wait::Cwai), "waiting");
+        assert_eq!((cpu.pc, cpu.last_step_cycles(), cpu.wait), (0xe000, 1, Wait::Cwai), "waiting");
         bus.irq = true;
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!((cpu.pc, cpu.s, cpu.last_step_cycles()), (0x2000, 0x8000 - 12, 7), "nothing more stacked");
@@ -2010,10 +2021,20 @@ mod tests {
     fn sync_waits_for_any_line_and_a_masked_one_lets_it_go_on() {
         let (mut cpu, mut bus) = boot(&[0x13, 0x4c]); // sync; inca
         run_steps(&mut cpu, &mut bus, 3);
-        assert_eq!((cpu.pc, cpu.wait), (0xe001, Wait::Sync));
+        assert_eq!((cpu.pc, cpu.wait), (0xe000, Wait::Sync), "held on the sync");
         bus.irq = true; // I is set out of reset
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!((cpu.pc, cpu.a, cpu.wait), (0xe002, 1, Wait::Running));
+
+        // unmasked, the interrupt is taken, and stacks the pc past the sync
+        let (mut cpu, mut bus) = boot(&[0x13, 0x4c]);
+        bus.load(0xfff8, &[0x20, 0x00]);
+        (cpu.s, cpu.cc) = (0x8000, 0);
+        run_steps(&mut cpu, &mut bus, 2);
+        bus.irq = true;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pc, 0x2000);
+        assert_eq!(&bus.mem[0x8000 - 2..0x8000], &[0xe0, 0x01]);
     }
 
     /// A branch to self ends the run only with both interrupts masked;

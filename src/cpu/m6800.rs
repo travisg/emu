@@ -456,8 +456,10 @@ pub struct Cpu6800 {
     pc: u16,
     sp: u16,
     cc: u8,
-    /// Waiting for an interrupt after WAI, with everything stacked; a
-    /// waiting step runs no instruction.
+    /// Waiting for an interrupt after WAI, with everything stacked. A
+    /// waiting step runs no instruction, and PC is held on the WAI, as the
+    /// Z80 core holds it on HALT: a breakpoint there is the one that fires
+    /// every waiting step, not one on the instruction after it.
     waiting: bool,
     /// The NMI line as last sampled, so the step that sees it asserted
     /// takes the interrupt: the pin is edge-triggered.
@@ -1130,9 +1132,12 @@ impl Cpu for Cpu6800 {
 
             Op::Daa => self.daa(),
 
+            // held on the WAI: the interrupt that ends it only vectors, so
+            // the PC past it that was stacked is the one RTI returns to
             Op::Wai => {
                 self.stack_state(bus);
                 self.waiting = true;
+                self.pc = self.pc.wrapping_sub(1);
             }
 
             Op::Bad => unreachable!("handled before operand fetch"),
@@ -1569,9 +1574,10 @@ mod tests {
         bus.load(0xfff8, &[0x20, 0x00]);
         cpu.sp = 0x80ff;
         run_steps(&mut cpu, &mut bus, 2);
-        assert_eq!((cpu.pc, cpu.sp, cpu.last_step_cycles()), (0xe002, 0x80f8, 9));
+        assert_eq!((cpu.pc, cpu.sp, cpu.last_step_cycles()), (0xe001, 0x80f8, 9), "held on the wai");
+        assert_eq!(&bus.mem[0x80fe..0x8100], &[0xe0, 0x02], "the pc past it is stacked");
         run_steps(&mut cpu, &mut bus, 3);
-        assert_eq!((cpu.pc, cpu.last_step_cycles(), cpu.waiting), (0xe002, 1, true));
+        assert_eq!((cpu.pc, cpu.last_step_cycles(), cpu.waiting), (0xe001, 1, true));
         bus.irq = true;
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!((cpu.pc, cpu.sp, cpu.cc, cpu.last_step_cycles()), (0x2000, 0x80f8, CC_I, 5));
