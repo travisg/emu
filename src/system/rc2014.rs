@@ -62,6 +62,10 @@ pub const DEFAULT_ROM: &str = "roms/rc2014/24886009.BIN";
 /// project publishes it. Not a rom, so not tracked -- see disks/README.md.
 pub const DEFAULT_CF: &str = "disks/rc2014-cf.img";
 
+/// What `--serial` connects to the host: the SIO's second channel, which
+/// Searle's CP/M CBIOS drives as a second console.
+pub const SERIAL_PORT: &str = "SIO channel B, ports 0x82/0x83";
+
 /// The system clock, which is also the SIO's serial clock input.
 pub const CLOCK_HZ: u64 = 7_372_800;
 
@@ -83,6 +87,8 @@ pub struct Rc2014 {
     pageable: bool,
     rom_paged_out: bool,
     console: ConsoleEndpoint,
+    /// `--serial`: the far end of channel B, when something is on it.
+    serial: Option<ConsoleEndpoint>,
     sio: Z80Sio,
     ctc: Z80Ctc,
     /// The compact flash module, with a slot only on the cpm build.
@@ -136,6 +142,7 @@ impl Rc2014 {
             pageable: cpm,
             rom_paged_out: false,
             console,
+            serial: None,
             sio,
             ctc: Z80Ctc::new(),
             cf: CompactFlash::new(),
@@ -175,11 +182,23 @@ impl Rc2014 {
     }
 
     /// Hand the console's keystrokes to the terminal end of channel A's
-    /// line; the SIO clocks them in at the baud rate from there.
+    /// line, and what arrived on `--serial`'s to channel B's; the SIO
+    /// clocks them in at the baud rate from there.
     fn poll_console(&mut self) {
         while let Some(c) = self.console.try_next_char() {
             self.sio.receive(Ch::A, c);
         }
+        if let Some(line) = self.serial.as_mut() {
+            while let Some(c) = line.try_next_char() {
+                self.sio.receive(Ch::B, c);
+            }
+        }
+    }
+
+    /// Put `line` on channel B. Like the console, the far end honours RTS.
+    pub fn attach_serial(&mut self, line: ConsoleEndpoint) {
+        self.serial = Some(line);
+        self.sio.set_honours_rts(Ch::B, true);
     }
 }
 
@@ -225,7 +244,7 @@ impl Bus for Rc2014 {
             // it; the SIO reports it a frame after each write.
             0x80 => self.sio.read_control(Ch::A),
             0x81 => self.sio.read_data(Ch::A),
-            // SIO/B: the second serial port, with nothing on its line
+            // SIO/B: the second serial port, `--serial`'s line
             0x82 => self.sio.read_control(Ch::B),
             0x83 => self.sio.read_data(Ch::B),
             0x88..=0x8b => self.ctc.read((port & 0x03) as usize),
@@ -294,7 +313,12 @@ impl Bus for Rc2014 {
                 self.sio.write_data(Ch::A, val);
             }
             0x82 => self.sio.write_control(Ch::B, val),
-            0x83 => self.sio.write_data(Ch::B, val),
+            0x83 => {
+                if let Some(line) = self.serial.as_mut() {
+                    line.put_char(val);
+                }
+                self.sio.write_data(Ch::B, val);
+            }
             0x88..=0x8b => self.ctc.write((port & 0x03) as usize, val),
             0x90 | 0x91 => {}
             _ => eprintln!("out to unknown port {port:#x}"),
@@ -478,6 +502,44 @@ mod tests {
         sys.io_write8(0x80, 0xea);
         assert!(sys.poll_interrupts(FRAME).irq);
         assert_eq!(sys.io_read8(0x81), b'w');
+    }
+
+    /// `--serial`'s line is channel B: what arrives on it reaches B's
+    /// receiver at the baud rate, what the guest writes to port 0x83 goes
+    /// down it, and the console on A sees none of either.
+    #[test]
+    fn the_serial_line_is_channel_b() {
+        let (mut sys, console_tx) = build("serial");
+        let (line_tx, line_rx) = std::sync::mpsc::channel();
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        sys.attach_serial(ConsoleEndpoint::new(line_rx, Box::new(Shared(sent.clone()))));
+        init_sio(&mut sys);
+        for byte in [0x18, 0x04, 0xc4, 0x01, 0x18, 0x03, 0xe1, 0x05, 0xea] {
+            sys.io_write8(0x82, byte);
+        }
+        line_tx.send(b'b').unwrap();
+        sys.poll_interrupts(FRAME - 1);
+        assert_eq!(sys.io_read8(0x82) & RX_AVAILABLE, 0, "still on the wire");
+        sys.poll_interrupts(1);
+        assert_ne!(sys.io_read8(0x82) & RX_AVAILABLE, 0);
+        assert_eq!(sys.io_read8(0x80) & RX_AVAILABLE, 0, "not on the console");
+        assert_eq!(sys.io_read8(0x83), b'b');
+        sys.io_write8(0x83, b'Q');
+        assert_eq!(*sent.lock().unwrap(), b"Q");
+        drop(console_tx);
+    }
+
+    /// A byte sink a test can read back.
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     /// The acknowledge cycle puts the SIO's receive source under service,

@@ -13,6 +13,7 @@
 //! hardcoded anywhere else (the help text is generated from this table).
 
 use crate::bus::Bus;
+use crate::console::serial::{self, SerialSpec};
 use crate::console::{ConsoleEndpoint, Display};
 use crate::cpu::Cpu;
 use crate::system::{altair680, kaypro, ray703, rc2014, sys09};
@@ -65,6 +66,20 @@ pub struct MachineOpts {
     /// the fixed name under `disks/`. The Kaypro's floppy takes it; the 703
     /// mounts four units by name and ignores it.
     pub disk: Option<PathBuf>,
+    /// `--serial SPEC`: the host end of the machine's spare serial port.
+    /// Only a machine whose descriptor names a `serial_port` is given one;
+    /// `main` refuses the option for the rest.
+    pub serial: Option<SerialSpec>,
+}
+
+/// Open the `--serial` line, if asked for, and announce where it is.
+fn open_serial(opts: &MachineOpts, port: &str) -> io::Result<Option<ConsoleEndpoint>> {
+    let Some(spec) = &opts.serial else {
+        return Ok(None);
+    };
+    let (endpoint, place) = serial::open(spec)?;
+    println!("serial: {port} is on {place}");
+    Ok(Some(endpoint))
 }
 
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
@@ -79,6 +94,9 @@ pub struct SystemDescriptor {
     /// until the rate is verified *and* the core reports cycle counts --
     /// throttling a core that reports none is an announced no-op.
     pub clock_hz: Option<u64>,
+    /// The serial port `--serial` connects to the host, if the machine has
+    /// one spare: what `-h` and the startup line call it.
+    pub serial_port: Option<&'static str>,
 }
 
 fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
@@ -102,6 +120,9 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
     if bus.has_compact_flash() {
         let card = opts.disk.clone().unwrap_or_else(|| PathBuf::from(rc2014::DEFAULT_CF));
         bus.mount_compact_flash(&card);
+    }
+    if let Some(line) = open_serial(opts, rc2014::SERIAL_PORT)? {
+        bus.attach_serial(line);
     }
     Ok(Machine {
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
@@ -257,6 +278,9 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &Machine
     if opts.fast_io {
         bus.set_fast_io();
     }
+    if let Some(line) = open_serial(opts, kaypro::SERIAL_PORT)? {
+        bus.attach_serial(line);
+    }
     Ok(Machine {
         cpu: Box::new(crate::cpu::z80::CpuZ80::new()),
         bus: Box::new(bus),
@@ -277,6 +301,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // 7.3728 MHz crystal the 6809 divides by four, so the E clock the
         // datasheet's cycle counts tick at is 1.8432 MHz.
         clock_hz: Some(1_843_200),
+        serial_port: None,
     },
     SystemDescriptor {
         name: "altair680",
@@ -286,6 +311,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // The 680 ran its 6800 at 500 kHz -- MITS shipped it slow to suit
         // the memory it came with.
         clock_hz: Some(500_000),
+        serial_port: None,
     },
     SystemDescriptor {
         name: "kaypro",
@@ -294,6 +320,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         factory: build_kaypro,
         // The stock Kaypro II Z80 rate (the 5 MHz machines came later).
         clock_hz: Some(kaypro::CLOCK_HZ),
+        serial_port: Some(kaypro::SERIAL_PORT),
     },
     SystemDescriptor {
         name: "ray703",
@@ -301,6 +328,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         default_rom: ray703::DEFAULT_ROM,
         factory: build_ray703,
         clock_hz: Some(crate::cpu::ray703::CLOCK_HZ),
+        serial_port: None,
     },
     SystemDescriptor {
         name: "rc2014",
@@ -311,6 +339,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // clock divides down to 115200 baud, and the Z80 runs off the same
         // can.
         clock_hz: Some(rc2014::CLOCK_HZ),
+        serial_port: Some(rc2014::SERIAL_PORT),
     },
 ];
 

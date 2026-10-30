@@ -72,6 +72,8 @@ Run a system:
 ./target/debug/emu                          # the default system (6809)
 ./target/debug/emu -s altair680
 ./target/debug/emu -s kaypro                # opens a window; also loads disks/mbasic-games.img
+./target/debug/emu -s kaypro --disk my.img  # a floppy of your own, which keeps what CP/M saves
+./target/debug/emu -s rc2014-cpm --serial tcp:2323   # SIO channel B on localhost:2323 (nc localhost 2323)
 ./target/debug/emu -s 6809 -r roms/6809/BASIC.HEX
 ./target/debug/emu -s 6809 -l 1000000       # stop after a million instructions
 ./target/debug/emu -s 6809 -t trace.txt     # log one line of CPU state per instruction
@@ -85,6 +87,12 @@ startup — so a guest runs at period speed. `--no-throttle` runs the CPU as fas
 host can, which is what a scripted run wants; `--throttle N` names a rate in Hz. The pacing is a knob
 on the CPU alone: a device keeps its own timing whatever the CPU is doing, so a 703 held to 10 kHz
 still has a teletype printing ten characters a second.
+
+The Kaypro and the RC2014 each have a serial port with nothing on it — the Kaypro's RS-232
+connector, the RC2014's second SIO channel — and `--serial pty` or `--serial tcp:PORT` plugs the
+host into it: a new pseudo-terminal for `screen` or a Kermit, or a localhost socket for `nc`. The
+RC2014's monitor takes its console from whichever channel sees a space first, so it can be driven
+entirely over the socket.
 
 The terminal systems run in raw mode and pass Ctrl-C through to the guest. **Ctrl-D exits**; so does
 closing the Kaypro window.

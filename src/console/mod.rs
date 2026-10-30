@@ -33,6 +33,7 @@ pub mod panel703;
 pub mod paper;
 pub mod ray703;
 pub mod sdl;
+pub mod serial;
 pub mod terminal;
 pub mod tty703;
 pub mod tty33_font;

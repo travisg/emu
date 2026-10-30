@@ -11,6 +11,7 @@
 
 use emu::console::ray703::Ray703Frontend;
 use emu::console::sdl::SdlFrontend;
+use emu::console::serial::SerialSpec;
 use emu::console::terminal::TerminalFrontend;
 use emu::console::{ConsoleEndpoint, ConsoleFrontend};
 use emu::debug::server::{spawn_unix, DebugServer};
@@ -51,6 +52,8 @@ struct Args {
     fast_io: bool,
     /// `--disk PATH`: the disk image, in place of the fixed name under disks/.
     disk: Option<PathBuf>,
+    /// `--serial SPEC`: the host end of the machine's spare serial port.
+    serial: Option<SerialSpec>,
     /// `--debug PATH`: listen on a Unix socket for a debugger.
     debug: Option<PathBuf>,
     /// `--halt`: start halted, waiting for RUN from the panel or the port.
@@ -58,7 +61,7 @@ struct Args {
 }
 
 fn usage(argv0: &str) {
-    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io] [--disk image] [--debug socket] [--halt]");
+    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io] [--disk image] [--serial pty|tcp:port] [--debug socket] [--halt]");
     eprintln!();
     eprintln!("valid systems:");
     for s in registry::SYSTEMS {
@@ -70,6 +73,9 @@ fn usage(argv0: &str) {
             eprint!("  clock: {hz} Hz");
         }
         eprintln!();
+        if let Some(port) = s.serial_port {
+            eprintln!("  {:-10} --serial: {port}", "");
+        }
     }
     eprintln!();
     eprintln!("note: system may include a subsystem suffix like '6809-obc'.");
@@ -81,6 +87,7 @@ fn usage(argv0: &str) {
     eprintln!("note: device periods follow the throttle rate, so a slow-motion cpu keeps a real-time terminal.");
     eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
     eprintln!("note: --disk PATH mounts an image in place of the fixed one under disks/ (the kaypro's drive A -- click a drive in the window to change disks; the 703 mounts its four units by name).");
+    eprintln!("note: --serial pty|tcp:PORT puts the machine's spare serial port (shown above) on a new pseudo-terminal or a localhost TCP listener, for a terminal program, nc or a file transfer.");
     eprintln!("note: --debug PATH listens on a unix socket for a debugger (halt/run/step, registers, memory, breakpoints, the console); tools/emudbg.py talks to it. HLT then halts to the debugger instead of exiting.");
     eprintln!("note: --halt starts the machine halted; needs a front panel or --debug to start it.");
 }
@@ -100,6 +107,7 @@ fn parse_args() -> Result<Args, ()> {
         throttle: ThrottleArg::Unset,
         fast_io: false,
         disk: None,
+        serial: None,
         debug: None,
         halt: false,
     };
@@ -210,6 +218,16 @@ fn parse_args() -> Result<Args, ()> {
                 println!("disk option: '{v}'");
                 args.disk = Some(PathBuf::from(v));
             }
+            "--serial" => {
+                let v = value(&mut i).ok_or(())?;
+                match SerialSpec::parse(&v) {
+                    Ok(spec) => args.serial = Some(spec),
+                    Err(e) => {
+                        eprintln!("--serial: {e}");
+                        return Err(());
+                    }
+                }
+            }
             "--debug" => {
                 let v = value(&mut i).ok_or(())?;
                 args.debug = Some(PathBuf::from(v));
@@ -243,6 +261,10 @@ fn main() -> ExitCode {
         eprintln!("unknown system '{}', aborting", args.system);
         return ExitCode::FAILURE;
     };
+    if args.serial.is_some() && desc.serial_port.is_none() {
+        eprintln!("--serial: system '{}' has no spare serial port", desc.name);
+        return ExitCode::FAILURE;
+    }
 
     // Load the ROM
     let rom = args.rom.unwrap_or_else(|| PathBuf::from(desc.default_rom));
@@ -268,6 +290,7 @@ fn main() -> ExitCode {
     let opts = registry::MachineOpts {
         fast_io: args.fast_io,
         disk: args.disk,
+        serial: args.serial,
     };
     let mut machine = match (desc.factory)(&rom, endpoint, subsystem, &opts) {
         Ok(m) => m,

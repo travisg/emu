@@ -47,6 +47,10 @@ pub const DEFAULT_FLOPPY: &str = "disks/mbasic-games.img";
 
 pub const WINDOW_TITLE: &str = "Kaypro II Emulator";
 
+/// What `--serial` connects to the host: SIO channel A on ports 0x04/0x06,
+/// the back panel's RS-232 connector. (Channel B is the keyboard.)
+pub const SERIAL_PORT: &str = "SIO channel A, the RS-232 port";
+
 /// The Z80's clock.
 pub const CLOCK_HZ: u64 = 2_500_000;
 
@@ -80,6 +84,9 @@ pub struct Kaypro {
     rom: Memory,
     video: VideoBuffer,
     console: ConsoleEndpoint,
+    /// `--serial`: the far end of the RS-232 port, when something is
+    /// plugged into it.
+    serial: Option<ConsoleEndpoint>,
     fdc: Wd1793,
     sio: Z80Sio,
     /// The image mounted copy-on-write: `DEFAULT_FLOPPY`, in the machine
@@ -151,6 +158,7 @@ impl Kaypro {
             rom,
             video,
             console,
+            serial: None,
             fdc,
             // the keyboard is a one-way serial line with no RTS input;
             // the rom sets the baud rates before it programs the channels
@@ -160,6 +168,13 @@ impl Kaypro {
         };
         sys.select_fdc();
         Ok((sys, display))
+    }
+
+    /// Plug `line` into the RS-232 port. The far end honours RTS, as a
+    /// terminal or a modem on the cable would.
+    pub fn attach_serial(&mut self, line: ConsoleEndpoint) {
+        self.serial = Some(line);
+        self.sio.set_honours_rts(Ch::A, true);
     }
 
     /// `--fast-io`: the serial ports complete instantly in both directions.
@@ -190,6 +205,15 @@ impl Kaypro {
     fn poll_keyboard(&mut self) {
         while let Some(c) = self.console.try_next_char() {
             self.sio.receive(Ch::B, c);
+        }
+    }
+
+    /// Hand what arrived on the RS-232 line to channel A's.
+    fn poll_serial(&mut self) {
+        if let Some(line) = self.serial.as_mut() {
+            while let Some(c) = line.try_next_char() {
+                self.sio.receive(Ch::A, c);
+            }
         }
     }
 
@@ -244,11 +268,12 @@ impl Bus for Kaypro {
     /// service. NMI is the floppy controller's INTRQ or DRQ, and that one
     /// is the disk system: the rom's transfer loops sleep in HALT for each
     /// byte's DRQ and for the completion, with a RET planted at 0x0066 to
-    /// return them past the HALT. Keystrokes reach the keyboard's line, and
-    /// the SIO's frames and the floppy's bytes advance here, once an
-    /// instruction.
+    /// return them past the HALT. Keystrokes reach the keyboard's line, the
+    /// serial port's far end its own, and the SIO's frames and the
+    /// floppy's bytes advance here, once an instruction.
     fn poll_interrupts(&mut self, elapsed_cycles: u32) -> IntStatus {
         self.poll_keyboard();
+        self.poll_serial();
         self.sio.tick(elapsed_cycles);
         self.fdc.tick(elapsed_cycles);
         IntStatus { irq: self.sio.int_pending(), nmi: self.fdc.nmi_line() }
@@ -338,9 +363,15 @@ impl Bus for Kaypro {
             // baud rate generators: the serial port's and the keyboard's
             0x00 => self.sio.set_clock_hz(Ch::A, 16 * COM8116_BAUD[(val & 0x0f) as usize]),
             0x0c => self.sio.set_clock_hz(Ch::B, 16 * COM8116_BAUD[(val & 0x0f) as usize]),
-            // serial port A transmits into the ether; the keyboard channel
-            // has nothing listening either
-            0x04 => self.sio.write_data(Ch::A, val),
+            // serial port A: down the line to whatever `--serial` plugged
+            // in, or into the ether. The keyboard channel has nothing
+            // listening.
+            0x04 => {
+                if let Some(line) = self.serial.as_mut() {
+                    line.put_char(val);
+                }
+                self.sio.write_data(Ch::A, val);
+            }
             0x06 => self.sio.write_control(Ch::A, val),
             0x05 => self.sio.write_data(Ch::B, val),
             0x07 => self.sio.write_control(Ch::B, val),
@@ -481,6 +512,51 @@ mod tests {
         sys.io_write8(0x0c, 0x05);
         for byte in [0x04, 0x44, 0x03, 0xc1, 0x05, 0xe8, 0x01, 0x00] {
             sys.io_write8(0x07, byte);
+        }
+    }
+
+    /// A line on the RS-232 port, as `--serial` plugs one in: what arrives
+    /// reaches channel A a frame after it is sent, held while RTS is off;
+    /// what the guest writes to port 0x04 goes down the line, and none of
+    /// it reaches the keyboard's channel or the console.
+    #[test]
+    fn the_serial_port_is_channel_a_and_honours_rts() {
+        let fx = Fixture::new("serial");
+        let (mut sys, _) = fx.build();
+        let (line_tx, line_rx) = std::sync::mpsc::channel();
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        sys.attach_serial(ConsoleEndpoint::new(line_rx, Box::new(Shared(sent.clone()))));
+        // 9600 baud, 8N1 -- 2,604 cycles a character -- RTS off to start
+        sys.io_write8(0x06, 0x18);
+        sys.io_write8(0x00, 0x0e);
+        for byte in [0x04, 0x44, 0x03, 0xc1, 0x05, 0xe8, 0x01, 0x00] {
+            sys.io_write8(0x06, byte);
+        }
+        line_tx.send(b'k').unwrap();
+        sys.poll_interrupts(10 * 2_604);
+        assert_eq!(sys.io_read8(0x06) & 0x01, 0, "held while RTS is off");
+        sys.io_write8(0x06, 0x05);
+        sys.io_write8(0x06, 0xea); // RTS on
+        sys.poll_interrupts(2_603);
+        assert_eq!(sys.io_read8(0x06) & 0x01, 0, "a frame on the wire");
+        sys.poll_interrupts(1);
+        assert_ne!(sys.io_read8(0x06) & 0x01, 0);
+        assert_eq!(sys.io_read8(0x04), b'k');
+        assert_eq!(sys.io_read8(0x07) & 0x01, 0, "nothing on the keyboard's channel");
+        sys.io_write8(0x04, b'Z');
+        assert_eq!(*sent.lock().unwrap(), b"Z");
+    }
+
+    /// A byte sink a test can read back.
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
         }
     }
 
