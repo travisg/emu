@@ -32,7 +32,7 @@ pub enum Endian {
 /// The Kaypro's floppy controller drives NMI -- its INTRQ and DRQ are ORed
 /// onto the pin, and the rom's transfer loops sleep in HALT for each one.
 /// The 6800 and 6809 cores take IRQ and NMI too, and the 6809 FIRQ, which
-/// only it has. The Raytheon 703 runs interrupts for real too, but its 16
+/// only it has; the Altair 680 drives IRQ from its ACIA. The Raytheon 703 runs interrupts for real too, but its 16
 /// prioritized levels don't fit this set of lines -- see
 /// `poll_interrupt_lines`.
 ///

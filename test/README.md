@@ -27,6 +27,7 @@ report of success; the python ones talk to the emulator's debug port
 (`tools/emudbg.py`) instead and read the guest's output from there, so they
 need no pty and no `script(1)`.
 
+    make -C test altair680-irq-test  # the 6800's IRQ through the ACIA, written into RAM
     make -C test basic6809-test      # boots 6809 BASIC, runs 6809/lang_test.bas
     make -C test kaypro-zex-test     # the Z80 instruction exercisers under CP/M
     make -C test rc2014-basic-test   # factory BASIC, every keystroke an interrupt

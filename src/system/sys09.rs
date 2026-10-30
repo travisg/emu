@@ -12,7 +12,7 @@
 //! HEX rom -- the other three have vestigial ihex scaffolding but read flat
 //! binaries.
 
-use crate::bus::{Bus, MemoryDevice};
+use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
 use crate::dev::mc6850::Mc6850;
 use crate::dev::memory::Memory;
@@ -98,7 +98,17 @@ impl Bus for System09 {
         }
     }
 
-    /// The banks only: the ACIA pulls a character on any register read.
+    /// The ACIA takes its next character here, and its IRQ goes nowhere:
+    /// Grant Searle's board leaves the pin off the CPU (MAME's `gs6809`
+    /// driver routes it to the serial port's RTS instead), and the BASIC
+    /// never unmasks IRQ to find out, though it does enable the receive
+    /// interrupt.
+    fn poll_interrupts(&mut self, _elapsed_cycles: u32) -> IntStatus {
+        self.uart.poll();
+        IntStatus::NONE
+    }
+
+    /// The banks only: the ACIA's data register gives up its byte when read.
     fn peek8(&self, addr: u32) -> Option<u8> {
         match (addr & 0xffff) as u16 {
             addr @ 0x0000..=0x7fff => Some(self.ram.peek(addr as u32)),

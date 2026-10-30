@@ -8,46 +8,54 @@
  */
 //! Motorola MC6850 ACIA (serial port).
 //!
-//! Port of `dev/mc6850.{h,cpp}`. Two behaviours here are Altair-680-monitor
-//! specific rather than real ACIA semantics, and are preserved deliberately:
-//! incoming LF is remapped to CR and lowercase is folded to upper case.
+//! Port of `dev/mc6850.{h,cpp}`, with the chip's interrupt side added: the
+//! control register's master reset and its receive and transmit interrupt
+//! enables, the IRQ bit in the status register, and the IRQ output a
+//! machine wires to its CPU or not (`irq`). A character reaches the receive
+//! data register when the machine polls (`poll`), not when the guest reads
+//! a register, so it can raise IRQ before anyone looks; reading the data
+//! register empties it.
+//!
+//! Not modelled: the baud rate (a character arrives as soon as the
+//! register is empty, and transmit is always ready), word formats, framing
+//! and overrun errors, and the modem lines. Two behaviours are
+//! Altair-680-monitor specific rather than real ACIA semantics, and are
+//! preserved deliberately: incoming LF is remapped to CR and lowercase is
+//! folded to upper case.
 
 use crate::bus::MemoryDevice;
 use crate::console::ConsoleEndpoint;
 
 const STAT_RDRF: u8 = 1 << 0;
 const STAT_TDRE: u8 = 1 << 1;
+const STAT_IRQ: u8 = 1 << 7;
+
+/// Counter divide select 0b11: master reset, which keeps IRQ off until the
+/// next control write selects a divide.
+const CTRL_MASTER_RESET: u8 = 0b11;
+/// Transmit control 0b01: RTS low and the transmit interrupt enabled.
+const CTRL_TIE: u8 = 0b01 << 5;
+const CTRL_TC_MASK: u8 = 0b11 << 5;
+const CTRL_RIE: u8 = 1 << 7;
 
 pub struct Mc6850 {
     console: ConsoleEndpoint,
-    /// Latched receive byte. The C++ uses -1 for "empty".
-    pending_rx: Option<u8>,
-    status: u8,
-    #[allow(dead_code)]
+    /// The receive data register; full is RDRF.
+    rx: Option<u8>,
     control: u8,
 }
 
 impl Mc6850 {
     pub fn new(console: ConsoleEndpoint) -> Self {
-        Mc6850 {
-            console,
-            pending_rx: None,
-            // Transmit is modelled as always ready and never goes busy, so
-            // TDRE is set once here and never cleared. There is a STAT_IRQ bit
-            // in the C++ that is never set or read: this ACIA is polled only,
-            // so no interrupt is modelled.
-            status: STAT_TDRE,
-            control: 0,
-        }
+        // Powers up in master reset, as the data sheet asks software to
+        // assume: no interrupt until the guest programs it.
+        Mc6850 { console, rx: None, control: CTRL_MASTER_RESET }
     }
-}
 
-impl MemoryDevice for Mc6850 {
-    fn read_byte(&mut self, addr: u32) -> u8 {
-        // Note this runs for *any* register read, including the status
-        // register -- reading status is what pulls a character out of the
-        // console queue. Matches the C++.
-        if self.pending_rx.is_none() {
+    /// Take the next character from the console into an empty receive
+    /// register. The machine calls this between instructions.
+    pub fn poll(&mut self) {
+        if self.rx.is_none() {
             if let Some(c) = self.console.try_next_char() {
                 let c = if c == 0x0a {
                     0x0d
@@ -56,23 +64,44 @@ impl MemoryDevice for Mc6850 {
                 } else {
                     c
                 };
-                self.pending_rx = Some(c);
+                self.rx = Some(c);
             }
         }
+    }
 
+    /// The IRQ output, asserted: a full receive register with the receive
+    /// interrupt enabled, or the always-empty transmit register with the
+    /// transmit interrupt enabled -- never in master reset.
+    pub fn irq(&self) -> bool {
+        if self.control & CTRL_MASTER_RESET == CTRL_MASTER_RESET {
+            return false;
+        }
+        (self.control & CTRL_RIE != 0 && self.rx.is_some()) || self.control & CTRL_TC_MASK == CTRL_TIE
+    }
+
+    fn status(&self) -> u8 {
+        let mut s = STAT_TDRE;
+        if self.rx.is_some() {
+            s |= STAT_RDRF;
+        }
+        if self.irq() {
+            s |= STAT_IRQ;
+        }
+        s
+    }
+}
+
+impl MemoryDevice for Mc6850 {
+    fn read_byte(&mut self, addr: u32) -> u8 {
         match addr {
-            // status register
-            0 => self.status | if self.pending_rx.is_some() { STAT_RDRF } else { 0 },
-            // data register
-            1 => self.pending_rx.take().unwrap_or(0),
+            0 => self.status(),
+            1 => self.rx.take().unwrap_or(0),
             _ => 0,
         }
     }
 
     fn write_byte(&mut self, addr: u32, val: u8) {
         match addr {
-            // control register: the C++ stores it and ignores it -- no
-            // baud-rate divider or word-format handling exists
             0 => self.control = val,
             1 => self.console.put_char(val & 0x7f),
             _ => {}
@@ -85,12 +114,25 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
 
+    /// An ACIA out of master reset, receive interrupt off, `input` waiting
+    /// at the console and the first character already polled in.
     fn uart_with_input(input: &[u8]) -> Mc6850 {
         let (tx, rx) = mpsc::channel();
         for &c in input {
             tx.send(c).unwrap();
         }
-        Mc6850::new(ConsoleEndpoint::new(rx, Box::new(Vec::new())))
+        let mut u = Mc6850::new(ConsoleEndpoint::new(rx, Box::new(Vec::new())));
+        u.write_byte(0, 0x15); // divide by 16, 8N1, RTS low, no interrupts
+        u.poll();
+        u
+    }
+
+    /// Read the data register, then poll the next character in, as the
+    /// machine would between the guest's reads.
+    fn read_data(u: &mut Mc6850) -> u8 {
+        let c = u.read_byte(1);
+        u.poll();
+        c
     }
 
     #[test]
@@ -103,9 +145,9 @@ mod tests {
     fn status_reports_rdrf_only_once_a_character_is_waiting() {
         let mut u = uart_with_input(&[]);
         assert_eq!(u.read_byte(0) & STAT_RDRF, 0);
-
         let mut u = uart_with_input(b"A");
         assert_eq!(u.read_byte(0) & STAT_RDRF, STAT_RDRF);
+        assert_eq!(u.read_byte(0) & STAT_RDRF, STAT_RDRF, "reading status takes nothing");
     }
 
     #[test]
@@ -117,12 +159,52 @@ mod tests {
         assert_eq!(u.read_byte(1), 0);
     }
 
+    /// The receive interrupt: IRQ while a character waits with RIE set,
+    /// in the status register and on the pin, dropped by reading the data.
+    #[test]
+    fn a_waiting_character_raises_irq_when_the_receive_interrupt_is_enabled() {
+        let mut u = uart_with_input(b"A");
+        assert!(!u.irq(), "RIE clear");
+        u.write_byte(0, 0x95); // what the 6809 BASIC writes: RIE, 8N1, /16
+        assert!(u.irq());
+        assert_eq!(u.read_byte(0) & STAT_IRQ, STAT_IRQ);
+        assert_eq!(u.read_byte(1), b'A');
+        assert!(!u.irq(), "reading the data clears it");
+        assert_eq!(u.read_byte(0) & STAT_IRQ, 0);
+    }
+
+    /// The transmit interrupt, enabled by transmit control 01, is asserted
+    /// for as long as the (never busy) transmitter is empty.
+    #[test]
+    fn the_transmit_interrupt_follows_the_transmit_control_bits() {
+        let mut u = uart_with_input(&[]);
+        u.write_byte(0, 0x35); // TC = 01
+        assert!(u.irq());
+        u.write_byte(0, 0x55); // TC = 10: RTS high, no interrupt
+        assert!(!u.irq());
+    }
+
+    /// Master reset keeps the chip quiet whatever else the byte says, and
+    /// the part powers up in it.
+    #[test]
+    fn master_reset_holds_irq_off() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(b'A').unwrap();
+        let mut u = Mc6850::new(ConsoleEndpoint::new(rx, Box::new(Vec::new())));
+        u.poll();
+        assert!(!u.irq(), "power-up is master reset");
+        u.write_byte(0, 0x83); // RIE with master reset
+        assert!(!u.irq());
+        u.write_byte(0, 0x81);
+        assert!(u.irq());
+    }
+
     #[test]
     fn lowercase_is_folded_to_upper() {
         let mut u = uart_with_input(b"abz");
-        assert_eq!(u.read_byte(1), b'A');
-        assert_eq!(u.read_byte(1), b'B');
-        assert_eq!(u.read_byte(1), b'Z');
+        assert_eq!(read_data(&mut u), b'A');
+        assert_eq!(read_data(&mut u), b'B');
+        assert_eq!(read_data(&mut u), b'Z');
     }
 
     #[test]
@@ -134,7 +216,7 @@ mod tests {
     #[test]
     fn uppercase_and_digits_pass_through_untouched() {
         let mut u = uart_with_input(b"Q7");
-        assert_eq!(u.read_byte(1), b'Q');
-        assert_eq!(u.read_byte(1), b'7');
+        assert_eq!(read_data(&mut u), b'Q');
+        assert_eq!(read_data(&mut u), b'7');
     }
 }

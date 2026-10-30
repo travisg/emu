@@ -11,7 +11,7 @@
 //! Port of `system/altair680.cpp`. The rom is a flat 256-byte binary; the
 //! `iHexParseCallback` in the C++ file is dead code that is never wired up.
 
-use crate::bus::{Bus, MemoryDevice};
+use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
 use crate::dev::mc6850::Mc6850;
 use crate::dev::memory::Memory;
@@ -82,7 +82,17 @@ impl Bus for Altair680 {
         }
     }
 
-    /// The banks only: the ACIA pulls a character on any register read.
+    /// The ACIA takes its next character here, and drives IRQ: "The IRQ
+    /// output is tied directly to the MPU's IRQ input" (680b Theory of
+    /// Operation, sheet 2). The monitor enables the receive interrupt but
+    /// never clears I, so the line only reaches a program that unmasks it,
+    /// through the IRQ vector's pointer to 0x0100 in RAM.
+    fn poll_interrupts(&mut self, _elapsed_cycles: u32) -> IntStatus {
+        self.uart.poll();
+        IntStatus { irq: self.uart.irq(), ..IntStatus::NONE }
+    }
+
+    /// The banks only: the ACIA's data register gives up its byte when read.
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
         match addr {
@@ -111,7 +121,7 @@ mod tests {
     }
 
     /// The debugger's peek covers ram and both roms and declines the ACIA,
-    /// whose every register read drains the console queue.
+    /// whose data register gives up its byte when read.
     #[test]
     fn peek_refuses_the_acia_and_reads_the_banks() {
         let mut m = build();
