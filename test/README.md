@@ -23,9 +23,9 @@ it uses to reach `target/` and `roms/`.
 Build the emulator first (`cargo build`); the harnesses run the debug binary
 unless `EMU_BIN` says otherwise. Each writes a log beside itself. The shell
 ones drive the emulator through a pty and grep the log for the guest's own
-report of success; the python one talks to the emulator's debug port
-(`tools/emudbg.py`) instead, reads the guest's output from there and takes
-the halt from the port's stop event, so it needs no pty and no `script(1)`.
+report of success; the python ones talk to the emulator's debug port
+(`tools/emudbg.py`) instead and read the guest's output from there, so they
+need no pty and no `script(1)`.
 
     make -C test basic6809-test      # boots 6809 BASIC, runs 6809/lang_test.bas
     make -C test kaypro-zex-test     # the Z80 instruction exercisers under CP/M
@@ -70,7 +70,7 @@ see the Test section of AGENTS.md.
                     for work on the decoder; `cwai` and `daa` are commented out.
     addressing.asm  every addressing mode the 6809 has, indexed and indirect
                     forms included. Assembles; it is not meant to run.
-    lang_test.bas   the BASIC program run_basic6809_lang_test.sh types at
+    lang_test.bas   the BASIC program run_basic6809_lang_test.py types at
                     6809 BASIC. It prints BASIC LANGUAGE TEST PASS if every
                     case agrees.
 

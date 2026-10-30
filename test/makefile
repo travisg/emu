@@ -41,7 +41,7 @@ clean:
 	rm -f *.log
 
 basic6809-test:
-	./run_basic6809_lang_test.sh
+	./run_basic6809_lang_test.py
 
 # The Z80 exercisers on the Kaypro. Needs the Kaypro ROMs, the stock floppy
 # and disks/cpm/zex*.com (all from tools/fetch-roms.py), cpmtools, and the

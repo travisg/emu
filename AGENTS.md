@@ -75,14 +75,14 @@ CP/M ones because they boot the factory rom.
 
 Each CPU core has an in-module `mod tests` driving hand-assembled programs over `cpu::testbus::TestBus` (flat 64K plus an IO space, a `watch` counter for operand re-reads, and `run_steps`). These need no ROMs and nothing outside the repo, so they are the bulk of what `cargo test` covers. Several of them pin the deliberate quirks listed under Architecture. Derive expected values from the implementation, not from a datasheet, and keep a named test per quirk: those are what a future cleanup would silently break.
 
-End-to-end regression: boots 6809 BASIC, feeds it `test/6809/lang_test.bas`, and checks the captured log for `BASIC LANGUAGE TEST PASS`:
+End-to-end regression: boots 6809 BASIC, types `test/6809/lang_test.bas` at it over the debug port, RUNs it, and requires the program's own verdict — `BASIC LANGUAGE TEST PASS` and then BASIC's `OK`, looked for only after the RUN's echo, since typing the program's last line echoes the PASS text too:
 
 ```bash
 cargo build                         # build first
-./test/run_basic6809_lang_test.sh   # or EMU_BIN=./target/release/emu ./test/run_basic6809_lang_test.sh
+make -C test basic6809-test         # or EMU_BIN=./target/release/emu ./test/run_basic6809_lang_test.py
 ```
 
-Requires `roms/6809/BASIC.HEX` to be in place (`tools/fetch-roms.py`), plus `script(1)` and `perl`.
+Requires `roms/6809/BASIC.HEX` to be in place (`tools/fetch-roms.py`) and python3. Each line is paced on its echo, so a lost key fails the echo rather than the program, and a direct command on BASIC's `OK` as well, because a key typed while BASIC carries one out is read by its break check and lost, as on the machine. Its negative controls are `PROGRAM_FILE=` a copy of the program with one answer made wrong (it stops on that line's `FAIL`) and one with a syntax error (`?TM ERROR`); both must FAIL.
 
 The 703 has the same shape of test: boot the demo image, type a line at it, and check that the guest echoed it upper-cased and then halted. It covers the core, the interrupt system, the DIO channel, the teletype and the debug port at once, because the demo's echo runs entirely out of a level 0 service routine.
 
