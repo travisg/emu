@@ -174,6 +174,31 @@ pub struct Tty703 {
     fast_io: bool,
 }
 
+impl crate::snapshot::Snapshot for Tty703 {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Tty703 {
+            console: _session, level: _wiring, armed, echo, frame, tx_owed, tx_remaining, rx_credit,
+            char_cycles: _session_pacing, fast_io: _session_flag,
+        } = self;
+        w.bool(*armed);
+        w.bool(*echo);
+        w.opt(frame, |w, f| w.u8(*f));
+        w.u32(*tx_owed);
+        w.u32(*tx_remaining);
+        w.u32(*rx_credit);
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.armed = r.bool()?;
+        self.echo = r.bool()?;
+        self.frame = r.opt(|r| r.u8())?;
+        self.tx_owed = r.u32()?;
+        self.tx_remaining = r.u32()?;
+        self.rx_credit = r.u32()?;
+        Ok(())
+    }
+}
+
 impl Tty703 {
     pub fn new(console: ConsoleEndpoint, level: u8) -> Self {
         Tty703 {
@@ -365,6 +390,25 @@ pub struct TapeReader703 {
     frame: Option<u8>,
 }
 
+/// The tape is in the snapshot, as a disk is: it is what the reader holds.
+impl crate::snapshot::Snapshot for TapeReader703 {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let TapeReader703 { level: _wiring, frames, pos, running, frame } = self;
+        w.bytes(frames);
+        w.u32(*pos as u32);
+        w.bool(*running);
+        w.opt(frame, |w, f| w.u8(*f));
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.frames = r.bytes()?.to_vec();
+        self.pos = r.u32()? as usize;
+        self.running = r.bool()?;
+        self.frame = r.opt(|r| r.u8())?;
+        Ok(())
+    }
+}
+
 impl TapeReader703 {
     pub fn new(level: u8) -> Self {
         TapeReader703 { level, frames: Vec::new(), pos: 0, running: false, frame: None }
@@ -486,6 +530,20 @@ fn line_clock_period_cycles(pacing_hz: u64) -> u32 {
 const LINE_CLOCK_PERIOD_CYCLES: u32 = (CLOCK_HZ / LINE_HZ) as u32;
 
 const FN_LINE_CLOCK_CONNECT: u8 = 0x1;
+
+impl crate::snapshot::Snapshot for LineClock703 {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let LineClock703 { level: _wiring, armed, acc, period_cycles: _session_pacing } = self;
+        w.bool(*armed);
+        w.u32(*acc);
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.armed = r.bool()?;
+        self.acc = r.u32()?;
+        Ok(())
+    }
+}
 
 impl LineClock703 {
     pub fn new(level: u8) -> Self {

@@ -31,8 +31,10 @@ negative control is a build with one device field left out of its save and
 load, which must FAIL.
 """
 
+import contextlib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -248,11 +250,103 @@ def kaypro(workdir, log):
     return emu, elsewhere, 100000
 
 
+ROMS_703 = os.path.join(ROOT, 'roms', '703')
+
+
+@contextlib.contextmanager
+def cwd(path):
+    """Spawn from `path`: the 703 mounts disks/ray703-disc*.img relative to
+    where it runs, and the repo root's are the user's own."""
+    old = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
+def ray703_demo(workdir, log):
+    """The demo printing its banner, stopped with the teletype part way
+    through a character's tenth of a second. Needs make -C test ray703."""
+    with cwd(workdir):
+        emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', os.path.join(ROMS_703, 'demo.bin'), '--no-throttle'], log=log)
+    emu.run()
+    emu.wait_for_output('RAYTHEON')
+    emu.halt()
+
+    def elsewhere():
+        emu.run()
+        emu.wait_for_output('READY')
+        emu.wait_quiet()
+        emu.key('somewhere else\r')
+        emu.wait_for_output('SOMEWHERE ELSE')
+        # every key taken: the host's queue is no machine's state
+        emu.wait_quiet()
+        emu.halt()
+    return emu, elsewhere, 60000
+
+
+def rex(workdir, log):
+    """REX with its three letter tasks running, stopped between ticks: the
+    line clock armed and part way to its next, the scheduler's slices in
+    flight. Needs make -C rex all modules."""
+    build = os.path.join(ROOT, 'rex', 'build')
+    os.makedirs(os.path.join(workdir, 'disks'), exist_ok=True)
+    subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkdisc703.py'),
+                    os.path.join(workdir, 'disks', 'ray703-disc0.img'),
+                    '--add', 'HELLO', os.path.join(build, 'hello.obj'),
+                    '--add', 'BASIC', os.path.join(build, 'basic.obj')], check=True, stdout=log)
+    with cwd(workdir):
+        emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', os.path.join(build, 'rex.bin'), '--no-throttle'], log=log)
+    emu.run()
+    emu.wait_for_output('REX 703 UP')
+    emu.wait_quiet()
+    emu.key('START\r')
+    emu.wait_for_output('START')
+    time.sleep(1)
+    emu.halt()
+
+    def elsewhere():
+        emu.run()
+        emu.key('STOP\r')
+        emu.wait_quiet(timeout=60)
+        emu.halt()
+    return emu, elsewhere, 200000
+
+
+DISC_WRITE_STARTED = 0x005a
+
+
+def ray703_disc(workdir, log):
+    """The disc exerciser against a blank platter, stopped with its first
+    write in flight, the teletype on level 0 and the disc on level 1.
+    Needs make -C test ray703."""
+    os.makedirs(os.path.join(workdir, 'disks'), exist_ok=True)
+    subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkdisc703.py'),
+                    os.path.join(workdir, 'disks', 'ray703-disc0.img')], check=True, stdout=log)
+    with cwd(workdir):
+        emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', os.path.join(ROMS_703, 'disc.bin'), '--no-throttle'], log=log)
+    # just past the DOT 1,4 that starts the write (test/703/disc.lst)
+    emu.add_break(DISC_WRITE_STARTED)
+    emu.run()
+    stop = emu.wait_stopped()
+    if stop.pc != DISC_WRITE_STARTED:
+        raise AssertionError('ray703-disc: stopped at %04x, not past the write' % stop.pc)
+    emu.remove_break(DISC_WRITE_STARTED)
+    emu.step(20)
+
+    def elsewhere():
+        emu.run()
+        emu.wait_for_output('DISC TEST PASS')
+        emu.halt()
+    return emu, elsewhere, 100000
+
+
 MACHINES = {
     'altair680': altair680, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
-    'rc2014-cpm': rc2014_cpm, 'kaypro': kaypro,
+    'rc2014-cpm': rc2014_cpm, 'kaypro': kaypro, 'ray703': ray703_demo, 'rex': rex, 'ray703-disc': ray703_disc,
 }
-DEFAULT = ['altair680', 'rc2014-ctc']
+DEFAULT = ['altair680', 'rc2014-ctc', 'ray703', 'ray703-disc', 'rex']
 
 
 def snap(emu, path):

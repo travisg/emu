@@ -51,8 +51,10 @@ altair680-irq-test:
 
 # Save states: snapshot a machine with a device mid-flight, move it on,
 # restore, and require the same state and output again. SNAPSHOT_MACHINES
-# picks the machines; the default needs nothing fetched.
-snapshot-test:
+# picks the machines; the default needs nothing fetched, only the 703
+# guests and REX's modules built.
+snapshot-test: ray703
+	$(MAKE) -C ../rex build/rex.bin modules >/dev/null
 	./run_snapshot_test.py
 
 # The Z80 exercisers on the Kaypro. Needs the Kaypro ROMs, the stock floppy

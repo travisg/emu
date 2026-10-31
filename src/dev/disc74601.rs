@@ -197,6 +197,71 @@ pub struct Disc74601 {
     rack: Option<DiscRackState>,
 }
 
+/// Each platter whole, as the Kaypro's floppies: a load puts it back in
+/// memory with no file under it, so what the session writes after a
+/// restore never reaches an image a user owns.
+impl crate::snapshot::Snapshot for Disc74601 {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Disc74601 {
+            level: _wiring, connected, units, mem_addr, track, sector, active, fast_io: _session,
+            access_cycles: _session_pacing, word_cycles: _session_pacing_too, rack: _mirror,
+        } = self;
+        w.bool(*connected);
+        for unit in units {
+            w.opt(unit, |w, u| {
+                let DiscUnit { data, file: _host_file, write_inhibit, result } = u;
+                w.bytes(data);
+                w.opt(write_inhibit, |w, t| w.u8(*t));
+                w.u16(*result);
+            });
+        }
+        w.u16(*mem_addr);
+        w.u16(*track);
+        w.u16(*sector);
+        w.opt(active, |w, a| {
+            let Active { unit, op, words, remaining } = a;
+            w.u8(*unit as u8);
+            w.u8(match op {
+                Op::Write => 0,
+                Op::Read => 1,
+                Op::Verify => 2,
+            });
+            w.u16(*words);
+            w.u32(*remaining);
+        });
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.connected = r.bool()?;
+        for unit in 0..DISC_UNITS {
+            self.units[unit] = r.opt(|r| {
+                let data = r.bytes()?.to_vec();
+                if data.len() != IMAGE_BYTES {
+                    return Err(format!("disc unit {unit}: {} bytes, not a platter", data.len()));
+                }
+                Ok(DiscUnit { data, file: None, write_inhibit: r.opt(|r| r.u8())?, result: r.u16()? })
+            })?;
+            if let Some(rack) = &self.rack {
+                rack.set_online(unit, self.units[unit].is_some());
+            }
+        }
+        self.mem_addr = r.u16()?;
+        self.track = r.u16()?;
+        self.sector = r.u16()?;
+        self.active = r.opt(|r| {
+            let unit = r.u8()? as usize;
+            let op = match r.u8()? {
+                0 => Op::Write,
+                1 => Op::Read,
+                2 => Op::Verify,
+                v => return Err(format!("disc: {v} is no operation")),
+            };
+            Ok(Active { unit, op, words: r.u16()?, remaining: r.u32()? })
+        })?;
+        Ok(())
+    }
+}
+
 impl Disc74601 {
     pub fn new(level: u8) -> Self {
         Disc74601 {
@@ -605,6 +670,27 @@ mod tests {
         d.mount_blank(0);
         assert_eq!(d.din(0), 0, "all-zero status is ready (Table 5-29)");
         assert_eq!(d.din(1), ST_NOT_READY, "the other spindles are still absent");
+    }
+
+    /// A loaded platter is the snapshot's, in memory: a write after the
+    /// load lands on it and not in the file the unit was mounted from.
+    #[test]
+    fn a_loaded_platter_never_writes_the_file() {
+        use crate::snapshot::{Reader, Snapshot, Writer};
+        let p = std::env::temp_dir().join(format!("emu-disc-snap-{}.img", std::process::id()));
+        std::fs::write(&p, vec![0u8; IMAGE_BYTES]).unwrap();
+        let (mut d, mut m) = (Disc74601::new(LEVEL), core());
+        assert!(d.load_image(0, &p));
+        let mut w = Writer::new();
+        d.save(&mut w);
+        let saved = w.into_bytes();
+        d.load(&mut Reader::new(&saved)).unwrap();
+        fill(&mut m, 0x100, 10);
+        command(&mut d, FN_WRITE, 0x100, 0, 0, 0, 10);
+        finish(&mut d, &mut m);
+        assert_eq!(d.disc_word(0, 3), 3 ^ 0xa5c3, "the platter took it");
+        assert!(std::fs::read(&p).unwrap().iter().all(|&b| b == 0), "the file did not");
+        std::fs::remove_file(&p).ok();
     }
 
     #[test]

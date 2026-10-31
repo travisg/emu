@@ -976,6 +976,42 @@ impl Cpu for Cpu703 {
         Addressing { endian: Endian::Big, unit_bytes: 2 }
     }
 
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        let Cpu703 { acr, ixr, pcr, exr, neg, eql, ovf, global, levels, inhibit, cycles, panel: _session } = self;
+        for v in [acr, ixr, pcr] {
+            w.u16(*v);
+        }
+        w.u8(*exr);
+        for v in [neg, eql, ovf, global, inhibit] {
+            w.bool(*v);
+        }
+        for l in levels {
+            let Level { enabled, pending, active } = l;
+            for v in [enabled, pending, active] {
+                w.bool(*v);
+            }
+        }
+        w.u32(*cycles);
+        Ok(())
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        for v in [&mut self.acr, &mut self.ixr, &mut self.pcr] {
+            *v = r.u16()?;
+        }
+        self.exr = r.u8()?;
+        for v in [&mut self.neg, &mut self.eql, &mut self.ovf, &mut self.global, &mut self.inhibit] {
+            *v = r.bool()?;
+        }
+        for l in &mut self.levels {
+            for v in [&mut l.enabled, &mut l.pending, &mut l.active] {
+                *v = r.bool()?;
+            }
+        }
+        self.cycles = r.u32()?;
+        Ok(())
+    }
+
     fn disassemble(&self, peek: &dyn Fn(u32) -> Option<u8>, addr: u32) -> Option<super::Disassembly> {
         super::ray703_dis::disassemble(peek, addr)
     }

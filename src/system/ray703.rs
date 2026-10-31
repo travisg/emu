@@ -220,6 +220,26 @@ impl Bus for Ray703 {
     }
 
     /// Every device is on the DIO channel, so all of core is peekable.
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        let Ray703 { core, tty, reader, disc, line_clock } = self;
+        w.section(b"CORE", |w| core.save(w));
+        w.section(b"TTY ", |w| tty.save(w));
+        w.section(b"PTR ", |w| reader.save(w));
+        w.section(b"DISC", |w| disc.save(w));
+        w.section(b"CLK ", |w| line_clock.save(w));
+        Ok(())
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        r.section(b"CORE", |r| self.core.load(r))?;
+        r.section(b"TTY ", |r| self.tty.load(r))?;
+        r.section(b"PTR ", |r| self.reader.load(r))?;
+        r.section(b"DISC", |r| self.disc.load(r))?;
+        r.section(b"CLK ", |r| self.line_clock.load(r))
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         Some(self.core.peek(addr & 0xffff))
     }
