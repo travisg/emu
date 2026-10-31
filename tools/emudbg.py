@@ -501,6 +501,19 @@ class Emu:
     def eject(self, drive):
         self.command('eject %s' % drive)
 
+    def save_disk(self, drive, path):
+        """The disk in a drive to a new file at `path`, never over one."""
+        self.command('savedisk %s %s' % (drive, path))
+
+    def snapshot(self, path):
+        """The whole machine into the file at `path`."""
+        self.command('snapshot %s' % path)
+
+    def restore(self, path):
+        """The machine back from a snapshot; returns the stop it raises."""
+        self.command('restore %s' % path)
+        return self.wait_stopped()
+
     def kill(self):
         self.command('kill')
 

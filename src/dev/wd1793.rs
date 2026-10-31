@@ -463,6 +463,12 @@ impl Wd1793 {
         }
     }
 
+    /// The whole disk in `drive`, as it is now.
+    pub fn disk_contents(&self, drive: usize) -> Result<Vec<u8>, String> {
+        let image = self.images.get(drive).and_then(|i| i.as_ref()).ok_or("the drive is empty")?;
+        image.contents().map_err(|e| format!("{}: {e}", image.path.display()))
+    }
+
     /// The chip, its transfer in flight, and each drive's disk whole.
     pub fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         let Wd1793 {

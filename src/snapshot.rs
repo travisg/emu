@@ -26,15 +26,20 @@
 //! snapshot is a machine in itself. Session settings -- the pacing rate,
 //! `--fast-io`, the windows' mirrors, the console and serial endpoints --
 //! stay as the running session has them: a load leaves those fields alone.
+//! So do keys typed and not yet taken by the guest, which are in the host's
+//! queue rather than the machine: a snapshot taken with keys still queued
+//! is restored without them, and the queue's next key reaches the restored
+//! machine instead.
 //! Each `save` destructures its struct without `..`, binding a field it
 //! does not save to `_` with the reason, so a field added later and not
 //! saved does not compile.
 //!
 //! Disks follow one rule: a restore never writes into a file the user
 //! owns. A floppy or a 703 platter is saved whole and comes back
-//! copy-on-write, its session's writes in memory; the RC2014's card, at
-//! 128 MB, is saved as its path and a hash of its contents, and a restore
-//! refuses a card that no longer hashes the same.
+//! copy-on-write, its session's writes in memory, and the port's `savedisk`
+//! writes one out to a new file; the RC2014's card, at 128 MB, is saved as
+//! its path and a hash of its contents, and a restore refuses a card that
+//! no longer hashes the same.
 
 use crate::bus::Bus;
 use crate::cpu::Cpu;
@@ -219,6 +224,18 @@ pub fn content_hash(mut r: impl std::io::Read) -> std::io::Result<u64> {
             h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
         }
     }
+}
+
+/// `bytes` into a new file at `path`, refusing one that is there: the
+/// file a disk is saved to is never one the user already has.
+pub fn write_new_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// A piece of the machine that saves and loads its own state.

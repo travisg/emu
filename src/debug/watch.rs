@@ -155,6 +155,10 @@ impl Bus for WatchBus<'_> {
         self.inner.change_disk(drive, image)
     }
 
+    fn save_disk(&self, drive: usize, path: &std::path::Path) -> Result<(), String> {
+        self.inner.save_disk(drive, path)
+    }
+
     fn save_state(&self, w: &mut Writer) -> Result<(), String> {
         self.inner.save_state(w)
     }

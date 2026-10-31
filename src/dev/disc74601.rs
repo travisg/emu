@@ -295,6 +295,11 @@ impl Disc74601 {
         self.fast_io = true;
     }
 
+    /// The whole platter on `unit`, as it is now.
+    pub fn platter(&self, unit: usize) -> Option<&[u8]> {
+        self.units.get(unit)?.as_ref().map(|u| &u.data[..])
+    }
+
     /// Turn the platter at 1800 RPM against a machine paced at `pacing_hz`
     /// cycles to the second; see [`crate::bus::Bus::set_device_pacing_hz`].
     /// `--fast-io` still outranks it, in `dot`.

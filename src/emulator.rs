@@ -529,6 +529,7 @@ impl Emulator {
                 DebugReply::Breaks(b)
             }
             DebugOp::Disassemble { addr, count } => self.disassemble(addr, count),
+            DebugOp::SaveDisk { drive, path } => self.bus.save_disk(drive, &path).map_or_else(DebugReply::Err, |_| DebugReply::Ok),
             DebugOp::Snapshot(path) => crate::snapshot::save_machine(&self.system, &*self.cpu, &*self.bus)
                 .and_then(|data| std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display())))
                 .map_or_else(DebugReply::Err, |_| DebugReply::Ok),

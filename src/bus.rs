@@ -223,6 +223,12 @@ pub trait Bus {
         Err("this machine has no removable drive".into())
     }
 
+    /// Write the disk in `drive` out to a new file at `path`: how a disk a
+    /// snapshot put back in memory is kept. Never over an existing file.
+    fn save_disk(&self, _drive: usize, _path: &std::path::Path) -> Result<(), String> {
+        Err("this machine has no disk to save".into())
+    }
+
     /// Memory and every device, into a snapshot; see `crate::snapshot`.
     fn save_state(&self, _w: &mut crate::snapshot::Writer) -> Result<(), String> {
         Err("this machine cannot save its state".into())

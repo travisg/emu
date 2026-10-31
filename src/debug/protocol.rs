@@ -74,7 +74,16 @@ pub fn parse(line: &str) -> Result<Command, String> {
             return Ok(Command::Machine(op(std::path::PathBuf::from(path))));
         }
     }
-    // so does `disk`, after the drive: a path may have spaces in it
+    // as do `disk` and `savedisk`, after the drive
+    if let Some(rest) = line.strip_prefix("savedisk ") {
+        let rest = rest.trim_start();
+        let (drive, path) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let path = path.trim();
+        if path.is_empty() {
+            return Err("savedisk takes a drive and a path".into());
+        }
+        return Ok(Command::Machine(DebugOp::SaveDisk { drive: parse_drive(drive)?, path: path.into() }));
+    }
     if let Some(rest) = line.strip_prefix("disk ").or_else(|| line.strip_prefix("DISK ")) {
         let rest = rest.trim_start();
         let (drive, path) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
@@ -206,6 +215,7 @@ pub fn parse(line: &str) -> Result<Command, String> {
         "key" => Command::Key(Vec::new()),
         "disk" => return Err("disk takes a drive and a path".into()),
         "snapshot" | "restore" => return Err(format!("{verb} takes a path")),
+        "savedisk" => return Err("savedisk takes a drive and a path".into()),
         "eject" => {
             arity(1)?;
             Command::Machine(DebugOp::ChangeDisk { drive: parse_drive(args[0])?, path: None })
@@ -386,6 +396,7 @@ pub const HELP: &[&str] = &[
     "key TEXT               keystrokes to the guest (\\r \\n \\t \\\\ \\xHH)",
     "disk DRIVE PATH        put the image at PATH in drive DRIVE (a letter, or a number)",
     "eject DRIVE            empty the drive",
+    "savedisk DRIVE PATH    the disk in a drive to a new file",
     "snapshot PATH          the whole machine into a file",
     "restore PATH           the machine back from a snapshot, halted",
     "backlog                the last 16 KiB of guest output",
@@ -441,6 +452,7 @@ mod tests {
             ("disk 1 x", Command::Machine(DebugOp::ChangeDisk { drive: 1, path: Some("x".into()) })),
             ("eject a", Command::Machine(DebugOp::ChangeDisk { drive: 0, path: None })),
             ("eject 1", Command::Machine(DebugOp::ChangeDisk { drive: 1, path: None })),
+            ("savedisk a keep.img", Command::Machine(DebugOp::SaveDisk { drive: 0, path: "keep.img".into() })),
             ("snapshot /tmp/a b.snap", Command::Machine(DebugOp::Snapshot("/tmp/a b.snap".into()))),
             ("restore x.snap ", Command::Machine(DebugOp::Restore("x.snap".into()))),
             ("backlog", Command::Backlog),

@@ -220,6 +220,11 @@ impl Bus for Ray703 {
     }
 
     /// Every device is on the DIO channel, so all of core is peekable.
+    fn save_disk(&self, unit: usize, path: &Path) -> Result<(), String> {
+        let platter = self.disc.platter(unit).ok_or_else(|| format!("no platter on disc unit {unit}"))?;
+        crate::snapshot::write_new_file(path, platter)
+    }
+
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         use crate::snapshot::Snapshot;
         let Ray703 { core, tty, reader, disc, line_clock } = self;

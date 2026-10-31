@@ -335,11 +335,35 @@ def ray703_disc(workdir, log):
     emu.remove_break(DISC_WRITE_STARTED)
     emu.step(20)
 
+    platter = os.path.join(workdir, 'disks', 'ray703-disc0.img')
+    written = {}
+
     def elsewhere():
         emu.run()
         emu.wait_for_output('DISC TEST PASS')
         emu.halt()
-    return emu, elsewhere, 100000
+        with open(platter, 'rb') as f:
+            written['file'] = f.read()
+
+    def kept(s1):
+        """The restore put the platter back in memory: what the rerun wrote
+        never reached the file, and savedisk is the way to keep it -- never
+        over a file that is there."""
+        with open(platter, 'rb') as f:
+            if f.read() != written['file']:
+                raise AssertionError('ray703-disc: the restored machine wrote into the image file')
+        out = os.path.join(workdir, 'kept.img')
+        emu.save_disk(0, out)
+        if os.path.getsize(out) != len(written['file']):
+            raise AssertionError('ray703-disc: savedisk wrote %d bytes' % os.path.getsize(out))
+        try:
+            emu.save_disk(0, platter)
+        except DebugError as e:
+            if 'exists' not in str(e):
+                raise
+        else:
+            raise AssertionError('ray703-disc: savedisk wrote over a file that was there')
+    return emu, elsewhere, 100000, kept
 
 
 MACHINES = {
@@ -358,7 +382,8 @@ def snap(emu, path):
 def check(name, setup, workdir, log):
     emu, elsewhere, *rest = setup(workdir, log)
     steps = rest[0] if rest else STEPS
-    refuse = rest[1] if len(rest) > 1 else None
+    # a last check of the machine's own, after the rest: given the S1 path
+    after = rest[1] if len(rest) > 1 else None
     try:
         s1, sm = os.path.join(workdir, name + '-1.snap'), os.path.join(workdir, name + '-m.snap')
         first = snap(emu, s1)
@@ -401,8 +426,8 @@ def check(name, setup, workdir, log):
         except DebugError as e:
             if 'this machine is' not in str(e):
                 raise
-        if refuse:
-            refuse(s1)
+        if after:
+            after(s1)
         log.write(('%s: %d-byte snapshot, %d steps reproduced, %d bytes of output\n'
                    % (name, len(first), steps, len(first_out))).encode())
     finally:

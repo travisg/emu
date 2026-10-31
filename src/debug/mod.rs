@@ -53,6 +53,7 @@
 //! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
 //! | `disk DRIVE PATH` | `ok` | put the image at PATH (the rest of the line) in DRIVE, a letter or a number; `err` with the reason if the machine refuses it, and the drive keeps what it had |
 //! | `eject DRIVE` | `ok` | empty the drive |
+//! | `savedisk DRIVE PATH` | `ok` | the disk in DRIVE (a letter, or a number: the 703's disc unit) to a new file at PATH; never over a file that is there. How a disk a restore put back in memory is kept |
 //! | `snapshot PATH` | `ok` | the whole machine into the file at PATH (the rest of the line); see `crate::snapshot` |
 //! | `restore PATH` | `ok`, then `! stopped reason=restore` | the machine back as the snapshot at PATH has it, halted; breakpoints and watches stay, the history is emptied; `err` with the reason, and the machine as it was, if the snapshot is not of this machine or will not load |
 //! | `backlog` | `ok TEXT` | the last 16 KiB of guest output, escaped |
@@ -127,6 +128,8 @@ pub enum DebugOp {
     AddWatch { addr: u32, len: u32 },
     RemoveWatch(u32),
     Watches,
+    /// The disk in `drive` out to a new file.
+    SaveDisk { drive: usize, path: PathBuf },
     /// The whole machine into a file, and back (`crate::snapshot`).
     Snapshot(PathBuf),
     Restore(PathBuf),

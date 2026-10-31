@@ -80,6 +80,7 @@ Run a system:
 ./target/debug/emu -s 6809 --no-throttle    # flat out instead of at the real 1.8432 MHz
 ./target/debug/emu -s 6809 --throttle 10000 # slow motion, 10 kHz
 ./target/debug/emu -s ray703 -r roms/703/basic.bin --debug /tmp/emu.sock   # a debug port; tools/emudbg.py talks to it
+./target/debug/emu -s kaypro --restore game.snap   # start from a save state the port's `snapshot` took
 ```
 
 Every machine runs at the clock rate its real counterpart ran at — the rate `-h` lists, announced at
@@ -93,6 +94,14 @@ connector, the RC2014's second SIO channel — and `--serial pty` or `--serial t
 host into it: a new pseudo-terminal for `screen` or a Kermit, or a localhost socket for `nc`. The
 RC2014's monitor takes its console from whichever channel sees a space first, so it can be driven
 entirely over the socket.
+
+The debug port is a monitor on the running machine: registers, memory, breakpoints and write
+watchpoints, a disassembler for each CPU in its assembler's syntax, the last thousand instructions'
+addresses, and save states (`snapshot PATH`, `restore PATH`, or `--restore PATH` at startup). A
+restore never writes into a disk image you own: a floppy or a 703 platter comes back in memory,
+copy-on-write, and `savedisk` writes one out to a new file; the RC2014's card is checked against
+the snapshot and a changed card refuses the restore. `tools/emudbg.py` is the client, and reads
+symbols from the assemblers' listings and maps.
 
 The terminal systems run in raw mode and pass Ctrl-C through to the guest. **Ctrl-D exits**; so does
 closing the Kaypro window.

@@ -340,6 +340,13 @@ impl Bus for Kaypro {
         Ok(())
     }
 
+    fn save_disk(&self, drive: usize, path: &Path) -> Result<(), String> {
+        if drive >= DRIVES {
+            return Err(format!("no drive {drive}; the Kaypro II has A and B"));
+        }
+        crate::snapshot::write_new_file(path, &self.fdc.disk_contents(drive)?)
+    }
+
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         use crate::snapshot::Snapshot;
         let Kaypro {
