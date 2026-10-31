@@ -115,6 +115,9 @@ pub struct Wd1793 {
     sector_bytes: [u8; SECTOR_SIZE],
     /// A Write Sector in progress: the data register takes the bytes.
     writing: bool,
+    /// The drive that write goes to, taken when it starts; a disk change
+    /// there drops it.
+    write_drive: Option<usize>,
 
     /// Cycles until DRQ rises for the next byte; 0 when none is due.
     drq_in: u32,
@@ -154,6 +157,7 @@ impl Wd1793 {
             buffer_count: 0,
             sector_bytes: [0; SECTOR_SIZE],
             writing: false,
+            write_drive: None,
             drq_in: 0,
             intrq_in: 0,
             pacing_hz: crate::system::kaypro::CLOCK_HZ,
@@ -255,10 +259,14 @@ impl Wd1793 {
     }
 
     /// Change the disk in `drive`: `image` goes in, or `None` leaves it
-    /// empty. A transfer in flight keeps the sector it already read; the
-    /// next one finds whatever is in the slot now, as with a real disk
-    /// pulled mid-run.
+    /// empty. A read in flight keeps the sector it already read; a write
+    /// in flight to this drive keeps its pace but lands on neither disk,
+    /// and ends with Record Not Found. The next transfer finds whatever is
+    /// in the slot now, as with a real disk pulled mid-run.
     pub fn mount(&mut self, drive: usize, image: Option<DiskImage>) {
+        if self.write_drive == Some(drive) {
+            self.write_drive = None;
+        }
         if let Some(bay) = &self.bay {
             bay.set_mounted(drive, image.as_ref().map(|i| i.path.clone()));
         }
@@ -383,6 +391,7 @@ impl Wd1793 {
         self.sector_index = 0;
         self.buffer_count = count;
         self.writing = writing;
+        self.write_drive = if writing { self.selected } else { None };
         self.drq = false;
         self.drq_in = self.byte_cycles();
     }
@@ -458,14 +467,14 @@ impl Wd1793 {
         self.selected.and_then(|d| self.images[d].as_ref())
     }
 
-    /// Where the current track/sector starts in an image, if the track is
-    /// on the disk. Sectors are numbered from 0 (Kaypro II convention).
+    /// Where the current track/sector starts in an image, if the track and
+    /// sector are on the disk. Sectors are numbered from 0 (Kaypro II
+    /// convention).
     fn sector_offset(&self) -> Option<u64> {
-        let track = self.track as u32;
-        if track >= TRACKS {
+        let (track, sector) = (self.track as u32, self.sector as u32);
+        if track >= TRACKS || sector >= SECTORS_PER_TRACK {
             return None;
         }
-        let sector = self.sector as u32 % SECTORS_PER_TRACK;
         Some((track * SECTORS_PER_TRACK + sector) as u64 * SECTOR_SIZE as u64)
     }
 
@@ -481,11 +490,13 @@ impl Wd1793 {
     }
 
     /// Write the sector buffer through to the image at the current
-    /// track/sector. Err is the status bit that says why not: no such
-    /// sector (no disk, or a track off its end), or the file refused it.
+    /// track/sector of the drive the write started on. Err is the status
+    /// bit that says why not: no such sector (no disk, the disk changed
+    /// under the write, or a track or sector off its end), or the file
+    /// refused it.
     fn write_sector_to_image(&mut self) -> Result<(), u8> {
         let offset = self.sector_offset().ok_or(STATUS_RECORD_NOT_FOUND)?;
-        let image = self.selected.and_then(|d| self.images[d].as_mut()).ok_or(STATUS_RECORD_NOT_FOUND)?;
+        let image = self.write_drive.and_then(|d| self.images[d].as_mut()).ok_or(STATUS_RECORD_NOT_FOUND)?;
         image.write_at(offset, &self.sector_bytes).map_err(|e| match e.kind() {
             std::io::ErrorKind::UnexpectedEof => STATUS_RECORD_NOT_FOUND,
             _ => STATUS_WRITE_FAULT,
@@ -714,6 +725,82 @@ mod tests {
         write_sector(&mut fdc, 0, 0, 0x55);
         assert_ne!(fdc.read(0) & STATUS_RECORD_NOT_FOUND, 0, "no disk");
         std::fs::remove_file(&p).ok();
+    }
+
+    /// A sector number past the track's ten is no sector at all: the
+    /// write ends with Record Not Found and the image is untouched, and a
+    /// read of it is filler.
+    #[test]
+    fn a_sector_off_the_track_is_record_not_found() {
+        let p = image_with_pattern("sector");
+        let before = std::fs::read(&p).unwrap();
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p, false);
+        write_sector(&mut fdc, 0, SECTORS_PER_TRACK as u8 + 10, 0x99);
+        assert_ne!(fdc.read(0) & STATUS_RECORD_NOT_FOUND, 0);
+        assert_eq!(std::fs::read(&p).unwrap(), before);
+        fdc.write(2, SECTORS_PER_TRACK as u8);
+        fdc.write(0, 0x88);
+        fdc.tick(BYTE);
+        assert_eq!(fdc.read(3), 0xe5);
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// Write `byte` into the data register `n` times, a byte time apart.
+    fn write_bytes(fdc: &mut Wd1793, n: usize, byte: u8) {
+        for _ in 0..n {
+            fdc.tick(BYTE);
+            assert!(fdc.data_ready());
+            fdc.write(3, byte);
+        }
+    }
+
+    /// A disk changed in the drive a write is going to loses the write:
+    /// the transfer keeps its pace -- the Kaypro's HALT loop needs every
+    /// DRQ -- and ends with Record Not Found, and neither disk has the
+    /// sector.
+    #[test]
+    fn a_disk_changed_under_a_write_gets_none_of_it() {
+        let a = image_with_pattern("swap-a");
+        let b = image_with_pattern("swap-b");
+        let (a_before, b_before) = (std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &a, false);
+        fdc.write(1, 0);
+        fdc.write(2, 0);
+        fdc.write(0, 0xa8);
+        write_bytes(&mut fdc, SECTOR_SIZE / 2, 0x77);
+        fdc.mount(0, Some(DiskImage::open(b.clone()).unwrap()));
+        write_bytes(&mut fdc, SECTOR_SIZE / 2, 0x77);
+        fdc.tick(2 * BYTE - 1);
+        assert!(!fdc.interrupt_pending());
+        fdc.tick(1);
+        assert!(fdc.interrupt_pending(), "completes on time");
+        assert_ne!(fdc.read(0) & STATUS_RECORD_NOT_FOUND, 0);
+        assert_eq!(std::fs::read(&a).unwrap(), a_before, "the disk taken out");
+        assert_eq!(std::fs::read(&b).unwrap(), b_before, "the disk put in");
+        std::fs::remove_file(&a).ok();
+        std::fs::remove_file(&b).ok();
+    }
+
+    /// A disk changed in the other drive leaves the write alone.
+    #[test]
+    fn a_disk_changed_in_the_other_drive_leaves_a_write_alone() {
+        let a = image_with_pattern("other-a");
+        let b = image_with_pattern("other-b");
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &a, false);
+        fdc.write(1, 0);
+        fdc.write(2, 0);
+        fdc.write(0, 0xa8);
+        write_bytes(&mut fdc, SECTOR_SIZE / 2, 0x77);
+        fdc.mount(1, Some(DiskImage::open(b.clone()).unwrap()));
+        write_bytes(&mut fdc, SECTOR_SIZE / 2, 0x77);
+        fdc.tick(2 * BYTE);
+        assert_eq!(fdc.read(0) & (STATUS_RECORD_NOT_FOUND | STATUS_WRITE_FAULT), 0);
+        assert!(std::fs::read(&a).unwrap()[..SECTOR_SIZE].iter().all(|&x| x == 0x77));
+        std::fs::remove_file(&a).ok();
+        std::fs::remove_file(&b).ok();
     }
 
     /// The pacing rate rescales the byte time: at a tenth of the clock a
