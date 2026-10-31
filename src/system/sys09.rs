@@ -109,6 +109,22 @@ impl Bus for System09 {
     }
 
     /// The banks only: the ACIA's data register gives up its byte when read.
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        let System09 { ram, rom, uart, layout: _fixed_by_the_subsystem } = self;
+        w.section(b"RAM ", |w| ram.save(w));
+        w.section(b"ROM ", |w| rom.save(w));
+        w.section(b"ACIA", |w| uart.save(w));
+        Ok(())
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        r.section(b"RAM ", |r| self.ram.load(r))?;
+        r.section(b"ROM ", |r| self.rom.load(r))?;
+        r.section(b"ACIA", |r| self.uart.load(r))
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         match (addr & 0xffff) as u16 {
             addr @ 0x0000..=0x7fff => Some(self.ram.peek(addr as u32)),

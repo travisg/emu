@@ -74,7 +74,35 @@ def altair680(workdir, log):
     return emu, elsewhere
 
 
-MACHINES = {'altair680': altair680}
+def type_line(emu, line):
+    """A line typed a key at a time, each paced on its echo, as the 6809
+    BASIC harness types: a key the guest reads while busy is lost."""
+    for ch in line:
+        at = len(emu.output)
+        emu.key(ch)
+        emu.wait_for_output(ch if ch != '\r' else '\n', start=at)
+
+
+def system09(workdir, log):
+    """6809 BASIC in a loop that prints, stopped part way through it.
+    Needs roms/6809/BASIC.HEX."""
+    emu = Emu.spawn([EMU_BIN, '-s', '6809', '--no-throttle'], log=log)
+    emu.run()
+    emu.wait_for_output('OK\r\n')
+    type_line(emu, 'FOR I=1 TO 400:PRINT I;:NEXT\r')
+    emu.wait_for_output(' 100 ')
+    emu.halt()
+
+    def elsewhere():
+        emu.run()
+        at = emu.wait_for_output('OK\r\n', start=len(emu.output) - 4).end()
+        type_line(emu, 'PRINT 6*7\r')
+        emu.wait_for_output(' 42 ', start=at)
+        emu.halt()
+    return emu, elsewhere, 50000
+
+
+MACHINES = {'altair680': altair680, '6809': system09}
 DEFAULT = ['altair680']
 
 
@@ -85,12 +113,13 @@ def snap(emu, path):
 
 
 def check(name, setup, workdir, log):
-    emu, elsewhere = setup(workdir, log)
+    emu, elsewhere, *steps = setup(workdir, log)
+    steps = steps[0] if steps else STEPS
     try:
         s1, sm = os.path.join(workdir, name + '-1.snap'), os.path.join(workdir, name + '-m.snap')
         first = snap(emu, s1)
         start = len(emu.output)
-        emu.step(STEPS)
+        emu.step(steps)
         first_m = snap(emu, sm)
         first_out = bytes(emu.output[start:])
 
@@ -108,14 +137,14 @@ def check(name, setup, workdir, log):
             raise AssertionError('%s: the restored machine saves differently (%d bytes against %d, first differing '
                                  'at %s)' % (name, len(again), len(first), at))
         start = len(emu.output)
-        emu.step(STEPS)
+        emu.step(steps)
         again_m = snap(emu, os.path.join(workdir, name + '-mb.snap'))
         again_out = bytes(emu.output[start:])
         if again_out != first_out:
             raise AssertionError('%s: %d steps from the restore printed %r, the first run %r'
-                                 % (name, STEPS, again_out, first_out))
+                                 % (name, steps, again_out, first_out))
         if again_m != first_m:
-            raise AssertionError('%s: %d steps from the restore end in a different state' % (name, STEPS))
+            raise AssertionError('%s: %d steps from the restore end in a different state' % (name, steps))
 
         other = os.path.join(workdir, 'other.snap')
         with open(other, 'wb') as f:
@@ -127,7 +156,7 @@ def check(name, setup, workdir, log):
             if 'this machine is' not in str(e):
                 raise
         log.write(('%s: %d-byte snapshot, %d steps reproduced, %d bytes of output\n'
-                   % (name, len(first), STEPS, len(first_out))).encode())
+                   % (name, len(first), steps, len(first_out))).encode())
     finally:
         emu.kill()
         emu.wait_exit()

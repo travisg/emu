@@ -1524,6 +1524,42 @@ impl Cpu for Cpu6809 {
         super::m6809_dis::disassemble(peek, addr)
     }
 
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        let Cpu6809 { a, b, x, y, u, s, pc, dp, cc, wait, nmi_line, cycles } = self;
+        for v in [a, b, dp, cc] {
+            w.u8(*v);
+        }
+        for v in [x, y, u, s, pc] {
+            w.u16(*v);
+        }
+        w.u8(match wait {
+            Wait::Running => 0,
+            Wait::Cwai => 1,
+            Wait::Sync => 2,
+        });
+        w.bool(*nmi_line);
+        w.u32(*cycles);
+        Ok(())
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        for v in [&mut self.a, &mut self.b, &mut self.dp, &mut self.cc] {
+            *v = r.u8()?;
+        }
+        for v in [&mut self.x, &mut self.y, &mut self.u, &mut self.s, &mut self.pc] {
+            *v = r.u16()?;
+        }
+        self.wait = match r.u8()? {
+            0 => Wait::Running,
+            1 => Wait::Cwai,
+            2 => Wait::Sync,
+            v => return Err(format!("6809: {v} is no wait state")),
+        };
+        self.nmi_line = r.bool()?;
+        self.cycles = r.u32()?;
+        Ok(())
+    }
+
     fn pc(&self) -> u32 {
         self.pc as u32
     }
