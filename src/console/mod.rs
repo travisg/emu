@@ -123,6 +123,23 @@ impl VideoBuffer {
         self.ram.lock().unwrap().len()
     }
 
+    /// The whole of it, for a snapshot.
+    pub fn contents(&self) -> Vec<u8> {
+        self.ram.lock().unwrap().clone()
+    }
+
+    /// All of it back from a snapshot, which must be the size it is, and
+    /// the frame redrawn.
+    pub fn set_contents(&self, bytes: &[u8]) -> Result<(), String> {
+        let mut ram = self.ram.lock().unwrap();
+        if bytes.len() != ram.len() {
+            return Err(format!("video ram: {} bytes where {} were expected", bytes.len(), ram.len()));
+        }
+        ram.copy_from_slice(bytes);
+        self.dirty.store(true, Ordering::Release);
+        Ok(())
+    }
+
     /// CPU-side read through the bus.
     pub fn read(&self, offset: usize) -> u8 {
         let ram = self.ram.lock().unwrap();
@@ -542,7 +559,9 @@ impl DriveBayState {
 /// it is drop it in the slot.
 pub struct DiskImage {
     pub path: PathBuf,
-    file: File,
+    /// None for a disk that only ever lived in memory: one a snapshot put
+    /// back, which is always copy-on-write.
+    file: Option<File>,
     /// The tab over the notch: the drive refuses to write the disk. Set for
     /// a file that can only be opened read-only.
     pub write_protected: bool,
@@ -559,16 +578,16 @@ impl DiskImage {
     /// `Bus::change_disk`, since only the machine knows its geometry.
     pub fn open(path: PathBuf) -> Result<Self, String> {
         let file = match OpenOptions::new().read(true).write(true).open(&path) {
-            Ok(file) => return Ok(DiskImage { path, file, write_protected: false, copy: None }),
+            Ok(file) => return Ok(DiskImage { path, file: Some(file), write_protected: false, copy: None }),
             Err(_) => File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?,
         };
-        Ok(DiskImage { path, file, write_protected: true, copy: None })
+        Ok(DiskImage { path, file: Some(file), write_protected: true, copy: None })
     }
 
     /// Open `path` copy-on-write: see `copy_on_write`.
     pub fn open_copy_on_write(path: PathBuf) -> Result<Self, String> {
         let file = File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut image = DiskImage { path, file, write_protected: false, copy: None };
+        let mut image = DiskImage { path, file: Some(file), write_protected: false, copy: None };
         image.copy_on_write()?;
         Ok(image)
     }
@@ -577,10 +596,12 @@ impl DiskImage {
     /// written stays in the copy and never reaches the file. Lifts any
     /// write-protect: the copy is always writable.
     pub fn copy_on_write(&mut self) -> Result<(), String> {
+        if self.copy.is_some() {
+            return Ok(());
+        }
         let mut bytes = Vec::new();
-        self.file
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| self.file.read_to_end(&mut bytes))
+        self.file()
+            .and_then(|f| f.seek(SeekFrom::Start(0)).and_then(|_| f.read_to_end(&mut bytes)))
             .map_err(|e| format!("{}: {e}", self.path.display()))?;
         self.copy = Some(bytes);
         self.write_protected = false;
@@ -591,11 +612,36 @@ impl DiskImage {
         self.copy.is_some()
     }
 
+    /// A disk a snapshot held, in memory and copy-on-write: what is
+    /// written to it stays in the session, and `path` only names it.
+    pub fn in_memory(path: PathBuf, bytes: Vec<u8>, write_protected: bool) -> Self {
+        DiskImage { path, file: None, write_protected, copy: Some(bytes) }
+    }
+
+    /// The whole disk, as a snapshot embeds it.
+    pub fn contents(&self) -> io::Result<Vec<u8>> {
+        use std::os::unix::fs::FileExt;
+        match (&self.copy, &self.file) {
+            (Some(c), _) => Ok(c.clone()),
+            (None, Some(f)) => {
+                let mut bytes = vec![0; f.metadata()?.len() as usize];
+                f.read_exact_at(&mut bytes, 0)?;
+                Ok(bytes)
+            }
+            (None, None) => Err(io::ErrorKind::NotFound.into()),
+        }
+    }
+
+    /// The file under a disk that is not copy-on-write.
+    fn file(&mut self) -> io::Result<&mut File> {
+        self.file.as_mut().ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+
     /// The disk's size in bytes.
     pub fn size(&self) -> io::Result<u64> {
         match &self.copy {
             Some(c) => Ok(c.len() as u64),
-            None => self.file.metadata().map(|m| m.len()),
+            None => self.file.as_ref().ok_or(io::ErrorKind::NotFound)?.metadata().map(|m| m.len()),
         }
     }
 
@@ -607,7 +653,7 @@ impl DiskImage {
                 buf.copy_from_slice(src);
                 Ok(())
             }
-            None => self.file.seek(SeekFrom::Start(offset)).and_then(|_| self.file.read_exact(buf)),
+            None => self.file().and_then(|f| f.seek(SeekFrom::Start(offset)).and_then(|_| f.read_exact(buf))),
         }
     }
 
@@ -623,10 +669,8 @@ impl DiskImage {
                 Ok(())
             }
             None => self
-                .file
-                .seek(SeekFrom::Start(offset))
-                .and_then(|_| self.file.write_all(buf))
-                .and_then(|_| self.file.flush()),
+                .file()
+                .and_then(|f| f.seek(SeekFrom::Start(offset)).and_then(|_| f.write_all(buf)).and_then(|_| f.flush())),
         }
     }
 }

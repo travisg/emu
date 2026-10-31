@@ -340,6 +340,32 @@ impl Bus for Kaypro {
         Ok(())
     }
 
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        let Kaypro {
+            ram, rom, video, console: _session, serial: _session_too, fdc, sio, stock_floppy: _session_path,
+            control_latch,
+        } = self;
+        w.section(b"RAM ", |w| ram.save(w));
+        w.section(b"ROM ", |w| rom.save(w));
+        w.section(b"VRAM", |w| w.bytes(&video.contents()));
+        w.u8(*control_latch);
+        w.section(b"SIO ", |w| sio.save(w));
+        let mut disks = Ok(());
+        w.section(b"FDC ", |w| disks = fdc.save_state(w));
+        disks
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        r.section(b"RAM ", |r| self.ram.load(r))?;
+        r.section(b"ROM ", |r| self.rom.load(r))?;
+        r.section(b"VRAM", |r| self.video.set_contents(r.bytes()?))?;
+        self.control_latch = r.u8()?;
+        r.section(b"SIO ", |r| self.sio.load(r))?;
+        r.section(b"FDC ", |r| self.fdc.load_state(r))
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
         Some(if self.bank1() && addr < ROM_SIZE as u16 {

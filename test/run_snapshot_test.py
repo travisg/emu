@@ -35,6 +35,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -197,9 +198,59 @@ def rc2014_cpm(workdir, log):
     return emu, elsewhere, 200000, refuse
 
 
+def kaypro_keys(emu, text):
+    """Keys at the Kaypro's keyboard, slowly enough for its 300 baud SIO
+    to take each before the next, so none is left in the host's queue --
+    which no snapshot holds."""
+    for ch in text:
+        emu.key(ch)
+        time.sleep(0.3)
+
+
+# CP/M's BIOS on the stock floppy reads through its own copies of the
+# rom's HALT; INI; JR NZ loop, at 0xff2a and 0xff2f: each stopped on at
+# its JR
+KAYPRO_READ_LOOPS = (0xff2d, 0xff32)
+
+
+def kaypro(workdir, log):
+    """CP/M on a scratch copy of the stock floppy, stopped while TYPE reads
+    a file: the controller part way through a sector, its next DRQ
+    counting down. Its console is the screen, which the snapshot's video
+    ram carries. Needs the roms and the floppy."""
+    os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')
+    os.environ.setdefault('SDL_RENDER_DRIVER', 'software')
+    disk = os.path.join(workdir, 'kaypro.img')
+    shutil.copyfile(os.path.join(ROOT, 'disks', 'mbasic-games.img'), disk)
+    emu = Emu.spawn([EMU_BIN, '-s', 'kaypro', '--disk', disk, '--no-throttle'], log=log)
+    emu.run()
+    time.sleep(3)
+    # the JR NZ of a sector read loop: stopped there, the controller has
+    # handed over a byte and is counting down to the next one's DRQ
+    for pc in KAYPRO_READ_LOOPS:
+        emu.add_break(pc)
+    kaypro_keys(emu, 'TYPE CATCHUM.DAT')
+    emu.key('\r')
+    stop = emu.wait_stopped(timeout=30)
+    if stop.pc not in KAYPRO_READ_LOOPS:
+        raise AssertionError('kaypro: stopped at %04x, not in a read loop' % stop.pc)
+    log.write(b'kaypro: in the read loop at %04x\n' % stop.pc)
+    for pc in KAYPRO_READ_LOOPS:
+        emu.remove_break(pc)
+    emu.step(40)
+
+    def elsewhere():
+        emu.run()
+        time.sleep(1)
+        kaypro_keys(emu, 'TYPE LADDER.DAT\r')
+        time.sleep(1)
+        emu.halt()
+    return emu, elsewhere, 100000
+
+
 MACHINES = {
     'altair680': altair680, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
-    'rc2014-cpm': rc2014_cpm,
+    'rc2014-cpm': rc2014_cpm, 'kaypro': kaypro,
 }
 DEFAULT = ['altair680', 'rc2014-ctc']
 

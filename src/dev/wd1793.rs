@@ -463,6 +463,73 @@ impl Wd1793 {
         }
     }
 
+    /// The chip, its transfer in flight, and each drive's disk whole.
+    pub fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        let Wd1793 {
+            status, track, sector, data, command, intrq, drq, index_pulse, index_counter, selected, motor,
+            sector_index, buffer_count, sector_bytes, writing, write_drive, drq_in, intrq_in, pacing_hz: _session,
+            images, bay: _mirror,
+        } = self;
+        for v in [status, track, sector, data, command] {
+            w.u8(*v);
+        }
+        for v in [intrq, drq, index_pulse, motor, writing] {
+            w.bool(*v);
+        }
+        w.u32(*index_counter);
+        w.opt(selected, |w, d| w.u8(*d as u8));
+        w.u32(*sector_index as u32);
+        w.u32(*buffer_count as u32);
+        w.bytes(sector_bytes);
+        w.opt(write_drive, |w, d| w.u8(*d as u8));
+        w.u32(*drq_in);
+        w.u32(*intrq_in);
+        for image in images {
+            let disk = match image {
+                Some(i) => Some((i, i.contents().map_err(|e| format!("{}: {e}", i.path.display()))?)),
+                None => None,
+            };
+            w.opt(&disk, |w, (i, bytes)| {
+                w.str(&i.path.display().to_string());
+                w.bool(i.write_protected);
+                w.bytes(bytes);
+            });
+        }
+        Ok(())
+    }
+
+    /// Back from a snapshot. Each drive gets the disk the snapshot held,
+    /// in memory and copy-on-write, whatever was in it: a restore never
+    /// writes into a file the user owns.
+    pub fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        for v in [&mut self.status, &mut self.track, &mut self.sector, &mut self.data, &mut self.command] {
+            *v = r.u8()?;
+        }
+        for v in [&mut self.intrq, &mut self.drq, &mut self.index_pulse, &mut self.motor, &mut self.writing] {
+            *v = r.bool()?;
+        }
+        self.index_counter = r.u32()?;
+        self.selected = r.opt(|r| Ok(r.u8()? as usize))?;
+        self.sector_index = r.u32()? as usize;
+        self.buffer_count = r.u32()? as usize;
+        r.bytes_into(&mut self.sector_bytes)?;
+        self.write_drive = r.opt(|r| Ok(r.u8()? as usize))?;
+        self.drq_in = r.u32()?;
+        self.intrq_in = r.u32()?;
+        for drive in 0..DRIVES {
+            let image = r.opt(|r| {
+                let path = std::path::PathBuf::from(r.str()?);
+                let write_protected = r.bool()?;
+                Ok(DiskImage::in_memory(path, r.bytes()?.to_vec(), write_protected))
+            })?;
+            if let Some(bay) = &self.bay {
+                bay.set_mounted(drive, image.as_ref().map(|i| i.path.clone()));
+            }
+            self.images[drive] = image;
+        }
+        Ok(())
+    }
+
     fn selected_image(&self) -> Option<&DiskImage> {
         self.selected.and_then(|d| self.images[d].as_ref())
     }
@@ -724,6 +791,34 @@ mod tests {
         fdc.mount(0, None);
         write_sector(&mut fdc, 0, 0, 0x55);
         assert_ne!(fdc.read(0) & STATUS_RECORD_NOT_FOUND, 0, "no disk");
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A snapshot holds the disk whole, and a load puts it back in memory,
+    /// copy-on-write, over whatever the drive held: a write after the load
+    /// reaches the disk the guest sees and never the file.
+    #[test]
+    fn a_loaded_disk_is_the_snapshots_and_never_writes_the_file() {
+        use crate::snapshot::{Reader, Writer};
+        let p = image_with_pattern("snapshot");
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p, false);
+        let mut w = Writer::new();
+        fdc.save_state(&mut w).unwrap();
+        let saved = w.into_bytes();
+        write_sector(&mut fdc, 1, 1, 0x99);
+        let written = std::fs::read(&p).unwrap();
+
+        fdc.load_state(&mut Reader::new(&saved)).unwrap();
+        fdc.write(1, 1);
+        fdc.write(2, 1);
+        fdc.write(0, 0x88);
+        fdc.tick(BYTE);
+        assert_eq!(fdc.read(3), (SECTORS_PER_TRACK + 1) as u8, "the disk as it was saved");
+        fdc.write(0, 0xd0);
+        write_sector(&mut fdc, 2, 2, 0x44);
+        assert_eq!(fdc.read(0) & (STATUS_RECORD_NOT_FOUND | STATUS_WRITE_FAULT), 0);
+        assert_eq!(std::fs::read(&p).unwrap(), written, "the file is not written");
         std::fs::remove_file(&p).ok();
     }
 
