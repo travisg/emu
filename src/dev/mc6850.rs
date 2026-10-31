@@ -14,7 +14,8 @@
 //! machine wires to its CPU or not (`irq`). A character reaches the receive
 //! data register when the machine polls (`poll`), not when the guest reads
 //! a register, so it can raise IRQ before anyone looks; reading the data
-//! register empties it.
+//! register empties it, and so does master reset, which also holds the
+//! receiver until the guest programs the chip.
 //!
 //! Not modelled: the baud rate (a character arrives as soon as the
 //! register is empty, and transmit is always ready), word formats, framing
@@ -52,10 +53,15 @@ impl Mc6850 {
         Mc6850 { console, rx: None, control: CTRL_MASTER_RESET }
     }
 
+    fn in_master_reset(&self) -> bool {
+        self.control & CTRL_MASTER_RESET == CTRL_MASTER_RESET
+    }
+
     /// Take the next character from the console into an empty receive
-    /// register. The machine calls this between instructions.
+    /// register. The machine calls this between instructions. In master
+    /// reset the receiver is held, and the character waits at the console.
     pub fn poll(&mut self) {
-        if self.rx.is_none() {
+        if self.rx.is_none() && !self.in_master_reset() {
             if let Some(c) = self.console.try_next_char() {
                 let c = if c == 0x0a {
                     0x0d
@@ -73,7 +79,7 @@ impl Mc6850 {
     /// interrupt enabled, or the always-empty transmit register with the
     /// transmit interrupt enabled -- never in master reset.
     pub fn irq(&self) -> bool {
-        if self.control & CTRL_MASTER_RESET == CTRL_MASTER_RESET {
+        if self.in_master_reset() {
             return false;
         }
         (self.control & CTRL_RIE != 0 && self.rx.is_some()) || self.control & CTRL_TC_MASK == CTRL_TIE
@@ -102,7 +108,14 @@ impl MemoryDevice for Mc6850 {
 
     fn write_byte(&mut self, addr: u32, val: u8) {
         match addr {
-            0 => self.control = val,
+            0 => {
+                self.control = val;
+                // master reset empties the receiver (data sheet: RDRF is
+                // cleared by a data read or a master reset)
+                if self.in_master_reset() {
+                    self.rx = None;
+                }
+            }
             1 => self.console.put_char(val & 0x7f),
             _ => {}
         }
@@ -184,19 +197,39 @@ mod tests {
         assert!(!u.irq());
     }
 
-    /// Master reset keeps the chip quiet whatever else the byte says, and
-    /// the part powers up in it.
+    /// The part powers up in master reset, and in it receives nothing: a
+    /// character typed before the guest programs the chip waits for it.
     #[test]
-    fn master_reset_holds_irq_off() {
+    fn master_reset_receives_nothing() {
         let (tx, rx) = mpsc::channel();
         tx.send(b'A').unwrap();
         let mut u = Mc6850::new(ConsoleEndpoint::new(rx, Box::new(Vec::new())));
         u.poll();
-        assert!(!u.irq(), "power-up is master reset");
+        assert_eq!(u.read_byte(0) & STAT_RDRF, 0, "power-up is master reset");
         u.write_byte(0, 0x83); // RIE with master reset
+        u.poll();
         assert!(!u.irq());
+        assert_eq!(u.read_byte(0) & STAT_RDRF, 0);
         u.write_byte(0, 0x81);
+        u.poll();
+        assert!(u.irq(), "out of reset the character comes in");
+        assert_eq!(u.read_byte(1), b'A');
+    }
+
+    /// Master reset empties a full receiver: RDRF and IRQ drop, and stay
+    /// down when the receive interrupt comes back on. The next character
+    /// is still waiting.
+    #[test]
+    fn master_reset_clears_a_waiting_character() {
+        let mut u = uart_with_input(b"AB");
+        u.write_byte(0, 0x95);
         assert!(u.irq());
+        u.write_byte(0, 0x03);
+        assert_eq!(u.read_byte(0) & (STAT_RDRF | STAT_IRQ), 0);
+        u.write_byte(0, 0x95);
+        assert!(!u.irq());
+        u.poll();
+        assert_eq!(u.read_byte(1), b'B');
     }
 
     #[test]
