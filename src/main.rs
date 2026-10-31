@@ -58,10 +58,12 @@ struct Args {
     debug: Option<PathBuf>,
     /// `--halt`: start halted, waiting for RUN from the panel or the port.
     halt: bool,
+    /// `--restore PATH`: start from a snapshot instead of from reset.
+    restore: Option<PathBuf>,
 }
 
 fn usage(argv0: &str) {
-    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io] [--disk image] [--serial pty|tcp:port] [--debug socket] [--halt]");
+    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io] [--disk image] [--serial pty|tcp:port] [--debug socket] [--halt] [--restore snapshot]");
     eprintln!();
     eprintln!("valid systems:");
     for s in registry::SYSTEMS {
@@ -90,6 +92,7 @@ fn usage(argv0: &str) {
     eprintln!("note: --serial pty|tcp:PORT puts the machine's spare serial port (shown above) on a new pseudo-terminal or a localhost TCP listener, for a terminal program, nc or a file transfer.");
     eprintln!("note: --debug PATH listens on a unix socket for a debugger (halt/run/step, registers, memory, breakpoints, the console); tools/emudbg.py talks to it. HLT then halts to the debugger instead of exiting.");
     eprintln!("note: --halt starts the machine halted; needs a front panel or --debug to start it.");
+    eprintln!("note: --restore PATH starts the machine from a snapshot (the debug port's `snapshot`) instead of from reset; it must be of the same -s system.");
 }
 
 /// Mirrors the C++ `getopt_long` handling, including `--cpu` being accepted
@@ -110,6 +113,7 @@ fn parse_args() -> Result<Args, ()> {
         serial: None,
         debug: None,
         halt: false,
+        restore: None,
     };
 
     let mut i = 1;
@@ -238,6 +242,10 @@ fn parse_args() -> Result<Args, ()> {
                     return Err(());
                 }
                 args.halt = true;
+            }
+            "--restore" => {
+                let v = value(&mut i).ok_or(())?;
+                args.restore = Some(PathBuf::from(v));
             }
             _ => {
                 eprintln!("unknown option '{raw}'");
@@ -368,6 +376,7 @@ fn main() -> ExitCode {
     }
     let addressing = machine.cpu.addressing();
     let mut emu = Emulator::new(machine.cpu, machine.bus, Arc::clone(&shutdown));
+    emu.set_system(&args.system);
     emu.set_cycle_limit(args.limit);
     emu.set_throttle(throttle_hz);
     emu.set_panel_state(machine.panel);
@@ -420,6 +429,14 @@ fn main() -> ExitCode {
         }
     }
     emu.reset();
+    // after the reset, which would otherwise undo it
+    if let Some(path) = &args.restore {
+        if let Err(e) = std::fs::read(path).map_err(|e| e.to_string()).and_then(|data| emu.restore(&data)) {
+            eprintln!("--restore {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+        println!("restored {}", path.display());
+    }
     if has_panel {
         // the machine starts halted, as a real one did at power-on
         println!("halted at the front panel; press RUN to start");

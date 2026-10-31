@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+# vim: ts=4:sw=4:expandtab:
+#
+# Copyright (c) 2026 Travis Geiselbrecht
+#
+# Use of this source code is governed by a MIT-style
+# license that can be found in the LICENSE file or at
+# https://opensource.org/licenses/MIT
+"""Save states, over the debug port, on each machine.
+
+Each machine is brought to a moment where a device is holding something --
+the Altair's ACIA with a character in its receive register -- and
+snapshotted there (S1). It is stepped M instructions and snapshotted again
+(S_M), the guest's output in those steps kept. Then the live machine is
+driven somewhere else, with more input, so that everything a load fails to
+put back is now different, and S1 is restored. Two things must hold:
+
+  * a snapshot taken straight after the restore is S1, byte for byte --
+    every saved field is loaded back;
+  * M steps from there make S_M again, byte for byte, and the same output
+    -- nothing that matters to the next M steps was left out of the save.
+
+The second is only worth anything because the device was mid-flight at S1
+and the live machine was moved on before the restore: a field the save
+forgot then carries the later value into the rerun, and the rerun differs.
+A snapshot of another machine must also be refused.
+
+`SNAPSHOT_MACHINES` picks the machines (comma-separated); the default is
+every one whose guest this tree builds itself, which is what CI runs. The
+negative control is a build with one device field left out of its save and
+load, which must FAIL.
+"""
+
+import os
+import sys
+import tempfile
+import traceback
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+sys.path.insert(0, HERE)
+
+from emudbg import DebugError, Emu  # noqa: E402
+import run_altair680_irq_test as altair_irq  # noqa: E402
+
+EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
+LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'snapshot_test.log')
+STEPS = 2000
+
+
+def altair680(workdir, log):
+    """The IRQ harness's program, stopped on its handler's first
+    instruction: the ACIA holds the character and has IRQ up."""
+    rom = os.path.join(workdir, 'altair.bin')
+    with open(rom, 'wb') as f:
+        f.write(altair_irq.monitor_rom())
+    emu = Emu.spawn([EMU_BIN, '-s', 'altair680', '-r', rom, '--no-throttle'], log=log)
+    emu.write(altair_irq.PROGRAM, altair_irq.MAIN)
+    emu.write(altair_irq.HANDLER, altair_irq.HANDLER_CODE)
+    emu.add_break(altair_irq.HANDLER)
+    emu.run()
+    emu.key('S')
+    stop = emu.wait_stopped()
+    if stop.pc != altair_irq.HANDLER:
+        raise AssertionError('altair680: stopped at %04x, not the handler' % stop.pc)
+    emu.remove_break(altair_irq.HANDLER)
+
+    def elsewhere():
+        emu.run()
+        emu.key('ELSEWHERE')
+        emu.wait_for_output('ELSEWHERE', start=len(emu.output) - 1 if emu.output else 0)
+        emu.halt()
+    return emu, elsewhere
+
+
+MACHINES = {'altair680': altair680}
+DEFAULT = ['altair680']
+
+
+def snap(emu, path):
+    emu.command('snapshot %s' % path)
+    with open(path, 'rb') as f:
+        return f.read()
+
+
+def check(name, setup, workdir, log):
+    emu, elsewhere = setup(workdir, log)
+    try:
+        s1, sm = os.path.join(workdir, name + '-1.snap'), os.path.join(workdir, name + '-m.snap')
+        first = snap(emu, s1)
+        start = len(emu.output)
+        emu.step(STEPS)
+        first_m = snap(emu, sm)
+        first_out = bytes(emu.output[start:])
+
+        elsewhere()
+        if snap(emu, os.path.join(workdir, name + '-x.snap')) == first:
+            raise AssertionError('%s: the live machine did not move on' % name)
+
+        emu.command('restore %s' % s1)
+        stop = emu.wait_stopped()
+        if stop.reason != 'restore':
+            raise AssertionError('%s: the restore stopped with %r' % (name, stop))
+        again = snap(emu, os.path.join(workdir, name + '-1b.snap'))
+        if again != first:
+            at = next(i for i, (a, b) in enumerate(zip(first, again)) if a != b) if len(first) == len(again) else None
+            raise AssertionError('%s: the restored machine saves differently (%d bytes against %d, first differing '
+                                 'at %s)' % (name, len(again), len(first), at))
+        start = len(emu.output)
+        emu.step(STEPS)
+        again_m = snap(emu, os.path.join(workdir, name + '-mb.snap'))
+        again_out = bytes(emu.output[start:])
+        if again_out != first_out:
+            raise AssertionError('%s: %d steps from the restore printed %r, the first run %r'
+                                 % (name, STEPS, again_out, first_out))
+        if again_m != first_m:
+            raise AssertionError('%s: %d steps from the restore end in a different state' % (name, STEPS))
+
+        other = os.path.join(workdir, 'other.snap')
+        with open(other, 'wb') as f:
+            f.write(first.replace(name.encode(), b'x' * len(name), 1))
+        try:
+            emu.command('restore %s' % other)
+            raise AssertionError('%s: a snapshot of another machine was taken' % name)
+        except DebugError as e:
+            if 'this machine is' not in str(e):
+                raise
+        log.write(('%s: %d-byte snapshot, %d steps reproduced, %d bytes of output\n'
+                   % (name, len(first), STEPS, len(first_out))).encode())
+    finally:
+        emu.kill()
+        emu.wait_exit()
+
+
+def main():
+    if not os.access(EMU_BIN, os.X_OK):
+        print('error: emulator binary not found at %s' % EMU_BIN, file=sys.stderr)
+        print('build first with: cargo build', file=sys.stderr)
+        return 1
+    names = os.environ.get('SNAPSHOT_MACHINES', ','.join(DEFAULT)).split(',')
+    with tempfile.TemporaryDirectory(prefix='snapshot-') as workdir, open(LOG_FILE, 'wb') as log:
+        try:
+            for name in names:
+                check(name, MACHINES[name], workdir, log)
+        except Exception:
+            log.write(b'\n--- harness failure ---\n')
+            log.write(traceback.format_exc().encode())
+            print('FAIL: snapshot test (see %s)' % LOG_FILE, file=sys.stderr)
+            return 1
+    print('PASS: snapshot test (%s; %s)' % (', '.join(names), EMU_BIN))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

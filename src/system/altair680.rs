@@ -93,6 +93,24 @@ impl Bus for Altair680 {
     }
 
     /// The banks only: the ACIA's data register gives up its byte when read.
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        let Altair680 { ram, rom_monitor, rom_vtl, uart } = self;
+        w.section(b"RAM ", |w| ram.save(w));
+        w.section(b"MON ", |w| rom_monitor.save(w));
+        w.section(b"VTL ", |w| rom_vtl.save(w));
+        w.section(b"ACIA", |w| uart.save(w));
+        Ok(())
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        r.section(b"RAM ", |r| self.ram.load(r))?;
+        r.section(b"MON ", |r| self.rom_monitor.load(r))?;
+        r.section(b"VTL ", |r| self.rom_vtl.load(r))?;
+        r.section(b"ACIA", |r| self.uart.load(r))
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
         match addr {

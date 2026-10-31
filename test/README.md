@@ -39,6 +39,7 @@ need no pty and no `script(1)`.
     make -C test ray703-disc-test    # the 74601 disc, over two interrupt levels
     make -C test ray703-boot-test    # the disc controller's LOAD button
     make -C test ray703-dis-test     # the disassembler, against the 1968 listings
+    make -C test snapshot-test       # save states, restored mid-flight
 
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0

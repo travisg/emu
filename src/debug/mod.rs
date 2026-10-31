@@ -53,12 +53,14 @@
 //! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
 //! | `disk DRIVE PATH` | `ok` | put the image at PATH (the rest of the line) in DRIVE, a letter or a number; `err` with the reason if the machine refuses it, and the drive keeps what it had |
 //! | `eject DRIVE` | `ok` | empty the drive |
+//! | `snapshot PATH` | `ok` | the whole machine into the file at PATH (the rest of the line); see `crate::snapshot` |
+//! | `restore PATH` | `ok`, then `! stopped reason=restore` | the machine back as the snapshot at PATH has it, halted; breakpoints and watches stay, the history is emptied; `err` with the reason, and the machine as it was, if the snapshot is not of this machine or will not load |
 //! | `backlog` | `ok TEXT` | the last 16 KiB of guest output, escaped |
 //! | `help` | `# ...` lines, then `ok` | |
 //! | `quit` | `ok`, then the connection closes | the machine runs on |
 //! | `kill` | `ok` | shuts the emulator down; `! exit` follows |
 //!
-//! Events: `! stopped reason=(request|step|break|hlt|badop|reset|watch)
+//! Events: `! stopped reason=(request|step|break|hlt|badop|reset|restore|watch)
 //! pc=HEX [by=HEX addr=HEX val=HEX] [insn=TEXT]` whenever the machine goes
 //! from moving to halted -- `by`, `addr` and `val` for a watch: the PC the
 //! step that wrote began at, the first watched byte it wrote and what it
@@ -125,6 +127,9 @@ pub enum DebugOp {
     AddWatch { addr: u32, len: u32 },
     RemoveWatch(u32),
     Watches,
+    /// The whole machine into a file, and back (`crate::snapshot`).
+    Snapshot(PathBuf),
+    Restore(PathBuf),
     /// The image at `path` into `drive`, or `None` to empty it -- the
     /// window's drive door, from the port. The run loop opens the file
     /// and the machine judges it.
@@ -154,6 +159,8 @@ pub enum StopReason {
     Watch,
     /// RESET, which leaves the machine halted.
     Reset,
+    /// A snapshot loaded, which leaves the machine halted.
+    Restore,
 }
 
 impl StopReason {
@@ -166,6 +173,7 @@ impl StopReason {
             StopReason::BadOpcode => "badop",
             StopReason::Watch => "watch",
             StopReason::Reset => "reset",
+            StopReason::Restore => "restore",
         }
     }
 }

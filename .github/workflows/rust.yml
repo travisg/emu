@@ -65,3 +65,7 @@ jobs:
     # a round trip of every word through asm703.py, over the debug port.
     - name: 703 disassembler test
       run: make -C test ray703-dis-test
+
+    # Save states, on the machines whose guests the harness writes itself.
+    - name: Snapshot test
+      run: make -C test snapshot-test

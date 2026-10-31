@@ -1154,6 +1154,33 @@ impl Cpu for Cpu6800 {
         super::m6800_dis::disassemble(peek, addr)
     }
 
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        let Cpu6800 { a, b, ix, pc, sp, cc, waiting, nmi_line, cycles } = self;
+        w.u8(*a);
+        w.u8(*b);
+        w.u16(*ix);
+        w.u16(*pc);
+        w.u16(*sp);
+        w.u8(*cc);
+        w.bool(*waiting);
+        w.bool(*nmi_line);
+        w.u32(*cycles);
+        Ok(())
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.a = r.u8()?;
+        self.b = r.u8()?;
+        self.ix = r.u16()?;
+        self.pc = r.u16()?;
+        self.sp = r.u16()?;
+        self.cc = r.u8()?;
+        self.waiting = r.bool()?;
+        self.nmi_line = r.bool()?;
+        self.cycles = r.u32()?;
+        Ok(())
+    }
+
     fn pc(&self) -> u32 {
         self.pc as u32
     }

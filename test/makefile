@@ -9,7 +9,7 @@ LINKFLAGS := -ni
 # C++ tree; objcopy does the same job for a contiguous image.
 OBJCOPY   := objcopy
 
-.PHONY: all clean altair680-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test
+.PHONY: all clean altair680-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test snapshot-test
 
 # The 6809 sources, all built in place under 6809/. memtest is the only one
 # meant to run; the other two exist to be assembled. README.md says which is
@@ -48,6 +48,12 @@ basic6809-test:
 # fetched.
 altair680-irq-test:
 	./run_altair680_irq_test.py
+
+# Save states: snapshot a machine with a device mid-flight, move it on,
+# restore, and require the same state and output again. SNAPSHOT_MACHINES
+# picks the machines; the default needs nothing fetched.
+snapshot-test:
+	./run_snapshot_test.py
 
 # The Z80 exercisers on the Kaypro. Needs the Kaypro ROMs, the stock floppy
 # and disks/cpm/zex*.com (all from tools/fetch-roms.py), cpmtools, and the

@@ -185,6 +185,8 @@ pub struct Emulator {
     history_count: u64,
     /// Why the machine is halted, for `status`; None while running.
     stop_reason: Option<StopReason>,
+    /// The machine's full name, as `-s` gave it: what a snapshot is of.
+    system: String,
 }
 
 /// Whether the machine is executing instructions or sitting halted at the
@@ -221,6 +223,7 @@ impl Emulator {
             history: Box::new([0; HISTORY_LEN]),
             history_count: 0,
             stop_reason: None,
+            system: String::new(),
         }
     }
 
@@ -241,6 +244,25 @@ impl Emulator {
     pub fn set_halted(&mut self, halted: bool) {
         let state = if halted { RunState::Halted } else { RunState::Running };
         self.set_run_state(state);
+    }
+
+    /// Name the machine, as `-s` did, for its snapshots.
+    pub fn set_system(&mut self, system: &str) {
+        self.system = system.to_string();
+    }
+
+    /// Load a snapshot into the machine, all or nothing: on an error the
+    /// machine is put back as it was. The history goes, being of a run
+    /// that is no longer this machine's past.
+    pub fn restore(&mut self, data: &[u8]) -> Result<(), String> {
+        let before = crate::snapshot::save_machine(&self.system, &*self.cpu, &*self.bus)?;
+        if let Err(e) = crate::snapshot::load_machine(data, &self.system, &mut *self.cpu, &mut *self.bus) {
+            crate::snapshot::load_machine(&before, &self.system, &mut *self.cpu, &mut *self.bus)
+                .expect("the machine loads the state it just saved");
+            return Err(e);
+        }
+        self.history_count = 0;
+        Ok(())
     }
 
     pub fn set_debug_sink(&mut self, sink: Option<DebugSink>) {
@@ -507,6 +529,19 @@ impl Emulator {
                 DebugReply::Breaks(b)
             }
             DebugOp::Disassemble { addr, count } => self.disassemble(addr, count),
+            DebugOp::Snapshot(path) => crate::snapshot::save_machine(&self.system, &*self.cpu, &*self.bus)
+                .and_then(|data| std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display())))
+                .map_or_else(DebugReply::Err, |_| DebugReply::Ok),
+            DebugOp::Restore(path) => match std::fs::read(&path)
+                .map_err(|e| format!("{}: {e}", path.display()))
+                .and_then(|data| self.restore(&data))
+            {
+                Ok(()) => {
+                    self.stop(StopReason::Restore);
+                    DebugReply::Ok
+                }
+                Err(e) => DebugReply::Err(e),
+            },
             DebugOp::History(n) => self.history(n),
             DebugOp::AddWatch { len: 0, .. } => DebugReply::Err("a watch is at least a byte long".into()),
             DebugOp::AddWatch { addr, len } => {

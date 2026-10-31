@@ -222,6 +222,16 @@ pub trait Bus {
     fn change_disk(&mut self, _drive: usize, _image: Option<crate::console::DiskImage>) -> Result<(), String> {
         Err("this machine has no removable drive".into())
     }
+
+    /// Memory and every device, into a snapshot; see `crate::snapshot`.
+    fn save_state(&self, _w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        Err("this machine cannot save its state".into())
+    }
+
+    /// Back from a snapshot `save_state` wrote.
+    fn load_state(&mut self, _r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        Err("this machine cannot load a state".into())
+    }
 }
 
 #[cfg(test)]

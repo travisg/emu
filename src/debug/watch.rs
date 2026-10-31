@@ -22,6 +22,7 @@
 
 use crate::bus::{Bus, Endian, IntStatus};
 use crate::console::DiskImage;
+use crate::snapshot::{Reader, Writer};
 
 /// A watched range of bus bytes, `len` from `addr`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -153,6 +154,14 @@ impl Bus for WatchBus<'_> {
     fn change_disk(&mut self, drive: usize, image: Option<DiskImage>) -> Result<(), String> {
         self.inner.change_disk(drive, image)
     }
+
+    fn save_state(&self, w: &mut Writer) -> Result<(), String> {
+        self.inner.save_state(w)
+    }
+
+    fn load_state(&mut self, r: &mut Reader) -> Result<(), String> {
+        self.inner.load_state(r)
+    }
 }
 
 #[cfg(test)]
@@ -236,6 +245,14 @@ mod tests {
             self.marks.push("change_disk");
             Ok(())
         }
+        fn save_state(&self, w: &mut Writer) -> Result<(), String> {
+            w.u8(0x5a);
+            Ok(())
+        }
+        fn load_state(&mut self, _r: &mut Reader) -> Result<(), String> {
+            self.marks.push("load_state");
+            Ok(())
+        }
     }
 
     #[test]
@@ -261,13 +278,17 @@ mod tests {
         assert_eq!(w.poll_interrupt_lines(1), 0x8000);
         w.set_device_pacing_hz(1);
         w.change_disk(0, None).unwrap();
+        let mut saved = Writer::new();
+        w.save_state(&mut saved).unwrap();
+        assert_eq!(saved.into_bytes(), [0x5a]);
+        w.load_state(&mut Reader::new(&[])).unwrap();
         assert_eq!(w.hit, None);
         assert_eq!(
             inner.marks,
             [
                 "read8", "write8", "poke8", "io_read8", "io_write8", "io_read16", "io_write16", "read16", "write16",
                 "read32", "write32", "poll_interrupts", "interrupt_acknowledge", "interrupt_return",
-                "poll_interrupt_lines", "set_device_pacing_hz", "change_disk",
+                "poll_interrupt_lines", "set_device_pacing_hz", "change_disk", "load_state",
             ]
         );
     }

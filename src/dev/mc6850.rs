@@ -97,6 +97,20 @@ impl Mc6850 {
     }
 }
 
+impl crate::snapshot::Snapshot for Mc6850 {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Mc6850 { console: _session, rx, control } = self;
+        w.opt(rx, |w, c| w.u8(*c));
+        w.u8(*control);
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.rx = r.opt(|r| r.u8())?;
+        self.control = r.u8()?;
+        Ok(())
+    }
+}
+
 impl MemoryDevice for Mc6850 {
     fn read_byte(&mut self, addr: u32) -> u8 {
         match addr {

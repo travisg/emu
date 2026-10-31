@@ -57,6 +57,18 @@ impl Memory {
     }
 }
 
+/// The bank whole; a load must find it the size it was saved at.
+impl crate::snapshot::Snapshot for Memory {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Memory { mem } = self;
+        w.bytes(mem);
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        r.bytes_into(&mut self.mem)
+    }
+}
+
 impl MemoryDevice for Memory {
     fn read_byte(&mut self, addr: u32) -> u8 {
         let i = self.index(addr);

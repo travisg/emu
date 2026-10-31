@@ -146,6 +146,16 @@ pub trait Cpu {
         None
     }
 
+    /// The core's whole state, into a snapshot; see `crate::snapshot`.
+    fn save_state(&self, _w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        Err("this core cannot save its state".into())
+    }
+
+    /// Back from a snapshot `save_state` wrote.
+    fn load_state(&mut self, _r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        Err("this core cannot load a state".into())
+    }
+
     /// Human-readable register dump, for debugging.
     fn dump(&self);
 
