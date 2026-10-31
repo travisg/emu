@@ -1794,6 +1794,48 @@ impl Cpu for CpuZ80 {
         super::z80_dis::disassemble(peek, addr)
     }
 
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        let CpuZ80 {
+            a, f, b, c, d, e, h, l,
+            a_alt, f_alt, b_alt, c_alt, d_alt, e_alt, h_alt, l_alt,
+            pc, sp, ix, iy, im, iff1, iff2, ei_shadow, halted, nmi_line, i, r,
+            prefix_dd, prefix_fd, wz, q, flags_written, cycles,
+        } = self;
+        for v in [a, f, b, c, d, e, h, l, a_alt, f_alt, b_alt, c_alt, d_alt, e_alt, h_alt, l_alt, im, i, r, q] {
+            w.u8(*v);
+        }
+        for v in [pc, sp, ix, iy, wz] {
+            w.u16(*v);
+        }
+        for v in [iff1, iff2, ei_shadow, halted, nmi_line, prefix_dd, prefix_fd, flags_written] {
+            w.bool(*v);
+        }
+        w.u32(*cycles);
+        Ok(())
+    }
+
+    fn load_state(&mut self, rd: &mut crate::snapshot::Reader) -> Result<(), String> {
+        let s = self;
+        for v in [
+            &mut s.a, &mut s.f, &mut s.b, &mut s.c, &mut s.d, &mut s.e, &mut s.h, &mut s.l,
+            &mut s.a_alt, &mut s.f_alt, &mut s.b_alt, &mut s.c_alt, &mut s.d_alt, &mut s.e_alt, &mut s.h_alt,
+            &mut s.l_alt, &mut s.im, &mut s.i, &mut s.r, &mut s.q,
+        ] {
+            *v = rd.u8()?;
+        }
+        for v in [&mut s.pc, &mut s.sp, &mut s.ix, &mut s.iy, &mut s.wz] {
+            *v = rd.u16()?;
+        }
+        for v in [
+            &mut s.iff1, &mut s.iff2, &mut s.ei_shadow, &mut s.halted, &mut s.nmi_line, &mut s.prefix_dd,
+            &mut s.prefix_fd, &mut s.flags_written,
+        ] {
+            *v = rd.bool()?;
+        }
+        s.cycles = rd.u32()?;
+        Ok(())
+    }
+
     /// The trace line's registers first, then the alternate set and the
     /// interrupt state the trace leaves out.
     fn registers(&self) -> Vec<Register> {

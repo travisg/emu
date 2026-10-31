@@ -32,6 +32,7 @@ load, which must FAIL.
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import traceback
@@ -43,6 +44,7 @@ sys.path.insert(0, HERE)
 
 from emudbg import DebugError, Emu  # noqa: E402
 import run_altair680_irq_test as altair_irq  # noqa: E402
+import run_rc2014_ctc_test as rc2014_ctc  # noqa: E402
 
 EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'snapshot_test.log')
@@ -102,8 +104,104 @@ def system09(workdir, log):
     return emu, elsewhere, 50000
 
 
-MACHINES = {'altair680': altair680, '6809': system09}
-DEFAULT = ['altair680']
+def rc2014_ctc_case(workdir, log):
+    """The CTC harness's program, a timer under IM 2 waking a HALT, stopped
+    between ticks: the channel is part way through its countdown."""
+    rom = os.path.join(workdir, 'zeros.bin')
+    with open(rom, 'wb') as f:
+        f.write(bytes(64 * 1024))
+    emu = Emu.spawn([EMU_BIN, '-s', 'rc2014', '-r', rom, '--no-throttle'], log=log)
+    emu.write(rc2014_ctc.PROGRAM, rc2014_ctc.MAIN)
+    emu.write(rc2014_ctc.HANDLER, rc2014_ctc.HANDLER_CODE)
+    emu.write(rc2014_ctc.TABLE + 0x10, rc2014_ctc.ENTRY)
+    emu.write(rc2014_ctc.COUNTER, b'\x00')
+    emu.set_reg('PC', rc2014_ctc.PROGRAM)
+    emu.step(rc2014_ctc.PERIOD // 4 * 2 + 5000)
+
+    def elsewhere():
+        emu.step(rc2014_ctc.PERIOD // 4 * 3 + 777)
+    return emu, elsewhere, rc2014_ctc.PERIOD // 4 * 2 + 1000
+
+
+RC2014_ROM = os.path.join(ROOT, 'roms', 'rc2014', '24886009.BIN')
+
+
+def rc2014_basic(workdir, log):
+    """The factory rom's BASIC printing a string, stopped with the SIO part
+    way through sending it. Needs the rom."""
+    emu = Emu.spawn([EMU_BIN, '-s', 'rc2014', '-r', RC2014_ROM, '--no-throttle'], log=log)
+    emu.run()
+    emu.wait_for_output('Memory top?')
+    emu.key('\r')
+    at = emu.wait_for_output('Ok\r\n').end()
+    type_line(emu, 'PRINT "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"\r')
+    emu.wait_for_output('\nABCDEFGH', start=at)
+    emu.halt()
+
+    def elsewhere():
+        emu.run()
+        at = emu.wait_for_output('Ok\r\n', start=len(emu.output) - 4).end()
+        type_line(emu, 'PRINT 7*6\r')
+        emu.wait_for_output(' 42', start=at)
+        emu.halt()
+    # short enough to end with the output still going: a run that reaches
+    # BASIC's idle loop looks the same whatever its timing on the way
+    return emu, elsewhere, 1500
+
+
+def rc2014_cpm(workdir, log):
+    """CP/M off a scratch copy of the card, stopped part way through a DIR:
+    the card between sectors and the SIO sending. Needs the rom and the
+    card. Then the card is written, and a restore must refuse it."""
+    card = os.path.join(workdir, 'card.img')
+    shutil.copyfile(os.path.join(ROOT, 'disks', 'rc2014-cf.img'), card)
+    emu = Emu.spawn([EMU_BIN, '-s', 'rc2014-cpm', '-r', RC2014_ROM, '--disk', card, '--no-throttle'], log=log)
+    emu.run()
+    at = emu.wait_for_output('activate console').end()
+    emu.key(' ')
+    at = emu.wait_for_output('\r\n>', start=at).end()
+    emu.key('X')
+    at = emu.wait_for_output('Boot CP/M?', start=at).end()
+    emu.key('Y')
+    at = emu.wait_for_output('\r\nA>', start=at).end()
+    emu.key('DIR\r')
+    emu.wait_for_output('A: ', start=at)
+    emu.halt()
+
+    def elsewhere():
+        emu.run()
+        at = emu.wait_for_output('\r\nA>', start=len(emu.output) - 4).end()
+        emu.key('C:\r')
+        at = emu.wait_for_output('\r\nC>', start=at).end()
+        emu.key('DIR\r')
+        emu.wait_for_output('\r\nC>', start=at)
+        emu.halt()
+
+    def refuse(s1):
+        emu.run()
+        at = len(emu.output)
+        emu.key('A:\r')
+        at = emu.wait_for_output('\r\nA>', start=at).end()
+        emu.key('SAVE 1 SNAP.TXT\r')
+        at = emu.wait_for_output('\r\nA>', start=at).end()
+        emu.key('DIR\r')
+        emu.wait_for_output('SNAP', start=at)
+        emu.halt()
+        try:
+            emu.command('restore %s' % s1)
+        except DebugError as e:
+            if 'has changed' not in str(e):
+                raise
+            return
+        raise AssertionError('rc2014-cpm: a snapshot was restored over a card written since')
+    return emu, elsewhere, 200000, refuse
+
+
+MACHINES = {
+    'altair680': altair680, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
+    'rc2014-cpm': rc2014_cpm,
+}
+DEFAULT = ['altair680', 'rc2014-ctc']
 
 
 def snap(emu, path):
@@ -113,8 +211,9 @@ def snap(emu, path):
 
 
 def check(name, setup, workdir, log):
-    emu, elsewhere, *steps = setup(workdir, log)
-    steps = steps[0] if steps else STEPS
+    emu, elsewhere, *rest = setup(workdir, log)
+    steps = rest[0] if rest else STEPS
+    refuse = rest[1] if len(rest) > 1 else None
     try:
         s1, sm = os.path.join(workdir, name + '-1.snap'), os.path.join(workdir, name + '-m.snap')
         first = snap(emu, s1)
@@ -146,15 +245,19 @@ def check(name, setup, workdir, log):
         if again_m != first_m:
             raise AssertionError('%s: %d steps from the restore end in a different state' % (name, steps))
 
+        # the header: magic, version, then the system's name, length first
+        n = int.from_bytes(first[12:16], 'little')
         other = os.path.join(workdir, 'other.snap')
         with open(other, 'wb') as f:
-            f.write(first.replace(name.encode(), b'x' * len(name), 1))
+            f.write(first[:16] + b'x' * n + first[16 + n:])
         try:
             emu.command('restore %s' % other)
             raise AssertionError('%s: a snapshot of another machine was taken' % name)
         except DebugError as e:
             if 'this machine is' not in str(e):
                 raise
+        if refuse:
+            refuse(s1)
         log.write(('%s: %d-byte snapshot, %d steps reproduced, %d bytes of output\n'
                    % (name, len(first), steps, len(first_out))).encode())
     finally:

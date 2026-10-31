@@ -112,6 +112,43 @@ impl Channel {
     }
 }
 
+impl crate::snapshot::Snapshot for Z80Ctc {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Z80Ctc { chan, vector, ius } = self;
+        for c in chan {
+            let Channel { control, constant, count, prescale, running, expect_constant, int_pending } = c;
+            w.u8(*control);
+            w.u8(*constant);
+            w.u16(*count);
+            w.u32(*prescale);
+            w.bool(*running);
+            w.bool(*expect_constant);
+            w.bool(*int_pending);
+        }
+        w.u8(*vector);
+        for v in ius {
+            w.bool(*v);
+        }
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        for c in &mut self.chan {
+            c.control = r.u8()?;
+            c.constant = r.u8()?;
+            c.count = r.u16()?;
+            c.prescale = r.u32()?;
+            c.running = r.bool()?;
+            c.expect_constant = r.bool()?;
+            c.int_pending = r.bool()?;
+        }
+        self.vector = r.u8()?;
+        for v in &mut self.ius {
+            *v = r.bool()?;
+        }
+        Ok(())
+    }
+}
+
 pub struct Z80Ctc {
     chan: [Channel; CHANNELS],
     vector: u8,

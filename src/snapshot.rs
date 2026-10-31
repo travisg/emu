@@ -204,6 +204,23 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// A disk too big to embed is saved as a hash of its contents: 64-bit
+/// FNV-1a, which tells a changed card from the same one and is all a
+/// restore needs to know.
+pub fn content_hash(mut r: impl std::io::Read) -> std::io::Result<u64> {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = r.read(&mut buf)?;
+        if n == 0 {
+            return Ok(h);
+        }
+        for &b in &buf[..n] {
+            h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+}
+
 /// A piece of the machine that saves and loads its own state.
 pub trait Snapshot {
     fn save(&self, w: &mut Writer);

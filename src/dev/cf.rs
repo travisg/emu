@@ -54,6 +54,8 @@ const FEATURE_8BIT: u8 = 0x01;
 
 pub struct CompactFlash {
     image: Option<File>,
+    /// Where the card came from, which a snapshot names it by.
+    path: Option<std::path::PathBuf>,
     /// Sectors in the image.
     sectors: u64,
     error: u8,
@@ -83,6 +85,7 @@ impl CompactFlash {
     pub fn new() -> Self {
         CompactFlash {
             image: None,
+            path: None,
             sectors: 0,
             error: 0,
             count: 0,
@@ -106,14 +109,79 @@ impl CompactFlash {
                 self.sectors = len / SECTOR_SIZE as u64;
                 println!("CF: mounted '{}', {} sectors", path.display(), self.sectors);
                 self.image = Some(f);
+                self.path = Some(path.to_path_buf());
                 true
             }
             Err(e) => {
                 println!("CF: no card: '{}': {e}", path.display());
                 self.image = None;
+                self.path = None;
                 false
             }
         }
+    }
+
+    /// The card in the slot, by path and a hash of its contents.
+    fn card(&self) -> Result<Option<(String, u64)>, String> {
+        let (Some(image), Some(path)) = (&self.image, &self.path) else { return Ok(None) };
+        let mut f = image.try_clone().map_err(|e| e.to_string())?;
+        f.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        let hash = crate::snapshot::content_hash(f).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(Some((path.display().to_string(), hash)))
+    }
+
+    /// The card's registers and transfer, and which card it is: by path
+    /// and hash, the card being too big to embed.
+    pub fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        let CompactFlash {
+            image: _host_file, path: _named_by_card, sectors, error, count, lba, status, eight_bit, buffer, index,
+            remaining, writing, current,
+        } = self;
+        let card = self.card()?;
+        w.opt(&card, |w, (path, hash)| {
+            w.str(path);
+            w.u64(*hash);
+        });
+        w.u64(*sectors);
+        w.u8(*error);
+        w.u8(*count);
+        w.bytes(lba);
+        w.u8(*status);
+        w.bool(*eight_bit);
+        w.bytes(buffer);
+        w.u32(*index as u32);
+        w.u32(*remaining);
+        w.bool(*writing);
+        w.u64(*current);
+        Ok(())
+    }
+
+    /// Refuses, changing nothing, unless the card in the slot is the one
+    /// the snapshot was taken with, as it was then: what CP/M has cached
+    /// of a disk that has since changed would not be true of it.
+    pub fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        let saved = r.opt(|r| Ok((r.str()?, r.u64()?)))?;
+        match (saved, self.card()?) {
+            (None, None) => {}
+            (Some((_, hash)), Some((_, now))) if hash == now => {}
+            (Some((path, _)), Some(_)) => {
+                return Err(format!("the card {path} has changed since the snapshot was taken"));
+            }
+            (Some((path, _)), None) => return Err(format!("no card in the slot; the snapshot had {path}")),
+            (None, Some((path, _))) => return Err(format!("the snapshot had no card, and {path} is in the slot")),
+        }
+        self.sectors = r.u64()?;
+        self.error = r.u8()?;
+        self.count = r.u8()?;
+        r.bytes_into(&mut self.lba)?;
+        self.status = r.u8()?;
+        self.eight_bit = r.bool()?;
+        r.bytes_into(&mut self.buffer)?;
+        self.index = r.u32()? as usize;
+        self.remaining = r.u32()?;
+        self.writing = r.bool()?;
+        self.current = r.u64()?;
+        Ok(())
     }
 
     pub fn is_mounted(&self) -> bool {
@@ -321,6 +389,35 @@ mod tests {
         cf.write(7, 0x20);
         assert_ne!(cf.read(7) & STATUS_DRQ, 0);
         (0..SECTOR_SIZE).map(|_| cf.read(0)).collect()
+    }
+
+    /// A snapshot names its card by a hash of the contents: the same card
+    /// loads, mid-transfer state and all, and one written to since does
+    /// not, leaving the controller as it was.
+    #[test]
+    fn a_snapshot_loads_only_over_the_card_it_was_taken_with() {
+        use crate::snapshot::{Reader, Writer};
+        let p = image("snap", 4);
+        let mut cf = CompactFlash::new();
+        cf.mount(&p);
+        cf.write(1, FEATURE_8BIT);
+        cf.write(7, 0xef);
+        cf.write(3, 2);
+        cf.write(2, 1);
+        cf.write(7, 0x20);
+        let mut w = Writer::new();
+        cf.save_state(&mut w).unwrap();
+        let saved = w.into_bytes();
+        assert_eq!(cf.read(0), 2, "a read under way");
+        cf.load_state(&mut Reader::new(&saved)).unwrap();
+        assert_eq!(cf.read(0), 2, "the same byte again: the transfer came back");
+
+        std::fs::OpenOptions::new().write(true).open(&p).unwrap().write_all(&[0x55]).unwrap();
+        let before = cf.read(0);
+        let err = cf.load_state(&mut Reader::new(&saved)).unwrap_err();
+        assert!(err.contains("has changed"), "{err}");
+        assert_eq!(cf.read(0), 2, "nothing loaded: the transfer went on from {before}");
+        std::fs::remove_file(&p).ok();
     }
 
     #[test]

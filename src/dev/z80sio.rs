@@ -337,6 +337,61 @@ impl Channel {
     }
 }
 
+impl Channel {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Channel {
+            wr, pointer, line, rx_remaining, rx_fifo, rx_overrun, rx_first_armed, tx_remaining, tx_int_pending,
+            honours_rts: _wiring, clock_hz: _wiring_too, char_cycles: _derived,
+        } = self;
+        w.bytes(wr);
+        w.u8(*pointer);
+        w.bytes(&line.iter().copied().collect::<Vec<_>>());
+        w.u32(*rx_remaining);
+        w.bytes(&rx_fifo.iter().copied().collect::<Vec<_>>());
+        w.bool(*rx_overrun);
+        w.bool(*rx_first_armed);
+        w.u32(*tx_remaining);
+        w.bool(*tx_int_pending);
+    }
+
+    /// `char_cycles` follows from the loaded WR4 and the session's pacing.
+    fn load(&mut self, r: &mut crate::snapshot::Reader, pacing_hz: u64, fast_io: bool) -> Result<(), String> {
+        r.bytes_into(&mut self.wr)?;
+        self.pointer = r.u8()?;
+        self.line = r.bytes()?.iter().copied().collect();
+        self.rx_remaining = r.u32()?;
+        self.rx_fifo = r.bytes()?.iter().copied().collect();
+        self.rx_overrun = r.bool()?;
+        self.rx_first_armed = r.bool()?;
+        self.tx_remaining = r.u32()?;
+        self.tx_int_pending = r.bool()?;
+        self.refresh(pacing_hz, fast_io);
+        Ok(())
+    }
+}
+
+impl crate::snapshot::Snapshot for Z80Sio {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Z80Sio { chan, ius, pacing_hz: _session, fast_io: _session_too } = self;
+        for c in chan {
+            c.save(w);
+        }
+        for v in ius {
+            w.bool(*v);
+        }
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        for c in &mut self.chan {
+            c.load(r, self.pacing_hz, self.fast_io)?;
+        }
+        for v in &mut self.ius {
+            *v = r.bool()?;
+        }
+        Ok(())
+    }
+}
+
 pub struct Z80Sio {
     chan: [Channel; 2],
     /// Interrupt under service, by priority rank (`rank`): a source is

@@ -234,6 +234,32 @@ impl Bus for Rc2014 {
 
     /// The rom window and the ram; everything else is port-mapped, so
     /// nothing in the memory space has a read side effect.
+    fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        let Rc2014 {
+            ram, rom, rom_bank: _jumpers, ram_base: _module, pageable: _module_too, rom_paged_out,
+            console: _session, serial: _session_too, sio, ctc, cf, has_cf: _slot,
+        } = self;
+        w.section(b"RAM ", |w| ram.save(w));
+        w.section(b"ROM ", |w| rom.save(w));
+        w.bool(*rom_paged_out);
+        w.section(b"SIO ", |w| sio.save(w));
+        w.section(b"CTC ", |w| ctc.save(w));
+        let mut card = Ok(());
+        w.section(b"CF  ", |w| card = cf.save_state(w));
+        card
+    }
+
+    fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        use crate::snapshot::Snapshot;
+        r.section(b"RAM ", |r| self.ram.load(r))?;
+        r.section(b"ROM ", |r| self.rom.load(r))?;
+        self.rom_paged_out = r.bool()?;
+        r.section(b"SIO ", |r| self.sio.load(r))?;
+        r.section(b"CTC ", |r| self.ctc.load(r))?;
+        r.section(b"CF  ", |r| self.cf.load_state(r))
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
         if addr < ROM_WINDOW && !self.rom_paged_out {
