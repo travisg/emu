@@ -360,8 +360,16 @@ class Emu:
     def dis(self, addr, n=1):
         """`n` instructions from `addr` (core units), as (addr, raw, text)
         tuples: raw a list of the instruction's units."""
+        return self._listing('dis %x %d' % (addr, n))
+
+    def history(self, n=16):
+        """The last `n` instructions executed, oldest first, as `dis` lists
+        them."""
+        return self._listing('history %d' % n)
+
+    def _listing(self, line):
         before = len(self.info)
-        self.command('dis %x %d' % (addr, n))
+        self.command(line)
         out = []
         for line in self.info[before:]:
             a, raw_text = line.split('  ', 1)

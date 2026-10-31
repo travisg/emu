@@ -57,6 +57,9 @@ pub enum StopPolicy {
 const PEEK_LIMIT: u32 = 256;
 /// The most instructions one `dis` lists.
 const DIS_LIMIT: u32 = 64;
+/// How many of the last instructions' PCs the history keeps; a power of
+/// two, so the ring's index is a mask.
+pub const HISTORY_LEN: usize = 1024;
 
 /// What the throttle wants done after one more instruction. Split out of
 /// [`Throttle::pace`] as a pure function of the numbers so the arithmetic,
@@ -168,6 +171,11 @@ pub struct Emulator {
     pending_steps: u32,
     /// Instructions executed since the run began.
     executed: u64,
+    /// The PCs of the last `HISTORY_LEN` instructions, a ring indexed by
+    /// `history_count`, the number recorded. Kept only with a debug port,
+    /// the one thing that reads it.
+    history: Box<[u32; HISTORY_LEN]>,
+    history_count: u64,
     /// Why the machine is halted, for `status`; None while running.
     stop_reason: Option<StopReason>,
 }
@@ -201,6 +209,8 @@ impl Emulator {
             breakpoints: Vec::new(),
             pending_steps: 0,
             executed: 0,
+            history: Box::new([0; HISTORY_LEN]),
+            history_count: 0,
             stop_reason: None,
         }
     }
@@ -488,6 +498,7 @@ impl Emulator {
                 DebugReply::Breaks(b)
             }
             DebugOp::Disassemble { addr, count } => self.disassemble(addr, count),
+            DebugOp::History(n) => self.history(n),
             DebugOp::ChangeDisk { drive, path } => {
                 let image = match path.map(DiskImage::open).transpose() {
                     Ok(image) => image,
@@ -522,33 +533,38 @@ impl Emulator {
         }
     }
 
+    /// The instruction at `addr` as a listing line, if it is all memory.
+    fn dis_line(&self, addr: u32) -> Option<DisLine> {
+        let unit = self.cpu.addressing();
+        let d = self.cpu.disassemble(&|a| self.bus.peek8(a), addr)?;
+        let raw = (0..d.len)
+            .map(|i| {
+                let at = addr.wrapping_add(i).wrapping_mul(unit.unit_bytes);
+                (0..unit.unit_bytes).fold(0u16, |w, b| {
+                    let byte = self.bus.peek8(at + b).unwrap_or(0) as u16;
+                    match unit.endian {
+                        Endian::Big => (w << 8) | byte,
+                        Endian::Little => w | (byte << (8 * b)),
+                    }
+                })
+            })
+            .collect();
+        Some(DisLine { addr, raw, digits: 2 * unit.unit_bytes as usize, text: d.text })
+    }
+
     /// `count` instructions from `addr`, up to the first that is not all
     /// memory.
     fn disassemble(&self, mut addr: u32, count: u32) -> DebugReply {
         if count > DIS_LIMIT {
             return DebugReply::Err(format!("at most {DIS_LIMIT} instructions per request"));
         }
-        let unit = self.cpu.addressing();
-        let peek = |a| self.bus.peek8(a);
         let mut lines = Vec::new();
         for _ in 0..count {
-            let Some(d) = self.cpu.disassemble(&peek, addr) else {
+            let Some(line) = self.dis_line(addr) else {
                 break;
             };
-            let raw = (0..d.len)
-                .map(|i| {
-                    let at = addr.wrapping_add(i).wrapping_mul(unit.unit_bytes);
-                    (0..unit.unit_bytes).fold(0u16, |w, b| {
-                        let byte = self.bus.peek8(at + b).unwrap_or(0) as u16;
-                        match unit.endian {
-                            Endian::Big => (w << 8) | byte,
-                            Endian::Little => w | (byte << (8 * b)),
-                        }
-                    })
-                })
-                .collect();
-            lines.push(DisLine { addr, raw, digits: 2 * unit.unit_bytes as usize, text: d.text });
-            addr = addr.wrapping_add(d.len);
+            addr = addr.wrapping_add(line.raw.len() as u32);
+            lines.push(line);
         }
         if lines.is_empty() && count > 0 {
             if self.cpu.disassemble(&|_| Some(0), 0).is_none() {
@@ -556,6 +572,21 @@ impl Emulator {
             }
             return DebugReply::Err(format!("no memory at {addr:04x}"));
         }
+        DebugReply::Disassembly(lines)
+    }
+
+    /// The last `n` instructions executed, oldest first, each disassembled
+    /// from memory as it is now.
+    fn history(&self, n: u32) -> DebugReply {
+        if n as usize > HISTORY_LEN {
+            return DebugReply::Err(format!("the history holds {HISTORY_LEN} instructions"));
+        }
+        let lines = (self.history_count.saturating_sub(n as u64)..self.history_count)
+            .map(|i| self.history[i as usize & (HISTORY_LEN - 1)])
+            .map(|pc| {
+                self.dis_line(pc).unwrap_or(DisLine { addr: pc, raw: Vec::new(), digits: 2, text: String::new() })
+            })
+            .collect();
         DebugReply::Disassembly(lines)
     }
 
@@ -613,6 +644,11 @@ impl Emulator {
             // state the instruction starts from.
             if let Some(t) = self.trace.as_mut() {
                 let _ = self.cpu.trace_line(t);
+            }
+
+            if self.sink.is_some() {
+                self.history[self.history_count as usize & (HISTORY_LEN - 1)] = self.cpu.pc();
+                self.history_count += 1;
             }
 
             let result = self.cpu.step(&mut *self.bus);
@@ -950,6 +986,31 @@ mod tests {
         assert_eq!(steps.load(Ordering::SeqCst), stopped_at, "halted means halted");
         drop(tx);
         assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
+    }
+
+    /// The history is the PCs stepped through, oldest first, and keeps the
+    /// last `HISTORY_LEN` once it wraps.
+    #[test]
+    fn history_lists_the_last_pcs_oldest_first() {
+        let PanelRig { mut emu, tx, events, .. } = ScriptedCpu::build(vec![]);
+        let runner = std::thread::spawn(move || emu.run());
+        let pcs = |reply: DebugReply| match reply {
+            DebugReply::Disassembly(lines) => lines.iter().map(|l| l.addr).collect::<Vec<_>>(),
+            other => panic!("expected a listing, got {other:?}"),
+        };
+        assert_eq!(pcs(debug(&tx, DebugOp::History(4)).recv().unwrap()), Vec::<u32>::new(), "nothing run yet");
+        debug(&tx, DebugOp::Step(3)).recv().unwrap();
+        next_event(&events);
+        assert_eq!(pcs(debug(&tx, DebugOp::History(16)).recv().unwrap()), [0, 1, 2]);
+        let n = HISTORY_LEN as u32 + 5;
+        debug(&tx, DebugOp::Step(n)).recv().unwrap();
+        next_event(&events);
+        assert_eq!(pcs(debug(&tx, DebugOp::History(2)).recv().unwrap()), [n + 1, n + 2]);
+        let all = pcs(debug(&tx, DebugOp::History(HISTORY_LEN as u32)).recv().unwrap());
+        assert_eq!((all.len(), all[0]), (HISTORY_LEN, 8), "the oldest kept");
+        assert!(matches!(debug(&tx, DebugOp::History(HISTORY_LEN as u32 + 1)).recv().unwrap(), DebugReply::Err(_)));
+        drop(tx);
+        runner.join().unwrap();
     }
 
     #[test]

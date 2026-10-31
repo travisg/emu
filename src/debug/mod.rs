@@ -46,6 +46,7 @@
 //! | `writew ADDR W...` | `ok` | words to core-unit address ADDR |
 //! | `break ADDR` / `unbreak ADDR` | `ok` | ADDR in core units, the same as `pc` |
 //! | `breaks` | `ok HEX ...` | |
+//! | `history [N]` | `# ` lines, then `ok` | the last N instructions executed (default 16, at most 1024), oldest first, as `dis` lists them -- from memory as it is now, so code that has since changed reads as it is |
 //! | `dis ADDR [N]` | `# ` lines, then `ok` | N instructions (default 1, at most 64) from ADDR in core units: `# ADDR  RAW  TEXT` each, RAW in the core's units, TEXT in its assembler's syntax; stops early at a byte that is not memory, and `err` if the first is not |
 //! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
 //! | `disk DRIVE PATH` | `ok` | put the image at PATH (the rest of the line) in DRIVE, a letter or a number; `err` with the reason if the machine refuses it, and the drive keeps what it had |
@@ -109,6 +110,8 @@ pub enum DebugOp {
     Breaks,
     /// `count` instructions from `addr`, in core units.
     Disassemble { addr: u32, count: u32 },
+    /// The last N instructions executed.
+    History(u32),
     /// The image at `path` into `drive`, or `None` to empty it -- the
     /// window's drive door, from the port. The run loop opens the file
     /// and the machine judges it.

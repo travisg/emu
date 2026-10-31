@@ -139,6 +139,9 @@ fn a_client_drives_a_703_over_the_socket() {
     assert_eq!(c.ask("step"), "ok");
     assert_eq!(c.event(), "! stopped reason=step pc=0040 insn=JMP X'40'", "JMP $ lands where it started");
     assert!(c.ask("regs").starts_with("ok PC=0040 AC=1234 IX=0000 EX=00 ST=0000 "));
+    assert_eq!(c.ask("history"), "# 0000  1040           JMP X'40'", "the JMP at 0, then the one at 40");
+    assert_eq!(c.line(), "# 0040  1040           JMP X'40'");
+    assert_eq!(c.line(), "ok");
     assert_eq!(c.ask("key A\\r"), "ok");
     assert_eq!(c.ask("mem 1c ff"), "err 'ff' is not a count");
     assert_eq!(c.ask("mem 0 300"), "err at most 256 bytes per request");

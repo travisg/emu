@@ -170,6 +170,11 @@ pub fn parse(line: &str) -> Result<Command, String> {
             arity(0)?;
             Command::Machine(DebugOp::Breaks)
         }
+        "history" => match args.as_slice() {
+            [] => Command::Machine(DebugOp::History(16)),
+            [n] => Command::Machine(DebugOp::History(parse_count(n)?)),
+            _ => return Err("history takes at most one argument".into()),
+        },
         "dis" => match args.as_slice() {
             [addr] => Command::Machine(DebugOp::Disassemble { addr: parse_hex(addr)?, count: 1 }),
             [addr, n] => Command::Machine(DebugOp::Disassemble { addr: parse_hex(addr)?, count: parse_count(n)? }),
@@ -340,6 +345,7 @@ pub const HELP: &[&str] = &[
     "writew ADDR W...       words to core-unit address ADDR",
     "break ADDR | unbreak ADDR | breaks",
     "dis ADDR [N]           disassemble N instructions (default 1) at core-unit address ADDR",
+    "history [N]            the last N instructions executed (default 16), oldest first",
     "key TEXT               keystrokes to the guest (\\r \\n \\t \\\\ \\xHH)",
     "disk DRIVE PATH        put the image at PATH in drive DRIVE (a letter, or a number)",
     "eject DRIVE            empty the drive",
@@ -375,6 +381,8 @@ mod tests {
             ("unbreak 1a4", Command::Machine(DebugOp::RemoveBreak(0x1a4))),
             ("breaks", Command::Machine(DebugOp::Breaks)),
             ("dis 1a4", Command::Machine(DebugOp::Disassemble { addr: 0x1a4, count: 1 })),
+            ("history", Command::Machine(DebugOp::History(16))),
+            ("history 100", Command::Machine(DebugOp::History(100))),
             ("dis 0x100 20", Command::Machine(DebugOp::Disassemble { addr: 0x100, count: 20 })),
             ("key LIST\\r", Command::Key(b"LIST\r".to_vec())),
             ("key  two spaces", Command::Key(b" two spaces".to_vec())),
