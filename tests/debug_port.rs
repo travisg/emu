@@ -142,6 +142,18 @@ fn a_client_drives_a_703_over_the_socket() {
     assert_eq!(c.ask("history"), "# 0000  1040           JMP X'40'", "the JMP at 0, then the one at 40");
     assert_eq!(c.line(), "# 0040  1040           JMP X'40'");
     assert_eq!(c.line(), "ok");
+    // STW X'60' at 40, then back: a watch on word 60's bytes stops after
+    // the store, naming it
+    assert_eq!(c.ask("writew 40 7060 1040"), "ok");
+    assert_eq!(c.ask("watch c0 2"), "ok");
+    assert_eq!(c.ask("watch 200"), "ok");
+    assert_eq!(c.ask("watches"), "ok 00c0:2 0200:1");
+    assert_eq!(c.ask("run"), "ok");
+    assert_eq!(c.event(), "! stopped reason=watch pc=0041 by=0040 addr=00c0 val=12 insn=JMP X'40'");
+    assert_eq!(c.ask("mem c0 2"), "ok 12 34", "the store is done");
+    assert_eq!(c.ask("unwatch c0"), "ok");
+    assert_eq!(c.ask("unwatch c0"), "err no watch at 00c0");
+    assert_eq!(c.ask("watch 0 0"), "err a watch is at least a byte long");
     assert_eq!(c.ask("key A\\r"), "ok");
     assert_eq!(c.ask("mem 1c ff"), "err 'ff' is not a count");
     assert_eq!(c.ask("mem 0 300"), "err at most 256 bytes per request");

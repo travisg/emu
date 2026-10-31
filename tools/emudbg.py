@@ -71,8 +71,10 @@ class DebugError(Exception):
 
 
 # `insn` is the instruction at the PC, or None from a core without a
-# disassembler.
-Stopped = collections.namedtuple('Stopped', 'reason pc insn', defaults=(None,))
+# disassembler; a watch's stop gives the PC the writing step began at
+# (`by`; the interrupted instruction, when an interrupt's entry stacked),
+# the first watched byte written (`addr`) and the value (`val`).
+Stopped = collections.namedtuple('Stopped', 'reason pc insn by addr val', defaults=(None,) * 4)
 Exited = collections.namedtuple('Exited', 'reason')
 
 
@@ -208,7 +210,8 @@ class Emu:
                 # insn= is last and runs to the end of the line
                 head, _, insn = line[10:].partition(' insn=')
                 fields = dict(f.split('=', 1) for f in head.split())
-                self.events.put(Stopped(fields.get('reason', '?'), int(fields.get('pc', '0'), 16), insn or None))
+                watch = [int(fields[k], 16) if k in fields else None for k in ('by', 'addr', 'val')]
+                self.events.put(Stopped(fields.get('reason', '?'), int(fields.get('pc', '0'), 16), insn or None, *watch))
             elif line.startswith('! exit '):
                 fields = dict(f.split('=', 1) for f in line[7:].split())
                 self.events.put(Exited(fields.get('reason', '?')))
@@ -356,6 +359,18 @@ class Emu:
 
     def breaks(self):
         return [int(b, 16) for b in self.command('breaks').split()]
+
+    def watch(self, addr, n=1):
+        """Stop after an instruction writes into `n` bus bytes from `addr`."""
+        self.command('watch %x %d' % (addr, n))
+
+    def unwatch(self, addr):
+        self.command('unwatch %x' % addr)
+
+    def watches(self):
+        """(addr, len) for each watch."""
+        return [tuple(int(v, 16) if i == 0 else int(v) for i, v in enumerate(w.split(':')))
+                for w in self.command('watches').split()]
 
     def dis(self, addr, n=1):
         """`n` instructions from `addr` (core units), as (addr, raw, text)

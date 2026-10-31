@@ -170,6 +170,19 @@ pub fn parse(line: &str) -> Result<Command, String> {
             arity(0)?;
             Command::Machine(DebugOp::Breaks)
         }
+        "watch" => match args.as_slice() {
+            [addr] => Command::Machine(DebugOp::AddWatch { addr: parse_hex(addr)?, len: 1 }),
+            [addr, n] => Command::Machine(DebugOp::AddWatch { addr: parse_hex(addr)?, len: parse_count(n)? }),
+            _ => return Err("watch takes an address and an optional length".into()),
+        },
+        "unwatch" => {
+            arity(1)?;
+            Command::Machine(DebugOp::RemoveWatch(parse_hex(args[0])?))
+        }
+        "watches" => {
+            arity(0)?;
+            Command::Machine(DebugOp::Watches)
+        }
         "history" => match args.as_slice() {
             [] => Command::Machine(DebugOp::History(16)),
             [n] => Command::Machine(DebugOp::History(parse_count(n)?)),
@@ -303,6 +316,10 @@ pub fn format_reply(reply: &DebugReply) -> String {
         DebugReply::Words(w) => format!("ok {}", hex_list(w, 4)),
         DebugReply::Breaks(b) if b.is_empty() => "ok".into(),
         DebugReply::Breaks(b) => format!("ok {}", hex_list(b, 4)),
+        DebugReply::Watches(w) if w.is_empty() => "ok".into(),
+        DebugReply::Watches(w) => {
+            format!("ok {}", w.iter().map(|w| format!("{:04x}:{}", w.addr, w.len)).collect::<Vec<_>>().join(" "))
+        }
     }
 }
 
@@ -319,9 +336,15 @@ fn exit_name(reason: ExitReason) -> &'static str {
 /// One event line, without its newline.
 pub fn format_event(ev: &DebugEvent) -> String {
     match ev {
-        DebugEvent::Stopped { reason, pc, insn: None } => format!("! stopped reason={} pc={pc:04x}", reason.name()),
-        DebugEvent::Stopped { reason, pc, insn: Some(insn) } => {
-            format!("! stopped reason={} pc={pc:04x} insn={insn}", reason.name())
+        DebugEvent::Stopped { reason, pc, insn, watch } => {
+            let mut s = format!("! stopped reason={} pc={pc:04x}", reason.name());
+            if let Some(w) = watch {
+                s.push_str(&format!(" by={:04x} addr={:04x} val={:02x}", w.by, w.addr, w.val));
+            }
+            if let Some(insn) = insn {
+                s.push_str(&format!(" insn={insn}"));
+            }
+            s
         }
         DebugEvent::Exit(reason) => format!("! exit reason={}", exit_name(*reason)),
     }
@@ -346,6 +369,7 @@ pub const HELP: &[&str] = &[
     "break ADDR | unbreak ADDR | breaks",
     "dis ADDR [N]           disassemble N instructions (default 1) at core-unit address ADDR",
     "history [N]            the last N instructions executed (default 16), oldest first",
+    "watch ADDR [LEN] | unwatch ADDR | watches   stop on a write to LEN bytes at ADDR",
     "key TEXT               keystrokes to the guest (\\r \\n \\t \\\\ \\xHH)",
     "disk DRIVE PATH        put the image at PATH in drive DRIVE (a letter, or a number)",
     "eject DRIVE            empty the drive",
@@ -382,6 +406,10 @@ mod tests {
             ("breaks", Command::Machine(DebugOp::Breaks)),
             ("dis 1a4", Command::Machine(DebugOp::Disassemble { addr: 0x1a4, count: 1 })),
             ("history", Command::Machine(DebugOp::History(16))),
+            ("watch 50", Command::Machine(DebugOp::AddWatch { addr: 0x50, len: 1 })),
+            ("watch 8000 256", Command::Machine(DebugOp::AddWatch { addr: 0x8000, len: 256 })),
+            ("unwatch 50", Command::Machine(DebugOp::RemoveWatch(0x50))),
+            ("watches", Command::Machine(DebugOp::Watches)),
             ("history 100", Command::Machine(DebugOp::History(100))),
             ("dis 0x100 20", Command::Machine(DebugOp::Disassemble { addr: 0x100, count: 20 })),
             ("key LIST\\r", Command::Key(b"LIST\r".to_vec())),
@@ -470,12 +498,21 @@ mod tests {
         );
         assert!(lines.iter().all(|l| !l.contains('\n')));
         assert_eq!(
-            format_event(&DebugEvent::Stopped { reason: StopReason::Hlt, pc: 0x113, insn: None }),
+            format_event(&DebugEvent::Stopped { reason: StopReason::Hlt, pc: 0x113, insn: None, watch: None }),
             "! stopped reason=hlt pc=0113"
         );
         assert_eq!(
-            format_event(&DebugEvent::Stopped { reason: StopReason::Break, pc: 0x40, insn: Some("LDW X'54E'".into()) }),
+            format_event(&DebugEvent::Stopped { reason: StopReason::Break, pc: 0x40, insn: Some("LDW X'54E'".into()), watch: None }),
             "! stopped reason=break pc=0040 insn=LDW X'54E'"
+        );
+        assert_eq!(
+            format_event(&DebugEvent::Stopped {
+                reason: StopReason::Watch,
+                pc: 0x213,
+                insn: Some("rts".into()),
+                watch: Some(crate::debug::WatchStop { by: 0x210, addr: 0x50, val: 0x42 }),
+            }),
+            "! stopped reason=watch pc=0213 by=0210 addr=0050 val=42 insn=rts"
         );
         let dis = DebugReply::Disassembly(vec![
             DisLine { addr: 0x300, raw: vec![0xb6, 0xf0, 0x01], digits: 2, text: "ldaa 0xf001".into() },

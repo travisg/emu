@@ -46,6 +46,8 @@
 //! | `writew ADDR W...` | `ok` | words to core-unit address ADDR |
 //! | `break ADDR` / `unbreak ADDR` | `ok` | ADDR in core units, the same as `pc` |
 //! | `breaks` | `ok HEX ...` | |
+//! | `watch ADDR [LEN]` / `unwatch ADDR` | `ok` | stop after an instruction the cpu runs writes into LEN bus bytes (decimal, default 1) from byte address ADDR, as `mem` addresses them; a device's own writes into memory (the 703's disc) are not seen |
+//! | `watches` | `ok HEX:LEN ...` | |
 //! | `history [N]` | `# ` lines, then `ok` | the last N instructions executed (default 16, at most 1024), oldest first, as `dis` lists them -- from memory as it is now, so code that has since changed reads as it is |
 //! | `dis ADDR [N]` | `# ` lines, then `ok` | N instructions (default 1, at most 64) from ADDR in core units: `# ADDR  RAW  TEXT` each, RAW in the core's units, TEXT in its assembler's syntax; stops early at a byte that is not memory, and `err` if the first is not |
 //! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
@@ -56,8 +58,13 @@
 //! | `quit` | `ok`, then the connection closes | the machine runs on |
 //! | `kill` | `ok` | shuts the emulator down; `! exit` follows |
 //!
-//! Events: `! stopped reason=(request|step|break|hlt|badop|reset) pc=HEX
-//! [insn=TEXT]` whenever the machine goes from moving to halted, `insn`
+//! Events: `! stopped reason=(request|step|break|hlt|badop|reset|watch)
+//! pc=HEX [by=HEX addr=HEX val=HEX] [insn=TEXT]` whenever the machine goes
+//! from moving to halted -- `by`, `addr` and `val` for a watch: the PC the
+//! step that wrote began at, the first watched byte it wrote and what it
+//! wrote there, the machine stopping once that step is done. `by` is the
+//! instruction that wrote, or, when the step took an interrupt, the one it
+//! interrupted, whose entry did the stacking -- `insn`
 //! the instruction at the PC, last on the line and running to its end,
 //! since it has spaces in it; `! out TEXT` for guest
 //! serial output, escaped, consecutive bytes folded into one line; `! exit
@@ -79,6 +86,7 @@
 
 pub mod protocol;
 pub mod server;
+pub mod watch;
 
 use crate::cpu::Register;
 use crate::emulator::ExitReason;
@@ -112,6 +120,11 @@ pub enum DebugOp {
     Disassemble { addr: u32, count: u32 },
     /// The last N instructions executed.
     History(u32),
+    /// Stop after an instruction that writes into `len` bus bytes from
+    /// `addr`; a second watch at the same address replaces the first.
+    AddWatch { addr: u32, len: u32 },
+    RemoveWatch(u32),
+    Watches,
     /// The image at `path` into `drive`, or `None` to empty it -- the
     /// window's drive door, from the port. The run loop opens the file
     /// and the machine judges it.
@@ -137,6 +150,8 @@ pub enum StopReason {
     Hlt,
     /// The guest hit an opcode the core doesn't implement.
     BadOpcode,
+    /// An instruction wrote into a watch.
+    Watch,
     /// RESET, which leaves the machine halted.
     Reset,
 }
@@ -149,6 +164,7 @@ impl StopReason {
             StopReason::Break => "break",
             StopReason::Hlt => "hlt",
             StopReason::BadOpcode => "badop",
+            StopReason::Watch => "watch",
             StopReason::Reset => "reset",
         }
     }
@@ -164,6 +180,7 @@ pub enum DebugReply {
     Bytes(Vec<u8>),
     Words(Vec<u16>),
     Breaks(Vec<u32>),
+    Watches(Vec<watch::Watch>),
     Disassembly(Vec<DisLine>),
 }
 
@@ -179,12 +196,21 @@ pub struct DisLine {
     pub text: String,
 }
 
+/// What a watch caught: the PC the step that wrote began at (`by`) and the
+/// first watched byte it wrote.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct WatchStop {
+    pub by: u32,
+    pub addr: u32,
+    pub val: u8,
+}
+
 /// Something the machine did on its own, as opposed to a reply.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DebugEvent {
     /// The machine went from running (or stepping) to halted, in front of
-    /// `insn` when the core can read it.
-    Stopped { reason: StopReason, pc: u32, insn: Option<String> },
+    /// `insn` when the core can read it; `watch` says what a watch caught.
+    Stopped { reason: StopReason, pc: u32, insn: Option<String>, watch: Option<WatchStop> },
     /// The run loop returned; the process is on its way out.
     Exit(ExitReason),
 }

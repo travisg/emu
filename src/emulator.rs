@@ -11,7 +11,8 @@
 use crate::bus::{Bus, Endian};
 use crate::console::{DiskImage, PanelCommand, PanelState};
 use crate::cpu::{Cpu, StepResult};
-use crate::debug::{DebugEvent, DebugOp, DebugReply, DebugRequest, DebugSink, DisLine, StopReason};
+use crate::debug::watch::{Watch, WatchBus};
+use crate::debug::{DebugEvent, DebugOp, DebugReply, DebugRequest, DebugSink, DisLine, StopReason, WatchStop};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
@@ -166,6 +167,12 @@ pub struct Emulator {
     sink: Option<DebugSink>,
     /// PCs, in the core's own units, that halt the machine when reached.
     breakpoints: Vec<u32>,
+    /// Bus byte ranges a write into halts the machine after the
+    /// instruction; while there are any the cpu steps through a
+    /// `WatchBus`.
+    watches: Vec<Watch>,
+    /// What the watch that is stopping the machine caught, for the event.
+    watch_stop: Option<WatchStop>,
     /// Instructions still owed to a SINGLE COMMAND or a `step N`. While
     /// this is non-zero a halted machine keeps stepping.
     pending_steps: u32,
@@ -207,6 +214,8 @@ impl Emulator {
             run_state: RunState::Running,
             sink: None,
             breakpoints: Vec::new(),
+            watches: Vec::new(),
+            watch_stop: None,
             pending_steps: 0,
             executed: 0,
             history: Box::new([0; HISTORY_LEN]),
@@ -359,7 +368,7 @@ impl Emulator {
         if let Some(sink) = &self.sink {
             let pc = self.cpu.pc();
             let insn = self.cpu.disassemble(&|a| self.bus.peek8(a), pc).map(|d| d.text);
-            sink.event(DebugEvent::Stopped { reason, pc, insn });
+            sink.event(DebugEvent::Stopped { reason, pc, insn, watch: self.watch_stop.take() });
         }
     }
 
@@ -499,6 +508,24 @@ impl Emulator {
             }
             DebugOp::Disassemble { addr, count } => self.disassemble(addr, count),
             DebugOp::History(n) => self.history(n),
+            DebugOp::AddWatch { len: 0, .. } => DebugReply::Err("a watch is at least a byte long".into()),
+            DebugOp::AddWatch { addr, len } => {
+                self.watches.retain(|w| w.addr != addr);
+                self.watches.push(Watch { addr, len });
+                DebugReply::Ok
+            }
+            DebugOp::RemoveWatch(addr) => match self.watches.iter().position(|w| w.addr == addr) {
+                Some(i) => {
+                    self.watches.remove(i);
+                    DebugReply::Ok
+                }
+                None => DebugReply::Err(format!("no watch at {addr:04x}")),
+            },
+            DebugOp::Watches => {
+                let mut w = self.watches.clone();
+                w.sort_by_key(|w| w.addr);
+                DebugReply::Watches(w)
+            }
             DebugOp::ChangeDisk { drive, path } => {
                 let image = match path.map(DiskImage::open).transpose() {
                     Ok(image) => image,
@@ -651,7 +678,8 @@ impl Emulator {
                 self.history_count += 1;
             }
 
-            let result = self.cpu.step(&mut *self.bus);
+            let watched = !self.watches.is_empty();
+            let result = if watched { self.step_watched() } else { self.cpu.step(&mut *self.bus) };
             self.executed += 1;
             let stopped = match (result, self.stop_policy) {
                 (StepResult::Ok, _) => false,
@@ -675,6 +703,10 @@ impl Emulator {
                 (StepResult::InfiniteLoop, StopPolicy::Exit) => return ExitReason::InfiniteLoop,
                 (StepResult::InfiniteLoop, StopPolicy::Halt) => false,
             };
+
+            // A watch stops the machine once the instruction that wrote is
+            // done, whatever else was owed -- unless it has already stopped.
+            let stopped = if watched { self.watch_caught(stopped) } else { stopped };
 
             // A step budget counts down, and a breakpoint is checked on the
             // PC the machine now stands in front of -- so RUN from a
@@ -705,6 +737,36 @@ impl Emulator {
                     }
                     n => self.throttle.as_mut().unwrap().pace(n),
                 }
+            }
+        }
+    }
+
+    /// One step through the watching bus, leaving what it caught in
+    /// `watch_stop`. Out of line, so the loop without a watch stays as
+    /// small as it was.
+    #[cold]
+    #[inline(never)]
+    fn step_watched(&mut self) -> StepResult {
+        let by = self.cpu.pc();
+        let mut bus = WatchBus { inner: &mut *self.bus, watches: &self.watches, hit: None };
+        let result = self.cpu.step(&mut bus);
+        self.watch_stop = bus.hit.map(|h| WatchStop { by, addr: h.addr, val: h.val });
+        result
+    }
+
+    /// Stop for what the watched step caught, if anything and the step did
+    /// not stop the machine itself; whether the machine is now stopped.
+    #[cold]
+    #[inline(never)]
+    fn watch_caught(&mut self, stopped: bool) -> bool {
+        match self.watch_stop {
+            Some(_) if !stopped => {
+                self.stop(StopReason::Watch);
+                true
+            }
+            _ => {
+                self.watch_stop = None;
+                stopped
             }
         }
     }
@@ -978,7 +1040,7 @@ mod tests {
             panic!("halt should reply with a halted status, got {reply:?}");
         };
         assert_eq!(pc as u64, insns);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None, watch: None });
         let stopped_at = steps.load(Ordering::SeqCst);
         // a second halt of a still machine is not a second event
         assert!(matches!(debug(&tx, DebugOp::Halt).recv().unwrap(), DebugReply::Status { .. }));
@@ -1018,7 +1080,7 @@ mod tests {
         let PanelRig { mut emu, tx, steps, events, .. } = ScriptedCpu::build(vec![]);
         let runner = std::thread::spawn(move || emu.run());
         assert_eq!(debug(&tx, DebugOp::Step(3)).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Step, pc: 3, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Step, pc: 3, insn: None, watch: None });
         assert_eq!(steps.load(Ordering::SeqCst), 3);
         assert_eq!(
             debug(&tx, DebugOp::Status).recv().unwrap(),
@@ -1043,7 +1105,7 @@ mod tests {
         assert_eq!(debug(&tx, DebugOp::AddBreak(2)).recv().unwrap(), DebugReply::Ok, "idempotent");
         assert_eq!(debug(&tx, DebugOp::Breaks).recv().unwrap(), DebugReply::Breaks(vec![2]));
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Break, pc: 2, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Break, pc: 2, insn: None, watch: None });
         assert_eq!(steps.load(Ordering::SeqCst), 2);
 
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
@@ -1053,7 +1115,7 @@ mod tests {
             panic!("halt should report a halted machine");
         };
         assert!(pc > 2, "RUN went past the breakpoint");
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None, watch: None });
         assert_eq!(debug(&tx, DebugOp::RemoveBreak(2)).recv().unwrap(), DebugReply::Ok);
         assert_eq!(
             debug(&tx, DebugOp::RemoveBreak(2)).recv().unwrap(),
@@ -1073,7 +1135,7 @@ mod tests {
         else {
             panic!("halt should report a halted machine");
         };
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None, watch: None });
         let stopped_at = steps.load(Ordering::SeqCst);
         assert!(stopped_at < u32::MAX as u64);
         // the budget is gone: nothing more executes
@@ -1171,11 +1233,11 @@ mod tests {
             ScriptedCpu::build(vec![StepResult::Halted, StepResult::BadOpcode]);
         let runner = std::thread::spawn(move || emu.run());
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Hlt, pc: 1, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Hlt, pc: 1, insn: None, watch: None });
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::BadOpcode, pc: 2, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::BadOpcode, pc: 2, insn: None, watch: None });
         assert_eq!(debug(&tx, DebugOp::Reset).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Reset, pc: 2, insn: None });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Reset, pc: 2, insn: None, watch: None });
         assert_eq!(resets.load(Ordering::SeqCst), 1);
         drop(tx);
         assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
