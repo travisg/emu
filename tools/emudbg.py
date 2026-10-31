@@ -42,7 +42,17 @@ line returns to the guest); Ctrl-D leaves, the emulator running on.
 Two commands are the client's own, in either mode, moving host files in
 and out of guest memory over `write` and `mem`: `load ADDR FILE` and
 `save ADDR LEN FILE` (addresses hex, as the port's; the length any Python
-integer literal). Halt the machine first. To put a CP/M program on a disk:
+integer literal).
+
+Symbols are the client's too, so the port stays address-only: `--symbols
+FILE` (repeatable), `Emu.load_symbols`, reads an asm703.py listing (its
+`symbols:` table) or an ASxxxx linker map (`aslink -m`). Then any address
+a command takes may be a name, or a name plus hex (`break START`, `dis
+SEND+2 8`) -- in core units for `break`, `dis`, `memw` and `writew` and
+as bus bytes for `mem`, `write`, `watch`, `load` and `save`, by the unit
+the port's banner gives -- `sym NAME` or `sym ADDR` looks one up, and a
+`dis` or `history` listing names what it can: an address that is a
+label, and an operand that is a symbol's value, as a `; name` comment. Halt the machine first. To put a CP/M program on a disk:
 stop the guest in its TPA with a breakpoint on the BDOS entry (`break 5`,
 then Return at the `A>`), `load 100 prog.com`, `unbreak 5`, `run`, then
 type `SAVE n PROG.COM` -- n pages of 256 bytes.
@@ -129,6 +139,74 @@ def _as_bytes(data):
     return data.encode('latin-1') if isinstance(data, str) else bytes(data)
 
 
+class Symbols:
+    """Names for addresses, in the core's own units, out of the listings
+    and maps this tree's assemblers write."""
+
+    # asm703.py's listing ends `symbols:` and then `  NAME  HHHH` lines;
+    # aslink's map has `HHHH  name` cells, `|`-separated, under `Value
+    # Global` headings.
+    _LISTING_ROW = re.compile(r'^\s+(\S+)\s+([0-9A-Fa-f]{4})\s*$')
+    _MAP_CELL = re.compile(r'([0-9A-Fa-f]{4,8})\s+(\S+)')
+
+    def __init__(self):
+        self.by_name = {}
+        self.by_value = {}
+
+    def add(self, name, value):
+        self.by_name[name.upper()] = value
+        self.by_value.setdefault(value, []).append(name)
+
+    def load(self, path):
+        """Read a listing or a map; returns how many names it gave."""
+        with open(path, encoding='latin-1') as f:
+            lines = f.read().splitlines()
+        before = len(self.by_name)
+        if 'symbols:' in lines:
+            for line in lines[lines.index('symbols:') + 1:]:
+                m = self._LISTING_ROW.match(line)
+                if m:
+                    self.add(m.group(1), int(m.group(2), 16))
+        else:
+            in_table = False
+            for line in lines:
+                if 'Value' in line and 'Global' in line:
+                    in_table = True
+                elif in_table and line.strip() and not line.strip().startswith('-'):
+                    cells = [self._MAP_CELL.search(c) for c in line.split('|')]
+                    if not any(cells):
+                        in_table = False
+                    for m in filter(None, cells):
+                        if not m.group(2).startswith('.__.'):
+                            self.add(m.group(2), int(m.group(1), 16))
+        return len(self.by_name) - before
+
+    def value(self, text):
+        """`NAME` or `NAME+HEX` as a number, or None if it is neither."""
+        name, _, off = text.partition('+')
+        if name.upper() not in self.by_name:
+            return None
+        try:
+            return self.by_name[name.upper()] + (int(off, 16) if off else 0)
+        except ValueError:
+            return None
+
+    def name(self, value):
+        names = self.by_value.get(value)
+        return names[0] if names else None
+
+    # a listing's numbers: ASxxxx's 0x hex and asm703's X'..', not after
+    # a `#`, which makes them immediates
+    _OPERAND = re.compile(r"(?<![#\w])(?:0x([0-9a-fA-F]+)|X'([0-9A-F]+)')")
+
+    def annotate(self, addr, text):
+        """A listing line's text with what the symbols say about it."""
+        names = [n for n in (self.name(int(a or b, 16)) for a, b in self._OPERAND.findall(text)) if n]
+        label = self.name(addr)
+        out = ('%s: ' % label if label else '') + text
+        return out + ('    ; ' + ', '.join(names) if names else '')
+
+
 class Emu:
     """One connection to a debug port."""
 
@@ -147,9 +225,13 @@ class Emu:
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.connect(path)
         self._file = self._sock.makefile('rb')
+        self.symbols = Symbols()
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
         self.banner = self._wait_info()
+        unit = re.search(r'\bunit=(\d+)', self.banner)
+        # bus bytes to one of the core's address units
+        self.unit = int(unit.group(1)) if unit else 1
 
     # -- spawning -----------------------------------------------------------
 
@@ -372,6 +454,11 @@ class Emu:
         return [tuple(int(v, 16) if i == 0 else int(v) for i, v in enumerate(w.split(':')))
                 for w in self.command('watches').split()]
 
+    def load_symbols(self, path):
+        """Names from an asm703.py listing or an ASxxxx map; returns how
+        many."""
+        return self.symbols.load(path)
+
     def dis(self, addr, n=1):
         """`n` instructions from `addr` (core units), as (addr, raw, text)
         tuples: raw a list of the instruction's units."""
@@ -477,10 +564,58 @@ class Emu:
 
 # -- the program -------------------------------------------------------------
 
+# Which argument of a command is an address, and in what: the core's
+# units, or bus bytes.
+_CORE_ADDRESS = {'break': 0, 'unbreak': 0, 'dis': 0, 'memw': 0, 'writew': 0, 'set': 1}
+_BYTE_ADDRESS = {'mem': 0, 'write': 0, 'watch': 0, 'unwatch': 0, 'load': 0, 'save': 0}
+
+
+def _resolve(emu, line):
+    """`line` with a symbol in its address argument made hex."""
+    words = line.split()
+    if not words or not emu.symbols.by_name:
+        return line
+    verb = words[0].lower()
+    at = _CORE_ADDRESS.get(verb, _BYTE_ADDRESS.get(verb))
+    if at is None or len(words) <= at + 1:
+        return line
+    value = emu.symbols.value(words[at + 1])
+    if value is None:
+        return line
+    if verb in _BYTE_ADDRESS:
+        value *= emu.unit
+    words[at + 1] = '%x' % value
+    return ' '.join(words)
+
+
+def _info_lines(emu, line, before):
+    """The `#` lines a command brought, a listing's with its symbols."""
+    listing = line.split()[:1] in (['dis'], ['history'])
+    for l in emu.info[before:]:
+        if listing and emu.symbols.by_name:
+            addr, _, rest = l.partition('  ')
+            l = '%s  %s %s' % (addr, rest[:14], emu.symbols.annotate(int(addr, 16), rest[15:]))
+        yield '# ' + l
+
+
 def _command(emu, line):
-    """One command line: the client's own `load ADDR FILE` and `save ADDR
-    LEN FILE`, or a line for the port."""
+    """One command line: the client's own `load ADDR FILE`, `save ADDR
+    LEN FILE` and `sym NAME|ADDR`, or a line for the port."""
+    line = _resolve(emu, line)
     words = line.split(None, 3)
+    if words and words[0] == 'sym':
+        if len(words) != 2:
+            raise DebugError('usage: sym NAME|ADDR')
+        value = emu.symbols.value(words[1])
+        if value is not None:
+            return '%s=%x' % (words[1].upper(), value)
+        try:
+            names = emu.symbols.by_value.get(int(words[1], 16))
+        except ValueError:
+            names = None
+        if not names:
+            raise DebugError('no symbol %s' % words[1])
+        return '%s=%s' % (words[1], ','.join(names))
     if words and words[0] == 'load':
         if len(words) != 3:
             raise DebugError('usage: load ADDR FILE')
@@ -502,8 +637,8 @@ def _one_shot(emu, commands):
             print('err %s' % e)
             status = 1
             continue
-        for line in emu.info[before:]:
-            print('# ' + line)
+        for line in _info_lines(emu, cmd, before):
+            print(line)
         print('ok %s' % reply if reply else 'ok')
     return status
 
@@ -559,8 +694,8 @@ def _interactive(emu):
                         before = len(emu.info)
                         try:
                             reply = _command(emu, line)
-                            for l in emu.info[before:]:
-                                print('# ' + l)
+                            for l in _info_lines(emu, line, before):
+                                print(l)
                             print('ok %s' % reply if reply else 'ok')
                         except DebugError as e:
                             print('err %s' % e)
@@ -584,13 +719,23 @@ def main(argv=None):
     ap.add_argument('socket', nargs='?', help='the socket the emulator was given with --debug')
     ap.add_argument('-c', '--command', action='append', default=[],
                     help='send one command and print its reply (repeatable)')
-    ap.add_argument('--spawn', nargs=argparse.REMAINDER,
-                    help='start the emulator with these arguments and attach to it')
+    ap.add_argument('--spawn', nargs=argparse.REMAINDER, metavar='EMU ARGS',
+                    help='start the emulator with these arguments and attach to it; last, '
+                         'everything after it is the emulator\'s')
+    ap.add_argument('--symbols', action='append', default=[], metavar='FILE',
+                    help='names from an asm703.py listing or an ASxxxx map (repeatable)')
     ap.add_argument('--timeout', type=float, default=20.0)
+    # Everything after --spawn is the emulator's, split off here: argparse's
+    # REMAINDER does not reliably take a `--` and what follows it.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    spawn = None
+    if '--spawn' in argv:
+        at = argv.index('--spawn')
+        argv, spawn = argv[:at], argv[at + 1:]
     args = ap.parse_args(argv)
 
-    if args.spawn is not None:
-        cmd = args.spawn[1:] if args.spawn[:1] == ['--'] else args.spawn
+    if spawn is not None:
+        cmd = spawn[1:] if spawn[:1] == ['--'] else spawn
         if not cmd:
             ap.error('--spawn needs the emulator command after it')
         emu = Emu.spawn(cmd, log=sys.stderr, halt=False, timeout=args.timeout)
@@ -599,6 +744,8 @@ def main(argv=None):
     else:
         ap.error('a socket path or --spawn is required')
 
+    for path in args.symbols:
+        print('[%s: %d symbols]' % (path, emu.load_symbols(path)), file=sys.stderr)
     try:
         if args.command:
             return _one_shot(emu, args.command)

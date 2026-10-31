@@ -24,6 +24,12 @@ instruction, is disassembled and its text put back through
 the core ignores and the disassembly therefore does not show -- or, for a
 `DATA`, the word itself.
 
+And the client's symbols: the demo is assembled with its listing, whose
+symbol table `tools/emudbg.py` loads, and a command line naming a label
+has to reach the port as its address -- in words for `dis`, in bytes for
+`mem` -- and the listing has to come back with the labels on it; an
+ASxxxx linker map in the format aslink writes has to load too.
+
 Needs python3 only, so CI runs it. Every check counts what it compared and
 fails on too few, so a listing that stopped parsing cannot pass by
 comparing nothing. Negative controls, which must FAIL: `DIS_CONTROL=rename`
@@ -33,6 +39,7 @@ listings.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -43,6 +50,7 @@ sys.path.insert(0, os.path.join(ROOT, 'tools'))
 
 import asm703  # noqa: E402
 import xraylist  # noqa: E402
+import emudbg  # noqa: E402
 from emudbg import Emu  # noqa: E402
 
 EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
@@ -184,6 +192,55 @@ def check_every_word(workdir, log):
         raise AssertionError('only %d words compared' % compared)
 
 
+# The shape aslink -m writes: `Value Global` tables of `|`-separated cells.
+ASXXXX_MAP = '''\
+ASxxxx Linker V06.00                                                                Page 1
+Hexadecimal [16-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+CODE                       E000        0123 =         291. bytes (REL,CON)
+
+   Value  Global      Value  Global      Value  Global      Value  Global
+   -----  ------      -----  ------      -----  ------      -----  ------
+    E000  start    |   E010  loop     |   0000  .__.ABS. |   E0F0  putc
+    E100  getc
+ASxxxx Linker V06.00                                                                Page 2
+'''
+
+
+def check_symbols(workdir, log):
+    image, listing = os.path.join(workdir, 'demo.bin'), os.path.join(workdir, 'demo.lst')
+    subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'asm703.py'),
+                    os.path.join(HERE, '703', 'demo.asm'), '-o', image, '-l', listing], check=True, stdout=log)
+    emu = spawn(image, log)
+    try:
+        n = emu.load_symbols(listing)
+        start, send = emu.symbols.value('START'), emu.symbols.value('send')
+        if n < 10 or start is None or send is None:
+            raise AssertionError('the listing gave %d symbols, START %r, SEND %r' % (n, start, send))
+        before = len(emu.info)
+        emudbg._command(emu, 'dis START 2')
+        lines = list(emudbg._info_lines(emu, 'dis START 2', before))
+        if len(lines) != 2 or not lines[0].startswith('# %04x' % start) or 'START: ' not in lines[0]:
+            raise AssertionError('dis START gave %r' % lines)
+        want = emu.mem(send * 2, 2)
+        if emudbg._command(emu, 'mem SEND 2') != ' '.join('%02x' % b for b in want):
+            raise AssertionError('mem SEND did not read the bytes of word %04x' % send)
+        if emudbg._command(emu, 'sym %x' % send) != '%x=SEND' % send:
+            raise AssertionError('sym by address')
+    finally:
+        emu.kill()
+        emu.wait_exit()
+    path = os.path.join(workdir, 'x.map')
+    with open(path, 'w') as f:
+        f.write(ASXXXX_MAP)
+    syms = emudbg.Symbols()
+    if syms.load(path) != 4 or syms.value('putc') != 0xe0f0 or syms.name(0xe100) != 'getc':
+        raise AssertionError('the map gave %r' % syms.by_name)
+    log.write(('symbols: %d from the listing, the map read\n' % n).encode())
+
+
 def main():
     if not os.access(EMU_BIN, os.X_OK):
         print('error: emulator binary not found at %s' % EMU_BIN, file=sys.stderr)
@@ -195,6 +252,7 @@ def main():
             if CONTROL != 'rename-words':
                 cards = sum(check_listing(name, n, workdir, log) for name, n in REFERENCES)
             check_every_word(workdir, log)
+            check_symbols(workdir, log)
         except Exception:
             log.write(b'\n--- harness failure ---\n')
             log.write(traceback.format_exc().encode())
