@@ -602,8 +602,9 @@ impl Emulator {
         DebugReply::Disassembly(lines)
     }
 
-    /// The last `n` instructions executed, oldest first, each disassembled
-    /// from memory as it is now.
+    /// The PCs the last `n` steps began at, oldest first, each
+    /// disassembled from memory as it is now. A step that took an
+    /// interrupt began at the instruction it interrupted.
     fn history(&self, n: u32) -> DebugReply {
         if n as usize > HISTORY_LEN {
             return DebugReply::Err(format!("the history holds {HISTORY_LEN} instructions"));

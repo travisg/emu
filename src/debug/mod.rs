@@ -48,7 +48,7 @@
 //! | `breaks` | `ok HEX ...` | |
 //! | `watch ADDR [LEN]` / `unwatch ADDR` | `ok` | stop after an instruction the cpu runs writes into LEN bus bytes (decimal, default 1) from byte address ADDR, as `mem` addresses them; a device's own writes into memory (the 703's disc) are not seen |
 //! | `watches` | `ok HEX:LEN ...` | |
-//! | `history [N]` | `# ` lines, then `ok` | the last N instructions executed (default 16, at most 1024), oldest first, as `dis` lists them -- from memory as it is now, so code that has since changed reads as it is |
+//! | `history [N]` | `# ` lines, then `ok` | the PCs the last N steps began at (default 16, at most 1024), oldest first, as `dis` lists them -- a step that took an interrupt shows the instruction it interrupted, and the listing is of memory as it is now, so code that has since changed reads as it is |
 //! | `dis ADDR [N]` | `# ` lines, then `ok` | N instructions (default 1, at most 64) from ADDR in core units: `# ADDR  RAW  TEXT` each, RAW in the core's units, TEXT in its assembler's syntax; stops early at a byte that is not memory, and `err` if the first is not |
 //! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
 //! | `disk DRIVE PATH` | `ok` | put the image at PATH (the rest of the line) in DRIVE, a letter or a number; `err` with the reason if the machine refuses it, and the drive keeps what it had |
@@ -118,7 +118,7 @@ pub enum DebugOp {
     Breaks,
     /// `count` instructions from `addr`, in core units.
     Disassemble { addr: u32, count: u32 },
-    /// The last N instructions executed.
+    /// The PCs the last N steps began at.
     History(u32),
     /// Stop after an instruction that writes into `len` bus bytes from
     /// `addr`; a second watch at the same address replaces the first.

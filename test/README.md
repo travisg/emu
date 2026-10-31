@@ -43,8 +43,10 @@ need no pty and no `script(1)`.
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
-All but the first five need nothing outside the repo, and CI runs them.
-REX's session is `make -C rex test`, under its own directory. The 6809 one
+The Altair IRQ, CTC and 703 ones need nothing outside the repo, and CI
+runs them; the 6809 one and the RC2014 BASIC, CP/M and exerciser ones and
+the Kaypro's need images from outside it and run locally. REX's session is
+`make -C rex test`, under its own directory. The 6809 one
 boots Microsoft BASIC, so it needs `roms/6809/BASIC.HEX` in place
 (`tools/fetch-roms.py`) and runs only locally. The RC2014 BASIC one boots the
 factory rom's BASIC, `roms/rc2014/24886009.BIN` from the same script, and

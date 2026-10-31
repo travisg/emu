@@ -129,7 +129,7 @@ fn a_client_drives_a_703_over_the_socket() {
     assert_eq!(c.ask("memw 40 1"), "ok abcd", "word 0x40 is bytes 0x80-0x81, big-endian");
     assert_eq!(c.ask("writew 40 1040"), "ok");
     assert_eq!(c.ask("memw 0 1"), "ok 1040");
-    assert_eq!(c.ask("dis 40"), "# 0040  1040           JMP X'40'", "a listing's body comes ahead of its ok");
+    assert_eq!(c.ask("dis 40"), "# 0040  1040            JMP X'40'", "a listing's body comes ahead of its ok");
     assert_eq!(c.line(), "ok");
     assert_eq!(c.ask("break 40"), "ok");
     assert_eq!(c.ask("breaks"), "ok 0040");
@@ -139,8 +139,8 @@ fn a_client_drives_a_703_over_the_socket() {
     assert_eq!(c.ask("step"), "ok");
     assert_eq!(c.event(), "! stopped reason=step pc=0040 insn=JMP X'40'", "JMP $ lands where it started");
     assert!(c.ask("regs").starts_with("ok PC=0040 AC=1234 IX=0000 EX=00 ST=0000 "));
-    assert_eq!(c.ask("history"), "# 0000  1040           JMP X'40'", "the JMP at 0, then the one at 40");
-    assert_eq!(c.line(), "# 0040  1040           JMP X'40'");
+    assert_eq!(c.ask("history"), "# 0000  1040            JMP X'40'", "the JMP at 0, then the one at 40");
+    assert_eq!(c.line(), "# 0040  1040            JMP X'40'");
     assert_eq!(c.line(), "ok");
     // STW X'60' at 40, then back: a watch on word 60's bytes stops after
     // the store, naming it

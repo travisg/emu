@@ -135,6 +135,14 @@ def unescape(text):
     return bytes(out)
 
 
+def _listing_fields(line):
+    """A `dis` line's address, raw units and text, which the port keeps
+    two spaces apart at least."""
+    a, _, rest = line.partition('  ')
+    raw, _, text = rest.partition('  ')
+    return a, raw.strip(), text.strip()
+
+
 def _as_bytes(data):
     return data.encode('latin-1') if isinstance(data, str) else bytes(data)
 
@@ -465,8 +473,9 @@ class Emu:
         return self._listing('dis %x %d' % (addr, n))
 
     def history(self, n=16):
-        """The last `n` instructions executed, oldest first, as `dis` lists
-        them."""
+        """The PCs the last `n` steps began at, oldest first, as `dis` lists
+        them; a step that took an interrupt shows the instruction it
+        interrupted."""
         return self._listing('history %d' % n)
 
     def _listing(self, line):
@@ -474,9 +483,8 @@ class Emu:
         self.command(line)
         out = []
         for line in self.info[before:]:
-            a, raw_text = line.split('  ', 1)
-            raw, text = raw_text[:14].split(), raw_text[15:]
-            out.append((int(a, 16), [int(u, 16) for u in raw], text))
+            a, raw, text = _listing_fields(line)
+            out.append((int(a, 16), [int(u, 16) for u in raw.split()], text))
         return out
 
     def key(self, data):
@@ -593,8 +601,8 @@ def _info_lines(emu, line, before):
     listing = line.split()[:1] in (['dis'], ['history'])
     for l in emu.info[before:]:
         if listing and emu.symbols.by_name:
-            addr, _, rest = l.partition('  ')
-            l = '%s  %s %s' % (addr, rest[:14], emu.symbols.annotate(int(addr, 16), rest[15:]))
+            addr, raw, text = _listing_fields(l)
+            l = '%s  %-14s  %s' % (addr, raw, emu.symbols.annotate(int(addr, 16), text))
         yield '# ' + l
 
 

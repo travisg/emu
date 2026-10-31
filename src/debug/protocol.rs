@@ -270,9 +270,11 @@ fn hex_list<T: std::fmt::LowerHex>(items: &[T], width: usize) -> String {
     items.iter().map(|v| format!("{v:0width$x}")).collect::<Vec<_>>().join(" ")
 }
 
-/// One `dis` line, without its `# `: address, raw units, text.
+/// One `dis` line, without its `# `: address, raw units, text, each pair
+/// two spaces apart at least -- the raw units are one apart, and a long
+/// run of them pushes the text out rather than meeting it.
 pub fn format_dis_line(line: &DisLine) -> String {
-    format!("{:04x}  {:<14} {}", line.addr, hex_list(&line.raw, line.digits), line.text)
+    format!("{:04x}  {:<14}  {}", line.addr, hex_list(&line.raw, line.digits), line.text)
 }
 
 /// A reply's lines, without their newlines: any `# ` body, then the `ok
@@ -368,7 +370,7 @@ pub const HELP: &[&str] = &[
     "writew ADDR W...       words to core-unit address ADDR",
     "break ADDR | unbreak ADDR | breaks",
     "dis ADDR [N]           disassemble N instructions (default 1) at core-unit address ADDR",
-    "history [N]            the last N instructions executed (default 16), oldest first",
+    "history [N]            the PCs the last N steps began at (default 16), oldest first",
     "watch ADDR [LEN] | unwatch ADDR | watches   stop on a write to LEN bytes at ADDR",
     "key TEXT               keystrokes to the guest (\\r \\n \\t \\\\ \\xHH)",
     "disk DRIVE PATH        put the image at PATH in drive DRIVE (a letter, or a number)",
@@ -520,8 +522,10 @@ mod tests {
         ]);
         assert_eq!(
             format_reply_lines(&dis),
-            ["# 0300  b6 f0 01       ldaa 0xf001", "# 0545  854e           LDW X'54E'", "ok"]
+            ["# 0300  b6 f0 01        ldaa 0xf001", "# 0545  854e            LDW X'54E'", "ok"]
         );
+        let long = DisLine { addr: 0x100, raw: vec![0xdd, 0xdd, 0xdd, 0x21, 0x34, 0x12], digits: 2, text: "ld ix,0x1234".into() };
+        assert_eq!(format_dis_line(&long), "0100  dd dd dd 21 34 12  ld ix,0x1234");
         assert_eq!(format_event(&DebugEvent::Exit(ExitReason::CycleLimit)), "! exit reason=limit");
         assert_eq!(format_output(b"READY\r\n"), "! out READY\\r\\n");
     }
