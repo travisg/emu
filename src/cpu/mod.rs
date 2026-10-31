@@ -12,11 +12,16 @@ use crate::bus::{Bus, Endian};
 use std::io::Write;
 
 pub mod m6800;
+mod m6800_dis;
 pub mod m6809;
+mod m6809_dis;
 pub mod ray703;
 mod ray703_dis;
 pub mod z80;
+mod z80_dis;
 
+#[cfg(test)]
+mod asxxxx_check;
 #[cfg(test)]
 mod testbus;
 #[cfg(test)]
@@ -133,8 +138,10 @@ pub trait Cpu {
     /// The instruction at `addr`, in the core's own units, reading bus
     /// bytes through `peek` -- which, like `Bus::peek8`, never touches a
     /// device. None if the core has no disassembler or a byte of the
-    /// instruction is not memory. A word that is no instruction comes back
-    /// as the assembler's data directive, one unit long.
+    /// instruction is not memory. An encoding the core refuses comes back
+    /// as the assembler's data directive over its first unit, and one the
+    /// core runs as a no-op of its own (the Z80's undefined `ED`s) as that
+    /// directive over all of it.
     fn disassemble(&self, _peek: &dyn Fn(u32) -> Option<u8>, _addr: u32) -> Option<Disassembly> {
         None
     }

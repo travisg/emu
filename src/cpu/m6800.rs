@@ -1150,6 +1150,10 @@ impl Cpu for Cpu6800 {
         self.cycles
     }
 
+    fn disassemble(&self, peek: &dyn Fn(u32) -> Option<u8>, addr: u32) -> Option<super::Disassembly> {
+        super::m6800_dis::disassemble(peek, addr)
+    }
+
     fn pc(&self) -> u32 {
         self.pc as u32
     }

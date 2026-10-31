@@ -1790,6 +1790,10 @@ impl Cpu for CpuZ80 {
         self.pc as u32
     }
 
+    fn disassemble(&self, peek: &dyn Fn(u32) -> Option<u8>, addr: u32) -> Option<super::Disassembly> {
+        super::z80_dis::disassemble(peek, addr)
+    }
+
     /// The trace line's registers first, then the alternate set and the
     /// interrupt state the trace leaves out.
     fn registers(&self) -> Vec<Register> {
