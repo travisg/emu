@@ -522,12 +522,20 @@ impl Wd1793 {
         self.write_drive = r.opt(|r| Ok(r.u8()? as usize))?;
         self.drq_in = r.u32()?;
         self.intrq_in = r.u32()?;
-        for drive in 0..DRIVES {
-            let image = r.opt(|r| {
+        // every disk read before any goes in, so a section that fails
+        // part way leaves the drives as they were
+        let mut disks = Vec::with_capacity(DRIVES);
+        for _ in 0..DRIVES {
+            disks.push(r.opt(|r| {
                 let path = std::path::PathBuf::from(r.str()?);
                 let write_protected = r.bool()?;
                 Ok(DiskImage::in_memory(path, r.bytes()?.to_vec(), write_protected))
-            })?;
+            })?);
+        }
+        if r.keeps_disks() {
+            return Ok(());
+        }
+        for (drive, image) in disks.into_iter().enumerate() {
             if let Some(bay) = &self.bay {
                 bay.set_mounted(drive, image.as_ref().map(|i| i.path.clone()));
             }
@@ -825,6 +833,26 @@ mod tests {
         write_sector(&mut fdc, 2, 2, 0x44);
         assert_eq!(fdc.read(0) & (STATUS_RECORD_NOT_FOUND | STATUS_WRITE_FAULT), 0);
         assert_eq!(std::fs::read(&p).unwrap(), written, "the file is not written");
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A load that fails part way leaves the drives alone, and the
+    /// rollback after it keeps them too: a write-through disk is still
+    /// write-through, not the in-memory copy a successful load would give.
+    #[test]
+    fn a_failed_load_and_its_rollback_keep_a_disk_write_through() {
+        use crate::snapshot::{Reader, Writer};
+        let p = image_with_pattern("rollback");
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p, false);
+        let mut w = Writer::new();
+        fdc.save_state(&mut w).unwrap();
+        let saved = w.into_bytes();
+        assert!(fdc.load_state(&mut Reader::new(&saved[..saved.len() - 100])).is_err());
+        fdc.load_state(&mut Reader::for_rollback(&saved)).unwrap();
+        write_sector(&mut fdc, 1, 1, 0x99);
+        let at = (SECTORS_PER_TRACK + 1) as usize * SECTOR_SIZE;
+        assert_eq!(std::fs::read(&p).unwrap()[at], 0x99, "the write reached the file");
         std::fs::remove_file(&p).ok();
     }
 

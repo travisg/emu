@@ -231,8 +231,9 @@ impl Bus for Ray703 {
         w.section(b"CORE", |w| core.save(w));
         w.section(b"TTY ", |w| tty.save(w));
         w.section(b"PTR ", |w| reader.save(w));
-        w.section(b"DISC", |w| disc.save(w));
         w.section(b"CLK ", |w| line_clock.save(w));
+        // the disc last: nothing after it can fail once its platters are on
+        w.section(b"DISC", |w| disc.save(w));
         Ok(())
     }
 
@@ -241,8 +242,8 @@ impl Bus for Ray703 {
         r.section(b"CORE", |r| self.core.load(r))?;
         r.section(b"TTY ", |r| self.tty.load(r))?;
         r.section(b"PTR ", |r| self.reader.load(r))?;
-        r.section(b"DISC", |r| self.disc.load(r))?;
-        r.section(b"CLK ", |r| self.line_clock.load(r))
+        r.section(b"CLK ", |r| self.line_clock.load(r))?;
+        r.section(b"DISC", |r| self.disc.load(r))
     }
 
     fn peek8(&self, addr: u32) -> Option<u8> {

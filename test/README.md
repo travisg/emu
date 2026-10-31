@@ -46,7 +46,10 @@ need no pty and no `script(1)`.
 
 The Altair IRQ, CTC and 703 ones need nothing outside the repo, and CI
 runs them; the 6809 one and the RC2014 BASIC, CP/M and exerciser ones and
-the Kaypro's need images from outside it and run locally. REX's session is
+the Kaypro's need images from outside it and run locally. The snapshot
+one is both: CI runs its cases whose guests the tree builds, and
+`SNAPSHOT_MACHINES` adds the 6809, RC2014 and Kaypro ones, which need the
+images. REX's session is
 `make -C rex test`, under its own directory. The 6809 one
 boots Microsoft BASIC, so it needs `roms/6809/BASIC.HEX` in place
 (`tools/fetch-roms.py`) and runs only locally. The RC2014 BASIC one boots the

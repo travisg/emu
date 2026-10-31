@@ -251,13 +251,16 @@ impl Emulator {
         self.system = system.to_string();
     }
 
-    /// Load a snapshot into the machine, all or nothing: on an error the
-    /// machine is put back as it was. The history goes, being of a run
-    /// that is no longer this machine's past.
+    /// Load a snapshot into the machine, all or nothing: one that is not
+    /// of this machine is refused before anything is touched, and one that
+    /// fails part way is rolled back, the drives keeping the disks they
+    /// had. The history goes, being of a run that is no longer this
+    /// machine's past.
     pub fn restore(&mut self, data: &[u8]) -> Result<(), String> {
+        crate::snapshot::check_header(data, &self.system)?;
         let before = crate::snapshot::save_machine(&self.system, &*self.cpu, &*self.bus)?;
         if let Err(e) = crate::snapshot::load_machine(data, &self.system, &mut *self.cpu, &mut *self.bus) {
-            crate::snapshot::load_machine(&before, &self.system, &mut *self.cpu, &mut *self.bus)
+            crate::snapshot::roll_back(&before, &self.system, &mut *self.cpu, &mut *self.bus)
                 .expect("the machine loads the state it just saved");
             return Err(e);
         }
@@ -1110,6 +1113,20 @@ mod tests {
         assert!(matches!(debug(&tx, DebugOp::History(HISTORY_LEN as u32 + 1)).recv().unwrap(), DebugReply::Err(_)));
         drop(tx);
         runner.join().unwrap();
+    }
+
+    /// A snapshot of another machine, or none at all, is refused before
+    /// the machine is touched: this one cannot even save its state, so a
+    /// restore that took a backup first would fail on that instead.
+    #[test]
+    fn a_restore_checks_the_header_before_touching_the_machine() {
+        let PanelRig { mut emu, tx, .. } = ScriptedCpu::build(vec![]);
+        emu.set_system("scripted");
+        assert_eq!(emu.restore(b"junk"), Err("not a snapshot".into()));
+        let mut w = crate::snapshot::Writer::new();
+        crate::snapshot::write_header(&mut w, "rc2014");
+        assert!(emu.restore(&w.into_bytes()).unwrap_err().contains("this machine is scripted"));
+        drop(tx);
     }
 
     #[test]

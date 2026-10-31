@@ -358,6 +358,7 @@ impl Bus for Kaypro {
         w.section(b"VRAM", |w| w.bytes(&video.contents()));
         w.u8(*control_latch);
         w.section(b"SIO ", |w| sio.save(w));
+        // the fdc last: nothing after it can fail once its disks are in
         let mut disks = Ok(());
         w.section(b"FDC ", |w| disks = fdc.save_state(w));
         disks

@@ -1009,6 +1009,8 @@ impl Cpu for Cpu703 {
             }
         }
         self.cycles = r.u32()?;
+        // a halted machine's lamps show the restored registers at once
+        self.publish_panel();
         Ok(())
     }
 

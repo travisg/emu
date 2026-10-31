@@ -72,9 +72,10 @@ def altair680(workdir, log):
     emu.remove_break(altair_irq.HANDLER)
 
     def elsewhere():
+        at = len(emu.output)
         emu.run()
         emu.key('ELSEWHERE')
-        emu.wait_for_output('ELSEWHERE', start=len(emu.output) - 1 if emu.output else 0)
+        emu.wait_for_output('ELSEWHERE', start=at)
         emu.halt()
     return emu, elsewhere
 
@@ -326,6 +327,22 @@ def ray703_disc(workdir, log):
                     os.path.join(workdir, 'disks', 'ray703-disc0.img')], check=True, stdout=log)
     with cwd(workdir):
         emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', os.path.join(ROMS_703, 'disc.bin'), '--no-throttle'], log=log)
+    # Before anything is written: a snapshot of this machine cut short,
+    # refused part way through the load and rolled back. The platter must
+    # still be write-through after it, which the exerciser's write proves
+    # by reaching the file.
+    platter = os.path.join(workdir, 'disks', 'ray703-disc0.img')
+    with open(platter, 'rb') as f:
+        blank = f.read()
+    cut = os.path.join(workdir, 'cut.snap')
+    with open(cut, 'wb') as f:
+        f.write(snap(emu, os.path.join(workdir, 'pre.snap'))[:-1000])
+    try:
+        emu.command('restore %s' % cut)
+        raise AssertionError('ray703-disc: a cut-short snapshot was restored')
+    except DebugError as e:
+        if 'ends early' not in str(e):
+            raise
     # just past the DOT 1,4 that starts the write (test/703/disc.lst)
     emu.add_break(DISC_WRITE_STARTED)
     emu.run()
@@ -335,7 +352,6 @@ def ray703_disc(workdir, log):
     emu.remove_break(DISC_WRITE_STARTED)
     emu.step(20)
 
-    platter = os.path.join(workdir, 'disks', 'ray703-disc0.img')
     written = {}
 
     def elsewhere():
@@ -344,6 +360,8 @@ def ray703_disc(workdir, log):
         emu.halt()
         with open(platter, 'rb') as f:
             written['file'] = f.read()
+        if written['file'] == blank:
+            raise AssertionError('ray703-disc: the platter rolled back at the start no longer writes its file')
 
     def kept(s1):
         """The restore put the platter back in memory: what the rerun wrote

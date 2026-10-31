@@ -117,11 +117,27 @@ pub struct Reader<'a> {
     pos: usize,
     /// What is being read, for the errors.
     what: String,
+    /// A rollback: put the machine back as it was, its disks included --
+    /// they never left their drives, so a disk device reads its section and
+    /// keeps what it has (`keeps_disks`).
+    keep_disks: bool,
 }
 
 impl<'a> Reader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Reader { data, pos: 0, what: "snapshot".into() }
+        Reader { data, pos: 0, what: "snapshot".into(), keep_disks: false }
+    }
+
+    /// A reader for a rollback: see `roll_back`.
+    pub fn for_rollback(data: &'a [u8]) -> Self {
+        Reader { keep_disks: true, ..Reader::new(data) }
+    }
+
+    /// Whether a disk device keeps the disks it has rather than load the
+    /// snapshot's: true in a rollback, where they are the very disks the
+    /// snapshot was taken of, files and all.
+    pub fn keeps_disks(&self) -> bool {
+        self.keep_disks
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
@@ -194,7 +210,7 @@ impl<'a> Reader<'a> {
         }
         let n = self.u32()? as usize;
         let payload = self.take(n)?;
-        let mut inner = Reader { data: payload, pos: 0, what: format!("section {name}") };
+        let mut inner = Reader { data: payload, pos: 0, what: format!("section {name}"), keep_disks: self.keep_disks };
         let v = f(&mut inner)?;
         inner.finish()?;
         Ok(v)
@@ -259,9 +275,28 @@ pub fn save_machine(system: &str, cpu: &dyn Cpu, bus: &dyn Bus) -> Result<Vec<u8
 
 /// Load a whole machine saved by `save_machine` into `cpu` and `bus`,
 /// which must be the machine it was saved from. On an error the machine
-/// may be part loaded: the caller restores what it had.
+/// may be part loaded, its disks excepted -- a machine loads its disk
+/// devices last, and each of those reads its whole section before it
+/// changes anything -- and the caller puts back what it had with
+/// `roll_back`.
 pub fn load_machine(data: &[u8], system: &str, cpu: &mut dyn Cpu, bus: &mut dyn Bus) -> Result<(), String> {
-    let mut r = Reader::new(data);
+    load_with(Reader::new(data), system, cpu, bus)
+}
+
+/// Put back a machine `save_machine` saved a moment ago, after a load
+/// that failed part way: everything but the disks, which are still the
+/// ones it had -- rebuilt from the backup they would come back in memory,
+/// and a disk the user had write-through would quietly stop writing.
+pub fn roll_back(backup: &[u8], system: &str, cpu: &mut dyn Cpu, bus: &mut dyn Bus) -> Result<(), String> {
+    load_with(Reader::for_rollback(backup), system, cpu, bus)
+}
+
+/// Check that `data` is a snapshot of `system`, changing nothing.
+pub fn check_header(data: &[u8], system: &str) -> Result<(), String> {
+    read_header(&mut Reader::new(data), system)
+}
+
+fn load_with(mut r: Reader, system: &str, cpu: &mut dyn Cpu, bus: &mut dyn Bus) -> Result<(), String> {
     read_header(&mut r, system)?;
     r.section(b"CPU ", |r| cpu.load_state(r))?;
     r.section(b"BUS ", |r| bus.load_state(r))?;

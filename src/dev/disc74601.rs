@@ -233,17 +233,17 @@ impl crate::snapshot::Snapshot for Disc74601 {
 
     fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
         self.connected = r.bool()?;
+        // every platter read before any goes on, so a section that fails
+        // part way leaves the units as they were
+        let mut platters = Vec::with_capacity(DISC_UNITS);
         for unit in 0..DISC_UNITS {
-            self.units[unit] = r.opt(|r| {
+            platters.push(r.opt(|r| {
                 let data = r.bytes()?.to_vec();
                 if data.len() != IMAGE_BYTES {
                     return Err(format!("disc unit {unit}: {} bytes, not a platter", data.len()));
                 }
                 Ok(DiscUnit { data, file: None, write_inhibit: r.opt(|r| r.u8())?, result: r.u16()? })
-            })?;
-            if let Some(rack) = &self.rack {
-                rack.set_online(unit, self.units[unit].is_some());
-            }
+            })?);
         }
         self.mem_addr = r.u16()?;
         self.track = r.u16()?;
@@ -258,6 +258,14 @@ impl crate::snapshot::Snapshot for Disc74601 {
             };
             Ok(Active { unit, op, words: r.u16()?, remaining: r.u32()? })
         })?;
+        if !r.keeps_disks() {
+            for (unit, platter) in platters.into_iter().enumerate() {
+                if let Some(rack) = &self.rack {
+                    rack.set_online(unit, platter.is_some());
+                }
+                self.units[unit] = platter;
+            }
+        }
         Ok(())
     }
 }
