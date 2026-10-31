@@ -14,6 +14,7 @@ use std::io::Write;
 pub mod m6800;
 pub mod m6809;
 pub mod ray703;
+mod ray703_dis;
 pub mod z80;
 
 #[cfg(test)]
@@ -53,6 +54,16 @@ impl Register {
     pub fn hex(&self) -> String {
         format!("{:0width$x}", self.value, width = (self.bits as usize).div_ceil(4))
     }
+}
+
+/// One instruction, read back out of memory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Disassembly {
+    /// In the syntax of the core's assembler in this tree, so a line can go
+    /// back through it.
+    pub text: String,
+    /// In the core's own units, words on the 703.
+    pub len: u32,
 }
 
 /// How the debugger presents this core's memory: the byte order of a 16-bit
@@ -117,6 +128,15 @@ pub trait Cpu {
     /// byte-addressed big-endian shape of the Motorola parts.
     fn addressing(&self) -> Addressing {
         Addressing { endian: Endian::Big, unit_bytes: 1 }
+    }
+
+    /// The instruction at `addr`, in the core's own units, reading bus
+    /// bytes through `peek` -- which, like `Bus::peek8`, never touches a
+    /// device. None if the core has no disassembler or a byte of the
+    /// instruction is not memory. A word that is no instruction comes back
+    /// as the assembler's data directive, one unit long.
+    fn disassemble(&self, _peek: &dyn Fn(u32) -> Option<u8>, _addr: u32) -> Option<Disassembly> {
+        None
     }
 
     /// Human-readable register dump, for debugging.

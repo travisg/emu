@@ -70,7 +70,9 @@ class DebugError(Exception):
     """An `err` reply, or the connection going away."""
 
 
-Stopped = collections.namedtuple('Stopped', 'reason pc')
+# `insn` is the instruction at the PC, or None from a core without a
+# disassembler.
+Stopped = collections.namedtuple('Stopped', 'reason pc insn', defaults=(None,))
 Exited = collections.namedtuple('Exited', 'reason')
 
 
@@ -203,8 +205,10 @@ class Emu:
                     self.output += data
                     self._changed.notify_all()
             elif line.startswith('! stopped '):
-                fields = dict(f.split('=', 1) for f in line[10:].split())
-                self.events.put(Stopped(fields.get('reason', '?'), int(fields.get('pc', '0'), 16)))
+                # insn= is last and runs to the end of the line
+                head, _, insn = line[10:].partition(' insn=')
+                fields = dict(f.split('=', 1) for f in head.split())
+                self.events.put(Stopped(fields.get('reason', '?'), int(fields.get('pc', '0'), 16), insn or None))
             elif line.startswith('! exit '):
                 fields = dict(f.split('=', 1) for f in line[7:].split())
                 self.events.put(Exited(fields.get('reason', '?')))
@@ -227,7 +231,7 @@ class Emu:
 
     def command(self, line):
         """Send one command line; return the text after `ok`. `#` lines on
-        the way (help) are collected in `info`."""
+        the way (help, dis) are collected in `info`."""
         self.transcript.append('> ' + line)
         try:
             self._sock.sendall((line + '\n').encode('latin-1'))
@@ -352,6 +356,18 @@ class Emu:
 
     def breaks(self):
         return [int(b, 16) for b in self.command('breaks').split()]
+
+    def dis(self, addr, n=1):
+        """`n` instructions from `addr` (core units), as (addr, raw, text)
+        tuples: raw a list of the instruction's units."""
+        before = len(self.info)
+        self.command('dis %x %d' % (addr, n))
+        out = []
+        for line in self.info[before:]:
+            a, raw_text = line.split('  ', 1)
+            raw, text = raw_text[:14].split(), raw_text[15:]
+            out.append((int(a, 16), [int(u, 16) for u in raw], text))
+        return out
 
     def key(self, data):
         """Keystrokes for the guest. A string is sent as latin-1."""
@@ -500,7 +516,7 @@ def _interactive(emu):
                 if ev is None:
                     return
                 show(('\r\n[%s]\r\n' % ' '.join('%s=%s' % (k, ('%04x' % v) if k == 'pc' else v)
-                                              for k, v in ev._asdict().items())).encode())
+                                              for k, v in ev._asdict().items() if v is not None)).encode())
             if closed:
                 return
 

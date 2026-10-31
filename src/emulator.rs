@@ -11,7 +11,7 @@
 use crate::bus::{Bus, Endian};
 use crate::console::{DiskImage, PanelCommand, PanelState};
 use crate::cpu::{Cpu, StepResult};
-use crate::debug::{DebugEvent, DebugOp, DebugReply, DebugRequest, DebugSink, StopReason};
+use crate::debug::{DebugEvent, DebugOp, DebugReply, DebugRequest, DebugSink, DisLine, StopReason};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
@@ -55,6 +55,8 @@ pub enum StopPolicy {
 /// The most the debugger may read in one request, so a mistyped length
 /// cannot stall the machine.
 const PEEK_LIMIT: u32 = 256;
+/// The most instructions one `dis` lists.
+const DIS_LIMIT: u32 = 64;
 
 /// What the throttle wants done after one more instruction. Split out of
 /// [`Throttle::pace`] as a pure function of the numbers so the arithmetic,
@@ -345,7 +347,9 @@ impl Emulator {
         self.set_run_state(RunState::Halted);
         self.stop_reason = Some(reason);
         if let Some(sink) = &self.sink {
-            sink.event(DebugEvent::Stopped { reason, pc: self.cpu.pc() });
+            let pc = self.cpu.pc();
+            let insn = self.cpu.disassemble(&|a| self.bus.peek8(a), pc).map(|d| d.text);
+            sink.event(DebugEvent::Stopped { reason, pc, insn });
         }
     }
 
@@ -483,6 +487,7 @@ impl Emulator {
                 b.sort_unstable();
                 DebugReply::Breaks(b)
             }
+            DebugOp::Disassemble { addr, count } => self.disassemble(addr, count),
             DebugOp::ChangeDisk { drive, path } => {
                 let image = match path.map(DiskImage::open).transpose() {
                     Ok(image) => image,
@@ -515,6 +520,43 @@ impl Emulator {
             Some(r) => DebugReply::Register(r),
             None => DebugReply::Err(format!("unknown register {name}")),
         }
+    }
+
+    /// `count` instructions from `addr`, up to the first that is not all
+    /// memory.
+    fn disassemble(&self, mut addr: u32, count: u32) -> DebugReply {
+        if count > DIS_LIMIT {
+            return DebugReply::Err(format!("at most {DIS_LIMIT} instructions per request"));
+        }
+        let unit = self.cpu.addressing();
+        let peek = |a| self.bus.peek8(a);
+        let mut lines = Vec::new();
+        for _ in 0..count {
+            let Some(d) = self.cpu.disassemble(&peek, addr) else {
+                break;
+            };
+            let raw = (0..d.len)
+                .map(|i| {
+                    let at = addr.wrapping_add(i).wrapping_mul(unit.unit_bytes);
+                    (0..unit.unit_bytes).fold(0u16, |w, b| {
+                        let byte = self.bus.peek8(at + b).unwrap_or(0) as u16;
+                        match unit.endian {
+                            Endian::Big => (w << 8) | byte,
+                            Endian::Little => w | (byte << (8 * b)),
+                        }
+                    })
+                })
+                .collect();
+            lines.push(DisLine { addr, raw, digits: 2 * unit.unit_bytes as usize, text: d.text });
+            addr = addr.wrapping_add(d.len);
+        }
+        if lines.is_empty() && count > 0 {
+            if self.cpu.disassemble(&|_| Some(0), 0).is_none() {
+                return DebugReply::Err("this core has no disassembler".into());
+            }
+            return DebugReply::Err(format!("no memory at {addr:04x}"));
+        }
+        DebugReply::Disassembly(lines)
     }
 
     fn peek(&self, addr: u32, len: u32) -> DebugReply {
@@ -900,7 +942,7 @@ mod tests {
             panic!("halt should reply with a halted status, got {reply:?}");
         };
         assert_eq!(pc as u64, insns);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None });
         let stopped_at = steps.load(Ordering::SeqCst);
         // a second halt of a still machine is not a second event
         assert!(matches!(debug(&tx, DebugOp::Halt).recv().unwrap(), DebugReply::Status { .. }));
@@ -915,7 +957,7 @@ mod tests {
         let PanelRig { mut emu, tx, steps, events, .. } = ScriptedCpu::build(vec![]);
         let runner = std::thread::spawn(move || emu.run());
         assert_eq!(debug(&tx, DebugOp::Step(3)).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Step, pc: 3 });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Step, pc: 3, insn: None });
         assert_eq!(steps.load(Ordering::SeqCst), 3);
         assert_eq!(
             debug(&tx, DebugOp::Status).recv().unwrap(),
@@ -940,7 +982,7 @@ mod tests {
         assert_eq!(debug(&tx, DebugOp::AddBreak(2)).recv().unwrap(), DebugReply::Ok, "idempotent");
         assert_eq!(debug(&tx, DebugOp::Breaks).recv().unwrap(), DebugReply::Breaks(vec![2]));
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Break, pc: 2 });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Break, pc: 2, insn: None });
         assert_eq!(steps.load(Ordering::SeqCst), 2);
 
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
@@ -950,7 +992,7 @@ mod tests {
             panic!("halt should report a halted machine");
         };
         assert!(pc > 2, "RUN went past the breakpoint");
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None });
         assert_eq!(debug(&tx, DebugOp::RemoveBreak(2)).recv().unwrap(), DebugReply::Ok);
         assert_eq!(
             debug(&tx, DebugOp::RemoveBreak(2)).recv().unwrap(),
@@ -970,7 +1012,7 @@ mod tests {
         else {
             panic!("halt should report a halted machine");
         };
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Request, pc, insn: None });
         let stopped_at = steps.load(Ordering::SeqCst);
         assert!(stopped_at < u32::MAX as u64);
         // the budget is gone: nothing more executes
@@ -1068,11 +1110,11 @@ mod tests {
             ScriptedCpu::build(vec![StepResult::Halted, StepResult::BadOpcode]);
         let runner = std::thread::spawn(move || emu.run());
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Hlt, pc: 1 });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Hlt, pc: 1, insn: None });
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::BadOpcode, pc: 2 });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::BadOpcode, pc: 2, insn: None });
         assert_eq!(debug(&tx, DebugOp::Reset).recv().unwrap(), DebugReply::Ok);
-        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Reset, pc: 2 });
+        assert_eq!(next_event(&events), DebugEvent::Stopped { reason: StopReason::Reset, pc: 2, insn: None });
         assert_eq!(resets.load(Ordering::SeqCst), 1);
         drop(tx);
         assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);

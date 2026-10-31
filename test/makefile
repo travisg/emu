@@ -87,7 +87,7 @@ MKDISC703    := ../tools/mkdisc703.py
 RAY703_ROMS  := ../roms/703
 RAY703_DISKS := ../disks
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-dis-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
 
 ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-listings
 
@@ -194,3 +194,8 @@ ray703-disc-test: ray703-disc
 
 ray703-boot-test: ray703-boot
 	./run_ray703_boot_test.sh
+
+# The disassembler, against the listings' own mnemonics and asm703.py. The
+# harness makes its core images from the transcripts itself.
+ray703-dis-test:
+	./run_ray703_dis_test.py

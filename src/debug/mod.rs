@@ -23,7 +23,9 @@
 //! server answers every command with exactly one line, `ok [text]` or
 //! `err message`, in order. Lines starting with `!` are events the
 //! machine raised on its own and may arrive at any time; lines starting
-//! with `#` are information (the banner on connect, `help`). Addresses and
+//! with `#` are information -- the banner on connect, and the body of a
+//! reply that takes more than a line (`help`, `dis`), which comes ahead
+//! of that reply's `ok`. Addresses and
 //! values are hex, bare or with `0x`; counts are decimal; register names
 //! are case-insensitive. Output hex is bare, lower case and zero-padded
 //! to the register's width, as in `--trace`.
@@ -44,6 +46,7 @@
 //! | `writew ADDR W...` | `ok` | words to core-unit address ADDR |
 //! | `break ADDR` / `unbreak ADDR` | `ok` | ADDR in core units, the same as `pc` |
 //! | `breaks` | `ok HEX ...` | |
+//! | `dis ADDR [N]` | `# ` lines, then `ok` | N instructions (default 1, at most 64) from ADDR in core units: `# ADDR  RAW  TEXT` each, RAW in the core's units, TEXT in its assembler's syntax; stops early at a byte that is not memory, and `err` if the first is not |
 //! | `key TEXT` | `ok` | the rest of the line, unescaped, as keystrokes; `\r` is Return |
 //! | `disk DRIVE PATH` | `ok` | put the image at PATH (the rest of the line) in DRIVE, a letter or a number; `err` with the reason if the machine refuses it, and the drive keeps what it had |
 //! | `eject DRIVE` | `ok` | empty the drive |
@@ -52,8 +55,10 @@
 //! | `quit` | `ok`, then the connection closes | the machine runs on |
 //! | `kill` | `ok` | shuts the emulator down; `! exit` follows |
 //!
-//! Events: `! stopped reason=(request|step|break|hlt|badop|reset) pc=HEX`
-//! whenever the machine goes from moving to halted; `! out TEXT` for guest
+//! Events: `! stopped reason=(request|step|break|hlt|badop|reset) pc=HEX
+//! [insn=TEXT]` whenever the machine goes from moving to halted, `insn`
+//! the instruction at the PC, last on the line and running to its end,
+//! since it has spaces in it; `! out TEXT` for guest
 //! serial output, escaped, consecutive bytes folded into one line; `! exit
 //! reason=(shutdown|limit|halted|badop|loop)` when the run loop returns.
 //!
@@ -102,6 +107,8 @@ pub enum DebugOp {
     AddBreak(u32),
     RemoveBreak(u32),
     Breaks,
+    /// `count` instructions from `addr`, in core units.
+    Disassemble { addr: u32, count: u32 },
     /// The image at `path` into `drive`, or `None` to empty it -- the
     /// window's drive door, from the port. The run loop opens the file
     /// and the machine judges it.
@@ -154,13 +161,27 @@ pub enum DebugReply {
     Bytes(Vec<u8>),
     Words(Vec<u16>),
     Breaks(Vec<u32>),
+    Disassembly(Vec<DisLine>),
+}
+
+/// One instruction of a `dis` listing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisLine {
+    pub addr: u32,
+    /// The instruction's units as they sit in memory: bytes, or the 703's
+    /// words.
+    pub raw: Vec<u16>,
+    /// Hex digits to a unit.
+    pub digits: usize,
+    pub text: String,
 }
 
 /// Something the machine did on its own, as opposed to a reply.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DebugEvent {
-    /// The machine went from running (or stepping) to halted.
-    Stopped { reason: StopReason, pc: u32 },
+    /// The machine went from running (or stepping) to halted, in front of
+    /// `insn` when the core can read it.
+    Stopped { reason: StopReason, pc: u32, insn: Option<String> },
     /// The run loop returned; the process is on its way out.
     Exit(ExitReason),
 }

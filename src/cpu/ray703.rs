@@ -976,6 +976,10 @@ impl Cpu for Cpu703 {
         Addressing { endian: Endian::Big, unit_bytes: 2 }
     }
 
+    fn disassemble(&self, peek: &dyn Fn(u32) -> Option<u8>, addr: u32) -> Option<super::Disassembly> {
+        super::ray703_dis::disassemble(peek, addr)
+    }
+
     /// The panel's data-entry path (section 5). Runs on the CPU thread
     /// between instructions, halted or not -- the PROGRAM COUNTER row is
     /// "always active for both entry and display" (5-1), and keying the

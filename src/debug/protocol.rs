@@ -11,7 +11,7 @@
 //! file is its parser and its formatter, and nothing here touches the
 //! machine.
 
-use super::{DebugEvent, DebugOp, DebugReply};
+use super::{DebugEvent, DebugOp, DebugReply, DisLine};
 use crate::emulator::ExitReason;
 
 /// One parsed command line.
@@ -170,6 +170,11 @@ pub fn parse(line: &str) -> Result<Command, String> {
             arity(0)?;
             Command::Machine(DebugOp::Breaks)
         }
+        "dis" => match args.as_slice() {
+            [addr] => Command::Machine(DebugOp::Disassemble { addr: parse_hex(addr)?, count: 1 }),
+            [addr, n] => Command::Machine(DebugOp::Disassemble { addr: parse_hex(addr)?, count: parse_count(n)? }),
+            _ => return Err("dis takes an address and an optional count".into()),
+        },
         "key" => Command::Key(Vec::new()),
         "disk" => return Err("disk takes a drive and a path".into()),
         "eject" => {
@@ -247,9 +252,28 @@ fn hex_list<T: std::fmt::LowerHex>(items: &[T], width: usize) -> String {
     items.iter().map(|v| format!("{v:0width$x}")).collect::<Vec<_>>().join(" ")
 }
 
-/// One reply line, without its newline: `ok ...` or `err ...`.
+/// One `dis` line, without its `# `: address, raw units, text.
+pub fn format_dis_line(line: &DisLine) -> String {
+    format!("{:04x}  {:<14} {}", line.addr, hex_list(&line.raw, line.digits), line.text)
+}
+
+/// A reply's lines, without their newlines: any `# ` body, then the `ok
+/// ...` or `err ...` that ends it.
+pub fn format_reply_lines(reply: &DebugReply) -> Vec<String> {
+    match reply {
+        DebugReply::Disassembly(lines) => {
+            let mut out: Vec<String> = lines.iter().map(|l| format!("# {}", format_dis_line(l))).collect();
+            out.push("ok".into());
+            out
+        }
+        other => vec![format_reply(other)],
+    }
+}
+
+/// The line that ends a reply, without its newline: `ok ...` or `err ...`.
 pub fn format_reply(reply: &DebugReply) -> String {
     match reply {
+        DebugReply::Disassembly(_) => "ok".into(),
         DebugReply::Ok => "ok".into(),
         DebugReply::Err(msg) => format!("err {msg}"),
         DebugReply::Status { halted, reason, pc, insns } => {
@@ -290,7 +314,10 @@ fn exit_name(reason: ExitReason) -> &'static str {
 /// One event line, without its newline.
 pub fn format_event(ev: &DebugEvent) -> String {
     match ev {
-        DebugEvent::Stopped { reason, pc } => format!("! stopped reason={} pc={pc:04x}", reason.name()),
+        DebugEvent::Stopped { reason, pc, insn: None } => format!("! stopped reason={} pc={pc:04x}", reason.name()),
+        DebugEvent::Stopped { reason, pc, insn: Some(insn) } => {
+            format!("! stopped reason={} pc={pc:04x} insn={insn}", reason.name())
+        }
         DebugEvent::Exit(reason) => format!("! exit reason={}", exit_name(*reason)),
     }
 }
@@ -312,6 +339,7 @@ pub const HELP: &[&str] = &[
     "write ADDR B...        bytes to bus byte address ADDR",
     "writew ADDR W...       words to core-unit address ADDR",
     "break ADDR | unbreak ADDR | breaks",
+    "dis ADDR [N]           disassemble N instructions (default 1) at core-unit address ADDR",
     "key TEXT               keystrokes to the guest (\\r \\n \\t \\\\ \\xHH)",
     "disk DRIVE PATH        put the image at PATH in drive DRIVE (a letter, or a number)",
     "eject DRIVE            empty the drive",
@@ -346,6 +374,8 @@ mod tests {
             ("break 1a4", Command::Machine(DebugOp::AddBreak(0x1a4))),
             ("unbreak 1a4", Command::Machine(DebugOp::RemoveBreak(0x1a4))),
             ("breaks", Command::Machine(DebugOp::Breaks)),
+            ("dis 1a4", Command::Machine(DebugOp::Disassemble { addr: 0x1a4, count: 1 })),
+            ("dis 0x100 20", Command::Machine(DebugOp::Disassemble { addr: 0x100, count: 20 })),
             ("key LIST\\r", Command::Key(b"LIST\r".to_vec())),
             ("key  two spaces", Command::Key(b" two spaces".to_vec())),
             ("key", Command::Key(Vec::new())),
@@ -432,8 +462,20 @@ mod tests {
         );
         assert!(lines.iter().all(|l| !l.contains('\n')));
         assert_eq!(
-            format_event(&DebugEvent::Stopped { reason: StopReason::Hlt, pc: 0x113 }),
+            format_event(&DebugEvent::Stopped { reason: StopReason::Hlt, pc: 0x113, insn: None }),
             "! stopped reason=hlt pc=0113"
+        );
+        assert_eq!(
+            format_event(&DebugEvent::Stopped { reason: StopReason::Break, pc: 0x40, insn: Some("LDW X'54E'".into()) }),
+            "! stopped reason=break pc=0040 insn=LDW X'54E'"
+        );
+        let dis = DebugReply::Disassembly(vec![
+            DisLine { addr: 0x300, raw: vec![0xb6, 0xf0, 0x01], digits: 2, text: "ldaa 0xf001".into() },
+            DisLine { addr: 0x545, raw: vec![0x854e], digits: 4, text: "LDW X'54E'".into() },
+        ]);
+        assert_eq!(
+            format_reply_lines(&dis),
+            ["# 0300  b6 f0 01       ldaa 0xf001", "# 0545  854e           LDW X'54E'", "ok"]
         );
         assert_eq!(format_event(&DebugEvent::Exit(ExitReason::CycleLimit)), "! exit reason=limit");
         assert_eq!(format_output(b"READY\r\n"), "! out READY\\r\\n");

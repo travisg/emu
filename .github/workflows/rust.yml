@@ -60,3 +60,8 @@ jobs:
     # the makefile ignores it.
     - name: Verify the transcribed listings
       run: make -C test ray703-verify
+
+    # The disassemblers: the 703's against the 1968 listings' mnemonics and
+    # a round trip of every word through asm703.py, over the debug port.
+    - name: 703 disassembler test
+      run: make -C test ray703-dis-test

@@ -222,7 +222,7 @@ fn read_loop<R: Read>(reader: R, out: &Sender<Outbound>, server: &DebugServer) -
         };
         match protocol::parse(&text) {
             Err(e) => reply(format!("err {e}")),
-            Ok(Command::Machine(op)) => reply(protocol::format_reply(&ask(server, op))),
+            Ok(Command::Machine(op)) => protocol::format_reply_lines(&ask(server, op)).into_iter().for_each(reply),
             Ok(Command::Key(bytes)) => {
                 if bytes.iter().any(|&b| server.keys.send(b).is_err()) {
                     reply("err the console is gone".into());
