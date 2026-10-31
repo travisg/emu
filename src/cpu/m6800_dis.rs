@@ -223,8 +223,9 @@ mod tests {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/asxxxx/t6800.asm");
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}; run tools/fetch-asxxxx.py"));
         let mut symbols = symbols(&text);
-        // a label in the direct page area, past its .blkb
-        symbols.push(("dir".into(), 0x33));
+        // a label in the direct page area, past its .blkb, which the walk
+        // through the code area cannot place
+        symbols.insert(0, ("dir".into(), 0x33));
         let all = cases(&text, &|_| false);
         let mut bad = Vec::new();
         for c in &all {
