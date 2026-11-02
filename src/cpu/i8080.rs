@@ -45,6 +45,8 @@
 
 use super::{Addressing, Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
+use crate::console::altair_status as st;
+use crate::console::{AltairPanel, PanelCommand};
 use std::io::Write;
 
 const F_C: u8 = 1 << 0;
@@ -130,6 +132,43 @@ pub struct Cpu8080 {
     halted: bool,
     /// States the last `step()` consumed, for `last_step_cycles`.
     cycles: u32,
+    /// The front panel's lamps, when there is one.
+    panel: Option<Box<PanelTap>>,
+}
+
+/// Machine cycles a [`PanelTap`] counts before it flushes them to the
+/// panel: a quarter of a millisecond at 2 MHz, a sliver of a frame.
+const PANEL_FLUSH: u32 = 128;
+
+/// The core's end of an [`AltairPanel`]: what each machine cycle put on
+/// the address and data lines and the status latch, counted per lamp. A
+/// cycle is one charge whatever its length in states -- the lamps' duty
+/// is by machine cycle, which is near enough by time at three to five
+/// states each.
+#[derive(Clone)]
+struct PanelTap {
+    panel: AltairPanel,
+    counts: [[u32; 16]; 3],
+    cycles: u32,
+}
+
+impl PanelTap {
+    fn cycle(&mut self, addr: u16, data: u8, status: u16) {
+        for (row, value) in self.counts.iter_mut().zip([addr, data as u16, status]) {
+            let mut bits = value;
+            while bits != 0 {
+                let i = bits.leading_zeros() as usize;
+                row[i] += 1;
+                bits &= !(0x8000 >> i);
+            }
+        }
+        self.cycles += 1;
+        if self.cycles >= PANEL_FLUSH {
+            self.panel.flush(&self.counts, self.cycles);
+            self.counts = [[0; 16]; 3];
+            self.cycles = 0;
+        }
+    }
 }
 
 fn parity(val: u8) -> bool {
@@ -139,6 +178,34 @@ fn parity(val: u8) -> bool {
 impl Cpu8080 {
     pub fn new() -> Self {
         Cpu8080 { f: F_ONE, ..Default::default() }
+    }
+
+    /// Feed a front panel's lamps from here on.
+    pub fn attach_panel(&mut self, panel: AltairPanel) {
+        self.panel = Some(Box::new(PanelTap { panel, counts: [[0; 16]; 3], cycles: 0 }));
+    }
+
+    /// What the lamps show if the machine stops before the next step: the
+    /// M1 cycle of the next instruction, waiting -- or, in a HLT, the halt
+    /// acknowledge, with the address past it and the bus floating high.
+    #[inline(always)]
+    fn publish_stopped(&self, bus: &dyn Bus) {
+        if self.panel.is_some() {
+            self.publish_stopped_panel(bus);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn publish_stopped_panel(&self, bus: &dyn Bus) {
+        let Some(t) = &self.panel else { return };
+        let inte = if self.inte { st::INTE } else { 0 };
+        if self.halted {
+            t.panel.set_stopped(self.pc.wrapping_add(1), 0xff, st::HLTA | st::MEMR | st::WO | inte);
+        } else {
+            let data = bus.peek8(self.pc as u32).unwrap_or(0xff);
+            t.panel.set_stopped(self.pc, data, st::M1 | st::MEMR | st::WO | inte);
+        }
     }
 
     fn bc(&self) -> u16 {
@@ -196,7 +263,7 @@ impl Cpu8080 {
             3 => self.e,
             4 => self.h,
             5 => self.l,
-            6 => bus.read8(self.hl() as u32),
+            6 => self.read(bus, self.hl()),
             _ => self.a,
         }
     }
@@ -208,13 +275,59 @@ impl Cpu8080 {
             3 => self.e = v,
             4 => self.h = v,
             5 => self.l = v,
-            6 => bus.write8(self.hl() as u32, v),
+            6 => self.write(bus, self.hl(), v),
             _ => self.a = v,
         }
     }
 
-    fn imm8(&mut self, bus: &mut dyn Bus) -> u8 {
+    /// One machine cycle onto the panel's lamps, INTE with it. The charge
+    /// itself is out of line: inlined at every bus access it costs a run
+    /// with no panel a quarter of its speed.
+    #[inline(always)]
+    fn tap(&mut self, addr: u16, data: u8, status: u16) {
+        if self.panel.is_some() {
+            self.tap_panel(addr, data, status);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn tap_panel(&mut self, addr: u16, data: u8, status: u16) {
+        let inte = if self.inte { st::INTE } else { 0 };
+        if let Some(t) = &mut self.panel {
+            t.cycle(addr, data, status | inte);
+        }
+    }
+
+    fn read(&mut self, bus: &mut dyn Bus, addr: u16) -> u8 {
+        let v = bus.read8(addr as u32);
+        self.tap(addr, v, st::MEMR | st::WO);
+        v
+    }
+    fn write(&mut self, bus: &mut dyn Bus, addr: u16, v: u8) {
+        bus.write8(addr as u32, v);
+        self.tap(addr, v, 0);
+    }
+    fn stack_read(&mut self, bus: &mut dyn Bus, addr: u16) -> u8 {
+        let v = bus.read8(addr as u32);
+        self.tap(addr, v, st::MEMR | st::STACK | st::WO);
+        v
+    }
+    fn stack_write(&mut self, bus: &mut dyn Bus, addr: u16, v: u8) {
+        bus.write8(addr as u32, v);
+        self.tap(addr, v, st::STACK);
+    }
+
+    /// The opcode, in an M1 cycle.
+    fn fetch(&mut self, bus: &mut dyn Bus) -> u8 {
         let v = bus.read8(self.pc as u32);
+        self.tap(self.pc, v, st::M1 | st::MEMR | st::WO);
+        self.pc = self.pc.wrapping_add(1);
+        v
+    }
+
+    fn imm8(&mut self, bus: &mut dyn Bus) -> u8 {
+        let v = self.read(bus, self.pc);
         self.pc = self.pc.wrapping_add(1);
         v
     }
@@ -222,27 +335,27 @@ impl Cpu8080 {
         let lo = self.imm8(bus);
         u16::from_le_bytes([lo, self.imm8(bus)])
     }
-    fn read16(&self, bus: &mut dyn Bus, addr: u16) -> u16 {
-        let lo = bus.read8(addr as u32);
-        u16::from_le_bytes([lo, bus.read8(addr.wrapping_add(1) as u32)])
+    fn read16(&mut self, bus: &mut dyn Bus, addr: u16) -> u16 {
+        let lo = self.read(bus, addr);
+        u16::from_le_bytes([lo, self.read(bus, addr.wrapping_add(1))])
     }
-    fn write16(&self, bus: &mut dyn Bus, addr: u16, v: u16) {
+    fn write16(&mut self, bus: &mut dyn Bus, addr: u16, v: u16) {
         let [lo, hi] = v.to_le_bytes();
-        bus.write8(addr as u32, lo);
-        bus.write8(addr.wrapping_add(1) as u32, hi);
+        self.write(bus, addr, lo);
+        self.write(bus, addr.wrapping_add(1), hi);
     }
     /// High byte first, as the part pushes.
     fn push(&mut self, bus: &mut dyn Bus, v: u16) {
         let [lo, hi] = v.to_le_bytes();
         self.sp = self.sp.wrapping_sub(1);
-        bus.write8(self.sp as u32, hi);
+        self.stack_write(bus, self.sp, hi);
         self.sp = self.sp.wrapping_sub(1);
-        bus.write8(self.sp as u32, lo);
+        self.stack_write(bus, self.sp, lo);
     }
     fn pop(&mut self, bus: &mut dyn Bus) -> u16 {
-        let lo = bus.read8(self.sp as u32);
+        let lo = self.stack_read(bus, self.sp);
         self.sp = self.sp.wrapping_add(1);
-        let hi = bus.read8(self.sp as u32);
+        let hi = self.stack_read(bus, self.sp);
         self.sp = self.sp.wrapping_add(1);
         u16::from_le_bytes([lo, hi])
     }
@@ -366,18 +479,18 @@ impl Cpu8080 {
                 }
             }
             (0, 2) => match (p, q) {
-                (0, 0) => bus.write8(self.bc() as u32, self.a),
-                (1, 0) => bus.write8(self.de() as u32, self.a),
+                (0, 0) => self.write(bus, self.bc(), self.a),
+                (1, 0) => self.write(bus, self.de(), self.a),
                 (2, 0) => {
                     let addr = self.imm16(bus);
                     self.write16(bus, addr, self.hl());
                 }
                 (3, 0) => {
                     let addr = self.imm16(bus);
-                    bus.write8(addr as u32, self.a);
+                    self.write(bus, addr, self.a);
                 }
-                (0, _) => self.a = bus.read8(self.bc() as u32),
-                (1, _) => self.a = bus.read8(self.de() as u32),
+                (0, _) => self.a = self.read(bus, self.bc()),
+                (1, _) => self.a = self.read(bus, self.de()),
                 (2, _) => {
                     let addr = self.imm16(bus);
                     let v = self.read16(bus, addr);
@@ -385,7 +498,7 @@ impl Cpu8080 {
                 }
                 _ => {
                     let addr = self.imm16(bus);
-                    self.a = bus.read8(addr as u32);
+                    self.a = self.read(bus, addr);
                 }
             },
             (0, 3) => {
@@ -428,6 +541,7 @@ impl Cpu8080 {
             },
             (1, 6) if y == 6 => {
                 // HLT, held on itself: see `halted`
+                self.tap(self.pc, 0xff, st::HLTA | st::MEMR | st::WO);
                 self.pc = self.pc.wrapping_sub(1);
                 self.halted = true;
                 if !self.inte {
@@ -472,18 +586,25 @@ impl Cpu8080 {
                 0 | 1 => self.pc = self.imm16(bus),
                 2 => {
                     let n = self.imm8(bus);
-                    bus.io_write8(u16::from_be_bytes([n, n]), self.a);
+                    let port = u16::from_be_bytes([n, n]);
+                    bus.io_write8(port, self.a);
+                    self.tap(port, self.a, st::OUT);
                 }
                 3 => {
                     // the port number is on both halves of the address bus
                     let n = self.imm8(bus);
-                    self.a = bus.io_read8(u16::from_be_bytes([n, n]));
+                    let port = u16::from_be_bytes([n, n]);
+                    self.a = bus.io_read8(port);
+                    self.tap(port, self.a, st::INP | st::WO);
                 }
                 4 => {
                     // XTHL
-                    let v = self.read16(bus, self.sp);
-                    self.write16(bus, self.sp, self.hl());
-                    self.set_hl(v);
+                    let sp = self.sp;
+                    let lo = self.stack_read(bus, sp);
+                    let hi = self.stack_read(bus, sp.wrapping_add(1));
+                    self.stack_write(bus, sp.wrapping_add(1), self.h);
+                    self.stack_write(bus, sp, self.l);
+                    self.set_hl(u16::from_le_bytes([lo, hi]));
                 }
                 5 => {
                     let de = self.de();
@@ -549,24 +670,51 @@ impl Cpu for Cpu8080 {
             // anything else is taken as the pulled-up bus's `RST 7`. The
             // fetch does not advance PC, so the RST pushes the address of
             // the instruction it interrupted.
+            let asleep = self.halted;
             self.wake();
             self.inte = false;
             let byte = bus.interrupt_acknowledge();
-            if byte & 0xc7 == 0xc7 {
-                byte
-            } else {
-                0xff
-            }
+            let byte = if byte & 0xc7 == 0xc7 { byte } else { 0xff };
+            self.tap(self.pc, byte, st::INT | st::M1 | st::WO | if asleep { st::HLTA } else { 0 });
+            byte
         } else if self.halted {
             if !self.inte {
                 return StepResult::Halted;
             }
             self.cycles += HALT_STATES;
+            self.tap(self.pc.wrapping_add(1), 0xff, st::HLTA | st::MEMR | st::WO);
+            self.publish_stopped(bus);
             return StepResult::Ok;
         } else {
-            self.imm8(bus)
+            self.fetch(bus)
         };
-        self.exec(bus, op)
+        let result = self.exec(bus, op);
+        self.publish_stopped(bus);
+        result
+    }
+
+    /// EXAMINE and DEPOSIT, each only on a stopped machine, as the panel's
+    /// switches only act on one; the run-state switches are the run loop's.
+    fn panel_command(&mut self, bus: &mut dyn Bus, cmd: &PanelCommand) {
+        let Some(t) = &self.panel else { return };
+        if !t.panel.halted() {
+            return;
+        }
+        let switches = t.panel.switches();
+        match cmd {
+            PanelCommand::Examine => self.pc = switches,
+            PanelCommand::ExamineNext => self.pc = self.pc.wrapping_add(1),
+            PanelCommand::Deposit => bus.write8(self.pc as u32, switches as u8),
+            PanelCommand::DepositNext => {
+                self.pc = self.pc.wrapping_add(1);
+                bus.write8(self.pc as u32, switches as u8);
+            }
+            _ => return,
+        }
+        // EXAMINE ends the HLT the machine was stopped in, as the JMP it
+        // jams onto the bus does
+        self.halted = false;
+        self.publish_stopped(bus);
     }
 
     fn last_step_cycles(&self) -> u32 {
@@ -582,7 +730,7 @@ impl Cpu for Cpu8080 {
     }
 
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
-        let Cpu8080 { a, f, b, c, d, e, h, l, sp, pc, inte, ei_shadow, halted, cycles } = self;
+        let Cpu8080 { a, f, b, c, d, e, h, l, sp, pc, inte, ei_shadow, halted, cycles, panel: _session } = self;
         for v in [a, f, b, c, d, e, h, l] {
             w.u8(*v);
         }
@@ -1079,6 +1227,61 @@ mod tests {
             let cpu = after(&[op, 0x00, 0x20], 0, f, 0);
             assert_eq!(cpu.pc == 0x2000, taken, "{op:02x} with f={f:02x}");
         }
+    }
+
+    /// With a panel, every machine cycle charges the lamps its address,
+    /// data and status lines lit: `JMP 0` is an M1 fetch at 0 and operand
+    /// reads at 1 and 2, so over its loop M1 is lit a third of the cycles,
+    /// MEMR and WO all of them, and A0 and A1 a third each.
+    #[test]
+    fn a_panel_sees_each_machine_cycle() {
+        use crate::console::{AltairPanel, ALTAIR_ADDRESS, ALTAIR_DATA, ALTAIR_STATUS};
+        let (mut cpu, mut bus) = boot(&[0xc3, 0x00, 0x00]); // jmp 0
+        let panel = AltairPanel::new();
+        cpu.attach_panel(panel.clone());
+        run_steps(&mut cpu, &mut bus, PANEL_FLUSH as usize); // 3 cycles a step: three flushes
+        let status = panel.snapshot(ALTAIR_STATUS);
+        assert_eq!(status.cycles, 3 * PANEL_FLUSH as u64);
+        let lit = |snap: &crate::console::LampSnapshot, bit: u16| snap.bits[bit.leading_zeros() as usize];
+        assert_eq!(lit(&status, st::M1), PANEL_FLUSH as u64);
+        assert_eq!(lit(&status, st::MEMR), 3 * PANEL_FLUSH as u64);
+        assert_eq!(lit(&status, st::WO), 3 * PANEL_FLUSH as u64);
+        assert_eq!(lit(&status, st::STACK) + lit(&status, st::INTE), 0);
+        let address = panel.snapshot(ALTAIR_ADDRESS);
+        assert_eq!((address.bits[15], address.bits[14], address.bits[13]), (PANEL_FLUSH as u64, PANEL_FLUSH as u64, 0));
+        let data = panel.snapshot(ALTAIR_DATA);
+        assert_eq!(data.bits[8], PANEL_FLUSH as u64, "D7 for the 0xc3");
+        // and what a stop would show: the next fetch, waiting
+        assert_eq!(panel.stopped(ALTAIR_ADDRESS), 0);
+        assert_eq!(panel.stopped(ALTAIR_DATA), 0xc3);
+        assert_eq!(panel.stopped(ALTAIR_STATUS), st::M1 | st::MEMR | st::WO);
+    }
+
+    /// EXAMINE puts the toggles in PC, DEPOSIT their low byte at it, the
+    /// NEXTs step first -- and none of them act on a running machine.
+    #[test]
+    fn examine_and_deposit_act_on_a_stopped_machine() {
+        use crate::console::{AltairPanel, RunLamp, ALTAIR_DATA};
+        let (mut cpu, mut bus) = boot(&[]);
+        let panel = AltairPanel::new();
+        cpu.attach_panel(panel.clone());
+        for bit in [13, 4, 1] {
+            panel.toggle_switch(bit); // 0x2012
+        }
+        cpu.panel_command(&mut bus, &PanelCommand::Examine);
+        assert_eq!(cpu.pc, 0, "running: ignored");
+        panel.set_halted(true);
+        cpu.panel_command(&mut bus, &PanelCommand::Examine);
+        assert_eq!(cpu.pc, 0x2012);
+        cpu.panel_command(&mut bus, &PanelCommand::Deposit);
+        cpu.panel_command(&mut bus, &PanelCommand::DepositNext);
+        assert_eq!((cpu.pc, bus.mem[0x2012], bus.mem[0x2013]), (0x2013, 0x12, 0x12));
+        cpu.panel_command(&mut bus, &PanelCommand::ExamineNext);
+        assert_eq!(cpu.pc, 0x2014);
+        bus.mem[0x2014] = 0x5a;
+        cpu.panel_command(&mut bus, &PanelCommand::ExamineNext);
+        cpu.panel_command(&mut bus, &PanelCommand::Examine);
+        assert_eq!(panel.stopped(ALTAIR_DATA), 0x12, "the lamps show what is at PC");
     }
 
     #[test]

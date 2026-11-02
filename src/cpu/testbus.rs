@@ -91,6 +91,11 @@ impl TestBus {
 }
 
 impl Bus for TestBus {
+    /// All of it is memory, and a peek is no read: it leaves `watch` alone.
+    fn peek8(&self, addr: u32) -> Option<u8> {
+        Some(self.mem[(addr & 0xffff) as usize])
+    }
+
     fn read8(&mut self, addr: u32) -> u8 {
         let addr = (addr & 0xffff) as u16;
         if self.watch == Some(addr) {

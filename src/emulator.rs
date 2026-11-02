@@ -9,7 +9,7 @@
 //! The run loop: a CPU, the bus it drives, and the things that stop it.
 
 use crate::bus::{Bus, Endian};
-use crate::console::{DiskImage, PanelCommand, PanelState};
+use crate::console::{DiskImage, PanelCommand, RunLamp};
 use crate::cpu::{Cpu, StepResult};
 use crate::debug::watch::{Watch, WatchBus};
 use crate::debug::{DebugEvent, DebugOp, DebugReply, DebugRequest, DebugSink, DisLine, StopReason, WatchStop};
@@ -161,7 +161,7 @@ pub struct Emulator {
     /// (HLT and bad opcodes halt to the panel too, not just the switch),
     /// so it publishes every run-state change here for the HALT
     /// indicator's red lens.
-    panel: Option<PanelState>,
+    panel: Option<Box<dyn RunLamp>>,
     run_state: RunState,
     /// Where stop events and the exit go, when a debug port is attached.
     sink: Option<DebugSink>,
@@ -275,7 +275,7 @@ impl Emulator {
     /// Wire in the panel's lamp state so run-state changes reach its HALT
     /// indicator. Publishes the current state immediately, so the order of
     /// this and `set_halted` doesn't matter.
-    pub fn set_panel_state(&mut self, panel: Option<PanelState>) {
+    pub fn set_panel_state(&mut self, panel: Option<Box<dyn RunLamp>>) {
         self.panel = panel;
         self.set_run_state(self.run_state);
     }
@@ -431,6 +431,15 @@ impl Emulator {
         self.stop(StopReason::Reset);
     }
 
+    /// The cpu's reset line alone: a running machine runs on from the
+    /// reset, a halted one stays halted there.
+    fn reset_in_place(&mut self) {
+        self.cpu.reset(&mut *self.bus);
+        if self.run_state == RunState::Halted {
+            self.stop(StopReason::Reset);
+        }
+    }
+
     /// Apply one panel command.
     fn handle_panel(&mut self, cmd: &PanelCommand) {
         match cmd {
@@ -438,6 +447,7 @@ impl Emulator {
             PanelCommand::Halt => self.halt(),
             PanelCommand::SingleCommand => self.step(1),
             PanelCommand::Reset => self.reset_and_halt(),
+            PanelCommand::ResetLine => self.reset_in_place(),
             // Everything else is data entry the core owns.
             cmd => self.cpu.panel_command(&mut *self.bus, cmd),
         }
@@ -824,6 +834,7 @@ impl Emulator {
 mod tests {
     use super::*;
     use crate::bus::Bus;
+    use crate::console::PanelState;
     use crate::cpu::Register;
     use crate::debug::Outbound;
 
@@ -996,7 +1007,7 @@ mod tests {
             emu.set_stop_policy(StopPolicy::Halt);
             emu.set_halted(true);
             let panel = PanelState::new();
-            emu.set_panel_state(Some(panel.clone()));
+            emu.set_panel_state(Some(Box::new(panel.clone())));
             let sink = DebugSink::new();
             let (ev_tx, events) = std::sync::mpsc::channel();
             sink.attach(ev_tx);

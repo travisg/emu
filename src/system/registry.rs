@@ -44,7 +44,7 @@ pub struct Machine {
     /// `Emulator::set_panel_state` -- the run loop publishes whether the
     /// machine is halted, which lights the HALT indicator's red lens.
     /// The frontend's own handle rides inside `display`.
-    pub panel: Option<crate::console::PanelState>,
+    pub panel: Option<Box<dyn crate::console::RunLamp>>,
 }
 
 /// Both ends of the run loop's control channel.
@@ -111,18 +111,36 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Mac
 }
 
 fn build_altair8800(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
-    let mut bus = altair8800::Altair8800::new(rom, console, sub)?;
+    // "panel" opens the front panel window, beside whatever the rest of the
+    // subsystem picks, in either order: altair8800-panel, -4k-panel
+    let mut tokens: Vec<&str> = sub.split('-').filter(|t| !t.is_empty()).collect();
+    let panel = tokens.iter().position(|&t| t == "panel").map(|i| tokens.remove(i)).is_some();
+    let sub = tokens.join("-");
+
+    let mut bus = altair8800::Altair8800::new(rom, console, &sub)?;
     if let Some(line) = open_serial(opts, altair8800::SERIAL_PORT)? {
         bus.attach_serial(line);
     }
-    Ok(Machine {
-        cpu: Box::new(crate::cpu::i8080::Cpu8080::new()),
-        bus: Box::new(bus),
-        display: None,
-        throttle_hz: None,
-        control: None,
-        panel: None,
-    })
+    let mut cpu = crate::cpu::i8080::Cpu8080::new();
+    let (mut display, mut control, mut run_lamp, mut throttle_hz) = (None, None, None, None);
+    if panel {
+        let state = crate::console::AltairPanel::new();
+        cpu.attach_panel(state.clone());
+        bus.attach_panel(state.clone());
+        let (ctl_tx, ctl_rx) = mpsc::channel();
+        display = Some(Display::Altair8800 {
+            title: "MITS Altair 8800",
+            panel: crate::console::AltairPanelDisplay {
+                panel: state.clone(),
+                control: crate::console::PanelControl(ctl_tx.clone()),
+            },
+        });
+        control = Some(ControlChannel { tx: ctl_tx, rx: ctl_rx });
+        run_lamp = Some(Box::new(state) as Box<dyn crate::console::RunLamp>);
+        // a live panel wants real time, as the 703's does
+        throttle_hz = Some(altair8800::CLOCK_HZ);
+    }
+    Ok(Machine { cpu: Box::new(cpu), bus: Box::new(bus), display, throttle_hz, control, panel: run_lamp })
 }
 
 fn build_rc2014(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
@@ -268,7 +286,7 @@ fn build_ray703(
         display,
         throttle_hz,
         control,
-        panel: panel_state,
+        panel: panel_state.map(|p| Box::new(p) as Box<dyn crate::console::RunLamp>),
     })
 }
 

@@ -7,7 +7,8 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 - **System09 (Motorola 6809)**: boots the 6809 BASIC ROM to a prompt on the terminal.
 - **MITS Altair 680 (Motorola 6800)**: boots the MITS monitor ROM on the terminal.
 - **MITS Altair 8800 (Intel 8080)**: no ROM: keys in MITS's bootstrap loader and loads Altair BASIC
-  4.0 off its paper tape, as an operator at the front panel did.
+  4.0 off its paper tape, as an operator at the front panel did — and `-s altair8800-panel` draws
+  that front panel, lamps, toggles, EXAMINE and DEPOSIT and all.
 - **RC2014 (Zilog Z80)**: boots the factory ROM image — Grant Searle's monitor into Microsoft
   BASIC 4.7b — on the terminal, over an interrupt-driven serial port.
 - **Kaypro II (Zilog Z80)**: boots CP/M 2.2 from a floppy image into an SDL2 window, with a
@@ -72,6 +73,7 @@ Run a system:
 ./target/debug/emu                          # the default system (6809)
 ./target/debug/emu -s altair680
 ./target/debug/emu -s altair8800               # loads 8K BASIC off paper tape, then MEMORY SIZE?
+./target/debug/emu -s altair8800-panel         # ...with the front panel: press RUN
 ./target/debug/emu -s kaypro                # opens a window; also loads disks/mbasic-games.img
 ./target/debug/emu -s kaypro --disk my.img  # a floppy of your own, which keeps what CP/M saves
 ./target/debug/emu -s rc2014-cpm --serial tcp:2323   # SIO channel B on localhost:2323 (nc localhost 2323)
@@ -210,7 +212,8 @@ other 703 scripts need `script(1)` and python3. `AGENTS.md` covers them all.
   registry that describes them.
 - `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO, WD1793 floppy controller.
 - `src/console/`: the terminal and SDL2 frontends — the Kaypro screen, the 703's front panel and
-  teletype-paper windows — and the channel/handles that connect them to the CPU thread.
+  teletype-paper windows, the Altair 8800's front panel — and the channel/handles that connect them
+  to the CPU thread.
 - `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
 - `tests/`: the one integration test. `test/`: the end-to-end regression scripts and the guest
   programs they drive, by machine — `test/6809/` and `test/703/` (the latter including a Tiny

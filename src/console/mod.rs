@@ -29,8 +29,10 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+pub mod altair8800;
 pub(crate) mod lamps;
 pub mod panel703;
+pub mod panel8800;
 pub mod paper;
 pub mod ray703;
 pub mod sdl;
@@ -383,6 +385,128 @@ impl PanelState {
     }
 }
 
+/// A front panel as the run loop sees it: a lamp for "halted at the
+/// panel", which every run-state change is published to. Everything else
+/// a panel shows comes from the core.
+pub trait RunLamp: Send {
+    fn set_halted(&self, halted: bool);
+}
+
+impl RunLamp for PanelState {
+    fn set_halted(&self, halted: bool) {
+        PanelState::set_halted(self, halted);
+    }
+}
+
+/// The Altair 8800 front panel's lamp sources, in [`AltairPanel`]'s
+/// accumulators: the address row, the data row (D7-D0 in indicators 8-15)
+/// and the status row.
+pub const ALTAIR_ADDRESS: usize = 0;
+pub const ALTAIR_DATA: usize = 1;
+pub const ALTAIR_STATUS: usize = 2;
+
+/// The status row's lamps as indicator bits, bit 15 indicator 0, in the
+/// order the panel has them left to right. All but INTE and PROT are the
+/// 8080's status word, latched at the start of each machine cycle; WO
+/// is its WO-bar, so the lamp is lit for every cycle that does not write.
+pub mod altair_status {
+    pub const INTE: u16 = 1 << 15;
+    pub const PROT: u16 = 1 << 14;
+    pub const MEMR: u16 = 1 << 13;
+    pub const INP: u16 = 1 << 12;
+    pub const M1: u16 = 1 << 11;
+    pub const OUT: u16 = 1 << 10;
+    pub const HLTA: u16 = 1 << 9;
+    pub const STACK: u16 = 1 << 8;
+    pub const WO: u16 = 1 << 7;
+    pub const INT: u16 = 1 << 6;
+}
+
+/// The Altair 8800's front panel wiring: the lamps the 8080 core feeds,
+/// one charge per machine cycle, and the sixteen address/data toggles the
+/// window flips -- A15-A8 the sense switches `IN 0xFF` reads.
+///
+/// Same shape as [`PanelState`]: a `Clone` handle over relaxed atomics,
+/// monotonic accumulators the frontend diffs a frame at a time. The core
+/// batches its charges and flushes them every few hundred machine cycles,
+/// so it touches the atomics a few thousand times a second, not millions.
+#[derive(Clone, Default)]
+pub struct AltairPanel(Arc<AltairPanelInner>);
+
+#[derive(Default)]
+struct AltairPanelInner {
+    on: [[AtomicU64; 16]; 3],
+    cycles: AtomicU64,
+    /// What each row shows with the machine stopped: the next fetch's
+    /// address, the byte there, and its status -- the 8080 sits in the
+    /// wait state of that M1 cycle, which is what STOP does to it.
+    stopped: [AtomicU16; 3],
+    switches: AtomicU16,
+    halted: AtomicBool,
+}
+
+impl AltairPanel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    // -- the CPU-thread side, called by the core ---------------------------
+
+    /// Add a batch of per-indicator machine-cycle counts and the cycles
+    /// they were counted over.
+    pub fn flush(&self, counts: &[[u32; 16]; 3], cycles: u32) {
+        for (src, row) in counts.iter().enumerate() {
+            for (i, &n) in row.iter().enumerate() {
+                if n != 0 {
+                    self.0.on[src][i].fetch_add(n as u64, Ordering::Relaxed);
+                }
+            }
+        }
+        self.0.cycles.fetch_add(cycles as u64, Ordering::Relaxed);
+    }
+
+    pub fn set_stopped(&self, addr: u16, data: u8, status: u16) {
+        self.0.stopped[ALTAIR_ADDRESS].store(addr, Ordering::Relaxed);
+        self.0.stopped[ALTAIR_DATA].store(data as u16, Ordering::Relaxed);
+        self.0.stopped[ALTAIR_STATUS].store(status, Ordering::Relaxed);
+    }
+
+    /// The sixteen toggles, bit n = An, set = up.
+    pub fn switches(&self) -> u16 {
+        self.0.switches.load(Ordering::Relaxed)
+    }
+
+    // -- the frontend side -------------------------------------------------
+
+    pub fn toggle_switch(&self, n: u8) {
+        self.0.switches.fetch_xor(1 << (n & 15), Ordering::Relaxed);
+    }
+
+    pub fn snapshot(&self, src: usize) -> LampSnapshot {
+        let mut s = LampSnapshot { bits: [0; 16], cycles: self.0.cycles.load(Ordering::Relaxed) };
+        for (i, ctr) in self.0.on[src].iter().enumerate() {
+            s.bits[i] = ctr.load(Ordering::Relaxed);
+        }
+        s
+    }
+
+    pub fn stopped(&self, src: usize) -> u16 {
+        self.0.stopped[src].load(Ordering::Relaxed)
+    }
+
+    /// Stopped at the panel: the WAIT lamp, and what lets EXAMINE and
+    /// DEPOSIT act, as they only do on a stopped machine.
+    pub fn halted(&self) -> bool {
+        self.0.halted.load(Ordering::Relaxed)
+    }
+}
+
+impl RunLamp for AltairPanel {
+    fn set_halted(&self, halted: bool) {
+        self.0.halted.store(halted, Ordering::Relaxed);
+    }
+}
+
 /// Units in the 74601 disc rack. `dev/disc74601.rs` pins its `DISC_UNITS`
 /// to this at compile time.
 pub const RACK_UNITS: usize = 4;
@@ -728,6 +852,18 @@ pub enum PanelCommand {
     Enter,
     /// DISPLAY: memory at the PCR into the MBR, PCR increments (5-3).
     Display,
+    /// The Altair 8800's RESET: the 8080's reset line, which leaves the
+    /// panel's STOP/RUN as it was -- a running machine restarts at 0.
+    ResetLine,
+    /// The Altair 8800's EXAMINE: the address toggles into the program
+    /// counter, its byte onto the data lamps. Only on a stopped machine.
+    Examine,
+    /// EXAMINE NEXT: the program counter on by one.
+    ExamineNext,
+    /// DEPOSIT: the data toggles, A7-A0, into memory at the program counter.
+    Deposit,
+    /// DEPOSIT NEXT: the program counter on by one, then a DEPOSIT.
+    DepositNext,
 }
 
 /// What a machine hands the frontend when it has something to show. Built
@@ -751,6 +887,16 @@ pub enum Display {
     /// rather than in `main`. At least one part is `Some` -- a machine with
     /// no window returns no `Display` at all.
     Ray703 { title: &'static str, panel: Option<PanelDisplay>, tty: Option<TtyDisplay> },
+    /// The Altair 8800's front panel, rendered by
+    /// [`altair8800::Altair8800Frontend`] beside the terminal.
+    Altair8800 { title: &'static str, panel: AltairPanelDisplay },
+}
+
+/// The Altair 8800 panel window's share of [`Display::Altair8800`]: the
+/// lamps and toggles, and the switch actuations back to the run loop.
+pub struct AltairPanelDisplay {
+    pub panel: AltairPanel,
+    pub control: PanelControl,
 }
 
 /// The teletype window's share of [`Display::Ray703`]: the paper the

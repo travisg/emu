@@ -28,15 +28,15 @@
 //! * `altair8800-image` loads `-r` as a memory image at 0 and runs it from
 //!   there -- what an operator who had deposited it would have.
 //!
-//! The sense switches read all off, which BASIC 4.x takes as console and
-//! load device both 88-2SIO port 0 (Martin Eberhard, *Loading Basic with
+//! Without a front panel the sense switches read all off, which BASIC 4.x
+//! takes as console and load device both 88-2SIO port 0 (Martin Eberhard, *Loading Basic with
 //! the 88-2SIO Board*, 2013). Both ports' interrupt outputs are jumpered to
 //! the bus's PINT, as the 2SIO's jumpers allow, with no vectored interrupt
 //! board: the pulled-up data bus answers INTA with `RST 7`. BASIC never
 //! enables an ACIA interrupt, so the line only reaches a program that does.
 
 use crate::bus::{Bus, IntStatus, MemoryDevice};
-use crate::console::ConsoleEndpoint;
+use crate::console::{AltairPanel, ConsoleEndpoint};
 use crate::dev::mc6850::Mc6850;
 use crate::dev::memory::Memory;
 use crate::rom;
@@ -92,8 +92,9 @@ pub struct Altair8800 {
     /// The 88-2SIO's two ports.
     sio: [Mc6850; 2],
     tape: Option<Tape>,
-    /// A15-A8 on the front panel.
+    /// A15-A8 on the front panel, when there is none to read them from.
     sense: u8,
+    panel: Option<AltairPanel>,
 }
 
 /// A line with nothing on either end, for a port nobody has plugged in.
@@ -110,6 +111,7 @@ impl Altair8800 {
             sio: [Mc6850::raw(console), Mc6850::raw(unplugged())],
             tape: None,
             sense: 0,
+            panel: None,
         };
         let laddr_high = match subsystem {
             "image" => {
@@ -142,6 +144,11 @@ impl Altair8800 {
         m.ram.load_at(BOOTSTRAP.len(), &BOOTSTRAP_STACK);
         m.tape = Some(Tape { bytes: image, pos: 0 });
         Ok(m)
+    }
+
+    /// The front panel, whose A15-A8 toggles `IN 0xFF` reads from here on.
+    pub fn attach_panel(&mut self, panel: AltairPanel) {
+        self.panel = Some(panel);
     }
 
     /// The host end of port 1, for `--serial`.
@@ -184,7 +191,7 @@ impl Bus for Altair8800 {
     fn io_read8(&mut self, port: u16) -> u8 {
         match port as u8 {
             p @ 0x10..=0x13 => self.sio[(p as usize - 0x10) >> 1].read_byte(p as u32 & 1),
-            0xff => self.sense,
+            0xff => self.panel.as_ref().map_or(self.sense, |p| (p.switches() >> 8) as u8),
             _ => 0xff,
         }
     }
@@ -210,7 +217,7 @@ impl Bus for Altair8800 {
     /// carries on mid-load with the tape it was taken with.
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         use crate::snapshot::Snapshot;
-        let Altair8800 { ram, sio, tape, sense } = self;
+        let Altair8800 { ram, sio, tape, sense, panel: _session } = self;
         w.section(b"RAM ", |w| ram.save(w));
         w.section(b"SIO0", |w| sio[0].save(w));
         w.section(b"SIO1", |w| sio[1].save(w));
@@ -341,6 +348,12 @@ mod tests {
     fn sense_switches_and_unused_ports() {
         let (mut m, _, _) = build("image", &[]);
         assert_eq!(m.io_read8(0xffff), 0, "all off");
+        let panel = AltairPanel::new();
+        m.attach_panel(panel.clone());
+        panel.toggle_switch(15);
+        panel.toggle_switch(8);
+        panel.toggle_switch(3);
+        assert_eq!(m.io_read8(0xffff), 0x81, "A15-A8 off the panel");
         assert_eq!(m.io_read8(0x4040), 0xff, "nothing there");
         assert_eq!(m.io_read8(0x1212) & 0x02, 0x02, "port 1 is there, transmit empty");
     }
