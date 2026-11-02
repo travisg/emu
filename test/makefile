@@ -9,7 +9,7 @@ LINKFLAGS := -ni
 # C++ tree; objcopy does the same job for a contiguous image.
 OBJCOPY   := objcopy
 
-.PHONY: all clean altair680-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test snapshot-test
+.PHONY: all clean altair680-irq-test altair8800-basic-test altair8800-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test snapshot-test
 
 # The 6809 sources, all built in place under 6809/. memtest is the only one
 # meant to run; the other two exist to be assembled. README.md says which is
@@ -48,6 +48,16 @@ basic6809-test:
 # fetched.
 altair680-irq-test:
 	./run_altair680_irq_test.py
+
+# The 8080's interrupt and the Altair 8800's 2SIO, the same shape: a
+# program in a memory image the harness makes.
+altair8800-irq-test:
+	./run_altair8800_irq_test.py
+
+# 8K BASIC 4.0 loaded off its paper tape through the 2SIO bootstrap, and a
+# program run on it. Needs roms/altair8800/basic8k40.tap (tools/fetch-roms.py).
+altair8800-basic-test:
+	./run_altair8800_basic_test.py
 
 # Save states: snapshot a machine with a device mid-flight, move it on,
 # restore, and require the same state and output again. SNAPSHOT_MACHINES

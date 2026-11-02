@@ -47,6 +47,7 @@ sys.path.insert(0, HERE)
 
 from emudbg import DebugError, Emu  # noqa: E402
 import run_altair680_irq_test as altair_irq  # noqa: E402
+import run_altair8800_irq_test as altair8800_irq  # noqa: E402
 import run_rc2014_ctc_test as rc2014_ctc  # noqa: E402
 
 EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
@@ -78,6 +79,43 @@ def altair680(workdir, log):
         emu.wait_for_output('ELSEWHERE', start=at)
         emu.halt()
     return emu, elsewhere
+
+
+def altair8800(workdir, log):
+    """The 8080 IRQ harness's program, stopped on its handler's first
+    instruction: the ACIA holds the character, INTE is clear and the HLT
+    it woke from is over."""
+    image = os.path.join(workdir, 'altair8800.bin')
+    with open(image, 'wb') as f:
+        f.write(altair8800_irq.image())
+    emu = Emu.spawn([EMU_BIN, '-s', 'altair8800-image', '-r', image, '--no-throttle'], log=log)
+    emu.add_break(altair8800_irq.HANDLER)
+    emu.run()
+    emu.key('S')
+    stop = emu.wait_stopped()
+    if stop.pc != altair8800_irq.HANDLER:
+        raise AssertionError('altair8800: stopped at %04x, not the handler' % stop.pc)
+    emu.remove_break(altair8800_irq.HANDLER)
+
+    def elsewhere():
+        at = len(emu.output)
+        emu.run()
+        emu.key('ELSEWHERE')
+        emu.wait_for_output('ELSEWHERE', start=at)
+        emu.halt()
+    return emu, elsewhere
+
+
+def altair8800_tape(workdir, log):
+    """8K BASIC part way through loading off its paper tape: the checksum
+    loader running, the tape read to a point the save must keep. Nothing
+    is typed, so the load is the same every time. Needs the tape."""
+    emu = Emu.spawn([EMU_BIN, '-s', 'altair8800', '--no-throttle'], log=log)
+    emu.step(60000)
+
+    def elsewhere():
+        emu.step(90000)
+    return emu, elsewhere, 30000
 
 
 def type_line(emu, line):
@@ -385,10 +423,10 @@ def ray703_disc(workdir, log):
 
 
 MACHINES = {
-    'altair680': altair680, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
+    'altair680': altair680, 'altair8800': altair8800, 'altair8800-tape': altair8800_tape, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
     'rc2014-cpm': rc2014_cpm, 'kaypro': kaypro, 'ray703': ray703_demo, 'rex': rex, 'ray703-disc': ray703_disc,
 }
-DEFAULT = ['altair680', 'rc2014-ctc', 'ray703', 'ray703-disc', 'rex']
+DEFAULT = ['altair680', 'altair8800', 'rc2014-ctc', 'ray703', 'ray703-disc', 'rex']
 
 
 def snap(emu, path):

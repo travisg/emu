@@ -50,6 +50,10 @@ jobs:
     - name: Altair 680 IRQ test
       run: make -C test altair680-irq-test
 
+    # And the Altair 8800's: the 8080 waking from EI; HLT into RST 7.
+    - name: Altair 8800 IRQ test
+      run: make -C test altair8800-irq-test
+
     # REX, the 703 executive, is its own project under rex/ with its own
     # makefile; its scripted session runs on the same harness as the above.
     - name: REX

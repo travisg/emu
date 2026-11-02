@@ -28,6 +28,8 @@ report of success; the python ones talk to the emulator's debug port
 need no pty and no `script(1)`.
 
     make -C test altair680-irq-test  # the 6800's IRQ through the ACIA, written into RAM
+    make -C test altair8800-irq-test # the 8080's EI; HLT woken by the 2SIO into RST 7
+    make -C test altair8800-basic-test # 8K BASIC off its paper tape, and a program on it
     make -C test basic6809-test      # boots 6809 BASIC, runs 6809/lang_test.bas
     make -C test kaypro-zex-test     # the Z80 instruction exercisers under CP/M
     make -C test rc2014-basic-test   # factory BASIC, every keystroke an interrupt
@@ -44,12 +46,12 @@ need no pty and no `script(1)`.
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
-The Altair IRQ, CTC and 703 ones need nothing outside the repo, and CI
-runs them; the 6809 one and the RC2014 BASIC, CP/M and exerciser ones and
-the Kaypro's need images from outside it and run locally. The snapshot
-one is both: CI runs its cases whose guests the tree builds, and
-`SNAPSHOT_MACHINES` adds the 6809, RC2014 and Kaypro ones, which need the
-images. REX's session is
+The two Altair IRQ ones, the CTC one and the 703 ones need nothing outside
+the repo, and CI runs them; the 6809 one, the Altair 8800 BASIC one, the
+RC2014 BASIC, CP/M and exerciser ones and the Kaypro's need images from
+outside it and run locally. The snapshot one is both: CI runs its cases
+whose guests the tree builds, and `SNAPSHOT_MACHINES` adds the 6809,
+Altair 8800 tape, RC2014 and Kaypro ones, which need the images. REX's session is
 `make -C rex test`, under its own directory. The 6809 one
 boots Microsoft BASIC, so it needs `roms/6809/BASIC.HEX` in place
 (`tools/fetch-roms.py`) and runs only locally. The RC2014 BASIC one boots the
