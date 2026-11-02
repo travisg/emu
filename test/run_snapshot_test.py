@@ -500,7 +500,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix='snapshot-') as workdir, open(LOG_FILE, 'wb') as log:
         try:
             for name in names:
-                check(name, MACHINES[name], workdir, log)
+                # a directory each: a case's disks must not be another's
+                own = os.path.join(workdir, name)
+                os.mkdir(own)
+                check(name, MACHINES[name], own, log)
         except Exception:
             log.write(b'\n--- harness failure ---\n')
             log.write(traceback.format_exc().encode())
