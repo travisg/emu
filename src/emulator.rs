@@ -1174,6 +1174,12 @@ mod tests {
         assert_eq!(steps.load(Ordering::SeqCst), 2);
 
         assert_eq!(debug(&tx, DebugOp::Run).recv().unwrap(), DebugReply::Ok);
+        // a HALT queued behind the RUN could land before any step
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while steps.load(Ordering::SeqCst) <= 2 {
+            assert!(std::time::Instant::now() < deadline, "RUN never stepped off the breakpoint");
+            std::thread::yield_now();
+        }
         let DebugReply::Status { halted: true, reason: Some(StopReason::Request), pc, .. } =
             debug(&tx, DebugOp::Halt).recv().unwrap()
         else {
