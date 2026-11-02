@@ -87,6 +87,8 @@ type FactoryFn = fn(&Path, ConsoleEndpoint, &str, &MachineOpts) -> io::Result<Ma
 
 pub struct SystemDescriptor {
     pub name: &'static str,
+    /// One line for `-h`: what the machine is and what it boots.
+    pub title: &'static str,
     pub cpu: &'static str,
     pub default_rom: &'static str,
     pub factory: FactoryFn,
@@ -97,6 +99,10 @@ pub struct SystemDescriptor {
     /// The serial port `--serial` connects to the host, if the machine has
     /// one spare: what `-h` and the startup line call it.
     pub serial_port: Option<&'static str>,
+    /// What `--disk` replaces, for `-h`, or why it has nothing to.
+    pub disks: Option<&'static str>,
+    /// The subsystem tokens `-h` lists, each with what it does.
+    pub variants: &'static [(&'static str, &'static str)],
 }
 
 fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
@@ -327,6 +333,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &Machine
 pub static SYSTEMS: &[SystemDescriptor] = &[
     SystemDescriptor {
         name: "6809",
+        title: "System09: Microsoft BASIC on a 6809",
         cpu: "6809",
         default_rom: sys09::DEFAULT_ROM,
         factory: build_sys09,
@@ -335,9 +342,12 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // datasheet's cycle counts tick at is 1.8432 MHz.
         clock_hz: Some(1_843_200),
         serial_port: None,
+        disks: None,
+        variants: &[],
     },
     SystemDescriptor {
         name: "altair680",
+        title: "MITS Altair 680 and its rom monitor",
         cpu: "6800",
         default_rom: altair680::DEFAULT_ROM,
         factory: build_altair680,
@@ -345,34 +355,56 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // the memory it came with.
         clock_hz: Some(500_000),
         serial_port: None,
+        disks: None,
+        variants: &[],
     },
     SystemDescriptor {
         name: "altair8800",
+        title: "MITS Altair 8800: loads 8K BASIC off paper tape",
         cpu: "8080",
         default_rom: altair8800::DEFAULT_ROM,
         factory: build_altair8800,
         clock_hz: Some(altair8800::CLOCK_HZ),
         serial_port: Some(altair8800::SERIAL_PORT),
+        disks: None,
+        variants: &[
+            ("4k", "for 4K BASIC: -r roms/altair8800/basic4k40.tap"),
+            ("ext", "for Extended BASIC 4.x, its tape given with -r"),
+            ("image", "-r is a memory image, run from address 0"),
+            ("panel", "the front panel in a window; starts stopped"),
+        ],
     },
     SystemDescriptor {
         name: "kaypro",
+        title: "Kaypro II: CP/M and the screen in an SDL window",
         cpu: "z80",
         default_rom: kaypro::DEFAULT_ROM,
         factory: build_kaypro,
         // The stock Kaypro II Z80 rate (the 5 MHz machines came later).
         clock_hz: Some(kaypro::CLOCK_HZ),
         serial_port: Some(kaypro::SERIAL_PORT),
+        disks: Some("drive A, default disks/mbasic-games.img"),
+        variants: &[],
     },
     SystemDescriptor {
         name: "ray703",
+        title: "Raytheon 703 (1967): -r is a core image loaded at word 0",
         cpu: "703",
         default_rom: ray703::DEFAULT_ROM,
         factory: build_ray703,
         clock_hz: Some(crate::cpu::ray703::CLOCK_HZ),
         serial_port: None,
+        disks: Some("unused; disks/ray703-disc0..3.img by name"),
+        variants: &[
+            ("ptb", "key in PTB; -r is the paper tape it reads"),
+            ("load", "press LOAD; -r is the boot disc for unit 0"),
+            ("panel", "front panel and disc rack window; starts halted"),
+            ("tty", "the teletype in a window"),
+        ],
     },
     SystemDescriptor {
         name: "rc2014",
+        title: "RC2014 Classic: 32K BASIC on the factory rom",
         cpu: "z80",
         default_rom: rc2014::DEFAULT_ROM,
         factory: build_rc2014,
@@ -381,6 +413,8 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // can.
         clock_hz: Some(rc2014::CLOCK_HZ),
         serial_port: Some(rc2014::SERIAL_PORT),
+        disks: Some("the cpm card, default disks/rc2014-cf.img"),
+        variants: &[("cpm", "RC2014 Pro: CP/M on a compact flash card")],
     },
 ];
 
@@ -431,6 +465,33 @@ mod tests {
             // a zero rate would make a bare --throttle divide by zero
             assert_ne!(s.clock_hz, Some(0), "{} has a zero clock rate", s.name);
         }
+    }
+
+    /// `-h` lists each variant, so each must be one its factory takes. A
+    /// variant may still fail on a rom this test does not supply, so what
+    /// is checked is that the refusal is not the unknown-subsystem one --
+    /// which a junk token, the control, must get.
+    #[test]
+    fn every_listed_variant_is_one_the_factory_takes() {
+        let dir = std::env::temp_dir().join(format!("emu-registry-variants-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom = dir.join("rom.bin");
+        std::fs::write(&rom, [0u8; 256]).unwrap();
+        let build = |s: &SystemDescriptor, sub: &str| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+            (s.factory)(&rom, console, sub, &MachineOpts::default()).err().map(|e| e.to_string())
+        };
+        for s in SYSTEMS.iter().filter(|s| !s.variants.is_empty()) {
+            let junk = build(s, "junk").unwrap_or_default();
+            assert!(junk.contains("unknown"), "{}-junk: {junk:?}", s.name);
+            for (token, _) in s.variants {
+                if let Some(err) = build(s, token) {
+                    assert!(!err.contains("unknown"), "{}-{token}: {err}", s.name);
+                }
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Build a ray703 machine for one subsystem string. Uses the demo image

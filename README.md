@@ -50,7 +50,7 @@ fetches them: from a local archive if `EMU_ROM_ARCHIVE` names one, otherwise fro
 publishes it. An image already there is checked and never overwritten.
 
 The emulator looks for them under `roms/` and `disks/` relative to the **current directory**, so
-run it from the top of the checkout. `-h` lists the default ROM per system and `-r` overrides it.
+run it from the top of the checkout. `-h` lists each system with its default ROM and its variants, and `-r` overrides the ROM.
 
 The Raytheon 703 needs none of this. It has no ROM to fetch, and its guests are built from source
 in this tree:
@@ -61,7 +61,7 @@ make -C test ray703      # assembles every 703 guest into roms/703
 
 ## Running
 
-Show the help message and the supported systems with their default ROMs:
+Show the help: every system with its default ROM and variants, then the options:
 
 ```bash
 ./target/debug/emu -h

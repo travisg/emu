@@ -63,37 +63,59 @@ struct Args {
     restore: Option<PathBuf>,
 }
 
-fn usage(argv0: &str) {
-    eprintln!("usage: {argv0} [-h] [-c/--cpu cpu type] [-s/--system system] [-r/--rom romfile] [-l/--limit limit] [-t/--trace tracefile] [--throttle [hz]] [--no-throttle] [--fast-io] [--disk image] [--serial pty|tcp:port] [--debug socket] [--halt] [--restore snapshot]");
-    eprintln!();
-    eprintln!("valid systems:");
+/// A rate as `-h` shows it: 1843200 is "1.8432 MHz".
+fn fmt_hz(hz: u64) -> String {
+    let (div, unit) = if hz >= 1_000_000 { (1e6, "MHz") } else if hz >= 1_000 { (1e3, "kHz") } else { (1.0, "Hz") };
+    let n = format!("{:.4}", hz as f64 / div);
+    format!("{} {unit}", n.trim_end_matches('0').trim_end_matches('.'))
+}
+
+/// The help text: `-h` prints it on stdout, a bad option on stderr.
+fn usage(argv0: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    writeln!(out, "usage: {argv0} [-s system[-variant...]] [-r rom] [options]").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "systems (default 6809):").unwrap();
     for s in registry::SYSTEMS {
-        eprint!(
-            "  {:-10} cpu: {:-4} default rom: {}",
-            s.name, s.cpu, s.default_rom
-        );
-        if let Some(hz) = s.clock_hz {
-            eprint!("  clock: {hz} Hz");
+        writeln!(out, "  {:<12}{}", s.name, s.title).unwrap();
+        let clock = s.clock_hz.map(|hz| format!(" at {}", fmt_hz(hz))).unwrap_or_default();
+        writeln!(out, "  {:<12}cpu {}{clock}, rom {}", "", s.cpu, s.default_rom).unwrap();
+        for (token, what) in s.variants {
+            writeln!(out, "  {:<12}{:<18}{what}", "", format!("{}-{token}", s.name)).unwrap();
         }
-        eprintln!();
+        if let Some(disks) = s.disks {
+            writeln!(out, "  {:<12}{:<18}{disks}", "", "--disk").unwrap();
+        }
         if let Some(port) = s.serial_port {
-            eprintln!("  {:-10} --serial: {port}", "");
+            writeln!(out, "  {:<12}{:<18}{port}", "", "--serial").unwrap();
         }
     }
-    eprintln!();
-    eprintln!("note: system may include a subsystem suffix like '6809-obc'.");
-    eprintln!("note: cpu is currently selected by system; --cpu is accepted but ignored.");
-    eprintln!("note: --trace writes one line of cpu state per instruction to tracefile.");
-    eprintln!("note: a machine with a known clock rate (shown above) runs at it by default.");
-    eprintln!("note: --throttle paces the cpu to that rate, or to an explicit rate in Hz (--throttle N or --throttle=N).");
-    eprintln!("note: --no-throttle runs flat out, overriding the real-time default.");
-    eprintln!("note: device periods follow the throttle rate, so a slow-motion cpu keeps a real-time terminal.");
-    eprintln!("note: --fast-io makes devices complete i/o instantly instead of at period rates (currently: the 703 teletype's 10 chars/sec). Independent of --throttle.");
-    eprintln!("note: --disk PATH mounts an image in place of the fixed one under disks/ (the kaypro's drive A -- click a drive in the window to change disks; the 703 mounts its four units by name).");
-    eprintln!("note: --serial pty|tcp:PORT puts the machine's spare serial port (shown above) on a new pseudo-terminal or a localhost TCP listener, for a terminal program, nc or a file transfer.");
-    eprintln!("note: --debug PATH listens on a unix socket for a debugger (halt/run/step, registers, memory, breakpoints, the console); tools/emudbg.py talks to it. HLT then halts to the debugger instead of exiting.");
-    eprintln!("note: --halt starts the machine halted; needs a front panel or --debug to start it.");
-    eprintln!("note: --restore PATH starts the machine from a snapshot (the debug port's `snapshot`) instead of from reset; it must be of the same -s system.");
+    writeln!(out, "  panel and tty combine with another variant in any order, e.g. ray703-panel-ptb").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "options:").unwrap();
+    for (opt, what) in [
+        ("-s, --system NAME", "the machine to run, from the list above"),
+        ("-r, --rom FILE", "a rom, tape or image in place of the system's default"),
+        ("-l, --limit N", "stop after N-1 instructions"),
+        ("-t, --trace FILE", "write one line of cpu state per instruction to FILE"),
+        ("--throttle [HZ]", "pace to HZ; bare, the machine's own clock (default)"),
+        ("--no-throttle", "run flat out"),
+        ("--fast-io", "devices finish i/o at once, not at real speed"),
+        ("--disk FILE", "mount FILE in place of the default disk (above)"),
+        ("--serial pty|tcp:PORT", "spare serial port (above) on a pty or localhost port"),
+        ("--debug SOCKET", "debug port on a unix socket, for tools/emudbg.py"),
+        ("--halt", "start halted; needs a panel or --debug to run"),
+        ("--restore FILE", "start from a snapshot of the same system"),
+        ("-c, --cpu TYPE", "accepted and ignored: the system picks the cpu"),
+        ("-h, --help", "this help"),
+    ] {
+        writeln!(out, "  {opt:<24}{what}").unwrap();
+    }
+    writeln!(out).unwrap();
+    writeln!(out, "Devices keep real time at any --throttle rate.").unwrap();
+    writeln!(out, "Ctrl-D exits; Ctrl-C goes to the guest.").unwrap();
+    out
 }
 
 /// Mirrors the C++ `getopt_long` handling, including `--cpu` being accepted
@@ -141,8 +163,8 @@ fn parse_args() -> Result<Args, ()> {
 
         match arg {
             "-h" | "--help" => {
-                usage(&argv0);
-                return Err(());
+                print!("{}", usage(&argv0));
+                std::process::exit(0);
             }
             "-c" | "--cpu" => {
                 let v = value(&mut i).ok_or(())?;
@@ -250,7 +272,7 @@ fn parse_args() -> Result<Args, ()> {
             }
             _ => {
                 eprintln!("unknown option '{raw}'");
-                usage(&argv0);
+                eprint!("{}", usage(&argv0));
                 return Err(());
             }
         }
