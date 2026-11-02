@@ -21,8 +21,9 @@
 //! register is empty, and transmit is always ready), word formats, framing
 //! and overrun errors, and the modem lines. Two behaviours are
 //! Altair-680-monitor specific rather than real ACIA semantics, and are
-//! preserved deliberately: incoming LF is remapped to CR and lowercase is
-//! folded to upper case.
+//! preserved deliberately on the chip `new` makes: incoming LF is remapped
+//! to CR and lowercase is folded to upper case. `raw` makes one without
+//! them, which a binary paper tape needs.
 
 use crate::bus::MemoryDevice;
 use crate::console::ConsoleEndpoint;
@@ -44,13 +45,20 @@ pub struct Mc6850 {
     /// The receive data register; full is RDRF.
     rx: Option<u8>,
     control: u8,
+    /// The 680 monitor's LF-to-CR and upper-casing of what arrives.
+    fold: bool,
 }
 
 impl Mc6850 {
     pub fn new(console: ConsoleEndpoint) -> Self {
         // Powers up in master reset, as the data sheet asks software to
         // assume: no interrupt until the guest programs it.
-        Mc6850 { console, rx: None, control: CTRL_MASTER_RESET }
+        Mc6850 { console, rx: None, control: CTRL_MASTER_RESET, fold: true }
+    }
+
+    /// The chip with nothing folded: every byte arrives as it was sent.
+    pub fn raw(console: ConsoleEndpoint) -> Self {
+        Mc6850 { fold: false, ..Mc6850::new(console) }
     }
 
     fn in_master_reset(&self) -> bool {
@@ -61,18 +69,29 @@ impl Mc6850 {
     /// register. The machine calls this between instructions. In master
     /// reset the receiver is held, and the character waits at the console.
     pub fn poll(&mut self) {
-        if self.rx.is_none() && !self.in_master_reset() {
+        if self.can_receive() {
             if let Some(c) = self.console.try_next_char() {
-                let c = if c == 0x0a {
-                    0x0d
-                } else if c.is_ascii_lowercase() {
-                    c.to_ascii_uppercase()
-                } else {
-                    c
-                };
-                self.rx = Some(c);
+                self.receive(c);
             }
         }
+    }
+
+    /// Whether a character offered now would be taken: the receive
+    /// register is empty and the chip is out of master reset.
+    pub fn can_receive(&self) -> bool {
+        self.rx.is_none() && !self.in_master_reset()
+    }
+
+    /// A character from somewhere other than the console -- a paper tape
+    /// reader on the same line -- into the receive register. The machine
+    /// asks `can_receive` first.
+    pub fn receive(&mut self, c: u8) {
+        let c = match c {
+            0x0a if self.fold => 0x0d,
+            c if self.fold => c.to_ascii_uppercase(),
+            c => c,
+        };
+        self.rx = Some(c);
     }
 
     /// The IRQ output, asserted: a full receive register with the receive
@@ -99,7 +118,7 @@ impl Mc6850 {
 
 impl crate::snapshot::Snapshot for Mc6850 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
-        let Mc6850 { console: _session, rx, control } = self;
+        let Mc6850 { console: _session, rx, control, fold: _wiring } = self;
         w.opt(rx, |w, c| w.u8(*c));
         w.u8(*control);
     }
@@ -258,6 +277,33 @@ mod tests {
     fn linefeed_is_remapped_to_carriage_return() {
         let mut u = uart_with_input(b"\n");
         assert_eq!(u.read_byte(1), 0x0d);
+    }
+
+    #[test]
+    fn a_raw_chip_folds_nothing() {
+        let (tx, rx) = mpsc::channel();
+        for &c in b"a\n\xc2" {
+            tx.send(c).unwrap();
+        }
+        let mut u = Mc6850::raw(ConsoleEndpoint::new(rx, Box::new(Vec::new())));
+        u.write_byte(0, 0x15);
+        u.poll();
+        assert_eq!(read_data(&mut u), b'a');
+        assert_eq!(read_data(&mut u), b'\n');
+        assert_eq!(read_data(&mut u), 0xc2);
+    }
+
+    /// A character handed in by the machine lands like one from the
+    /// console, and only when the chip can take it.
+    #[test]
+    fn receive_fills_the_register_the_poll_would() {
+        let mut u = uart_with_input(&[]);
+        assert!(u.can_receive());
+        u.receive(b'x');
+        assert!(!u.can_receive());
+        assert_eq!(u.read_byte(1), b'X', "the 680's chip folds it");
+        u.write_byte(0, 0x03);
+        assert!(!u.can_receive(), "held in master reset");
     }
 
     #[test]

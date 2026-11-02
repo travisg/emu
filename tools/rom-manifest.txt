@@ -26,6 +26,14 @@ roms/rc2014/24886009.BIN        db0312ada33065281781fc9b0f6c85ac0f987265c11cd51a
 # The original source is a 680b manual, which has a copy of the PROM listing.
 roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed239eed3af2b5ddd201  https://github.com/travisg/emu/releases/download/v0.0.1-assets/mits680b.bin
 
+# MITS Altair 8800: Microsoft's BASIC 4.0 for it, as paper tape images (the
+# bytes off the tape, leader and checksum loader included) from Mike
+# Douglas's archive at deramp.com. `emu -s altair8800` keys in the 2SIO
+# bootstrap and feeds the 8K tape through the console port; altair8800-4k
+# takes the 4K one.
+roms/altair8800/basic8k40.tap   e610937291d20860ff12068e5bb41edecdd7473097e1344cf504046e120cbb6a  https://deramp.com/downloads/altair/software/papertape_cassette/8K%20BASIC%20Ver%204-0.tap
+roms/altair8800/basic4k40.tap   1a55167cc55d252a350b2f40a661559b2b09a423dabc7f4d36f4bdd81c5389ca  https://deramp.com/downloads/altair/software/papertape_cassette/4K%20BASIC%20Ver%204-0.tap
+
 # Kaypro floppy: CP/M 2.2 with MBASIC and games.
 # The original source is a Kaypro II disk image, which has been converted to a raw floppy image.
 disks/mbasic-games.img          e0d3fe74578b5914cdb8e36d028fb0e3ec70f434df3a710ea41ea1534304101b  https://github.com/travisg/emu/releases/download/v0.0.1-assets/mbasic-games.img

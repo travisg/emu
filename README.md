@@ -6,6 +6,8 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 
 - **System09 (Motorola 6809)**: boots the 6809 BASIC ROM to a prompt on the terminal.
 - **MITS Altair 680 (Motorola 6800)**: boots the MITS monitor ROM on the terminal.
+- **MITS Altair 8800 (Intel 8080)**: no ROM: keys in MITS's bootstrap loader and loads Altair BASIC
+  4.0 off its paper tape, as an operator at the front panel did.
 - **RC2014 (Zilog Z80)**: boots the factory ROM image — Grant Searle's monitor into Microsoft
   BASIC 4.7b — on the terminal, over an interrupt-driven serial port.
 - **Kaypro II (Zilog Z80)**: boots CP/M 2.2 from a floppy image into an SDL2 window, with a
@@ -44,9 +46,7 @@ tools/fetch-roms.py      # into roms/ and disks/, verified against the manifest
 ```
 
 fetches them: from a local archive if `EMU_ROM_ARCHIVE` names one, otherwise from the source that
-publishes it. Four of the six have a public home and arrive on their own; the Altair 680b monitor
-and the Kaypro floppy do not, and the script names them so they can be put in place by hand. An
-image already there is checked and never overwritten.
+publishes it. An image already there is checked and never overwritten.
 
 The emulator looks for them under `roms/` and `disks/` relative to the **current directory**, so
 run it from the top of the checkout. `-h` lists the default ROM per system and `-r` overrides it.
@@ -71,6 +71,7 @@ Run a system:
 ```bash
 ./target/debug/emu                          # the default system (6809)
 ./target/debug/emu -s altair680
+./target/debug/emu -s altair8800               # loads 8K BASIC off paper tape, then MEMORY SIZE?
 ./target/debug/emu -s kaypro                # opens a window; also loads disks/mbasic-games.img
 ./target/debug/emu -s kaypro --disk my.img  # a floppy of your own, which keeps what CP/M saves
 ./target/debug/emu -s rc2014-cpm --serial tcp:2323   # SIO channel B on localhost:2323 (nc localhost 2323)
@@ -89,8 +90,8 @@ host can, which is what a scripted run wants; `--throttle N` names a rate in Hz.
 on the CPU alone: a device keeps its own timing whatever the CPU is doing, so a 703 held to 10 kHz
 still has a teletype printing ten characters a second.
 
-The Kaypro and the RC2014 each have a serial port with nothing on it — the Kaypro's RS-232
-connector, the RC2014's second SIO channel — and `--serial pty` or `--serial tcp:PORT` plugs the
+The Kaypro, the RC2014 and the Altair 8800 each have a serial port with nothing on it — the
+Kaypro's RS-232 connector, the RC2014's second SIO channel, the Altair's second 2SIO port — and `--serial pty` or `--serial tcp:PORT` plugs the
 host into it: a new pseudo-terminal for `screen` or a Kermit, or a localhost socket for `nc`. The
 RC2014's monitor takes its console from whichever channel sees a space first, so it can be driven
 entirely over the socket.

@@ -16,7 +16,7 @@ use crate::bus::Bus;
 use crate::console::serial::{self, SerialSpec};
 use crate::console::{ConsoleEndpoint, Display};
 use crate::cpu::Cpu;
-use crate::system::{altair680, kaypro, ray703, rc2014, sys09};
+use crate::system::{altair680, altair8800, kaypro, ray703, rc2014, sys09};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -103,6 +103,21 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &Mac
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6800::Cpu6800::new()),
         bus: Box::new(altair680::Altair680::new(rom, console)?),
+        display: None,
+        throttle_hz: None,
+        control: None,
+        panel: None,
+    })
+}
+
+fn build_altair8800(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
+    let mut bus = altair8800::Altair8800::new(rom, console, sub)?;
+    if let Some(line) = open_serial(opts, altair8800::SERIAL_PORT)? {
+        bus.attach_serial(line);
+    }
+    Ok(Machine {
+        cpu: Box::new(crate::cpu::i8080::Cpu8080::new()),
+        bus: Box::new(bus),
         display: None,
         throttle_hz: None,
         control: None,
@@ -312,6 +327,14 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // the memory it came with.
         clock_hz: Some(500_000),
         serial_port: None,
+    },
+    SystemDescriptor {
+        name: "altair8800",
+        cpu: "8080",
+        default_rom: altair8800::DEFAULT_ROM,
+        factory: build_altair8800,
+        clock_hz: Some(altair8800::CLOCK_HZ),
+        serial_port: Some(altair8800::SERIAL_PORT),
     },
     SystemDescriptor {
         name: "kaypro",

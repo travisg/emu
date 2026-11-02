@@ -9,6 +9,7 @@
 //! Machines, and the registry that describes them.
 
 pub mod altair680;
+pub mod altair8800;
 pub mod kaypro;
 pub mod ray703;
 pub mod rc2014;
