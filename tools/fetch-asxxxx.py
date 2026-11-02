@@ -11,9 +11,10 @@
 Alan Baldwin's ASxxxx distribution ships a test file per assembler, every
 line an instruction with the bytes it assembles to in its comment. This
 tree already carries the 6809's (`test/6809/t6809.asm`, which `cargo test`
-reads); the 6800's and the Z80's come from the v6.10 release into
-tests/data/asxxxx/, where `cargo test -- --ignored t6800 tz80` finds them.
-The release is a fixed file, so it is pinned by its hash. Only the two
+reads); the 6800's, the Z80's and as8085's 8080-mode one come from the
+v6.10 release into tests/data/asxxxx/, where `cargo test -- --ignored t6800
+tz80 t8080` finds them.
+The release is a fixed file, so it is pinned by its hash. Only those
 files are kept; nothing in the archive is built or run.
 
     tools/fetch-asxxxx.py                    # download (~80 MB) and extract
@@ -30,7 +31,11 @@ from pathlib import Path
 
 URL = "https://shop-pdp.net/_ftp/asxxxx/asxv6p10.zip"
 SHA256 = "486eb14b963fb3b8217b9b57c6550a54d895c9177648b9e1dff060fd8c634777"
-FILES = {"asxv6pxx/as6800/t6800.asm": "t6800.asm", "asxv6pxx/asz80/tz80.asm": "tz80.asm"}
+FILES = {
+    "asxv6pxx/as6800/t6800.asm": "t6800.asm",
+    "asxv6pxx/asz80/tz80.asm": "tz80.asm",
+    "asxv6pxx/as8085/t8080.asm": "t8080.asm",
+}
 DEST = Path(__file__).resolve().parent.parent / "tests" / "data" / "asxxxx"
 
 

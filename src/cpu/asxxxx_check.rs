@@ -22,9 +22,10 @@ pub struct Case {
     pub source: String,
 }
 
-/// The comment's bytes, `8e 00 05` or `d9*02`; None if it is not all hex.
+/// The comment's bytes, `8e 00 05`, `d9*02` or `CDr28s00` (the `r` and `s`
+/// marking a relocated byte); None if it is not all hex.
 fn comment_bytes(comment: &str) -> Option<Vec<u8>> {
-    let digits: String = comment.chars().filter(|c| !c.is_whitespace() && *c != '*').collect();
+    let digits: String = comment.chars().filter(|c| !c.is_whitespace() && !matches!(c, '*' | 'r' | 's')).collect();
     if digits.is_empty() || !digits.len().is_multiple_of(2) || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
@@ -33,8 +34,8 @@ fn comment_bytes(comment: &str) -> Option<Vec<u8>> {
 
 /// Every instruction line of `text`, addressed from 0 by the bytes before
 /// it, and every `label:` at the address it labels. Directives, comment
-/// lines and lines with no bytes are not cases; `skip` drops more by their
-/// source text.
+/// lines, lines with no bytes and lines the assembler flagged are not cases;
+/// `skip` drops more by their source text.
 fn walk(text: &str, skip: &dyn Fn(&str) -> bool) -> (Vec<Case>, Vec<(String, i64)>) {
     let mut out = Vec::new();
     let mut labels = Vec::new();
@@ -56,11 +57,17 @@ fn walk(text: &str, skip: &dyn Fn(&str) -> bool) -> (Vec<Case>, Vec<(String, i64
         if code.is_empty() || code.contains('=') {
             continue;
         }
+        // `;o ; 10`: the assembler's error flags ahead of the bytes, on an
+        // instruction it took exception to -- still bytes, never a case
+        let (flagged, comment) = match comment.rsplit_once(';') {
+            Some((_, bytes)) => (true, bytes),
+            None => (false, comment),
+        };
         let Some(bytes) = comment_bytes(comment) else {
             continue;
         };
         let n = bytes.len() as u16;
-        if !skip(code) {
+        if !flagged && !skip(code) {
             out.push(Case { line: i + 1, addr, bytes, source: code.to_string() });
         }
         addr = addr.wrapping_add(n);
@@ -118,9 +125,12 @@ fn tokenize(s: &str, here: u16, symbols: &[(String, i64)]) -> Vec<Tok> {
                 i += 1;
             }
             let lit: String = chars[start..i].iter().collect();
-            let v = match lit.strip_prefix("0x") {
-                Some(h) => i64::from_str_radix(h, 16),
-                None => lit.parse(),
+            let v = if let Some(h) = lit.strip_prefix("0x").or_else(|| lit.strip_prefix("0h")) {
+                i64::from_str_radix(h, 16)
+            } else if let Some(o) = lit.strip_prefix("0o") {
+                i64::from_str_radix(o, 8)
+            } else {
+                lit.parse()
             };
             toks.push(v.map_or(Tok::Word(lit), Tok::Num));
         } else if c.is_ascii_alphabetic() || c == '_' {

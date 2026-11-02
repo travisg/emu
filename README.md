@@ -192,17 +192,19 @@ cargo test                          # the whole suite: no ROMs, no external bina
 make -C test basic6809-test         # end-to-end: boots BASIC and runs a language test program
 ```
 
-`cargo test` needs nothing outside the repo, except the three tests it skips: the Z80 core against
-the SingleStepTests suite, whose data `tools/fetch-sst.py` fetches (`cargo test --release -- --ignored sst`), and the
-6800 and Z80 disassemblers against ASxxxx's own assembler tests, which `tools/fetch-asxxxx.py` fetches
-(`cargo test -- --ignored t6800 tz80`). The end-to-end scripts do: the 6809 one needs
+`cargo test` needs nothing outside the repo, except the five tests it skips: the Z80 core against
+the SingleStepTests suite, whose data `tools/fetch-sst.py` fetches (`cargo test --release -- --ignored sst`), the
+8080 core against the CP/M instruction exercisers, which `tools/fetch-i8080-tests.py` fetches
+(`cargo test --release -- --ignored i8080_exercisers`), and the 6800, Z80 and 8080 disassemblers against
+ASxxxx's own assembler tests, which `tools/fetch-asxxxx.py` fetches (`cargo test -- --ignored t6800 tz80
+t8080`). The end-to-end scripts do: the 6809 one needs
 `roms/6809/BASIC.HEX` and python3, driving the emulator over its debug port as the Raytheon 703
 demo test (`make -C test ray703-test`) does, which needs only python3; and the
 other 703 scripts need `script(1)` and python3. `AGENTS.md` covers them all.
 
 ## Project Structure
 
-- `src/cpu/`: CPU cores (6800, 6809, Z80, Raytheon 703), each implementing the `Cpu` trait against a `Bus`.
+- `src/cpu/`: CPU cores (6800, 6809, Z80, 8080, Raytheon 703), each implementing the `Cpu` trait against a `Bus`.
 - `src/system/`: one file per machine (the bus, address decode, devices, ROM loading) and the
   registry that describes them.
 - `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO, WD1793 floppy controller.

@@ -11,6 +11,8 @@
 use crate::bus::{Bus, Endian};
 use std::io::Write;
 
+pub mod i8080;
+mod i8080_dis;
 pub mod m6800;
 mod m6800_dis;
 pub mod m6809;
@@ -26,6 +28,8 @@ mod asxxxx_check;
 mod testbus;
 #[cfg(test)]
 mod z80_sst;
+#[cfg(test)]
+mod i8080_exer;
 
 /// Why a `step()` stopped, mapping onto the C++ cores' `Run()` return codes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
