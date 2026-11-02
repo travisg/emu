@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+pub(crate) mod lamps;
 pub mod panel703;
 pub mod paper;
 pub mod ray703;

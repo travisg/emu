@@ -38,13 +38,14 @@
 //! depends on.
 //!
 //! Everything is drawn with filled rectangles -- circles as stacks of
-//! horizontal spans, text from a 5x7 font embedded below -- so there are no
-//! textures, image files or font dependencies.
+//! horizontal spans, text from the 5x7 font in [`super::lamps`] -- so there
+//! are no textures, image files or font dependencies.
 
 use super::{
     DiscRackState, LampSnapshot, PanelCommand, PanelControl, PanelDisplay, PanelState, RackSnapshot,
     Selector,
 };
+use super::lamps::{self, duties};
 use crate::console::RACK_UNITS;
 use sdl2::keyboard::Keycode;
 use sdl2::mouse::MouseButton;
@@ -171,23 +172,6 @@ impl LampFilter {
     }
 }
 
-/// Per-indicator duty cycles between two snapshots of one lamp source.
-/// While the machine is halted no cycles accrue, and the point-sampled
-/// register value stands in -- full on or off, which is what a static
-/// register looks like on a real panel.
-fn duties(now: &LampSnapshot, prev: &LampSnapshot, halted_value: u16) -> [f32; 16] {
-    let dc = now.cycles.wrapping_sub(prev.cycles);
-    let mut out = [0.0f32; 16];
-    for (i, out) in out.iter_mut().enumerate() {
-        *out = if dc == 0 {
-            (halted_value >> (15 - i) & 1) as f32
-        } else {
-            now.bits[i].wrapping_sub(prev.bits[i]) as f32 / dc as f32
-        };
-    }
-    out
-}
-
 /// Perceived brightness for a duty cycle. A PWM'd filament's light output
 /// runs superlinear in duty (roughly phi ~ D^1.7 -- temperature tracks
 /// duty, radiance runs away with temperature) and the eye compresses
@@ -295,42 +279,16 @@ impl PanelWindow {
 
     // -- drawing -----------------------------------------------------------
 
-    /// A filled circle as one fill_rect span per scanline.
     fn circle(&mut self, cx: i32, cy: i32, r: i32, color: Color) {
-        self.canvas.set_draw_color(color);
-        for dy in -r..=r {
-            let half = ((r * r - dy * dy) as f32).sqrt() as i32;
-            let _ = self.canvas.fill_rect(Rect::new(cx - half, cy + dy, (2 * half + 1) as u32, 1));
-        }
+        lamps::circle(&mut self.canvas, cx, cy, r, color);
     }
 
-    /// 5x7 text, scaled up `scale` times. Unknown characters draw as space.
     fn text(&mut self, x: i32, y: i32, scale: u32, s: &str, color: Color) {
-        self.canvas.set_draw_color(color);
-        let mut cx = x;
-        for c in s.chars() {
-            if let Some(glyph) = glyph(c) {
-                for (row, bits) in glyph.iter().enumerate() {
-                    for col in 0..5 {
-                        if bits & (0x10 >> col) != 0 {
-                            let _ = self.canvas.fill_rect(Rect::new(
-                                cx + col * scale as i32,
-                                y + row as i32 * scale as i32,
-                                scale,
-                                scale,
-                            ));
-                        }
-                    }
-                }
-            }
-            cx += 6 * scale as i32;
-        }
+        lamps::text(&mut self.canvas, x, y, scale, s, color);
     }
 
-    /// Text centered on `cx`.
     fn text_centered(&mut self, cx: i32, y: i32, scale: u32, s: &str, color: Color) {
-        let w = (s.chars().count() as i32 * 6 - 1) * scale as i32;
-        self.text(cx - w / 2, y, scale, s, color);
+        lamps::text_centered(&mut self.canvas, cx, y, scale, s, color);
     }
 
     /// A caption between two rules, like the row headings in figure 5-1.
@@ -697,51 +655,6 @@ impl PanelWindow {
     }
 }
 
-/// A 5x7 font covering the panel's labels: digits, upper-case letters, the
-/// dash. Each row is one byte, bit 4 the leftmost pixel.
-fn glyph(c: char) -> Option<[u8; 7]> {
-    Some(match c {
-        '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
-        '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
-        '2' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f],
-        '3' => [0x1f, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0e],
-        '4' => [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
-        '5' => [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e],
-        '6' => [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e],
-        '7' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
-        '8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
-        '9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
-        'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
-        'B' => [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
-        'C' => [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e],
-        'D' => [0x1c, 0x12, 0x11, 0x11, 0x11, 0x12, 0x1c],
-        'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
-        'F' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
-        'G' => [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f],
-        'H' => [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
-        'I' => [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
-        'J' => [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0c],
-        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
-        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
-        'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
-        'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
-        'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
-        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
-        'Q' => [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
-        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
-        'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
-        'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
-        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
-        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
-        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a],
-        'X' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
-        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
-        'Z' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
-        '-' => [0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00],
-        _ => return None,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -779,25 +692,5 @@ mod tests {
             f.update(7.0); // out-of-range duty clamps to 1
         }
         assert!(f.brightness <= 1.0 && f.brightness > 0.99);
-    }
-
-    /// Halted (no cycles accrued) falls back to the point-sample value;
-    /// running divides on-cycles by total cycles per indicator.
-    #[test]
-    fn duties_divide_deltas_and_fall_back_when_halted() {
-        let prev = LampSnapshot { bits: [0; 16], cycles: 100 };
-        let mut now = LampSnapshot { bits: [0; 16], cycles: 200 };
-        now.bits[0] = 100; // indicator 0 lit the whole interval
-        now.bits[15] = 25; // indicator 15 lit a quarter of it
-        let d = duties(&now, &prev, 0);
-        assert_eq!(d[0], 1.0);
-        assert_eq!(d[15], 0.25);
-        assert_eq!(d[7], 0.0);
-
-        // no cycles: the 0x8001 point sample lights indicators 0 and 15
-        let d = duties(&prev, &prev, 0x8001);
-        assert_eq!(d[0], 1.0);
-        assert_eq!(d[15], 1.0);
-        assert_eq!(d[1], 0.0);
     }
 }
