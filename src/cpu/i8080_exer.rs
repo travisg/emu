@@ -22,7 +22,8 @@
 //! string at DE) whenever PC reaches 5, and takes PC reaching 0, CP/M's
 //! warm boot, as the program's exit. The programs are fetched, not kept here
 //! (`tools/fetch-i8080-tests.py`), so the test is `#[ignore]`d and run on
-//! purpose, in release -- 8080EXM is minutes of it:
+//! purpose, in release -- 8080EXM is half a minute of it there, and many
+//! minutes in a debug build:
 //!
 //! ```text
 //! cargo test --release -- --ignored i8080_exercisers

@@ -19,11 +19,12 @@
 //!
 //! Not modelled: the baud rate (a character arrives as soon as the
 //! register is empty, and transmit is always ready), word formats, framing
-//! and overrun errors, and the modem lines. Two behaviours are
+//! and overrun errors, and the modem lines. Three behaviours are
 //! Altair-680-monitor specific rather than real ACIA semantics, and are
 //! preserved deliberately on the chip `new` makes: incoming LF is remapped
-//! to CR and lowercase is folded to upper case. `raw` makes one without
-//! them, which a binary paper tape needs.
+//! to CR, lowercase is folded to upper case, and bit 7 is dropped from
+//! what is sent. `raw` makes one without them, which a binary paper tape
+//! needs in either direction.
 
 use crate::bus::MemoryDevice;
 use crate::console::ConsoleEndpoint;
@@ -45,7 +46,8 @@ pub struct Mc6850 {
     /// The receive data register; full is RDRF.
     rx: Option<u8>,
     control: u8,
-    /// The 680 monitor's LF-to-CR and upper-casing of what arrives.
+    /// The 680 monitor's LF-to-CR and upper-casing of what arrives, and
+    /// seven-bit sending.
     fold: bool,
 }
 
@@ -56,7 +58,8 @@ impl Mc6850 {
         Mc6850 { console, rx: None, control: CTRL_MASTER_RESET, fold: true }
     }
 
-    /// The chip with nothing folded: every byte arrives as it was sent.
+    /// The chip with nothing folded: every byte arrives as it was sent, and
+    /// goes out as the guest wrote it.
     pub fn raw(console: ConsoleEndpoint) -> Self {
         Mc6850 { fold: false, ..Mc6850::new(console) }
     }
@@ -149,7 +152,7 @@ impl MemoryDevice for Mc6850 {
                     self.rx = None;
                 }
             }
-            1 => self.console.put_char(val & 0x7f),
+            1 => self.console.put_char(if self.fold { val & 0x7f } else { val }),
             _ => {}
         }
     }
@@ -291,6 +294,30 @@ mod tests {
         assert_eq!(read_data(&mut u), b'a');
         assert_eq!(read_data(&mut u), b'\n');
         assert_eq!(read_data(&mut u), 0xc2);
+    }
+
+    #[test]
+    fn a_raw_chip_sends_all_eight_bits() {
+        let (_tx, rx) = mpsc::channel();
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Shared {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut raw = Mc6850::raw(ConsoleEndpoint::new(rx, Box::new(Shared(out.clone()))));
+        raw.write_byte(1, 0xc2);
+        let (_tx, rx) = mpsc::channel();
+        let folded = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut chip = Mc6850::new(ConsoleEndpoint::new(rx, Box::new(Shared(folded.clone()))));
+        chip.write_byte(1, 0xc2);
+        assert_eq!(*out.lock().unwrap(), vec![0xc2]);
+        assert_eq!(*folded.lock().unwrap(), vec![0x42], "the 680's drops bit 7");
     }
 
     /// A character handed in by the machine lands like one from the
