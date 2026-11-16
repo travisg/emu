@@ -130,10 +130,10 @@ and nobody means; it goes to stderr, and --werror makes it an error:
     selection is skipped and its reference runs without it, or the
     instruction is entered at its second word;
   - a direct reference behind a page selection, to something that is not
-    in the page selected: the selection governs the next reference
-    whatever it names;
+    in the page selected: the selection governs the next memory reference
+    whatever it names, the generics between the two notwithstanding;
   - a literal pool, or the cells before an END's, that execution can run
-    on into;
+    on into or that a JMP names a word of;
   - a labelled cell that nothing in the deck refers to.
 """
 
@@ -209,6 +209,9 @@ SKIPPERS = set(SKIPS) | {'IXS', 'DXS', 'SXP', 'SXM'}
 # Statements that are instructions and more than one word long. A skip in
 # front of one passes over its first word only.
 PAGE_SELECTS = {'SML', 'SMU', 'SMB'}
+# The generics a page selection does not outlast although they refer to no
+# memory: two leave for somewhere else, and CXE loads the register itself.
+SELECTION_ENDS = {'HLT', 'INR', 'CXE'}
 DATA_OPS = {'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'STR', 'RES', 'LPOOL'}
 
 # Mnemonics found only in the period listings, never in the reference manual,
@@ -425,20 +428,42 @@ def localize(text, scope):
                    if name.startswith('.') and len(name) > 1 else name)
 
 
-def split_args(text):
-    """A macro call's arguments: the commas outside quotes divide them."""
-    parts, start, i, n = [], 0, 0, len(text)
+CHAR = re.compile(r"'(?:\\.|[^'])(?:\\.|[^'])?'")
+
+
+def commas(text):
+    """Where the commas that divide a list of operands are: the ones
+    outside a string, a character constant and an X'..' number.
+
+    A string's quote may be escaped. A character constant is one or two
+    characters, either of which may be -- so `'\\'` alone is a backslash
+    and `','` a comma.
+    """
+    found, i, n = [], 0, len(text)
     while i < n:
         c = text[i]
-        if c in '\'"':
+        if c == '"':
             i += 1
-            while i < n and text[i] != c:
+            while i < n and text[i] != '"':
                 i += 2 if text[i] == '\\' else 1
+        elif c == "'":
+            m = None if text[i - 1:i] in ('X', 'x') else CHAR.match(text, i)
+            if m:
+                i = m.end() - 1
+            else:
+                i = text.find("'", i + 1)
+                if i < 0:
+                    break
         elif c == ',':
-            parts.append(text[start:i].strip())
-            start = i + 1
+            found.append(i)
         i += 1
-    parts.append(text[start:].strip())
+    return found
+
+
+def split_args(text):
+    """A macro call's arguments: the commas outside quotes divide them."""
+    cuts = [-1] + commas(text) + [len(text)]
+    parts = [text[a + 1:b].strip() for a, b in zip(cuts, cuts[1:])]
     return parts if any(parts) else []
 
 
@@ -465,7 +490,9 @@ class Macro:
     A missing argument is nothing. The call's label is the first word
     generated. A body may call other macros, and a `.LABEL` in it is its
     own at every call; one the call passes in is the caller's. A macro is
-    defined before it is used, by cards the deck reads before the call.
+    defined before it is used, by cards the deck reads before the call --
+    and assembles: a definition in the half of a TRUE or FALS that is not
+    taken defines nothing, so a guard may choose between two of one name.
     """
     __slots__ = ('name', 'params', 'body', 'loc')
 
@@ -479,15 +506,24 @@ class Macro:
 MACRO_DEPTH = 32
 
 
-def expand(statements, errors):
+def expand(statements, errors, skipping):
     """The deck with its macro definitions taken out, its macro calls
     replaced by what they generate, and every local label given its
-    deck-wide name: what the two passes assemble."""
+    deck-wide name: what the two passes assemble.
+
+    A generator, a card at a time, because what a card means depends on
+    the conditional assembly around it and only pass 1 knows that:
+    `skipping()` says whether the next card is in the untaken half of a
+    TRUE or FALS, and it is asked after pass 1 has placed everything
+    before it. A skipped card defines no macro, calls none and moves no
+    local label's scope; it goes through as written, for pass 1 to count
+    its ENDC or list it.
+    """
     macros = {}
-    out = []
     numbers = itertools.count(1)
     scope = [TOP_SCOPE]         # the caller's: the last label without a dot
-    defining = None
+    defining = None             # the macro whose body is being read,
+    kept = True                 # and whether its MACRO card was assembled
 
     def card(loc, label, op, arg, text, within, depth, via, exps):
         if label and label.startswith('.') and len(label) > 1:
@@ -495,7 +531,7 @@ def expand(statements, errors):
         elif label and depth == 0 and op != 'EQU':
             scope[0] = within = label
         if op not in macros:
-            out.append((loc, label, op, localize(arg, within), text))
+            yield loc, label, op, localize(arg, within), text
             return
         macro = macros[op]
         if depth >= MACRO_DEPTH:
@@ -508,7 +544,7 @@ def expand(statements, errors):
         number = next(numbers)
         inner = f'{MACRO_SCOPE}{number}'
         # The call itself: nothing but its label, which is the first word.
-        out.append((loc, label, None, None, text))
+        yield loc, label, None, None, text
         called = f'{macro.name} at {loc.path} line {loc.line}' if isinstance(loc, Loc) else macro.name
         for bloc, blabel, bop, barg, _ in macro.body:
             fill = lambda name: given.get(name, name)   # noqa: E731
@@ -520,9 +556,12 @@ def expand(statements, errors):
             shown_as = LOCALIZED.sub('.', f'+{blabel or "":<15}{bop or "":<8}{barg or ""}'.rstrip())
             where = Loc(bloc.path, bloc.line, loc.seq if isinstance(loc, Loc) else bloc.seq,
                         via or called, exps + (number,))
+            if skipping() and bop not in CONDITIONALS:
+                yield where, None, None, None, shown_as
+                continue
             try:
-                card(where, blabel or None, bop or None, barg or None, shown_as,
-                     inner, depth + 1, via or called, exps + (number,))
+                yield from card(where, blabel or None, bop or None, barg or None, shown_as,
+                                inner, depth + 1, via or called, exps + (number,))
             except AsmError as e:
                 errors.append(e)
 
@@ -530,13 +569,14 @@ def expand(statements, errors):
         try:
             if defining is not None:
                 if op == 'ENDM':
-                    macros[defining.name] = defining
+                    if kept:
+                        macros[defining.name] = defining
                     defining = None
                 elif op == 'MACRO':
                     raise AsmError(loc, f'MACRO inside {defining.name}: one definition at a time')
                 else:
                     defining.body.append((loc, label, op, arg, text))
-                out.append((loc, None, None, None, text))
+                yield loc, None, None, None, text
                 continue
             if op == 'MACRO':
                 name = (label or '').upper()
@@ -551,18 +591,22 @@ def expand(statements, errors):
                 bad = [q for q in params if not NAMES.fullmatch(q)]
                 if bad or len(set(params)) != len(params):
                     raise AsmError(loc, f'{name}: its parameters are names, each once')
-                defining = Macro(name, params, loc)
-                out.append((loc, None, None, None, text))
+                # In the untaken half of a choice the body is read to its
+                # ENDM all the same, and then let go.
+                defining, kept = Macro(name, params, loc), not skipping()
+                yield loc, None, None, None, text
+                continue
+            if skipping() and op not in CONDITIONALS:
+                yield loc, label, op, arg, text
                 continue
             if op == 'ENDM':
                 raise AsmError(loc, 'ENDM with no MACRO above it')
-            card(loc, label, op, arg, text, scope[0], 0, None, ())
+            yield from card(loc, label, op, arg, text, scope[0], 0, None, ())
         except AsmError as e:
             errors.append(e)
-            out.append((loc, None, None, None, text))
+            yield loc, None, None, None, text
     if defining is not None:
         errors.append(AsmError(defining.loc, f'{defining.name} has no ENDM'))
-    return out
 
 
 class AsmErrorList(AsmError):
@@ -861,18 +905,8 @@ def operand_list(arg):
     `D ','` is one operand, not two empty ones -- a comma is a perfectly good
     character constant -- and so is the comma in `LEN("A, B")`.
     """
-    parts, quote, start = [], None, 0
-    for i, c in enumerate(arg):
-        if quote:
-            if c == quote:
-                quote = None
-        elif c in '\'"':
-            quote = c
-        elif c == ',':
-            parts.append(arg[start:i])
-            start = i + 1
-    parts.append(arg[start:])
-    return parts
+    cuts = [-1] + commas(arg) + [len(arg)]
+    return [arg[a + 1:b] for a, b in zip(cuts, cuts[1:])]
 
 
 def sizeof(lineno, op, arg):
@@ -913,10 +947,10 @@ def encode(lineno, op, arg, symbols, here, address_syms=None,
            prev_selects_page=False, counts=None, relocatable=False):
     """Assemble one instruction into a single word.
 
-    `prev_selects_page` says the statement emitted immediately before this one
-    was SML/SMU/SMB, whose page selection governs exactly this instruction's
-    memory reference -- which is what licenses a direct operand outside the
-    instruction's own page.
+    `prev_selects_page` says an SML/SMU/SMB is in force: emitted in front of
+    this instruction with nothing but generics between, so that its page
+    selection governs exactly this instruction's memory reference -- which
+    is what licenses a direct operand outside the instruction's own page.
 
     Returns the word, or `(word, kind)` when `relocatable` -- see KINDS.
     `address_syms` is accepted for older callers and ignored: which symbols
@@ -999,8 +1033,8 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
         # must simply fit.
         #
         # A *direct* operand is a paged address: the hardware reads M under
-        # EXR, and EXR tracks the executing instruction's page unless the
-        # immediately preceding instruction selected another. So a direct
+        # EXR, and EXR tracks the executing instruction's page unless a
+        # selection in front of it, with only generics between, names another. So a direct
         # operand in the instruction's own page emits its low eleven bits
         # (what SYM II printed for the loader's own-page byte references), one
         # in a different page rides on a preceding SML/SMU/SMB, and anything
@@ -1181,9 +1215,8 @@ def _assemble(paths, origin=0, relocatable=False):
     # Errors from every stage, reported together at the end: on a long file
     # the first bad card should not hide the rest.
     errors = []
-    # Macros and local labels are settled before anything is placed: from
-    # here on the deck is plain cards under deck-wide names.
-    statements = expand(statements, errors)
+    # The cards as written: what a macro would generate is not known this
+    # early, since which macro a name means can itself hang on a guard.
     config = prescan_equates(statements)
 
     # Pass 1: place every statement and collect the labels.
@@ -1210,6 +1243,9 @@ def _assemble(paths, origin=0, relocatable=False):
     Expr.seen = set()
     # Labels on data, for the report of cells nothing refers to.
     cells = {}
+    # Where the location counter stood when an ORG moved it, by the ORG's
+    # place in `placed`: the end of whatever is in front of it.
+    left = {}
 
     def literal(lineno, op, arg):
         """The name of the pool slot `=expr` asks for."""
@@ -1227,7 +1263,9 @@ def _assemble(paths, origin=0, relocatable=False):
             value, cnt = probe.reloc()
             key = (value & 0xffff if cnt == 0 else value, cnt)
         except UndefinedSymbol:
-            key = ''.join(body.split())     # defined further down: by spelling
+            # defined further down: by spelling, as the tokens have it, so
+            # that the space in a string is not taken for spacing
+            key = ('spelled', *probe.tokens)
         if key not in pending:
             name = f'{LITERAL_PREFIX}{len(literals)}'
             pending[key] = literals[name] = Literal(name, body, lineno)
@@ -1244,7 +1282,10 @@ def _assemble(paths, origin=0, relocatable=False):
         pending.clear()
         return laid
 
-    for idx, (lineno, label, op, arg, text) in enumerate(statements):
+    # Macros and local labels are settled as pass 1 comes to each card, so
+    # that the cards it is skipping settle nothing: what it is handed is
+    # plain cards under deck-wide names.
+    for lineno, label, op, arg, text in expand(statements, errors, lambda: not all(cond)):
         try:
             if op in CONDITIONALS:
                 if op == 'ENDC':
@@ -1274,8 +1315,9 @@ def _assemble(paths, origin=0, relocatable=False):
                 end_card = (lineno, arg)
                 # Trailing cards in the same file are dropped, as they always
                 # were; a whole later file after the END is a deck mistake.
-                tail = {s[0].path for s in statements[idx + 1:]
-                        if isinstance(s[0], Loc) and s[0].path != lineno.path}
+                tail = {s[0].path for s in statements
+                        if isinstance(s[0], Loc) and isinstance(lineno, Loc)
+                        and s[0].seq > lineno.seq and s[0].path != lineno.path}
                 if tail:
                     errors.append(AsmError(
                         lineno,
@@ -1327,6 +1369,7 @@ def _assemble(paths, origin=0, relocatable=False):
                         lineno,
                         f'{op} {arg.strip()!r} in a module: the loader decides where '
                         f'a module goes, so its words are one stream from word 0')
+                left[len(placed)] = here
                 here = target
                 placed.append((lineno, here, op, arg, text))
                 continue
@@ -1386,7 +1429,7 @@ def _assemble(paths, origin=0, relocatable=False):
     spans = {}
     for i, (lineno, addr, _, _, _) in enumerate(placed):
         if isinstance(lineno, Loc) and lineno.exps:
-            after = placed[i + 1][1] if i + 1 < len(placed) else here
+            after = left.get(i + 1, placed[i + 1][1]) if i + 1 < len(placed) else here
             for number in lineno.exps:
                 spans.setdefault(number, [addr, after])[1] = after
 
@@ -1395,21 +1438,28 @@ def _assemble(paths, origin=0, relocatable=False):
     kinds = {}
     listing = []
     entry = None
-    # Whether the statement emitted immediately before this one was
-    # SML/SMU/SMB, whose page selection licenses the next direct reference to
-    # leave its own page. Statements that emit nothing (EQU, ORG, comments)
-    # are invisible to the hardware and leave the flag alone.
-    prev_selects = False
+    # The page selection in force, as (byte page, whether it is a
+    # location's -- which in a module is all that is known of it), or None.
+    # SML/SMU/SMB make one and the next memory reference uses it up: the
+    # hardware reloads the extension register after a memory reference and
+    # after nothing else, so the generics between the two leave it standing,
+    # and it licenses that reference to leave its own page. A skip between
+    # them makes which reference that is a matter of the data, so the
+    # assembler takes the selection to end there. Statements that emit
+    # nothing (EQU, ORG, comments) are invisible to the hardware.
+    selection = None
+    # Each direct JMP's target, and each pool laid down, for the jumps that
+    # land in one.
+    jumps = []
+    pools = []
 
     def data(part, at, lineno, what):
         v, c = Expr(part, symbols, at, lineno, counts).reloc()
         return v & 0xffff, data_kind(lineno, c, relocatable, what)
 
     # The lint's view of what has been emitted: the last two statements
-    # that put words down, as (mnemonic, words), and what the page selection
-    # in force, if the last of them was one, selected.
+    # that put words down, as (mnemonic, words).
     before = [(None, 0), (None, 0)]
-    selected = None
 
     def warn(lineno, message):
         warnings.append(AsmWarning(lineno, message))
@@ -1444,10 +1494,10 @@ def _assemble(paths, origin=0, relocatable=False):
                              f'which then runs without its page')
             elif len(words) > 1 and op not in DATA_OPS:
                 warn(lineno, f'{op} is {len(words)} words and {prev} skips only the first')
-        if prev in PAGE_SELECTS and op in MEMREF and not arg.strip().startswith('*'):
+        if selection is not None and op in MEMREF and not arg.strip().startswith('*'):
             # A page selection governs this reference whatever it names, so
             # what it names had better be in the page selected.
-            page, located = selected
+            page, located = selection
             if relocatable and located != (wkinds[0] != 'A'):
                 # all a module knows of its own page is that it is its own
                 where = 'the module\'s own page' if located else f'byte page {page}'
@@ -1474,6 +1524,7 @@ def _assemble(paths, origin=0, relocatable=False):
                     wkinds.append(k)
                 if pooled:
                     falls_into(lineno, 'a literal pool')
+                    pools.append((addr, len(pooled)))
             elif arg in literals and op in MEMREF and not relocatable \
                     and symbols[arg] >> 11 != addr >> 11:
                 lit, slot = literals[arg], symbols[arg]
@@ -1528,7 +1579,7 @@ def _assemble(paths, origin=0, relocatable=False):
                 wkinds = ['ILOC'] * len(words)
             elif op == 'JSX' and arg and len(operand_list(arg)) > 1:
                 parts = operand_list(arg)
-                w, k = encode2(lineno, op, parts[0], symbols, addr, prev_selects,
+                w, k = encode2(lineno, op, parts[0], symbols, addr, selection is not None,
                                counts, relocatable, info)
                 words, wkinds = [w], [k]
                 for i, part in enumerate(parts[1:], 1):
@@ -1577,9 +1628,12 @@ def _assemble(paths, origin=0, relocatable=False):
             elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', None):
                 words = []
             else:
-                w, k = encode2(lineno, op, arg, symbols, addr, prev_selects,
+                w, k = encode2(lineno, op, arg, symbols, addr, selection is not None,
                                counts, relocatable, info)
                 words, wkinds = [w], [k]
+                if op == 'JMP' and not arg.strip().startswith(('*', '/')):
+                    jumps.append((Expr(arg, symbols, addr, lineno, counts).value(),
+                                  lineno, arg.strip()))
 
             for i, (w, k) in enumerate(zip(words, wkinds)):
                 if addr + i in core:
@@ -1592,16 +1646,15 @@ def _assemble(paths, origin=0, relocatable=False):
             errors.append(e)
             words = []
         if words:
-            prev_selects = op in PAGE_SELECTS
             before = [before[1], (op, len(words))]
-            if prev_selects:
-                # the byte page selected, and whether it is a location's --
-                # which in a module is all that is known of it
-                if op == SELECT_BASE:
-                    target, cnt = Expr(arg, symbols, addr, lineno, counts).reloc()
-                    selected = ((target >> 10) & 0x1f, bool(cnt))
-                else:
-                    selected = ((words[0] & 0xf) | (0x10 if op == 'SMU' else 0), False)
+            if op == SELECT_BASE:
+                target, cnt = Expr(arg, symbols, addr, lineno, counts).reloc()
+                selection = ((target >> 10) & 0x1f, bool(cnt))
+            elif op in PAGE_SELECTS:
+                selection = ((words[0] & 0xf) | (0x10 if op == 'SMU' else 0), False)
+            elif (pooled is not None or len(words) != 1 or op in MEMREF or op in SKIPPERS
+                  or op in DATA_OPS or op in SELECTION_ENDS):
+                selection = None
         if pooled is None:
             listing.append((addr, words, text))
         else:
@@ -1610,6 +1663,14 @@ def _assemble(paths, origin=0, relocatable=False):
                 listing.append((addr, [], text))
             for i, lit in enumerate(pooled):
                 listing.append((addr + i, words[i:i + 1], f'{"":32}; ={lit.body}'))
+
+    # A jump into a pool is a way in that the card in front of the pool
+    # does not show: the JMP $+2 a macro ends on, with the pool behind it.
+    for start, n in pools:
+        for target, lineno, arg in jumps:
+            if start <= target < start + n:
+                warn(lineno, f'JMP {arg} goes to {target:#x}, which is in the '
+                             f'literal pool at {start:#x}')
 
     size = max(core) + 1 if core else 0
     sizeb = False

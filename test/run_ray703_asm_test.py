@@ -223,6 +223,26 @@ HIGH    ADD     =1
         check(name, any(want in e for e in errors_of(r)), errors_of(r))
 
 
+FORWARD = """
+START   LDW     %s
+        ADD     %s
+        HLT
+TABLE   WORD    0
+%s        END     START
+"""
+
+
+def forward_literals():
+    # Two literals that name something further down are one cell when
+    # they are spelled alike, and a space inside a string is spelling.
+    same('forward literals that differ inside a string are two cells',
+         FORWARD % ('=TABLE+LEN("A B")', '=TABLE+LEN("AB")', ''),
+         FORWARD % ('L1', 'L2', 'L1      WORD    TABLE+3\nL2      WORD    TABLE+2\n'))
+    same('forward literals that differ in spacing are one',
+         FORWARD % ('=TABLE+1', '= TABLE + 1', ''),
+         FORWARD % ('L1', 'L1', 'L1      WORD    TABLE+1\n'))
+
+
 MACROS = """
 JZ      MACRO   TARGET
         SAZ
@@ -365,6 +385,63 @@ SAY     MSG     "HI"
     said = [str(e) for e in getattr(r, 'errors', [])]
     check('an error under a call names the call', any('(in JZ at ' in s and "'NOWHERE'" in s for s in said), said)
 
+    # A string's comma divides no operands, behind an escaped quote or not.
+    r = build('START   LDW     T\n        HLT\nT       WORD    LEN("A\\",B"),7,\',\'\n        END     START\n')
+    check('a comma in a string behind an escaped quote', not isinstance(r, asm703.AsmErrorList)
+          and [r['core'][a] for a in (2, 3, 4)] == [4, 7, 0xac], getattr(r, 'errors', None) or words(r))
+
+    # Conditional assembly comes first: the half not taken defines no
+    # macro, calls none and is no local label's scope.
+    same('a macro defined both ways is the one whose guard holds', """
+WIDE    EQU     0
+        TRUE    WIDE=0
+PAD     MACRO
+        NOP
+        ENDM
+        ENDC
+        FALS    WIDE=0
+PAD     MACRO
+        HLT
+        HLT
+        ENDM
+        ENDC
+START   PAD
+        HLT
+        END     START
+""", 'START   NOP\n        HLT\n        END     START\n')
+    same('a label that is not assembled is no scope', """
+WIDE    EQU     0
+START   JMP     .ON
+        TRUE    WIDE=1
+OTHER   HLT
+        ENDC
+.ON     HLT
+        END     START
+""", 'START   JMP     ON\nON      HLT\n        END     START\n')
+    same('a call that is not assembled is not looked at', MACROS + """
+START   NOP
+        TRUE    0=1
+        JZ      START,START
+        NOSUCH  1,2
+        ENDC
+        HLT
+        END     START
+""", 'START   NOP\n        HLT\n        END     START\n')
+    same('a guard in a macro chooses among its cards', MACROS + """
+PICK    MACRO   WHICH,WHERE
+        TRUE    WHICH=1
+        JNZ     WHERE
+        ENDC
+        FALS    WHICH=1
+        NOP
+        ENDC
+        ENDM
+START   PICK    1,START
+        PICK    0,START
+        HLT
+        END     START
+""", 'START   SAZ\n        JMP     START\n        NOP\n        HLT\n        END     START\n')
+
     # STR pads an odd string with a zero byte, and LEN is what was written.
     r = build('START   LDW     =LEN("ODD")\n        HLT\nS       STR     "ODD"\n        END     START\n')
     check('STR and LEN', not isinstance(r, asm703.AsmErrorList)
@@ -456,6 +533,46 @@ START   LDW     =1
         END     START
 """, None)
 
+    warned('a pool a macro\'s own jump lands in', MACROS + """
+START   LDW     =1
+        JZ      START
+        LPOOL
+        HLT
+        END     START
+""", 'JMP $+2 goes to 0x4, which is in the literal pool at 0x4')
+    warned('a jump over a pool', """
+START   LDW     =1
+        JMP     ON
+        LPOOL
+ON      HLT
+        END     START
+""", None)
+
+    # A selection stands until a memory reference uses it, whatever
+    # generics come between.
+    warned('a selection over a generic, and a reference in another page',
+           frame % '        SMB     FAR\n        NOP\n        LDW     HERE',
+           'LDW HERE is in word page 0 and word page 2 is selected')
+    warned('a selection over generics, and a reference in its page',
+           frame % '        SMB     FAR\n        NOP\n        CAX\n        LDW     FAR', None)
+    warned('a selection is used up by one reference',
+           frame % '        SMB     FAR\n        LDW     FAR\n        NOP\n        LDW     HERE', None)
+    r = build(frame % '        SMB     FAR\n        SAZ\n        LDW     FAR')
+    check('a skip ends a selection', any('would land in the wrong page' in e for e in errors_of(r)),
+          errors_of(r) + warnings_of(r))
+
+    # A macro's words end where it ends, not where an ORG behind it goes.
+    warned('a one-word macro under a skip, an ORG behind it', """
+ONE     MACRO
+        NOP
+        ENDM
+START   SAZ
+        ONE
+        ORG     X'40'
+        HLT
+        END     START
+""", None)
+
     # A cell nothing names.
     warned('a cell never referred to', """
 START   LDW     USED
@@ -491,6 +608,7 @@ def command_line():
 
 def main():
     literals()
+    forward_literals()
     macros()
     lint()
     command_line()
