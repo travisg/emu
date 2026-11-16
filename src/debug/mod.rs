@@ -42,7 +42,7 @@
 //! | `set NAME HEX` | `ok NAME=HEX` | masked to the register's width |
 //! | `mem ADDR LEN` | `ok B B ...` | bus bytes at byte address ADDR; at most 256; `err no memory at HEX` if any byte is a device register or unmapped |
 //! | `memw ADDR LEN` | `ok W W ...` | 16-bit words at core-unit address ADDR, in the core's byte order (the 703: a word address, big-endian); at most 128 |
-//! | `write ADDR B...` | `ok` | bytes to byte address ADDR, through the guest's own write |
+//! | `write ADDR B...` | `ok` | bytes to byte address ADDR, through the guest's own write; `err rom at HEX` or `err no memory at HEX` for a byte the machine would drop |
 //! | `writew ADDR W...` | `ok` | words to core-unit address ADDR |
 //! | `break ADDR` / `unbreak ADDR` | `ok` | ADDR in core units, the same as `pc` |
 //! | `breaks` | `ok HEX ...` | |

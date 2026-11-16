@@ -82,6 +82,19 @@ impl Bus for Altair680 {
         }
     }
 
+    /// A poke where nothing is decoded is refused, rather than dropped as
+    /// the guest's write is.
+    fn poke8(&mut self, addr: u32, val: u8) -> Result<(), String> {
+        let a = (addr & 0xffff) as u16;
+        match a {
+            0x8000..=0xefff | 0xf002..=0xfbff => Err(format!("no memory at {a:#06x}")),
+            _ => {
+                self.write8(addr, val);
+                Ok(())
+            }
+        }
+    }
+
     /// The ACIA takes its next character here, and drives IRQ: "The IRQ
     /// output is tied directly to the MPU's IRQ input" (680b Theory of
     /// Operation, sheet 2). The monitor enables the receive interrupt but
@@ -128,7 +141,10 @@ mod tests {
     use std::sync::mpsc;
 
     fn build() -> Altair680 {
-        let path = std::env::temp_dir().join(format!("emu-altair680-{}.bin", std::process::id()));
+        // a name per call: the tests run side by side
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("emu-altair680-{}-{n}.bin", std::process::id()));
         // monitor byte i = i, so reads are recognisable
         let image: Vec<u8> = (0..MONITOR_ROM_SIZE).map(|i| i as u8).collect();
         std::fs::write(&path, &image).unwrap();
@@ -136,6 +152,20 @@ mod tests {
         let machine = Altair680::new(&path, ConsoleEndpoint::new(rx, Box::new(Vec::new())));
         std::fs::remove_file(&path).ok();
         machine.unwrap()
+    }
+
+    /// A debugger write above the ram or between the ACIA and the roms
+    /// says so; one to the ram or to the ACIA goes through.
+    #[test]
+    fn a_poke_where_nothing_is_decoded_is_refused() {
+        let mut m = build();
+        for hole in [0x8000, 0xefff, 0xf002, 0xfbff] {
+            assert!(m.poke8(hole, 0x55).unwrap_err().contains("no memory at"), "{hole:#06x}");
+        }
+        m.poke8(0x7fff, 0x55).unwrap();
+        assert_eq!(m.read8(0x7fff), 0x55);
+        m.poke8(0xf000, 0x03).unwrap();
+        m.poke8(0xfc00, 0x55).unwrap();
     }
 
     /// The debugger's peek covers ram and both roms and declines the ACIA,

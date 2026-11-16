@@ -221,15 +221,21 @@ impl Bus for Rc2014 {
         }
     }
 
-    /// A poke into the rom window is refused while the rom is in, rather
-    /// than dropped as the guest's write is.
+    /// A poke into the rom window is refused while the rom is in, and one
+    /// into the classic's hole always, rather than dropped as the guest's
+    /// write is.
     fn poke8(&mut self, addr: u32, val: u8) -> Result<(), String> {
         let a = (addr & 0xffff) as u16;
         if a < ROM_WINDOW && !self.rom_paged_out {
             return Err(format!("rom at {a:#06x}"));
         }
-        self.write8(addr, val);
-        Ok(())
+        match self.device_at(a) {
+            Some((dev, at)) => {
+                dev.write_byte(at, val);
+                Ok(())
+            }
+            None => Err(format!("no memory at {a:#06x}")),
+        }
     }
 
     /// The rom window and the ram; everything else is port-mapped, so
@@ -561,6 +567,17 @@ mod tests {
         sys.io_write8(0x38, 0x01);
         sys.poke8(0x0100, 0x99).unwrap();
         assert_eq!(sys.read8(0x0100), 0x99);
+    }
+
+    /// The classic has nothing between its rom and its 32K of ram, and a
+    /// poke there says so.
+    #[test]
+    fn a_poke_into_the_classics_hole_is_refused() {
+        let (mut sys, _tx) = build("hole");
+        assert!(sys.poke8(0x2000, 0x99).unwrap_err().contains("no memory at 0x2000"));
+        assert!(sys.poke8(0x7fff, 0x99).unwrap_err().contains("no memory at 0x7fff"));
+        sys.poke8(0x8000, 0x77).unwrap();
+        assert_eq!(sys.read8(0x8000), 0x77);
     }
 
     /// `--serial`'s line is channel B: what arrives on it reaches B's

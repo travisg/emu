@@ -98,6 +98,19 @@ impl Bus for System09 {
         }
     }
 
+    /// A poke where nothing is decoded is refused, rather than dropped as
+    /// the guest's write is.
+    fn poke8(&mut self, addr: u32, val: u8) -> Result<(), String> {
+        let a = (addr & 0xffff) as u16;
+        match self.device_at(a) {
+            Some((dev, at)) => {
+                dev.write_byte(at, val);
+                Ok(())
+            }
+            None => Err(format!("no memory at {a:#06x}")),
+        }
+    }
+
     /// The ACIA takes its next character here, and its IRQ goes nowhere:
     /// Grant Searle's board leaves the pin off the CPU (MAME's `gs6809`
     /// driver routes it to the serial port's RTS instead), and the BASIC
@@ -131,5 +144,26 @@ impl Bus for System09 {
             addr @ 0xc000..=0xffff => Some(self.rom.peek((addr - 0xc000) as u32)),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A debugger write into the hole between the ram and the ACIA says
+    /// so; one to the ram or to the ACIA goes through.
+    #[test]
+    fn a_poke_where_nothing_is_decoded_is_refused() {
+        let path = std::env::temp_dir().join(format!("emu-sys09-{}.hex", std::process::id()));
+        std::fs::write(&path, ":00000001FF\n").unwrap();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let sys = System09::new(&path, ConsoleEndpoint::new(rx, Box::new(Vec::new())), "");
+        std::fs::remove_file(&path).ok();
+        let mut sys = sys.unwrap();
+        assert!(sys.poke8(0x9000, 0x55).unwrap_err().contains("no memory at 0x9000"));
+        sys.poke8(0x1234, 0x55).unwrap();
+        assert_eq!(sys.read8(0x1234), 0x55);
+        sys.poke8(0xa000, 0x03).unwrap();
     }
 }

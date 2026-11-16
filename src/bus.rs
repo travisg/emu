@@ -87,8 +87,8 @@ pub trait Bus {
 
     /// A debugger write. The default is the guest's own write, device
     /// registers included -- poking one is the point. Err is a write the
-    /// machine would drop on the floor, a rom in the way, said rather than
-    /// silently lost.
+    /// machine would drop on the floor, a rom in the way or nothing decoded
+    /// at the address, said rather than silently lost.
     fn poke8(&mut self, addr: u32, val: u8) -> Result<(), String> {
         self.write8(addr, val);
         Ok(())
