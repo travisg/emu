@@ -8,6 +8,7 @@ glue that puts Tiny BASIC aboard it as a task, and the scripted session that
 tests it.
 
     rex.asm            the executive: scheduler, drivers, queues, the shell
+    boot.asm           the boot sector: reads the kernel in off the platter
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
     rexapi.asm         the kernel interface a module is assembled against
@@ -33,6 +34,8 @@ anything here.
     cargo build                                                  # the emulator
     make -C rex disc                                             # rex.bin, the modules, and the platter
     ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io  # a usable shell
+    make -C rex bootdisc                                         # rex/build/rex.img, the whole system on a platter
+    ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io   # ...booted with the LOAD button
     make -C rex test                                             # the scripted session
     make -C rex reloc-check                                      # the relocation check
 
@@ -261,23 +264,48 @@ another hog had in between -- and as many swaps in as out. Then four Tiny
 BASICs want the core below X'4000', which holds two: three run a program
 behind the prompt that counts and then saves itself under another name,
 one is typed at in front of them, and the saved listings are read back on
-the host.
+the host. A fourth machine is given no core image, only a platter and the
+LOAD button, and has to come up, list its directory and run a program.
 It runs `--fast-io` (the slices stay real machine time; the clock ignores
 the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
-`=nohello`, `=nolock`, `=nosave`, `=noguard` and `=noswapin` are its
-negative controls -- a platter with nothing on it, one without the hello
-module, a kernel with its wait for the disc patched out, one that never
-writes the directory back, one that lets any task read the console, and
+`=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin` and `=nosys` are
+its negative controls -- a platter with nothing on it, one without the
+hello module, a kernel with its wait for the disc patched out, one that
+never writes the directory back, one that lets any task read the console,
 one that cuts a returning task's blocks out of the free list but never
-reads them back -- which must all FAIL. Two things that make it hard
+reads them back, and a boot sector never told where the kernel is -- which
+must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
 at ten characters a second has to be read as a whole field, not matched on
 its first digit.
+
+## Booting
+
+`-s ray703 -r rex/build/rex.bin` puts the kernel in core the way the
+emulator can and a 703 could not. `make -C rex bootdisc` makes a platter
+that needs no such help, and `-s ray703-load` presses the disc controller's
+LOAD button on it: the button reads sector 0 into words 0-46 and starts
+there, and `boot.asm` is what it finds.
+
+The kernel's image begins at word 0, so the boot sector cannot stay where
+it was put. Its first act is to have the controller read the same sector
+again, to word X'6000' -- in what will be the pool, nobody's until the
+kernel lays it out -- and carry on in the copy. Nothing in it is assembled
+for the second address and nothing needs to be: both are the first word of
+a page, and every reference is an offset within the page it is executed
+in. Then it reads the kernel, which is two runs of words with the whole
+pool between them and is kept as two: `REX.SY` holds the low part and,
+from the next sector, the high part, and `mkdisc703.py --sys`, which makes
+that file from `rex.bin`, writes where each part is, how long, and where
+it goes into the six words at the end of the boot sector. Each transfer is
+polled to its end, there being nothing enabled yet to interrupt; then a
+jump to the kernel's first instruction. `ray703-panel-load` does the same
+from the front panel, starting halted like any panel machine.
 
 ## Swapping
 

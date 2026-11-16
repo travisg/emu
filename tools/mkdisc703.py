@@ -34,10 +34,17 @@ that compares no byte addresses within itself, and so may be loaded above word
 X'4000' (rex/rex.asm's header says why that matters); the directory entry
 carries the fact. --swap N makes SWAP.SY, N sectors of system file that REX
 puts tasks out to when more is loaded than core holds, unless the platter has
-one already; without it REX does no swapping. --list prints the directory.
+one already; without it REX does no swapping. --sys KERNEL puts REX's core
+image on as REX.SY -- its two parts, either side of the pool, one after the
+other -- and writes where they are into the six words at the end of REX's
+boot sector (rex/boot.asm), which must be in sector 0 already or be given
+with --boot in the same run; `emu -s ray703-load -r IMAGE` then boots it.
+--list prints the directory.
 
-An existing image is otherwise left alone unless --force is given: a disc the
-guest has been writing to is data, not a build product.
+An existing image is kept by every option but a bare run, which makes a blank
+one and so wants --force: --boot rewrites sector 0 and nothing else.
+
+A disc the guest has been writing to is data, not a build product.
 """
 
 import argparse
@@ -80,6 +87,55 @@ def old_catalogue(image):
     return entries or None
 
 
+BOOT_MARK = 0xd2d8              # 'RX', word 40 of REX's boot sector
+BOOT_TABLE = 41                 # the six words after it
+MAX_TRANSFER = 0x3fff           # words the controller moves at once
+
+
+def kernel_parts(kernel):
+    """A kernel image as the two runs of words either side of its longest
+    run of zeros: (address, bytes) for each. REX is the shell's end and
+    the filesystem's beginning with the whole pool between."""
+    words = [int.from_bytes(kernel[i:i + 2], 'big') for i in range(0, len(kernel), 2)]
+    best, start = (0, 0), None
+    for i, w in enumerate(words + [1]):
+        if w == 0 and start is None:
+            start = i
+        elif w != 0 and start is not None:
+            if i - start > best[1] - best[0]:
+                best = (start, i)
+            start = None
+    low, high = best
+    if low == 0 or high >= len(words):
+        sys.exit("the kernel image is not two parts with a gap between")
+    return (0, kernel[:low * 2]), (high, kernel[high * 2:])
+
+
+def track_sector(n):
+    """A sector's index as the controller's DOT 1,2 wants it: the track in
+    the top six bits, the sector in the low seven."""
+    return (n // SECTORS_PER_TRACK) << 10 | n % SECTORS_PER_TRACK
+
+
+def add_kernel(image, platter, path):
+    """REX.SY, and where its two parts are, written into the boot sector."""
+    if int.from_bytes(image[80:82], 'big') != BOOT_MARK:
+        sys.exit("sector 0 is not REX's boot sector; --sys wants --boot rex/build/boot.bin with it, "
+                 "or a platter that has it")
+    parts = kernel_parts(Path(path).read_bytes())
+    for address, data in parts:
+        if len(data) // 2 > MAX_TRANSFER:
+            sys.exit(f"{path}: {len(data) // 2} words at {address:04X} is more than one transfer")
+    low = parts[0][1]
+    low += bytes(-len(low) % SECTOR_BYTES)
+    entry = platter.add('REX', 'SY', low + parts[1][1], fs703.SYSTEM)
+    table, sector = [], entry.start
+    for address, data in parts:
+        table += [track_sector(sector), len(data) // 2, address]
+        sector += (len(data) + SECTOR_BYTES - 1) // SECTOR_BYTES
+    image[BOOT_TABLE * 2:(BOOT_TABLE + 6) * 2] = b''.join(w.to_bytes(2, 'big') for w in table)
+
+
 def filesystem(image, path):
     """The platter's filesystem, made first if the platter has none."""
     platter = fs703.Platter(image)
@@ -106,6 +162,8 @@ def main():
     parser.add_argument("--add-high", nargs=2, action="append", default=[],
                         metavar=("NAME", "FILE"),
                         help="the same, for a module that may be loaded above word X'4000'")
+    parser.add_argument("--sys", type=Path, metavar="KERNEL",
+                        help="put REX's core image on the platter as REX.SY, for its boot sector to load")
     parser.add_argument("--swap", type=int, metavar="SECTORS",
                         help="make SWAP.SY, the file REX swaps tasks out to, if there is none")
     parser.add_argument("--list", action="store_true", help="print the directory")
@@ -116,7 +174,8 @@ def main():
     exists = args.output.exists()
     adding = [(name, path, 0) for name, path in args.add]
     adding += [(name, path, fs703.HIGH) for name, path in args.add_high]
-    if exists and (adding or args.list or args.swap) and not args.boot and not args.force:
+    fs = adding or args.swap or args.sys
+    if exists and (fs or args.list or args.boot) and not args.force:
         image = bytearray(args.output.read_bytes())
         if len(image) != IMAGE_BYTES:
             sys.exit(f"{args.output} is {len(image)} bytes, not a {IMAGE_BYTES}-byte platter")
@@ -136,21 +195,22 @@ def main():
         what = f"{len(boot) // 2} words of {args.boot.name} in sector 0"
 
     try:
-        if args.swap and not adding:
+        if fs:
             platter, note = filesystem(image, args.output)
+        if args.sys:
+            add_kernel(image, platter, args.sys)
         if adding:
-            platter, note = filesystem(image, args.output)
             for name, path, flags in adding:
                 platter.add(*fs703.parse_name(name), Path(path).read_bytes(), flags)
         if args.swap and platter.find('SWAP', 'SY') is None:
             platter.add('SWAP', 'SY', bytes(args.swap * SECTOR_BYTES), fs703.SYSTEM)
-        if adding or args.swap:
+        if fs:
             files = len(platter.files())
             what += f", {files} file{'s' if files != 1 else ''}, {platter.free_sectors()} sectors free{note}"
 
         if args.list:
             print('\n'.join(fs703.listing(fs703.Platter(image))))
-            if not adding and not args.boot and not args.swap:
+            if not fs and not args.boot:
                 return
     except fs703.FsError as e:
         sys.exit(f"{args.output}: {e}")

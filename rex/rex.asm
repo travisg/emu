@@ -321,6 +321,9 @@
 ; then, from the repo root:
 ;
 ;   ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io
+;
+; make -C rex bootdisc puts the kernel itself on a platter of its own,
+; behind boot.asm, and -s ray703-load -r rex/build/rex.img boots that.
 
 ; ---------------------------------------------------------------- levels 0-3
                 ORG     0

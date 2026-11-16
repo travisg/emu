@@ -470,7 +470,7 @@ impl TapeReader703 {
 /// else on this machine's DIO channel -- no Raytheon document stands behind
 /// this device: no drawing number, no manual section, no driver listing. The
 /// tree needed a periodic interrupt source for a preemptive executive
-/// (`test/703/rex.asm`), and a line clock is the period-plausible shape for
+/// (`rex/rex.asm`), and a line clock is the period-plausible shape for
 /// one: a transformer tap and a zero-crossing detector pulsing an interrupt
 /// level at the mains rate, the instrument the PDP-8 knew as the KW8.
 ///

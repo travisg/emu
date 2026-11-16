@@ -66,6 +66,11 @@ one is typed at in front of them. The saved listings are read back on
 the host -- a program that came through being put out and brought back
 with a word wrong would not list as it was written.
 
+A fourth machine is given no core image at all, only a platter and the
+disc controller's LOAD button (-s ray703-load): the boot sector has to
+bring the kernel in from REX.SY and start it, and the kernel that comes
+up that way has to list the directory and run a program off it.
+
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
   nohello  a platter without the hello module
@@ -76,6 +81,7 @@ REX_CONTROL names a negative control, each of which must FAIL:
            not have the console patched out
   noswapin a task's blocks cut out of the free list where they were, but
            never read back into them
+  nosys    a boot sector that was never told where the kernel is
 """
 
 import contextlib
@@ -97,6 +103,7 @@ import fs703  # noqa: E402
 EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
 BUILD = os.path.join(HERE, 'build')
 ROM_FILE = os.path.join(BUILD, 'rex.bin')
+BOOT_BIN = os.path.join(BUILD, 'boot.bin')
 HELLO_OBJ = os.path.join(BUILD, 'hello.obj')
 BASIC_OBJ = os.path.join(BUILD, 'basic.obj')
 DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
@@ -742,6 +749,24 @@ def swap_session(emu, image):
         raise AssertionError('FG.BA is not the program that was typed')
 
 
+def boot_session(emu):
+    """The kernel, read in by the boot sector."""
+    s = Session(emu)
+    emu.run()
+    s.wait(b'REX 703 UP')
+    mark = s.say('DIR')
+    s.wait(b'SECTORS FREE')
+    if not re.search(rb'^REX\.SY \d+\r', s.since(mark), re.M):
+        raise AssertionError('no REX.SY in the directory: %r' % s.since(mark))
+    s.say('HELLO')
+    s.wait(re.compile(rb'^HELLO FROM WORD \d+\r', re.M))
+    s.say('HALT')
+    s.wait(b'REX 703 DOWN')
+    stopped = emu.wait_stopped()
+    if stopped.reason != 'hlt':
+        raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
+
+
 def verdict(paper):
     """What the shell had to have printed, on lines of its own: the
     terminal's echo of a command begins with the prompt instead."""
@@ -791,15 +816,17 @@ def verdict(paper):
     return [name for name, ok in checks if not ok]
 
 
-def make_platter(workdir, log, swap=False):
+def make_platter(workdir, log, swap=False, boot=False):
     os.makedirs(os.path.join(workdir, 'disks'))
     image = os.path.join(workdir, 'disks', 'ray703-disc0.img')
     cmd = [sys.executable, MKDISC, image]
+    if boot:
+        cmd += ['--boot', BOOT_BIN] + ([] if CONTROL == 'nosys' else ['--sys', ROM_FILE])
     if swap:
         cmd += ['--swap', str(SWAP_SECTORS)]
     if CONTROL == 'blank':
         pass
-    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin'):
+    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -831,7 +858,7 @@ def main():
         print('error: emulator binary not found at %s' % EMU_BIN, file=sys.stderr)
         print('build first with: cargo build', file=sys.stderr)
         return 1
-    for path in (ROM_FILE, REX_LST) + tuple(path for _, path in MODULES):
+    for path in (ROM_FILE, REX_LST, BOOT_BIN) + tuple(path for _, path in MODULES):
         if not os.path.isfile(path):
             print('error: %s is missing' % path, file=sys.stderr)
             print('build it with: make -C rex', file=sys.stderr)
@@ -873,6 +900,16 @@ def main():
             swap_session(emu, image)
             finish(emu)
             log.write(b'\n--- paper, the swap session ---\n' + bytes(emu.output))
+
+            # And a platter that is the whole system, with no core image:
+            # the LOAD button reads its sector 0 and starts that.
+            bootdir = os.path.join(workdir, 'boot')
+            os.makedirs(bootdir)
+            image = make_platter(bootdir, log, swap=True, boot=True)
+            emu = Emu.spawn([EMU_BIN, '-s', 'ray703-load', '-r', image, '--fast-io', '--no-throttle'], log=log)
+            boot_session(emu)
+            finish(emu)
+            log.write(b'\n--- paper, the boot session ---\n' + bytes(emu.output))
         except Exception:
             log.write(b'\n--- harness failure ---\n')
             log.write(traceback.format_exc().encode())

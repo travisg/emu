@@ -13,9 +13,9 @@ MKDISC703 := ../tools/mkdisc703.py
 BCORE     := ../test/703/bcore.asm
 BUILD     := build
 
-.PHONY: all modules reloc-check disc test clean
+.PHONY: all modules reloc-check disc bootdisc test clean
 
-all: $(BUILD)/rex.bin modules disc
+all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules disc
 
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
 # the filesystem and the swapper at the top of core. rexapi.asm states the kernel's
@@ -27,6 +27,12 @@ $(BUILD)/rex.bin: $(KERNEL) rexapi.asm $(ASM703) $(APICHECK)
 	@mkdir -p $(BUILD)
 	$(ASM703) $(KERNEL) -o $@ -l $(BUILD)/rex.lst
 	$(APICHECK) rexapi.asm $(BUILD)/rex.lst
+
+# The boot sector the disc controller's LOAD button reads: one sector, 47
+# words, which mkdisc703.py holds it to.
+$(BUILD)/boot.bin: boot.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) boot.asm -o $@ -l $(BUILD)/boot.lst
 
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record
@@ -109,11 +115,21 @@ disc: modules
 	    --add BASIC $(BUILD)/basic.obj --add-high HELLO $(BUILD)/hello.obj \
 	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
 
+# A platter that is the whole system: the boot sector, the kernel as
+# REX.SY, a swap file and the modules. From the repo root,
+#     ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io
+# presses LOAD on it. A build product, made afresh each time.
+bootdisc: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
+	$(MKDISC703) $(BUILD)/rex.img --force --boot $(BUILD)/boot.bin --sys $(BUILD)/rex.bin \
+	    --swap $(SWAP_SECTORS) \
+	    --add BASIC $(BUILD)/basic.obj --add-high HELLO $(BUILD)/hello.obj \
+	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
+
 # The scripted session, on a platter it makes for itself in a scratch
 # directory -- so it wants the kernel and the modules, not `disc`, which
 # writes the user's own platter. EMU_BIN in the environment names another
 # emulator binary; the default is the debug build.
-test: $(BUILD)/rex.bin modules
+test: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
 	./run_rex_test.py
 
 clean:
