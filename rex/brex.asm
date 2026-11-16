@@ -218,11 +218,9 @@ BPCBG           LDW     S.RUNMOD
                 SAZ
                 JMP     BPCPR
                 JMP     BPCX
-BPCFIL          ORI     BCH
-                SMB     K.PUTC
-                JSX     K.PUTC
-                SAZ                     ; kept for the close to report
-                STW     BOERR
+BPCFIL          ORI     BCH             ; a character the file has no room
+                SMB     K.PUTC          ; for is the channel's to remember:
+                JSX     K.PUTC          ; the close answers for it
                 JMP     BPCX
 
 ; T.PUTW: print the byte window [ACR, T.PWEND), one character at a time
@@ -397,7 +395,6 @@ B.LISTX         LDW     BOUT
 BLX1            SRL     8
                 SMB     K.CLOSE
                 JSX     K.CLOSE
-                ORI     BOERR
                 SAZ
                 JMP     BFERR
                 STW     BOUT
@@ -418,7 +415,6 @@ B.OLDX          LDW     L.TXTPTR
 ; A file call said no: SAVE's channel forgotten, and the core's HOW?.
 BFERR           CLR
                 STW     BOUT
-                STW     BOERR
                 JMP     E.HOW
 
 ; Open the file BFN names: ACR zero to read it, one to write it.
@@ -432,7 +428,9 @@ BOPEN           SUBR
 ; The file name at byte BNP into BFN, as the directory holds one: blanks
 ; passed over, up to six characters, then two of type after a dot, BA
 ; without one.  A zero ends the name, and so does a blank or any
-; character below one.
+; character below one.  Lower case goes in as upper: the core keeps a
+; line as it was typed, and the directory's names are the shell's, which
+; folds what it reads.
 BNAME           SUBR
                 CLR
                 STW     BFN
@@ -467,6 +465,9 @@ BNL2            CLB     X'A1'
 BN1             CLB     X'AE'           ; a dot starts the type
                 SNE
                 JMP     BNDOT
+                CLB     X'E1'           ; from 'a' up: bit 5 off
+                SLS
+                AND     K1.DF
                 STW     BCH2
                 LDW     BNN
                 SAZ                     ; room for it?
@@ -507,7 +508,6 @@ BCH             WORD    0               ; T.PUTC's character
 BCH2            WORD    0               ; T.GETL's character
 BIN             WORD    0               ; the channel a program is coming in by
 BOUT            WORD    0               ; the one SAVE lists down, times 256
-BOERR           WORD    0               ; what K.PUTC said, if it said no
 BAUTO           WORD    0               ; RUN, once the program is in
 BNOC            WORD    0               ; this task has no console
 BSIL            WORD    0               ; ...and so only a running program prints

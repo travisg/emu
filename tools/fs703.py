@@ -28,7 +28,8 @@ is read and written whole, as one 376-word transfer:
       7     what the entry is, in its low byte -- 0 unused, 1 a hole, 2 a
             file, 3 a file being written -- and above that X'0100', a
             module that may load above word X'4000', and X'0200', a system
-            file, which is never moved or deleted
+            file, which is never moved or deleted, here or on the
+            machine, nor replaced by anything but another system file
 
 Files are contiguous. The entries are in disc order and account for every
 data sector between them: a hole is an entry like any other, each entry
@@ -44,7 +45,7 @@ is what makes a platter and puts files on it.
     fs703.py IMAGE                  the directory
     fs703.py IMAGE --check          the rules above, held to the image
     fs703.py IMAGE --get NAME FILE  a file's bytes, out to the host
-    fs703.py IMAGE --delete NAME
+    fs703.py IMAGE --delete NAME    unless it is a system file
 """
 
 import argparse
@@ -94,9 +95,11 @@ def parse_name(text, default_type=DEFAULT_TYPE):
     """`NAME` or `NAME.TY` as (name, type), upper case."""
     name, dot, kind = text.upper().partition('.')
     kind = kind if dot else default_type
-    if not 1 <= len(name) <= 6 or not name.isalnum():
+    # ASCII's letters and digits: a character goes into the directory as
+    # seven bits, and isalnum alone would let through ones that are not
+    if not 1 <= len(name) <= 6 or not (name.isascii() and name.isalnum()):
         raise FsError("'%s': a name is one to six letters or digits" % text)
-    if not 1 <= len(kind) <= 2 or not kind.isalnum():
+    if not 1 <= len(kind) <= 2 or not (kind.isascii() and kind.isalnum()):
         raise FsError("'%s': a type is one or two letters or digits" % text)
     return name, kind
 
@@ -229,10 +232,15 @@ class Platter:
             raise FsError('%s.%s: no such file' % (name, kind))
         return bytes(self.image[e.start * SECTOR_BYTES:e.start * SECTOR_BYTES + e.size])
 
-    def delete(self, name, kind):
+    def delete(self, name, kind, system=False):
+        """Make a hole of a file; False if there is none of that name. A
+        system file goes only for a caller that says it means one: the
+        boot sector names REX.SY's sectors, and REX swaps to SWAP.SY's."""
         entries = self.entries()
         for e in entries:
             if e.what == FILE and (e.name, e.type) == (name, kind):
+                if e.flags & SYSTEM and not system:
+                    raise FsError('%s: a system file' % e.title)
                 e.name, e.type, e.last, e.flags = '', '', 0, HOLE
                 self.write_entries(self._merged(entries))
                 return True
@@ -240,8 +248,9 @@ class Platter:
 
     def add(self, name, kind, data, flags=0):
         """Put a file on the platter, in place of one of the same name: the
-        first hole it fits, the rest of the hole staying a hole."""
-        self.delete(name, kind)
+        first hole it fits, the rest of the hole staying a hole. Only a
+        system file takes a system file's place."""
+        self.delete(name, kind, system=bool(flags & SYSTEM))
         count = (len(data) + SECTOR_BYTES - 1) // SECTOR_BYTES
         last = len(data) - (count - 1) * SECTOR_BYTES if count else 0
         entries = [e if e.what != TENTATIVE else Entry(start=e.start, count=e.count, flags=HOLE)

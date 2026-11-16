@@ -16,6 +16,10 @@
 ; length and makes the rest a hole again.  A file being written
 ; that no channel holds -- its task ended, or the machine stopped -- is a
 ; hole to whoever looks next (FDNORM), which is all the recovery there is.
+; A file takes the place of an older one of its name only when it is
+; closed, and only whole: a channel that has refused a character refuses
+; the rest, and closing it gives the sectors back and leaves the older
+; file be.  A system file's name is nobody's to write under.
 ;
 ; The directory is kept in core, read once and written back whole after
 ; every change, one 376-word transfer each way.
@@ -51,7 +55,9 @@ C.POS           EQU     4               ; the next byte in the buffer
 C.LIM           EQU     5               ; reading: bytes in the buffer
 C.LST           EQU     6               ; reading: bytes in the last sector
 C.STA           EQU     7               ; writing: the hole's first sector
-C.BUF           EQU     8               ; the sector, 47 words
+C.ERR           EQU     8               ; writing: what a character was refused
+                                        ; with, which the rest and the close get
+C.BUF           EQU     9               ; the sector, 47 words
 C.LEN           EQU     C.BUF+47
 CHN             EQU     4               ; channels
 
@@ -643,8 +649,18 @@ FBOR1           CAX
 ; the whole hole taken it could not be when the free sectors are all in
 ; one piece.  Halving the hole takes an entry now, and closing the file
 ; may take another for what is left of its half, so there must be two
-; unused entries more than there are files being written.
-FBOCR           JSX     FDNORM
+; unused entries more than there are files being written.  Closing it
+; drops an older file of the name, so the name may not be a system file's.
+FBOCR           JSX     FDFIND
+                SAZ                     ; an older one?
+                JMP     FBOC1
+                JMP     FBOC2
+FBOC1           CAX
+                LDW     *DE.FLG
+                AND     FKSYS
+                SAZ
+                JMP     FBOPR
+FBOC2           JSX     FDNORM
                 LDW     FKM1
                 JSX     FCWHO
                 LDW     FCWN
@@ -747,6 +763,7 @@ FBOH3           LDX     FNPTR
                 STW     *C.END
                 CLR
                 STW     *C.POS
+                STW     *C.ERR
                 JSX     FCCLR
                 LDX     FCH             ; owned before the directory goes
                 LDW     FK2             ; out, or FDNORM would take the
@@ -764,6 +781,8 @@ FBOSV           STW     FDN0
                 LDW     FDN0
                 EXIT    FBOPEN
 FBODF           LDW     FKEDFL
+                EXIT    FBOPEN
+FBOPR           LDW     FKEPRT
                 EXIT    FBOPEN
 FBOOK           LDX     FCH
                 SMB     CURT
@@ -847,13 +866,16 @@ FBP1            CAX
                 CMW     FK2
                 SEQ
                 JMP     FBPBAD
+                LDW     *C.ERR
+                SAZ                     ; refused one already?  the same again
+                JMP     FBPX
                 LDW     *C.POS
                 CMW     FK94
                 SEQ                     ; a full sector waiting to go?
                 JMP     FBPST
                 JSX     FCFLSH
                 SAZ
-                JMP     FBPX
+                JMP     FBPERR
 FBPST           LDX     FCH
                 LDW     *C.SEC
                 CMW     *C.END
@@ -873,6 +895,8 @@ FBPST           LDX     FCH
                 CLR
 FBPX            EXIT    FBPUTC
 FBPFUL          LDW     FKEFUL
+FBPERR          LDX     FCH             ; kept, for the characters after this
+                STW     *C.ERR          ; one and for K.CLOSE
                 EXIT    FBPUTC
 
 ; K.CLOSE
@@ -887,6 +911,9 @@ FBC1            CAX
                 CMW     FK2
                 SEQ                     ; a reader just lets go
                 JMP     FBCRD
+                LDW     *C.ERR
+                SAZ                     ; a character refused?
+                JMP     FBCBAD
                 LDW     *C.POS
                 SAZ                     ; part of a sector in the buffer?
                 JMP     FBCW
@@ -958,6 +985,20 @@ FBCERR          STW     FDN0
 FBCRD           JSX     FCFREE
                 CLR
                 EXIT    FBCLOS
+; A file that did not all go in is not a file: with its channel let go
+; nobody is writing it, which is what FDNORM makes a hole of.  The answer
+; is what the character was refused with.
+FBCBAD          STW     FCL
+                JSX     FCFREE
+                JSX     FDLOAD
+                SAZ
+                JMP     FBCBX
+                JSX     FDNORM
+                JSX     FDSAVE
+                SAZ
+                JMP     FBCBX
+                LDW     FCL
+FBCBX           EXIT    FBCLOS
 
 ; K.DELET
 FBDELE          SUBR

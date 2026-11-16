@@ -24,6 +24,8 @@
 ;            in L.DTY, which is TX until a module stores another.  Zero
 ;            if the tail has run out, else not
 ;   L.ERR    what a file call answered, ACR an E. value, said in words
+;   L.BRK    nonzero if a Ctrl-C is waiting for this task: the flag is the
+;            console's, so a task without the console is never told of one
 ;   L.EXIT   the task is over
 
 ; Deposit under MSK, kick the printer, then masked-look/SWAI/SWTCH until
@@ -245,6 +247,17 @@ L.ERR           SUBR
                 JSX     L.MSG
                 JSX     L.NL
                 EXIT    L.ERR
+
+L.BRK           SUBR
+                SMB     CURT
+                LDX     CURT
+                LDW     *T.CON
+                SAZ                     ; the console's holder?
+                JMP     L.BRK1
+                EXIT    L.BRK
+L.BRK1          SMB     BRKREQ
+                LDW     BRKREQ
+                EXIT    L.BRK
 
 L.EXIT          SMB     K.EXIT
                 JMP     K.EXIT

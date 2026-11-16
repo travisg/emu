@@ -71,10 +71,15 @@ K.LOOK          EQU     X'28'           ; ACR = eight words, the first four a na
 ;                                       ; DE.SEC, DE.CNT, DE.LST, DE.FLG -- or E.
 K.OPEN          EQU     X'29'           ; ACR = five words: a name, then zero to
 ;                                       ; read or one to write -> a channel, or E.
+;                                       ; E.PROT to write under a system file's name
 K.GETC          EQU     X'2A'           ; ACR = a channel -> the next character,
 ;                                       ; or E.NOF at the end of the file
-K.PUTC          EQU     X'2B'           ; ACR = channel*256 + character -> zero, or E.
-K.CLOSE         EQU     X'2C'           ; ACR = a channel -> zero, or E.
+K.PUTC          EQU     X'2B'           ; ACR = channel*256 + character -> zero, or E.,
+;                                       ; and after one E. the same for the rest
+K.CLOSE         EQU     X'2C'           ; ACR = a channel -> zero, or E.  A file
+;                                       ; written replaces an older one of its name
+;                                       ; here; one K.PUTC refused a character of
+;                                       ; is given up instead, with K.PUTC's answer
 K.DELET         EQU     X'2D'           ; ACR = a name -> zero, or E.
 K.RENAM         EQU     X'2E'           ; ACR = eight words, the old name and the
 ;                                       ; new -> zero, or E.

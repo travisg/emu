@@ -4,7 +4,7 @@
 ;
 ; A line feed that does not follow a carriage return gets one in front
 ; of it, so a file made on a host with bare newlines still starts every
-; line at the left margin.  Ctrl-C stops it.
+; line at the left margin.  Ctrl-C stops it, where it has the console.
 
 TYPE            JSX     L.ARGS
                 LDW     TKNAM
@@ -22,8 +22,7 @@ TOPEN           CLR
                 SAP
                 JMP     TERR
                 STW     TCH
-TLOOP           SMB     BRKREQ
-                LDW     BRKREQ
+TLOOP           JSX     L.BRK
                 SAZ
                 JMP     TDONE
                 LDW     TCH

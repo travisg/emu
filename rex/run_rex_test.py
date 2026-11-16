@@ -52,7 +52,10 @@ runs three copies of the disc exerciser (dskt.asm) at once. They print
 nothing; each leaves its verdict in a sector of its own, read here off
 the platter, and the kernel's count of tasks that found the disc taken
 must not be zero -- three tasks that never met at the disc prove nothing
-about the lock.
+about the lock. The same machine, where a file takes minutes of its time
+to print, then has DUMP print one behind the prompt while a program that
+ignores Ctrl-C has the console and the key is struck: the break is the
+console holder's, and DUMP has to reach the file's last line.
 
 A third machine, also without --fast-io, is the swapper's. Four copies
 of hog.asm each take 8,000 words of core, which is more than there is,
@@ -74,6 +77,14 @@ disc controller's LOAD button (-s ray703-load): the boot sector has to
 bring the kernel in from REX.SY and start it, and the kernel that comes
 up that way has to list the directory and run a program off it.
 
+A fifth machine's platter has two sectors free, a saved program and a
+swap file. A SAVE under the program's name of more than the file's sector
+can take has to be refused and leave the program as it was, and a COPY
+onto the swap file's name has to be refused before it begins; the host
+then has to find both files untouched and the two sectors free again,
+and its own tools are held to the same rule about system files and to
+ASCII in a name.
+
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
   nohello  a platter without the hello module
@@ -86,6 +97,9 @@ REX_CONTROL names a negative control, each of which must FAIL:
            never read back into them
   nosys    a boot sector that was never told where the kernel is
   nopark   HALT's stopping of the loaded tasks patched out
+  nolatch  a channel forgetting that it refused a character, so the
+           close makes a file of what did go in
+  sysopen  a file opened for writing under a system file's name
 """
 
 import contextlib
@@ -171,15 +185,16 @@ SQ = b'10 PRINT "FROM A HOST FILE"\n20 FOR I=1 TO 3\n30 PRINT I*I\n40 NEXT I\n'
 MARKS = b'+=*'
 
 # The swap session's: how big the swap file is, hog.asm's constants, and
-# the three programs the background BASICs run -- each counts, to be
-# running for a while, and then saves itself as OUTn.BA.
+# the three programs the background BASICs run -- each counts, for long
+# enough that all three are wanted in core at once whatever order they
+# were loaded in, and then saves itself as OUTn.BA.
 SWAP_SECTORS = 1024
 HOG_WORDS = 8000
 HOG_COPIES = 4
 HOG_SECTOR = 4200
 HOG_GOOD = 0x600d
 JOBS = 3
-JOB_COUNT = 300
+JOB_COUNT = 3000
 
 
 def job_lines(n):
@@ -464,7 +479,7 @@ def session(emu):
     s.basic('10 FOR I=1 TO 3\r')
     s.basic('20 PRINT "BG";I\r')
     s.basic('30 NEXT I\r')
-    s.basic('SAVE BG\r')
+    s.basic('SAVE bg\r')              # the directory's names are upper case
     s.basic('NEW\r')
     s.basic('10 PRINT "LP"\r')
     s.basic('20 GOTO 20\r')
@@ -653,6 +668,35 @@ def disc_session(emu, image):
     if not together:
         raise AssertionError('STAT never showed the three exercisers on the ring together')
 
+    # A Ctrl-C is for the program that has the console. DUMP, behind the
+    # prompt, has minutes of machine time's printing to do; NAP has the
+    # console and never takes the break, so the flag stays up from the
+    # first key to the second, which is the one that ends NAP.
+    size = fs703.Platter(bytearray(platter)).find('HELLO', 'RX').size
+    last = b'%04X ' % ((size - 1) // 16 * 16)
+    mark = len(emu.output)
+    emu.key('LOAD DUMP HELLO.RX\r')
+    # its second line: the prompt prints into the first
+    emu.wait_for_output(b'\n0010 ', start=mark, timeout=120)
+    emu.key('NAP\r')
+    deadline = time.time() + 120
+    while True:
+        emu.halt()
+        held = emu.memw(symbols.value('CONBSY'), 1)[0]
+        emu.run()
+        if held:
+            break
+        if time.time() > deadline:
+            raise AssertionError('NAP never had the console')
+        time.sleep(0.05)
+    emu.key('\x03')
+    emu.wait_for_output(re.compile(re.escape(last) + rb'[0-9A-F]{4}'), start=mark, timeout=120)
+    emu.wait_quiet(timeout=120)
+    emu.key('\x03')
+    emu.wait_for_output(b'KILLED', start=mark, timeout=120)
+    emu.wait_quiet(timeout=120)
+    s.at = len(emu.output)
+
     emu.key('HALT\r')
     s.wait(b'REX 703 DOWN', timeout=120)
     stopped = emu.wait_stopped()
@@ -789,6 +833,75 @@ def boot_session(emu):
         raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
 
 
+KEEP = b'10 PRINT "KEEP"\n'
+FULL_FREE = 2                   # sectors: a new file is given half
+
+
+def fill_platter(image):
+    """A saved program, and then all but FULL_FREE sectors taken."""
+    with open(image, 'rb') as f:
+        platter = fs703.Platter(bytearray(f.read()))
+    platter.add('KEEP', 'BA', KEEP)
+    platter.add('FILL', 'TX', bytes((platter.free_sectors() - FULL_FREE) * fs703.SECTOR_BYTES))
+    with open(image, 'wb') as f:
+        f.write(platter.image)
+
+
+def full_session(emu, image):
+    """A file that does not fit, and a system file's name."""
+    symbols = Symbols()
+    symbols.load(REX_LST)
+    if CONTROL == 'nolatch':
+        # FBPERR is LDX FCH / STW *C.ERR
+        emu.writew(symbols.value('FBPERR') + 1, [NOP])
+    if CONTROL == 'sysopen':
+        # FBOC1 is CAX / LDW *DE.FLG / AND FKSYS / SAZ / JMP FBOPR
+        emu.writew(symbols.value('FBOC1') + 4, [NOP])
+    with open(image, 'rb') as f:
+        before = fs703.Platter(bytearray(f.read()))
+    s = Session(emu)
+    emu.run()
+    s.wait(b'REX 703 UP')
+    s.say('BASIC')
+    for n in (10, 20, 30):          # more than a sector of listing
+        s.basic('%d REM %s\r' % (n, 'X' * 40))
+    mark = len(emu.output)
+    s.basic('SAVE KEEP\r')
+    s.basic('BYE\r')
+    if not re.search(rb'^HOW\?', s.since(mark), re.M):
+        raise AssertionError('a SAVE with no room for it: %r' % s.since(mark))
+    mark = s.say('COPY MSG SWAP.SY')
+    emu.wait_for_output(b'SYSTEM FILE', start=mark)
+    s.say('HALT')
+    s.wait(b'REX 703 DOWN')
+    stopped = emu.wait_stopped()
+    if stopped.reason != 'hlt':
+        raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
+
+    with open(image, 'rb') as f:
+        after = fs703.Platter(bytearray(f.read()))
+    bad = after.check()
+    if bad:
+        raise AssertionError('the directory breaks its rules: ' + '; '.join(bad))
+    if after.read('KEEP', 'BA') != KEEP:
+        raise AssertionError('KEEP.BA is %r' % after.read('KEEP', 'BA'))
+
+    def shape(platter):
+        return [(e.what, e.title, e.start, e.count, e.flags) for e in platter.entries()]
+    if shape(after) != shape(before) or after.free_sectors() != FULL_FREE:
+        raise AssertionError('the directory is not as it was: %r' % after.entries())
+
+    # The host's tools, on the same platter.
+    for what, attempt in (('deleted a system file', lambda: after.delete('SWAP', 'SY')),
+                          ('put a file in a system file\'s place', lambda: after.add('SWAP', 'SY', b'X')),
+                          ('took a name that is not ASCII', lambda: fs703.parse_name('\u00e9.TX'))):
+        try:
+            attempt()
+        except fs703.FsError:
+            continue
+        raise AssertionError('fs703 ' + what)
+
+
 def verdict(paper, programs):
     """What the shell had to have printed, on lines of its own: the
     terminal's echo of a command begins with the prompt instead. The
@@ -852,7 +965,8 @@ def make_platter(workdir, log, swap=False, boot=False):
         cmd += ['--swap', str(SWAP_SECTORS)]
     if CONTROL == 'blank':
         pass
-    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark'):
+    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
+                     'nolatch', 'sysopen'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -937,6 +1051,18 @@ def main():
             boot_session(emu)
             finish(emu)
             log.write(b'\n--- paper, the boot session ---\n' + bytes(emu.output))
+
+            # And one with next to no room on it.
+            fulldir = os.path.join(workdir, 'full')
+            os.makedirs(fulldir)
+            image = make_platter(fulldir, log, swap=True)
+            fill_platter(image)
+            with cwd(fulldir):
+                emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE,
+                                 '--fast-io', '--no-throttle'], log=log)
+            full_session(emu, image)
+            finish(emu)
+            log.write(b'\n--- paper, the full platter ---\n' + bytes(emu.output))
         except Exception:
             log.write(b'\n--- harness failure ---\n')
             log.write(traceback.format_exc().encode())

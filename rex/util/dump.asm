@@ -2,7 +2,7 @@
 ;
 ; DUMP name -- a file in hexadecimal, eight words to a line behind the
 ; byte offset the line starts at.  A last odd byte is shown as the high
-; half of a word.  Ctrl-C stops it.
+; half of a word.  Ctrl-C stops it, where it has the console.
 
 DUMP            JSX     L.ARGS
                 LDW     UKNAM
@@ -21,8 +21,7 @@ U1              CLR
                 SAP
                 JMP     UERR
                 STW     UCH
-ULINE           SMB     BRKREQ
-                LDW     BRKREQ
+ULINE           JSX     L.BRK
                 SAZ
                 JMP     UDONE
                 JSX     UBYTE           ; the line's first byte, or none

@@ -172,7 +172,8 @@ still be broken. **The break is the console's**: BASIC's check between
 statements goes through the wrapper, which answers for the kernel's flag
 only while its task has the console, so a BASIC running behind the prompt
 neither stops for a Ctrl-C nor takes one that was meant for the program
-in front. A break belongs to a run: the
+in front; `TYPE` and `DUMP` ask through `rexlib.asm`'s `L.BRK`, which
+answers the same way. A break belongs to a run: the
 interpreter spends the flag at its `READY` loop, once the line is in, so
 one typed while the prompt was up is not kept for whatever runs next.
 `STOP`/`START` take a loaded task by its job number, never the shell --
@@ -251,7 +252,10 @@ machine, without `--fast-io` so that a disc
 transfer takes its half revolution, then runs three copies of `dskt.asm`
 at once: each writes and reads back a sector of its own 250 times, leaves
 its verdict on the platter where the harness reads it, and the kernel's
-count of tasks that found the disc taken has to be more than zero.
+count of tasks that found the disc taken has to be more than zero. On the
+same machine, where printing takes its time, `DUMP` then prints a file
+behind the prompt while a program that ignores Ctrl-C has the console and
+the key is struck: it has to reach the file's last line.
 
 A third machine is the swapper's, on a platter with a swap file. Four
 copies of `hog.asm` each take 8,000 words, which is more than there is,
@@ -265,19 +269,26 @@ BASICs want the core below X'4000', which holds two: three run a program
 behind the prompt that counts and then saves itself under another name,
 one is typed at in front of them, and the saved listings are read back on
 the host. A fourth machine is given no core image, only a platter and the
-LOAD button, and has to come up, list its directory and run a program.
+LOAD button, and has to come up, list its directory and run a program. A
+fifth has a platter with two sectors free: a `SAVE` too long for them
+under a saved program's name has to be refused with the program left as
+it was, a `COPY` onto the swap file's name refused outright, and the
+host's tools have to refuse the same of a system file.
 It runs `--fast-io` (the slices stay real machine time; the clock ignores
 the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
-`=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin`, `=nosys` and
-`=nopark` are its negative controls -- a platter with nothing on it, one
+`=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin`, `=nosys`,
+`=nopark`, `=nolatch` and `=sysopen` are its negative controls -- a platter
+with nothing on it, one
 without the hello module, a kernel with its wait for the disc patched out,
 one that never writes the directory back, one that lets any task read the
 console, one that cuts a returning task's blocks out of the free list but
-never reads them back, a boot sector never told where the kernel is, and a
-`HALT` that stops no task -- which must all FAIL. Two things that make it hard
+never reads them back, a boot sector never told where the kernel is, a
+`HALT` that stops no task, a channel that forgets it refused a character,
+and a file opened for writing under a system file's name -- which must all
+FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
@@ -364,7 +375,14 @@ to get out of step with the directory: a new file is given half of the
 largest hole as a file being written -- half, as RT-11 gave it, so that a
 second file can be begun before the first is closed -- and closing it cuts
 it to its length and makes the rest a hole again. A new file replaces an older one of its
-name when it is closed, not before. **A file being written that no channel
+name when it is closed, not before, and only if all of it went in: a
+channel that has refused a character -- the file filled its half of the
+hole -- refuses the rest, and closing it gives the sectors back and
+answers with the refusal, the older file still there. A system file --
+the kernel's, the swap file -- is not deleted, renamed or written over,
+by the kernel's calls or by the host's tools short of `mkdisc703.py --sys`.
+Names are upper case: the shell folds what it is typed, and BASIC folds
+the name it is given. **A file being written that no channel
 holds is a hole** to whoever looks next -- its task exited, or the machine
 stopped -- which is all the recovery there is and all that is needed.
 
@@ -430,4 +448,5 @@ name on the command line -- `BASIC PROG` -- is `OLD PROG` and then `RUN`,
 and `LOAD BASIC PROG` runs it behind the prompt with no console: what the
 program prints is printed, nothing else is, and the task is over when the
 program ends or asks for input. A file that is not there is the
-interpreter's `HOW?`. The module is 2,047 words of its 2,048-word page.
+interpreter's `HOW?`, and so is a `SAVE` the disc has no room for. The
+module is 2,045 words of its 2,048-word page.
