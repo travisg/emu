@@ -33,6 +33,13 @@ satisfied by the first. The printer is shared character by character, so
 nothing here matches a line a letter task could be printing into -- the
 letter tasks are stopped before anything is matched exactly.
 
+The filesystem is held to the host's reading of it (tools/fs703.py): the
+session runs the file calls' exerciser (fst.asm) twice, and afterwards
+the platter's directory has to pass the host's check of its rules, hold
+exactly the files the exerciser leaves with the bytes it wrote, and still
+hold every module byte for byte -- and the platter as it was made has to
+hold none of the exerciser's files, so the check cannot pass on nothing.
+
 A second machine, without --fast-io so that a transfer takes its time,
 runs three copies of the disc exerciser (dskt.asm) at once. They print
 nothing; each leaves its verdict in a sector of its own, read here off
@@ -45,6 +52,7 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nohello  a platter without the hello module
   nolock   the kernel's wait for the disc patched out, so a task that
            finds it taken goes in anyway
+  nosave   the directory never written back to the disc
 """
 
 import contextlib
@@ -61,6 +69,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 
 from emudbg import Emu, Symbols  # noqa: E402
+import fs703  # noqa: E402
 
 EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
 BUILD = os.path.join(HERE, 'build')
@@ -68,6 +77,8 @@ ROM_FILE = os.path.join(BUILD, 'rex.bin')
 HELLO_OBJ = os.path.join(BUILD, 'hello.obj')
 BASIC_OBJ = os.path.join(BUILD, 'basic.obj')
 DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
+FST_OBJ = os.path.join(BUILD, 'fst.obj')
+MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ))
 REX_LST = os.path.join(BUILD, 'rex.lst')
 MKDISC = os.path.join(ROOT, 'tools', 'mkdisc703.py')
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, 'rex_test.log')
@@ -135,6 +146,12 @@ def letters_ran(text):
 
 def session(emu):
     s = Session(emu)
+    if CONTROL == 'nosave':
+        # FDSAVE is STX slot / LDW FK1 / JSX FDXFR: a CLR in place of the
+        # call and the save answers "clean" having written nothing
+        symbols = Symbols()
+        symbols.load(REX_LST)
+        emu.writew(symbols.value('FDSAVE') + 2, [CLR])
     emu.run()
     s.wait(b'REX 703 UP')
 
@@ -188,6 +205,14 @@ def session(emu):
         raise AssertionError('STAT never showed the loaded hello on the ring')
     emu.key('MEM\r')
     s.say('RUN NOPE')
+
+    # The file calls, twice: the second run begins by finding the file
+    # the first one left unclosed, and has to make a hole of it.
+    for _ in range(2):
+        s.say('RUN FST')
+        s.wait(re.compile(rb'FST (OK|BAD \d+)'))
+    s.say('DIR')
+    s.say('MEM')
 
     # A BASIC session: the module comes off the platter, the console
     # changes hands, a program goes in and runs, and Ctrl-C -- which never
@@ -261,16 +286,43 @@ def session(emu):
 
 # dskt.asm's constants, and the platter's geometry.
 DSKT_SECTOR = 4000
-DSKT_ROUNDS = 150
+DSKT_ROUNDS = 250
 DSKT_COPIES = 3
 FIRST_JOB = 5                   # NARID: the first node the loader hands out
 SECTOR_WORDS = 47
 NOP = 0x0900                    # SRA 0
+CLR = 0x0100
+
+
+def fst_byte(i):
+    return (i * 5 + 1) & 0xff
+
+
+def check_platter(image, pristine):
+    """The platter after the session, read the host's way."""
+    with open(image, 'rb') as f:
+        platter = fs703.Platter(bytearray(f.read()))
+    bad = platter.check()
+    if bad:
+        raise AssertionError('the directory breaks its rules: ' + '; '.join(bad))
+    for name, path in MODULES:
+        with open(path, 'rb') as f:
+            if platter.read(name, 'RX') != f.read():
+                raise AssertionError('%s.RX is not the module that was put there' % name)
+    want = {'T2.TX': bytes(fst_byte(i) for i in range(10)), 'T4.TX': b''}
+    made = {e.title: platter.read(e.name, e.type) for e in platter.files() if e.type == 'TX'}
+    if made != want:
+        raise AssertionError('the exerciser left %r' % made)
+    unclosed = [e for e in platter.entries() if e.what == fs703.TENTATIVE]
+    if len(unclosed) != 1 or unclosed[0].title != 'T5.TX':
+        raise AssertionError('one unclosed T5.TX was expected, not %r' % unclosed)
+    if any(e.type == 'TX' for e in fs703.Platter(bytearray(pristine)).entries()):
+        raise AssertionError('the platter had the exerciser\'s files before it ran')
 
 
 def disc_session(emu, image):
     """Three tasks at the disc at once, each writing and reading back a
-    sector of its own 150 times over."""
+    sector of its own 250 times over."""
     symbols = Symbols()
     symbols.load(REX_LST)
     if CONTROL == 'nolock':
@@ -280,31 +332,34 @@ def disc_session(emu, image):
     s = Session(emu)
     emu.run()
     s.wait(b'REX 703 UP')
-    # Typed ahead in one go, so the three loads follow each other as fast
-    # as the shell can make them and the tasks overlap for most of their
-    # lives. The shell's queue holds the lot. The keyboard's echo of the
-    # second and third lands inside the prompts in between, so there is
-    # no prompt to count here: quiet is the three of them loaded.
+    # Typed ahead in one go, with the STAT behind them, so the three loads
+    # follow each other as fast as the shell can make them and the STAT
+    # finds the three on the ring together -- they are DS there until
+    # they exit. The shell's queue holds the lot. The keyboard's echo of
+    # the later commands lands inside the prompts in between, so there is
+    # no prompt to count here; STAT's last line is the idle node's, and
+    # nothing is typed after it to land in its output. Paced on the
+    # machine and not on the wall clock: an exerciser lives a few dozen
+    # machine seconds, which unthrottled is not long.
     s.wait(PROMPT)
     emu.wait_quiet()
-    emu.key('LOAD DSKT\r' * DSKT_COPIES)
-    emu.wait_quiet(idle=1.0, timeout=120)
+    mark = len(emu.output)
+    emu.key('LOAD DSKT\r' * DSKT_COPIES + 'STAT\r')
+    idle_line = re.compile(rb'^ID RUN', re.M)
+    emu.wait_for_output(idle_line, start=mark, timeout=120)
+    together = len(re.findall(rb'^DS ', s.since(mark), re.M)) == DSKT_COPIES
 
-    # They are DS on the ring until they exit: all three at once at some
-    # point, and then none. STAT's last line is the idle node's.
-    together = False
+    # ...and then none.
     for _ in range(400):
+        emu.wait_quiet(timeout=120)
         mark = len(emu.output)
         emu.key('STAT\r')
-        emu.wait_for_output(re.compile(rb'^ID RUN', re.M), start=mark, timeout=120)
-        emu.wait_quiet(timeout=120)
-        on_ring = len(re.findall(rb'^DS ', s.since(mark), re.M))
-        if on_ring == DSKT_COPIES:
-            together = True
-        if on_ring == 0:
+        emu.wait_for_output(idle_line, start=mark, timeout=120)
+        if not re.search(rb'^DS ', s.since(mark), re.M):
             break
     else:
         raise AssertionError('the disc exercisers never finished')
+    emu.wait_quiet(timeout=120)
     s.at = len(emu.output)
 
     emu.halt()
@@ -354,14 +409,18 @@ def verdict(paper):
         ('help', line(rb'^COMMANDS HELP STAT UPTIME')),
         ('echo', line(rb'^SHELL OUTPUT OK')),
         ('unknown command', line(rb'^WHAT')),
-        ('catalogue: hello', line(rb'^HELL 2 4')),
-        ('catalogue: basic', line(rb'^BASI 6 47')),
+        ('directory: hello', line(rb'^HELLO\.RX 4$')),
+        ('directory: basic', line(rb'^BASIC\.RX 47$')),
+        ('directory: the free sectors', line(rb'^\d+ SECTORS FREE')),
         # RUN's hello has the printer to itself. LOAD's prints behind the
         # prompt, a character at a time into whatever else is printing, so
         # it is taken from STAT's ring and the pool instead (session).
         ('hello ran under RUN', line(rb'^HELLO FROM WORD \d')),
         ('no such file', line(rb'^NO SUCH FILE')),
-        ('five MEMs', len(free) >= 5),
+        ('the file calls, twice', count(rb'^FST OK$') == 2),
+        ('directory: the file left', line(rb'^T2\.TX 1$')),
+        ('directory: the empty file', line(rb'^T4\.TX 0$')),
+        ('six MEMs', len(free) >= 6),
         ('the pool whole after every load', len(set(free)) == 1),
         ('two runs', count(rb'^SQ9') == 2),
         ('two breaks', count(rb'BREAK AT 50') == 2),
@@ -378,8 +437,9 @@ def make_platter(workdir, log):
         pass
     elif CONTROL == 'nohello':
         cmd += ['--add', 'BASIC', BASIC_OBJ]
-    elif CONTROL in ('', 'nolock'):
-        cmd += ['--add', 'HELLO', HELLO_OBJ, '--add', 'BASIC', BASIC_OBJ, '--add', 'DSKT', DSKT_OBJ]
+    elif CONTROL in ('', 'nolock', 'nosave'):
+        for name, path in MODULES:
+            cmd += ['--add', name, path]
     else:
         sys.exit('REX_CONTROL=%s: not a control this harness has' % CONTROL)
     subprocess.run(cmd, check=True, stdout=log)
@@ -400,7 +460,7 @@ def main():
         print('error: emulator binary not found at %s' % EMU_BIN, file=sys.stderr)
         print('build first with: cargo build', file=sys.stderr)
         return 1
-    for path in (ROM_FILE, HELLO_OBJ, BASIC_OBJ, DSKT_OBJ, REX_LST):
+    for path in (ROM_FILE, REX_LST) + tuple(path for _, path in MODULES):
         if not os.path.isfile(path):
             print('error: %s is missing' % path, file=sys.stderr)
             print('build it with: make -C rex', file=sys.stderr)
@@ -411,6 +471,8 @@ def main():
     with open(LOG_FILE, 'wb') as log, tempfile.TemporaryDirectory(prefix='rex-test-') as workdir:
         try:
             image = make_platter(workdir, log)
+            with open(image, 'rb') as f:
+                pristine = f.read()
             with cwd(workdir):
                 emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE,
                                  '--fast-io', '--no-throttle'], log=log)
@@ -420,6 +482,7 @@ def main():
                 raise AssertionError('not on the paper: ' + ', '.join(failed))
             finish(emu)
             log.write(b'\n--- paper ---\n' + bytes(emu.output))
+            check_platter(image, pristine)
 
             # Device time is machine time here: a transfer takes its half
             # revolution and a tick can land inside it.

@@ -17,18 +17,21 @@ BUILD     := build
 
 all: $(BUILD)/rex.bin modules disc
 
-# REX itself: the kernel and the shell, pages 0 and 1. rexapi.asm states
-# the kernel's vector, cells and node layout as EQUs for the modules; the
-# check holds rex.asm's own labels to them.
-$(BUILD)/rex.bin: rex.asm rexapi.asm $(ASM703) $(APICHECK)
+# REX itself, one deck: the kernel and the shell in pages 0 and 1, and
+# the filesystem at the top of core. rexapi.asm states the kernel's
+# vector, cells and node layout as EQUs for the modules; the check holds
+# the kernel's own labels to them.
+KERNEL := rex.asm rexfs.asm
+
+$(BUILD)/rex.bin: $(KERNEL) rexapi.asm $(ASM703) $(APICHECK)
 	@mkdir -p $(BUILD)
-	$(ASM703) rex.asm -o $@ -l $(BUILD)/rex.lst
+	$(ASM703) $(KERNEL) -o $@ -l $(BUILD)/rex.lst
 	$(APICHECK) rexapi.asm $(BUILD)/rex.lst
 
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record
 # format, each a deck that begins with rexapi.asm.
-modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/dskt.obj
+modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/dskt.obj $(BUILD)/fst.obj
 
 $(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -38,6 +41,12 @@ $(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
 $(BUILD)/dskt.obj: rexapi.asm dskt.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM703) rexapi.asm dskt.asm --object $@ -l $(BUILD)/dskt.lst
+
+# The file calls' exerciser. rexlib.asm is the printer, for a module
+# that would rather not write it again.
+$(BUILD)/fst.obj: rexapi.asm rexlib.asm fst.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm rexlib.asm fst.asm --object $@ -l $(BUILD)/fst.lst
 
 # Tiny BASIC as a module: the glue that pays the interpreter's wrapper
 # debts with the executive's services, over the interpreter itself, which
@@ -67,8 +76,8 @@ reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
 
 # The platter on unit 0, with the modules on it: the emulator mounts
 # disks/ray703-disc0.img from the repo root, so after this the run line
-# in README.md has them. Made if absent; adding rewrites only the sectors
-# the catalogue owns.
+# in README.md has them. Made if absent; each module replaces its
+# namesake and nothing else on the platter moves.
 DISC := ../disks/ray703-disc0.img
 
 disc: modules

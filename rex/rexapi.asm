@@ -47,8 +47,29 @@ K.DWRIT         EQU     X'19'           ; the same, core to disc
 ;                                       ; core address.  Status zero is clean.
 ;                                       ; The call waits its turn at the disc.
 
+; Files, at X'28'-X'2E'.  A name is four words, as the directory holds
+; one: six characters and then two of type, bit 7 set, each left-justified
+; and zero-filled -- HELLO.RX is 'HE','LL',X'CF00','RX'.  A file is read
+; or written a character at a time through a channel, of which the kernel
+; has four; what a task leaves open is let go when it exits, and a file it
+; was writing and never closed is gone.  A new file replaces an older one
+; of its name when it is closed, not before.  Every answer that is not
+; what was asked for is one of the E. values below, all minus.
+K.LOOK          EQU     X'28'           ; ACR = eight words, the first four a name
+;                                       ; -> zero and the last four filled in --
+;                                       ; DE.SEC, DE.CNT, DE.LST, DE.FLG -- or E.
+K.OPEN          EQU     X'29'           ; ACR = five words: a name, then zero to
+;                                       ; read or one to write -> a channel, or E.
+K.GETC          EQU     X'2A'           ; ACR = a channel -> the next character,
+;                                       ; or E.NOF at the end of the file
+K.PUTC          EQU     X'2B'           ; ACR = channel*256 + character -> zero, or E.
+K.CLOSE         EQU     X'2C'           ; ACR = a channel -> zero, or E.
+K.DELET         EQU     X'2D'           ; ACR = a name -> zero, or E.
+K.RENAM         EQU     X'2E'           ; ACR = eight words, the old name and the
+;                                       ; new -> zero, or E.
+
 ; ---------------------------------------------------------------- the cells
-; Words X'20'-X'2F', the blocks of levels 8-11.
+; Words X'20'-X'23', the block of level 8.
 CURT            EQU     X'20'           ; the running task's node
 BRKREQ          EQU     X'21'           ; Ctrl-C arrived; the console's owner clears it
 CONBSY          EQU     X'22'           ; the console belongs to a task, not the shell
@@ -91,6 +112,27 @@ SRUN            EQU     0
 SSLP            EQU     1
 SOFF            EQU     2               ; suspended by the shell's STOP
 SWAI            EQU     3               ; blocked on a queue or a device
+
+; ---------------------------------------------------------------- a file
+DE.NAM          EQU     0               ; the name: three words
+DE.TYP          EQU     3               ; the type: one
+DE.SEC          EQU     4               ; the first sector
+DE.CNT          EQU     5               ; how many sectors
+DE.LST          EQU     6               ; bytes used in the last one
+DE.FLG          EQU     7               ; DK.FILE, and perhaps DF.HIGH or DF.SYS
+DE.LEN          EQU     8
+DK.FILE         EQU     2
+DF.HIGH         EQU     X'0100'         ; a module that may load above X'4000'
+DF.SYS          EQU     X'0200'         ; never moved, renamed or deleted
+
+E.NOF           EQU     X'FFFF'         ; no such file; K.GETC's end of file
+E.CHN           EQU     X'FFFE'         ; no channel free, or not this task's, or the wrong way
+E.DFUL          EQU     X'FFFD'         ; the directory is full
+E.FULL          EQU     X'FFFC'         ; no hole, or the file has filled its hole
+E.DISC          EQU     X'FFFB'         ; the disc is not ready, or a transfer failed
+E.NDIR          EQU     X'FFFA'         ; the platter has no directory
+E.PROT          EQU     X'FFF9'         ; a system file
+E.EXST          EQU     X'FFF8'         ; the new name is taken
 
 ; ---------------------------------------------------------------- a queue
 Q.HEAD          EQU     0

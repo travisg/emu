@@ -24,8 +24,8 @@
 ;   START [A-C]  release one, or all three
 ;   ECHO text    print the rest of the line
 ;   MEM          the words free in the pool
-;   DIR          the disc's catalogue: name, first sector, sectors
-;   LOAD name    a module off the disc, run behind the prompt
+;   DIR          the disc's directory: name, type, sectors; then what is free
+;   LOAD name    a module off the disc -- name.RX -- run behind the prompt
 ;   RUN  name    the same, given the console until it exits
 ;   BASIC        RUN BASIC
 ;   HALT         park the tasks, drain the printer and stop the machine
@@ -248,10 +248,14 @@
 ;              buffer -- and its loader, with the sector it reads
 ;   1000-3FFF  the pool, which the allocator hands out: what the shell
 ;              loads and its workspaces live there
+;   7000-763F  the filesystem (rexfs.asm, the second file of this deck):
+;              the directory's routines, the channels and the bodies of
+;              the file calls, then the four channels and the directory
+;              itself
 ;   7E00-7FAF  the node arena
 ;
-; Build with make -C rex: asm703.py over this file into rex/build, and the
-; modules beside it -- brex.asm over test/703/bcore.asm is basic.obj, the
+; Build with make -C rex: asm703.py over this file and rexfs.asm, as one
+; deck, into rex/build, and the modules beside it -- brex.asm over test/703/bcore.asm is basic.obj, the
 ; module RUN BASIC loads.  make -C rex disc puts them on the platter, and
 ; then, from the repo root:
 ;
@@ -310,6 +314,17 @@ CONBSY          WORD    0               ; the console belongs to BASIC: set by
                                         ; BASIC as it hands back, and the
                                         ; cell the shell waits on meanwhile
 KCONSQ          WORD    QCONS           ; the console queue's descriptor
+
+; The vector goes on at X'28': files, each through KENTER to its body in
+; rexfs.asm.
+                ORG     X'28'
+K.LOOK          JMP     KLOOK           ; ACR = a name and four words -> zero, or why not
+K.OPEN          JMP     KOPEN           ; ACR = a name and a mode -> a channel, or why not
+K.GETC          JMP     KGETC           ; ACR = a channel -> a character, or minus
+K.PUTC          JMP     KPUTC           ; ACR = channel*256 + character -> zero, or why not
+K.CLOSE         JMP     KCLOSE          ; ACR = a channel -> zero, or why not
+K.DELET         JMP     KDELET          ; ACR = a name -> zero, or why not
+K.RENAM         JMP     KRENAM          ; ACR = two names, old and new -> zero, or why not
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
@@ -373,6 +388,32 @@ NRING           EQU     4               ; nodes on the ring at power-on: A,
 
 POOLB           EQU     X'1000'         ; the pool: core the allocator hands
 POOLE           EQU     X'4000'         ; out, from the end of the image
+
+; A directory entry (rexfs.asm, tools/fs703.py), and the eight words a
+; task hands K.LOOK, whose first four it fills in and whose last four the
+; kernel does.
+DE.NAM          EQU     0               ; six characters, left-justified, zero-filled
+DE.TYP          EQU     3               ; two more
+DE.SEC          EQU     4               ; the first sector
+DE.CNT          EQU     5               ; how many
+DE.LST          EQU     6               ; bytes used in the last
+DE.FLG          EQU     7               ; what it is, and what is special about it
+DE.LEN          EQU     8
+DK.HOLE         EQU     1               ; DE.FLG's low byte: a hole,
+DK.FILE         EQU     2               ; a file,
+DK.TENT         EQU     3               ; a file being written; zero is unused
+DF.HIGH         EQU     X'0100'         ; a module that may load above X'4000'
+DF.SYS          EQU     X'0200'         ; never moved, renamed or deleted
+
+; What a file call answers when it cannot do what was asked: all minus.
+E.NOF           EQU     X'FFFF'         ; no such file; K.GETC's end of file
+E.CHN           EQU     X'FFFE'         ; no channel free, or not this task's, or the wrong way
+E.DFUL          EQU     X'FFFD'         ; the directory is full
+E.FULL          EQU     X'FFFC'         ; no hole, or the file has filled its hole
+E.DISC          EQU     X'FFFB'         ; the disc is not ready, or a transfer failed
+E.NDIR          EQU     X'FFFA'         ; the platter has no directory
+E.PROT          EQU     X'FFF9'         ; a system file
+E.EXST          EQU     X'FFF8'         ; the new name is taken
 
 NARB            EQU     X'7E00'         ; the node arena: NARN nodes for what
 NARN            EQU     24              ; the shell loads, at the top of core
@@ -930,6 +971,13 @@ KNARID          WORD    NARID
 KTLEN           WORD    T.LEN
 KKDRB           WORD    KDRB            ; the bodies KENTER runs
 KKDWB           WORD    KDWB
+KKLOOK          WORD    FBLOOK
+KKOPEN          WORD    FBOPEN
+KKGETC          WORD    FBGETC
+KKPUTC          WORD    FBPUTC
+KKCLOS          WORD    FBCLOS
+KKDELE          WORD    FBDELE
+KKRENA          WORD    FBRENA
 K7F             WORD    X'7F'
 K60             WORD    60
 KM1             WORD    X'FFFF'
@@ -1058,6 +1106,43 @@ KDWRIT          MSK
                 LDW     KKDWB
                 JMP     KENTER
 
+; The file calls: each to its body in rexfs.asm.
+KLOOK           MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKLOOK
+                JMP     KENTER
+KOPEN           MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKOPEN
+                JMP     KENTER
+KGETC           MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKGETC
+                JMP     KENTER
+KPUTC           MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKPUTC
+                JMP     KENTER
+KCLOSE          MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKCLOS
+                JMP     KENTER
+KDELET          MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKDELE
+                JMP     KENTER
+KRENAM          MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKRENA
+                JMP     KENTER
+
 KDRB            SUBR
                 STW     DXARG
                 CLR
@@ -1091,6 +1176,16 @@ DRD1            SUBR
                 STW     DXOP
                 JSX     DXFER
                 EXIT    DRD1
+
+; ...and one sector the other way.
+DWR1            SUBR
+                STW     DXSEC
+                LDW     K47
+                STW     DXCNT
+                LDW     K1
+                STW     DXOP
+                JSX     DXFER
+                EXIT    DWR1
 
 ; Move DXCNT words between the disc, from sector DXSEC on, and core at
 ; DXBUF -- to the disc if DXOP is set -- and return the controller's
@@ -1633,6 +1728,9 @@ TXLS            LDW     XPRED
                 STW     LASTS
 TXCUR           LDW     XPRED
                 STW     CURT
+                LDW     XDEAD           ; its channels
+                SMB     FCREL
+                JSX     FCREL
                 LDW     KPOOLB          ; the sweep, block by block
 TXSWP           STW     XB
                 CMW     KPOOLE
@@ -1931,16 +2029,20 @@ SHBWD           UNM
 ; nothing but a task that holds the console can lower CONBSY.
 SHRUN           LDW     SHK1
                 STW     LDCON
-                JSX     SHTOK           ; the name
+                JSX     SHNAME          ; the name
                 JMP     SHLD1
 SHLOAD          CLR
                 STW     LDCON
-                JSX     SHTOK
+                JSX     SHNAME
                 JMP     SHLD1
 SHBASI          LDW     SHKBA0          ; BASIC: RUN BASIC, the name put
-                STW     STOK0           ; where SHTOK would have put it
+                STW     SHFN            ; where SHNAME would have put it
                 LDW     SHKBA1
-                STW     STOK1
+                STW     SHFN+1
+                LDW     SHKBA2
+                STW     SHFN+2
+                LDW     SHKRX
+                STW     SHFN+3
                 LDW     SHK1
                 STW     LDCON
 SHLD1           JSX     SHIOC           ; the disc, for the whole load
@@ -1972,9 +2074,7 @@ SHLDRN          MSK
                 JMP     SHBWT
 
 ; ---------------------------------------------------------------- the loader
-; Load the module STOK0:STOK1 names: find it in the catalogue -- sector
-; 1, entries of a four-character name packed as SHTOK packs one, a first
-; sector and a sector count, a zero first sector ending the table -- and run its
+; Load the module SHFN names: find it in the directory and run its
 ; object text into a block from the pool, one record to a sector.  The
 ; text is the 1968 relocating loader's (tools/asm703.py's docstring lists
 ; the codes, tools/reload703.py is the reference reading of them): the
@@ -1984,14 +2084,15 @@ SHLDRN          MSK
 ; the whole word, or twice for a byte address; a page selection is built
 ; here from the final address; END names the entry, which gets the base
 ; too.  Returns the node, with its entry, name and console flag filled
-; in and both blocks tagged as the task's own, ready for SPAWN -- or
-; zero, an error having been named: no such file, the disc's status (DE),
-; a record failing its checksum (CK), a code this loader does not take or
-; text out of order (LC), no room (MX).  An error path jumps straight out
-; of whatever routine it was in, as RELOADB's does.
+; in and the block tagged as the task's own, ready for SPAWN -- or
+; zero, an error having been named: no such file, the disc's status or
+; no directory on it (DE), a record failing its checksum (CK), a code
+; this loader does not take or text out of order (LC), no room (MX).  An
+; error path jumps straight out of whatever routine it was in, as
+; RELOADB's does.  The caller has claimed the disc.
 LDMOD           SUBR
-                LDW     STOK1           ; the name, in STOK0:STOK1 -- a short
-                SAZ                     ; one fills only the second word
+                LDW     SHFN            ; a name at all?
+                SAZ
                 JMP     LDM1
                 JMP     LDNOF
 LDM1            CLR
@@ -2000,33 +2101,19 @@ LDM1            CLR
                 STW     LDBASE
                 STW     LDPTR
                 STW     LDLIM
-                JSX     LDCAT           ; the catalogue
-                SAZ
-                JMP     LDEDE
-                LDW     SHKLDB
-                STW     LDCP
-LDCL            LDX     LDCP
-                LDW     *2
-                SAZ                     ; the end of the table: no file
-                JMP     LDC1            ; starts at sector 0, the boot sector
+                LDW     SHKFN
+                SMB     FSFND
+                JSX     FSFND
+                SAZ                     ; no such file?
+                JMP     LDM2
                 JMP     LDNOF
-LDC1            LDW     *0
-                CMW     STOK0
-                SEQ
-                JMP     LDCN
-                LDW     *1
-                CMW     STOK1
-                SEQ
-                JMP     LDCN
-                LDW     *2              ; found: where it starts...
+LDM2            SAP                     ; an error is minus
+                JMP     LDEDE
+                CAX
+                LDW     *DE.SEC         ; where it starts...
                 STW     LDSEC
-                LDW     *3              ; ...and how many sectors
+                LDW     *DE.CNT         ; ...and how many sectors
                 STW     LDNSEC
-                JMP     LDFND
-LDCN            LDW     LDCP
-                ADD     SHK4
-                STW     LDCP
-                JMP     LDCL
 LDFND           MSK                     ; a node from the arena
                 SMB     NALLOC
                 JSX     NALLOC
@@ -2162,7 +2249,7 @@ LDEND           JSX     LDGETW          ; END: the entry, relocated
 LDDONE          LDX     LDNODE
                 LDW     LDEXEC
                 STW     *T.PCR
-                LDW     STOK0
+                LDW     SHFN            ; the name's first two characters
                 STW     *T.NAM
                 LDW     LDCON
                 STW     *T.CON
@@ -2203,17 +2290,6 @@ LDER3           MSK
                 UNM
 LDER4           CLR
                 EXIT    LDMOD
-
-; The catalogue, sector 1, into the sector buffer: zero for a clean read,
-; else the disc's status.
-LDCAT           SUBR
-                LDW     SHKLDB
-                SMB     DXBUF
-                STW     DXBUF
-                LDW     SHK1
-                SMB     DRD1
-                JSX     DRD1
-                EXIT    LDCAT
 
 ; RELO11: the base added into the M field, the opcode and index bit kept.
 LDRL11          SUBR
@@ -2356,43 +2432,76 @@ SHIOR           SUBR
                 STW     IOLOCK
                 EXIT    SHIOR
 
-; DIR: the catalogue, a line to a file -- its name, its first sector and
-; how many sectors it has.  A name shorter than four characters prints as
-; its letters alone, since a zero byte is nothing to the printer.
+; DIR: the directory, a line to a file -- its name, its type and how
+; many sectors it has -- and then the sectors that are free.  The disc is
+; claimed only to bring the directory into core; the walk is of the
+; kernel's copy, unclaimed, so that a listing at the teletype's pace does
+; not hold every other task off the disc -- and a file made or deleted
+; meanwhile may show in it twice or not at all.
 SHDIR           JSX     SHIOC
-                JSX     LDCAT
+                LDW     SHKFN
+                SMB     FSFND
+                JSX     FSFND
                 STW     SHW2
                 JSX     SHIOR
                 LDW     SHW2
-                SAZ
+                SAM                     ; an error is minus
+                JMP     SHDR0
+                CMW     SHKNDR
+                SEQ
                 JMP     SHDRE
-                LDW     SHKLDB
-                STW     LDCP
-SHDRL           LDX     LDCP
-                LDW     *2
-                SAZ                     ; the end of the table?
-                JMP     SHDR1
+                LDW     SHMNDR
+                JSX     SHMSG
                 JMP     SHLOOP
-SHDR1           LDW     *0
+SHDR0           CLR
+                STW     SHMTOT
+                LDW     SHKFDE
+                STW     LDCP
+SHDRL           LDW     LDCP
+                CMW     SHKFDX
+                SLS                     ; inside the table?
+                JMP     SHDRT
+                CAX
+                LDW     *DE.FLG
+                AND     SHK0FF
+                SAZ                     ; an unused entry ends it
+                JMP     SHDR1
+                JMP     SHDRT
+SHDR1           CMW     SHKDKF
+                SEQ                     ; a file?
+                JMP     SHDRH
+                LDW     *0
                 JSX     SHPW2
                 LDX     LDCP
                 LDW     *1
                 JSX     SHPW2
-                LDW     SHKSP
-                JSX     SHPUTC
                 LDX     LDCP
                 LDW     *2
-                JSX     SHDEC
+                JSX     SHPW2
+                LDW     SHKDOT
+                JSX     SHPUTC
+                LDX     LDCP
+                LDW     *DE.TYP
+                JSX     SHPW2
                 LDW     SHKSP
                 JSX     SHPUTC
                 LDX     LDCP
-                LDW     *3
+                LDW     *DE.CNT
                 JSX     SHDEC
                 JSX     SHNL
-                LDW     LDCP
-                ADD     SHK4
+                JMP     SHDRN
+SHDRH           LDW     *DE.CNT         ; a hole, or what is being written
+                ADD     SHMTOT
+                STW     SHMTOT
+SHDRN           LDW     LDCP
+                ADD     SHK8
                 STW     LDCP
                 JMP     SHDRL
+SHDRT           LDW     SHMTOT
+                JSX     SHDEC
+                LDW     SHMSFR
+                JSX     SHMSG
+                JMP     SHLOOP
 SHDRE           LDW     SHMNRD
                 JSX     SHMSG
                 JMP     SHLOOP
@@ -2519,6 +2628,60 @@ SHTKS           LDW     SHCUR
                 STW     SHCUR
                 JMP     SHTKL
 SHTKD           EXIT    SHTOK
+
+; The file name at SHCUR into SHFN, as the directory holds one: up to
+; six characters, left-justified in three words and zero-filled, then
+; the type, two characters after a dot -- or RX, a module, when the name
+; has no dot.  Characters past the six, or the two, are stepped over.
+SHNAME          SUBR
+                CLR
+                STW     SHFN
+                STW     SHFN+1
+                STW     SHFN+2
+                LDW     SHKRX
+                STW     SHFN+3
+                JSX     SHSKB
+                LDW     SHKFNB
+                STW     SHNP
+                LDW     SHK6
+                STW     SHNN
+SHNL1           LDX     SHCUR
+                CLR
+                LDB     *0
+                SAZ                     ; the terminator ends it
+                JMP     SHN1
+                JMP     SHNX
+SHN1            CMW     SHKSP           ; and so does a blank
+                SNE
+                JMP     SHNX
+                CMW     SHKDOT          ; a dot starts the type
+                SNE
+                JMP     SHNDOT
+                STW     SHW2
+                LDW     SHNN            ; room for another character?
+                SAZ
+                JMP     SHN2
+                JMP     SHN3
+SHN2            SUB     SHK1
+                STW     SHNN
+                LDX     SHNP
+                LDW     SHW2
+                STB     *0
+                LDW     SHNP
+                ADD     SHK1
+                STW     SHNP
+SHN3            LDW     SHCUR
+                ADD     SHK1
+                STW     SHCUR
+                JMP     SHNL1
+SHNDOT          CLR
+                STW     SHFN+3
+                LDW     SHKFTB
+                STW     SHNP
+                LDW     SHK2
+                STW     SHNN
+                JMP     SHN3
+SHNX            EXIT    SHNAME
 
 ; An argument character: SHARGF is 0 for none, 1 with the character in
 ; SHARGV.  Whether it names a task is the ring's to say -- SHSONE walks
@@ -2721,6 +2884,9 @@ SHARGV          WORD    0
 STOK0           WORD    0               ; the command word, four characters
 STOK1           WORD    0
 STKN            WORD    0               ; how many of them are still wanted
+SHFN            WORD    0,0,0,0         ; a file's name and type, as SHNAME leaves them
+SHNP            WORD    0               ; where SHNAME's next character goes...
+SHNN            WORD    0               ; ...and how many more it will take
 SHW2            WORD    0               ; scratch
 SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
 SHMTOT          WORD    0               ; MEM's running total
@@ -2734,7 +2900,7 @@ LDSIZE          WORD    0               ; the SIZE code's word
 LDEXEC          WORD    0               ; the entry
 LDSEC           WORD    0               ; the next sector, and how many are left
 LDNSEC          WORD    0
-LDCP            WORD    0               ; the catalogue cursor
+LDCP            WORD    0               ; DIR's cursor over the directory
 LDBP            WORD    0               ; the byte pointer into the sector buffer
 LDBV            WORD    0               ; the byte it fetched
 LDSUM           WORD    0               ; the record's byte sum, and its fold
@@ -2759,6 +2925,7 @@ SHK1            WORD    1
 SHK2            WORD    2
 SHK3            WORD    3
 SHK4            WORD    4
+SHK6            WORD    6
 SHK8            WORD    8
 SHK0C           WORD    12              ; the control codes, 0..B
 SHK0F           WORD    X'000F'
@@ -2771,6 +2938,15 @@ SHKM1           WORD    X'FFFF'
 SHKTEN          WORD    10
 SHKZER          WORD    '0'
 SHKSP           WORD    ' '
+SHKDOT          WORD    '.'
+SHKRX           WORD    'RX'            ; a module's type
+SHKDKF          WORD    DK.FILE
+SHKNDR          WORD    E.NDIR
+SHKFN           WORD    SHFN            ; the name, as a word address...
+SHKFNB          WORD    SHFN*2          ; ...its first byte...
+SHKFTB          WORD    SHFN*2+6        ; ...and the type's
+SHKFDE          WORD    FDENT           ; the directory's entries in core,
+SHKFDX          WORD    FDEND           ; and one past the last
 SHKCR           WORD    X'008D'
 SHKLF           WORD    X'008A'
 SHKSLP          WORD    SSLP
@@ -2791,8 +2967,9 @@ SHKDBB          WORD    LDBUF*2         ; ...its first byte, the marker...
 SHKDBL          WORD    LDBUF*2+93      ; ...and its last, the checksum
 SHKALW          WORD    ALLOCW          ; the allocator's page entries, for
 SHKALB          WORD    ALLOCB          ; an indexed JSX
-SHKBA0          WORD    'BA'            ; BASIC's name, as SHTOK packs it
+SHKBA0          WORD    'BA'            ; BASIC's name, as SHNAME leaves one
 SHKBA1          WORD    'SI'
+SHKBA2          WORD    X'C300'         ; 'C', and nothing
 
 ; Four characters a state, indexed by the state doubled.
 SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT'
@@ -2829,6 +3006,8 @@ SHMHL2          WORD    SHHL2
 SHMFRE          WORD    SHFRE
 SHMNOF          WORD    SHNOF
 SHMNRD          WORD    SHNRD
+SHMNDR          WORD    SHNDR
+SHMSFR          WORD    SHSFR
 SHMEDE          WORD    SHEDE
 SHMECK          WORD    SHECK
 SHMELC          WORD    SHELC
@@ -2847,6 +3026,8 @@ SHHL2           WORD    SHHL2T*2,SHHL2E*2
 SHFRE           WORD    SHFRET*2,SHFREE*2
 SHNOF           WORD    SHNOFT*2,SHNOFE*2
 SHNRD           WORD    SHNRDT*2,SHNRDE*2
+SHNDR           WORD    SHNDRT*2,SHNDRE*2
+SHSFR           WORD    SHSFRT*2,SHSFRE*2
 SHEDE           WORD    SHEDET*2,SHEDEE*2
 SHECK           WORD    SHECKT*2,SHECKE*2
 SHELC           WORD    SHELCT*2,SHELCE*2
@@ -2874,6 +3055,10 @@ SHNOFT          TEXT    "NO SUCH FILE\r\n"
 SHNOFE          EQU     $
 SHNRDT          TEXT    "DISC NOT READY\r\n"
 SHNRDE          EQU     $
+SHNDRT          TEXT    "NO DIRECTORY\r\n"
+SHNDRE          EQU     $
+SHSFRT          TEXT    " SECTORS FREE \r\n"
+SHSFRE          EQU     $
 SHEDET          TEXT    "LOAD ERROR: DE\r\n"
 SHEDEE          EQU     $
 SHECKT          TEXT    "LOAD ERROR: CK\r\n"

@@ -8,10 +8,13 @@ glue that puts Tiny BASIC aboard it as a task, and the scripted session that
 tests it.
 
     rex.asm            the executive: scheduler, drivers, queues, the shell
+    rexfs.asm          the filesystem: the directory, channels, the file calls
     rexapi.asm         the kernel interface a module is assembled against
+    rexlib.asm         the printer's routines, for a module's deck
     brex.asm           the wrapper that makes Tiny BASIC a module
     hello.asm          a module: prints where it landed, sleeps, exits
     dskt.asm           a test module: writes a disc sector and reads it back, over and over
+    fst.asm            a test module: makes, reads, replaces, renames and deletes files
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
@@ -40,8 +43,8 @@ time either way. The shell's commands:
     START [A-C]  release one, or all three
     ECHO text    print the rest of the line
     MEM          the words free in the pool
-    DIR          the disc's catalogue: name, first sector, sectors
-    LOAD name    a module off the disc, run behind the prompt
+    DIR          the disc's directory: name, type, sectors; then what is free
+    LOAD name    a module off the disc -- name.RX -- run behind the prompt
     RUN  name    the same, given the console until it exits -- the only
                  way to start a module that reads the console
     BASIC        RUN BASIC
@@ -163,9 +166,15 @@ scratch directory, driving the emulator over its debug port
 same after each, then two BASIC sessions -- a program entered and RUN, a
 silent `GOTO` loop broken with Ctrl-C through the kernel's flag, `BYE`
 handing the console and the memory back, and a second session starting
-afresh -- and `HALT`. A second machine, without `--fast-io` so that a disc
+afresh -- and `HALT`. In between it runs `fst.asm` twice, which makes,
+reads back, replaces, renames and deletes files through the vector and
+checks every answer; afterwards the harness reads the platter the host's
+way (`../tools/fs703.py`): the directory has to pass the check of its
+rules, hold exactly the files the exerciser leaves with the bytes it
+wrote, and still hold every module byte for byte, and the platter as it
+was made has to hold none of them. A second machine, without `--fast-io` so that a disc
 transfer takes its half revolution, then runs three copies of `dskt.asm`
-at once: each writes and reads back a sector of its own 150 times, leaves
+at once: each writes and reads back a sector of its own 250 times, leaves
 its verdict on the platter where the harness reads it, and the kernel's
 count of tasks that found the disc taken has to be more than zero.
 It runs `--fast-io` (the slices stay real machine time; the clock ignores
@@ -173,14 +182,40 @@ the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
-`=nohello` and `=nolock` are its negative controls -- a platter with
-nothing on it, one without the hello module, and a kernel with its wait
-for the disc patched out -- which must all FAIL. Two things that make it hard
+`=nohello`, `=nolock` and `=nosave` are its negative controls -- a platter
+with nothing on it, one without the hello module, a kernel with its wait
+for the disc patched out, and one that never writes the directory back --
+which must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
 at ten characters a second has to be read as a whole field, not matched on
 its first digit.
+
+## The filesystem
+
+Disc unit 0 holds files: contiguous runs of sectors under a directory in
+sectors 1-8, the way OS/8 and RT-11 kept theirs. `../tools/fs703.py` states
+the format word for word and is the host's side of it; `rexfs.asm` is the
+kernel's. An entry is eight words -- a name of six characters and a type
+of two, the first sector, the sector count, the bytes used in the last
+sector, and what the entry is -- and there are forty-six of them. They are
+kept in disc order and **account for every data sector between them, a
+hole being an entry like any other**, so there is no free map and nothing
+to get out of step with the directory: a new file is given the largest
+hole, whole, as a file being written, and closing it cuts it to its length
+and makes the rest a hole again. A new file replaces an older one of its
+name when it is closed, not before. **A file being written that no channel
+holds is a hole** to whoever looks next -- its task exited, or the machine
+stopped -- which is all the recovery there is and all that is needed.
+
+The kernel keeps the directory in core, reads it once and writes it back
+whole after every change, one 376-word transfer each way. A task reads or
+writes a file a character at a time through one of four channels
+(`K.OPEN`, `K.GETC`, `K.PUTC`, `K.CLOSE`), and there are `K.LOOK`,
+`K.DELET` and `K.RENAM` beside them and the raw `K.DREAD` and `K.DWRIT`
+underneath; `rexapi.asm` says what each takes and gives. Every one of them
+comes through `KENTER` and so runs with the disc claimed, one at a time.
 
 ## Modules
 
@@ -196,8 +231,9 @@ reached only through a page selection in front of it, since the module's
 own page is not known until it is placed.
 
 `rexapi.asm` is the whole of what a module may know about the kernel: a
-jump vector at words X'10'-X'1F', exported cells at X'20'-X'2F', the shape
-of a task node and the state values, all as EQUs. A module calls an entry
+jump vector at words X'10'-X'1F' and X'28'-X'3F', exported cells at
+X'20'-X'23', the shape of a task node and of a directory entry, the state
+values and the file calls' error values, all as EQUs. A module calls an entry
 with an adjacent `SMB`/`JSX` pair and reads a cell with an adjacent
 `SMB`/`LDW` pair; nothing is linked at load time.
 
@@ -208,10 +244,10 @@ placement of the object (`../tools/reload703.py`) to those images word for
 word -- the check that the assembler's records and the loader's semantics
 agree, with no emulator in the loop.
 
-Modules live on disc unit 0 under a catalogue in sector 1 (`../tools/
-mkdisc703.py --add`, which `make -C rex disc` runs for the platter the
-emulator mounts from the repo root; `DIR` at the shell lists it). The
-shell's `LOAD` finds one by name, runs its text into a block from the kernel's pool -- first fit,
+Modules are files of type `RX` on disc unit 0 (`../tools/mkdisc703.py
+--add`, which `make -C rex disc` runs for the platter the emulator mounts
+from the repo root; `DIR` at the shell lists it). The shell's `LOAD` finds
+one by name, runs its text into a block from the kernel's pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields
 need -- gives it a task node and links it into the ring; `RUN` does the
 same and hands it the console until it exits. A task ends through

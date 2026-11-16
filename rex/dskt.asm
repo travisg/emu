@@ -16,7 +16,7 @@
 ; Word i of round r from job j is j*256 + r + i.
 
 DSKSEC          EQU     4000            ; job j's sector is this plus j
-DSKRND          EQU     150             ; under 256: the round shares a byte
+DSKRND          EQU     250             ; under 256: the round shares a byte
 
 DSKT            SMB     CURT
                 LDX     CURT
