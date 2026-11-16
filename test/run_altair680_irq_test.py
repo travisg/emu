@@ -121,11 +121,14 @@ def main():
                 emu.run()
                 emu.wait_for_output(TYPED[:n + 1])
             emu.remove_break(HANDLER)
-            emu.halt()
+            # the echo comes before the handler's inc and rti, so a `halt`
+            # here could land between them: the branch says it returned
+            emu.add_break(WAIT)
+            stop = emu.wait_stopped(timeout=5)
+            if stop.reason != 'break' or stop.pc != WAIT:
+                raise AssertionError('not back in the waiting branch: %r' % (stop,))
             if emu.mem(COUNTER, 1)[0] != len(TYPED):
                 raise AssertionError('the counter is not %d' % len(TYPED))
-            if emu.reg('PC') != WAIT:
-                raise AssertionError('not back in the waiting branch')
             emu.kill()
             emu.wait_exited()
             status = emu.wait_exit()

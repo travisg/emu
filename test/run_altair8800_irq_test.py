@@ -87,6 +87,24 @@ def image():
     return bytes(mem)
 
 
+def sleep_on_the_hlt(emu, what):
+    """Run the halted machine to the HLT and execute it, leaving it halted
+    and asleep. The breakpoint is what says the guest got there: a `halt`
+    sent on a timer would catch whatever it was still doing. It comes off
+    again before the step, since PC is held on a sleeping HLT and a
+    breakpoint there fires on every step."""
+    emu.add_break(WAIT)
+    emu.run()
+    stop = emu.wait_stopped(timeout=5)
+    if stop.reason != 'break' or stop.pc != WAIT:
+        raise AssertionError('%r: expected the hlt, got %r' % (what, stop))
+    emu.remove_break(WAIT)
+    emu.step()
+    regs = emu.regs()
+    if regs['PC'] != WAIT or regs['HALT'] != 1:
+        raise AssertionError('%r: not asleep on the hlt: %r' % (what, regs))
+
+
 def main():
     if not os.access(EMU_BIN, os.X_OK):
         print('error: emulator binary not found at %s' % EMU_BIN, file=sys.stderr)
@@ -102,12 +120,9 @@ def main():
             emu = Emu.spawn([EMU_BIN, '-s', 'altair8800-image', '-r', path, '--no-throttle'], log=log)
             emu.write(COUNTER, b'\x00')
             emu.add_break(HANDLER)
-            emu.run()
             for n, ch in enumerate(TYPED):
-                emu.halt()
-                regs = emu.regs()
-                if regs['PC'] != WAIT or regs['HALT'] != 1:
-                    raise AssertionError('%r: not asleep on the hlt: %r' % (ch, regs))
+                sleep_on_the_hlt(emu, ch)
+                emu.wait_for_output(TYPED[:n])
                 emu.run()
                 emu.key(ch)
                 stop = emu.wait_stopped(timeout=5)
@@ -124,14 +139,11 @@ def main():
                 count = emu.mem(COUNTER, 1)[0]
                 if count != n:
                     raise AssertionError('%r: the counter reads %d, not %d' % (ch, count, n))
-                emu.run()
-                emu.wait_for_output(TYPED[:n + 1])
             emu.remove_break(HANDLER)
-            emu.halt()
+            sleep_on_the_hlt(emu, 'the end')
+            emu.wait_for_output(TYPED)
             if emu.mem(COUNTER, 1)[0] != len(TYPED):
                 raise AssertionError('the counter is not %d' % len(TYPED))
-            if emu.reg('PC') != WAIT:
-                raise AssertionError('not back on the hlt')
             emu.kill()
             emu.wait_exited()
             status = emu.wait_exit()
