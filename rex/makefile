@@ -28,11 +28,16 @@ $(BUILD)/rex.bin: rex.asm rexapi.asm $(ASM703) $(APICHECK)
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record
 # format, each a deck that begins with rexapi.asm.
-modules: $(BUILD)/hello.obj $(BUILD)/basic.obj
+modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/dskt.obj
 
 $(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM703) rexapi.asm hello.asm --object $@ -l $(BUILD)/hello.lst
+
+# The disc exerciser the scripted session runs three of at once.
+$(BUILD)/dskt.obj: rexapi.asm dskt.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm dskt.asm --object $@ -l $(BUILD)/dskt.lst
 
 # Tiny BASIC as a module: the glue that pays the interpreter's wrapper
 # debts with the executive's services, over the interpreter itself, which

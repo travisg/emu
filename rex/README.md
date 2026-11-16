@@ -11,6 +11,7 @@ tests it.
     rexapi.asm         the kernel interface a module is assembled against
     brex.asm           the wrapper that makes Tiny BASIC a module
     hello.asm          a module: prints where it landed, sleeps, exits
+    dskt.asm           a test module: writes a disc sector and reads it back, over and over
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
@@ -139,7 +140,19 @@ a loaded task -- only nodes with a letter -- because stopping the console's
 owner would leave the shell waiting on a hand-back nobody can make. **The
 pool is owned word by word**: every block carries the node that asked for
 it, and a task's exit gives back all of them, which is what makes a
-module's memory come and go with the module.
+module's memory come and go with the module. The node itself is not in the
+pool: a loaded task's comes from an arena of twenty-four at the top of
+core, and stays put for as long as the task lives.
+
+Any number of tasks may be in the kernel at once, on a machine whose
+subroutines each have one static slot for the return address. So **a
+routine any task may call holds the mask from its first instruction** --
+the allocator -- and one that blocks keeps what it needs afterwards in
+the caller's node rather than in cells of its own, which is `Q.GET` and
+`KENTER`. And **the disc has one user at a time**, named by `IOLOCK`: a
+task's `K.DREAD` or `K.DWRIT` waits its turn in `KENTER`, a tick's sleep
+at a time, and the shell's loader makes the same claim, so the driver
+behind the claim is written like any single-task routine.
 
 ## The test
 
@@ -150,14 +163,19 @@ scratch directory, driving the emulator over its debug port
 same after each, then two BASIC sessions -- a program entered and RUN, a
 silent `GOTO` loop broken with Ctrl-C through the kernel's flag, `BYE`
 handing the console and the memory back, and a second session starting
-afresh -- and `HALT`.
+afresh -- and `HALT`. A second machine, without `--fast-io` so that a disc
+transfer takes its half revolution, then runs three copies of `dskt.asm`
+at once: each writes and reads back a sector of its own 150 times, leaves
+its verdict on the platter where the harness reads it, and the kernel's
+count of tasks that found the disc taken has to be more than zero.
 It runs `--fast-io` (the slices stay real machine time; the clock ignores
 the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
-a script. Every wait raises on its timeout, and `REX_CONTROL=blank` and
-`=nohello` are its negative controls -- a platter with nothing on it, and
-one without the hello module -- which must both FAIL. Two things that make it hard
+a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
+`=nohello` and `=nolock` are its negative controls -- a platter with
+nothing on it, one without the hello module, and a kernel with its wait
+for the disc patched out -- which must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
@@ -198,7 +216,7 @@ word-granular, with the page containment a module's page-offset M fields
 need -- gives it a task node and links it into the ring; `RUN` does the
 same and hands it the console until it exits. A task ends through
 `K.EXIT`, which gives back every block in the pool tagged with its node,
-the module and the node themselves included; `MEM` prints the free words,
+the module included, and then the node; `MEM` prints the free words,
 and it reads the same before and after. `RUN HELLO` prints the address the
 loader put it at. Tiny BASIC is the real module: `brex.asm` over
 `../test/703/bcore.asm` is `basic.obj`, and `RUN BASIC` (or `BASIC`) loads

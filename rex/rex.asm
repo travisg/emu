@@ -180,6 +180,25 @@
 ;   page boundary the EXR field is exactly (entry * 2); LTASK and IDLE
 ;   are in page 0, where the field is plain zero.
 ;
+; * A ROUTINE ANY TASK MAY CALL HOLDS THE MASK FROM ITS FIRST INSTRUCTION.
+;   A subroutine here has one link slot and keeps its work in static
+;   cells, so a second task entering while the first is inside would take
+;   both.  The allocator's entries and FREE therefore mask before they
+;   store anything and load the link back before they unmask.  A routine
+;   that blocks cannot hold the mask across its wait, so what it needs
+;   afterwards -- the link, the argument -- lives in the caller's node
+;   (T.KLK, T.KAR, T.KDS), and the static cells are scratch that is good
+;   only until the processor is handed on: Q.GET and KENTER.  Routines
+;   only one task runs -- the shell's own -- need none of this.
+;
+; * THE DISC HAS ONE USER AT A TIME, and IOLOCK names it.  A task's call
+;   comes through KENTER, which claims the disc a tick's sleep at a time
+;   and gives it up when the body returns; the shell's loader makes the
+;   same claim for itself.  Everything behind the claim -- DXFER, and
+;   whatever is built on it -- therefore runs one activation at a time,
+;   across the wait for a transfer's completion too, and is written like
+;   any single-task routine.
+;
 ; * THE POOL IS OWNED WORD BY WORD.  Core from POOLB to POOLE is a
 ;   first-fit list of free blocks, every block two words of header in
 ;   front of its payload: the size, and either the next free block or the
@@ -195,16 +214,23 @@
 ; * A TASK ENDS THROUGH K.EXIT, and takes everything with it: its last
 ;   character waited out, the console handed back if it held it, the
 ;   node unlinked with CURT moved to its predecessor before anything is
-;   freed, every block in the pool tagged with the node given back, and
-;   the processor handed on through the second half of SWTCH with nothing
-;   parked.  The loader tags a module's block and its node with the node
-;   as it makes them, which is what makes the sweep complete.
+;   freed, every block in the pool tagged with the node given back, the
+;   node itself returned to its arena, and the processor handed on
+;   through the second half of SWTCH with nothing parked.  The loader
+;   tags a module's block with the node as it makes it, which is what
+;   makes the sweep complete.
+;
+; * A LOADED TASK'S NODE COMES FROM THE ARENA, not the pool: NARN nodes
+;   at the top of core, on a free list.  A node stays where it is for as
+;   long as its task lives, whatever becomes of the task's blocks, so it
+;   must not sit among them.  Its job number, T.ID, is the node's own
+;   and outlasts every task that uses it.
 ;
 ; * EVERYTHING RUNS GLOBAL.  START sets it, the TCB statuses carry it,
 ;   and entry and JSX force it -- EXIT's indexed JSX and every indexed
 ;   reference here assume a flat address.
 ;
-; Memory map, everything below X'4000':
+; Memory map:
 ;
 ;   0000-000F  interrupt blocks: level 0 (teletype), level 1 (disc),
 ;              level 2 (line clock), level 3 (never signalled -- SWTCH
@@ -213,13 +239,16 @@
 ;              vector, then the exported cells (rexapi.asm)
 ;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
 ;              KICK, PICK, SWTCH, Q.PUT and DSERV; then the kernel cells,
-;              the console queue, the TCB nodes, Q.GET, DREAD, the idle
-;              task, LTASK -- the one letter-task body all three letter
-;              nodes run -- and the allocator
+;              the console queue, the nodes of the tasks that are here
+;              from power-on, the disc -- IOTRY, KENTER, DXFER -- Q.GET,
+;              the idle task, LTASK -- the one letter-task body all three
+;              letter nodes run -- the allocator, and the node arena's
+;              two doors
 ;   0800-      page 1: the shell -- banner, prompt, commands, line
 ;              buffer -- and its loader, with the sector it reads
 ;   1000-3FFF  the pool, which the allocator hands out: what the shell
-;              loads, its nodes and its workspaces live there
+;              loads and its workspaces live there
+;   7E00-7FAF  the node arena
 ;
 ; Build with make -C rex: asm703.py over this file into rex/build, and the
 ; modules beside it -- brex.asm over test/703/bcore.asm is basic.obj, the
@@ -266,8 +295,9 @@ K.EXIT          JMP     TEXIT           ; the task is over; never returns
 K.SWTCH         JMP     SWTCH           ; hand the processor on
 K.KICK          JMP     KICK            ; start the printer
 K.QGET          JMP     Q.GET           ; ACR = a queue descriptor -> the next word
-K.DREAD         JMP     DREAD           ; ACR = sector, DRBUF = buffer -> status
-                WORD    0,0,0,0,0,0,0   ; X'19'-X'1F'
+K.DREAD         JMP     KDREAD          ; ACR = a transfer block -> status
+K.DWRIT         JMP     KDWRIT          ; the same, core to disc
+                WORD    0,0,0,0,0,0     ; X'1A'-X'1F'
 
                 ORG     X'20'
 CURT            WORD    SHTCB           ; the current task's node: the kernel
@@ -280,7 +310,6 @@ CONBSY          WORD    0               ; the console belongs to BASIC: set by
                                         ; BASIC as it hands back, and the
                                         ; cell the shell waits on meanwhile
 KCONSQ          WORD    QCONS           ; the console queue's descriptor
-DRBUF           WORD    0               ; K.DREAD's buffer, a word address
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
@@ -313,7 +342,14 @@ T.CHR           EQU     8               ; a letter task's letter, and what
 T.NAP           EQU     9               ; a letter task's sleep, in ticks
 T.NAM           EQU     10              ; two characters, for STAT
 T.CON           EQU     11              ; nonzero: this task holds the console
-T.LEN           EQU     12              ; words in a node
+T.ID            EQU     12              ; the job number, fixed for the node
+T.KLK           EQU     13              ; a kernel call this task is blocked
+T.KAR           EQU     14              ; in: its way back, its argument and
+T.KDS           EQU     15              ; its body -- see KENTER
+T.ARG           EQU     16              ; the command tail's block, or zero
+T.SWP           EQU     17              ; first sector of the swap extent;
+                                        ; zero: the task is in core
+T.LEN           EQU     18              ; words in a node
 
 SRUN           EQU     0
 SSLP           EQU     1
@@ -338,6 +374,10 @@ NRING           EQU     4               ; nodes on the ring at power-on: A,
 POOLB           EQU     X'1000'         ; the pool: core the allocator hands
 POOLE           EQU     X'4000'         ; out, from the end of the image
 
+NARB            EQU     X'7E00'         ; the node arena: NARN nodes for what
+NARN            EQU     24              ; the shell loads, at the top of core
+NARID           EQU     5               ; the first one's job number
+
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
 
@@ -357,7 +397,29 @@ START           MSK
                 STW     *0
                 CLR
                 STW     *1
-                DOT     14,11           ; connect the keyboard; function 11
+                STW     NFREH           ; the node arena: every node onto
+                LDW     KNARN           ; the free list, numbered, from the
+                STW     NACNT           ; top down so the first one handed
+                LDW     KNARL           ; out is the lowest
+STNAR           CAX
+                LDW     NFREH
+                STW     *T.NXT
+                CXA
+                STW     NFREH
+                LDW     NACNT
+                ADD     KNARID
+                SUB     K1
+                STW     *T.ID
+                LDW     NACNT
+                SUB     K1
+                STW     NACNT
+                SAZ                     ; the last of them?
+                JMP     STNAR1
+                JMP     STNAR2
+STNAR1          LDW     NFREH
+                SUB     KTLEN
+                JMP     STNAR
+STNAR2          DOT     14,11           ; connect the keyboard; function 11
                                         ; is the one that echoes, which is
                                         ; the Model 33 printing what its own
                                         ; keyboard sent -- full duplex, and
@@ -843,11 +905,31 @@ QGI             WORD    0               ; ...and what it took out
 DSTAT           WORD    0               ; the disc's status at its last completion
 DBUSY           WORD    0               ; a transfer is in flight
 DWTR            WORD    X'FFFF'         ; the node whose transfer it is; -1 = none
-DRSEC           WORD    0               ; DREAD's sector index...
-DRTS            WORD    0               ; ...as track and sector...
-DRRES           WORD    0               ; ...and its answer
+IOLOCK          WORD    X'FFFF'         ; the node that has the disc; -1 = free
+IOWAITS         WORD    0               ; times a task found it taken
+DXOP            WORD    0               ; DXFER's: zero to read, else write...
+DXSEC           WORD    0               ; ...the first sector's index...
+DXCNT           WORD    0               ; ...how many words...
+DXBUF           WORD    0               ; ...and the core they are, a word address
+DXARG           WORD    0               ; a task's transfer block
+DXTS            WORD    0               ; the sector as track and sector
+DXRES           WORD    0               ; and the transfer's answer
+KELNK           WORD    0               ; KENTER's scratch: good under the mask
+KEARG           WORD    0               ; and no further, like every cell a
+KEBDY           WORD    0               ; blocking routine shares
+KERES           WORD    0
+QGLNK           WORD    0               ; Q.GET's, on the same terms
+NFREH           WORD    0               ; the first free node; zero: none
+NACNT           WORD    0               ; start-up's count over the arena
 K1              WORD    1
-K47             WORD    47              ; words in a sector, unit 0 in the top bits
+K47             WORD    47              ; words in a sector
+K3FFF           WORD    X'3FFF'         ; a transfer's word count; the unit is above it
+KNARL           WORD    NARB+(NARN-1)*T.LEN
+KNARN           WORD    NARN
+KNARID          WORD    NARID
+KTLEN           WORD    T.LEN
+KKDRB           WORD    KDRB            ; the bodies KENTER runs
+KKDWB           WORD    KDWB
 K7F             WORD    X'7F'
 K60             WORD    60
 KM1             WORD    X'FFFF'
@@ -883,72 +965,187 @@ KISRE           WORD    ISREND
 ; mode pointed at page 0.
 ;
 ;                    STA    NXT   ACR IXR PCR    MST   DLY MBX CHR NAP NAM  CON
+;                    ID KLK KAR KDS ARG SWP
 ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80', 0,  0,  'A',30, 'A ',0
+                WORD 1, 0,  0,  0,  0,  0
 BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80', 0,  0,  'B',45, 'B ',0
+                WORD 2, 0,  0,  0,  0,  0
 CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80', 0,  0,  'C',60, 'C ',0
+                WORD 3, 0,  0,  0,  0,  0
 SHTCB           WORD SRUN, ATCB, 0,  0,  0,     0,     0,  0,  0,  0,  'SH',0
+                WORD 4, 0,  0,  0,  0,  0
 IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80', 0,  0,  0,  0,  'ID',0
+                WORD 0, 0,  0,  0,  0,  0
 
-; Read one sector -- ACR is its index, track*128+sector -- into the 47
-; words at DRBUF, and return the controller's status, zero for a clean
-; transfer.  A task's call: it waits on the transfer the way a task waits
-; on anything here, masked, look, and if not yet, mark itself waiting and
-; hand the processor on, and DSERV wakes it.  DWTR names the node whose
-; transfer is in flight, so a second reader sleeps a tick and looks again.
-; A unit that is not there reads not-ready, and that comes back at once
-; rather than waiting for a completion that would never come.
-DREAD           SUBR
-                STW     DRSEC
-DRCLM           MSK
-                LDW     DWTR
-                SAM                     ; the disc is free?
-                JMP     DRSLP
-                JMP     DRGO
-DRSLP           LDX     CURT            ; no: sleep a tick and look again
+; The disc has one user at a time, and IOLOCK says who.  Everything that
+; starts a transfer holds it first -- a task's call through the vector,
+; the shell's loader -- so DXFER and whatever is built on it run one
+; activation at a time and may keep their state in static cells like any
+; other routine here, across the wait for the completion too.  IOTRY is
+; the claim, for a caller that holds the mask: zero and the disc is the
+; running task's, anything else and it is somebody's already.
+IOTRY           SUBR
+                LDW     IOLOCK
+                SAM                     ; free?
+                JMP     IOTBSY
+                LDW     CURT
+                STW     IOLOCK
+                CLR
+                EXIT    IOTRY
+IOTBSY          LDW     IOWAITS
+                ADD     K1
+                STW     IOWAITS
+                LDW     K1
+                EXIT    IOTRY
+
+; A task's call into a routine that needs the disc.  The vector's stub
+; arrives here masked with the body's address in ACR and the caller's link
+; and argument in KELNK and KEARG.  All three go into the caller's node,
+; because the wait for the disc is a sleep and the static cells belong to
+; whoever comes through next; then the claim, a tick's sleep at a time
+; until it succeeds; then the body, unmasked, with the argument in ACR,
+; which returns its answer here; then the disc is given up and the answer
+; goes back to the caller.  A task is in at most one such call, so one
+; set of node cells serves them all.
+KENTER          LDX     CURT
+                STW     *T.KDS
+                LDW     KELNK
+                STW     *T.KLK
+                LDW     KEARG
+                STW     *T.KAR
+KECLM           JSX     IOTRY
+                SAZ                     ; ours?
+                JMP     KEWAIT
+                LDX     CURT
+                LDW     *T.KDS
+                STW     KEBDY
+                LDW     *T.KAR
+                LDX     KEBDY
+                UNM
+                JSX     *0              ; the body
+                MSK
+                STW     KERES
+                LDW     KM1
+                STW     IOLOCK
+                LDX     CURT
+                LDW     *T.KLK
+                STW     KELNK
+                LDW     KERES
+                LDX     KELNK
+                UNM
+                JSX     *0              ; and home
+KEWAIT          LDX     CURT            ; taken: sleep a tick and try again
                 LDW     K1
                 STW     *T.DLY
                 LDW     KSLP
                 STW     *T.STA
                 JSX     SWTCH
-                JMP     DRCLM
-DRGO            DIN     1,0
+                MSK
+                JMP     KECLM
+
+; K.DREAD and K.DWRIT: ACR addresses three words in the caller's own core
+; -- the first sector's index, track*128+sector; the word count, which
+; may run across sectors and tracks; the core address -- and the answer
+; is the controller's status, zero for a clean transfer.
+KDREAD          MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKDRB
+                JMP     KENTER
+KDWRIT          MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKDWB
+                JMP     KENTER
+
+KDRB            SUBR
+                STW     DXARG
+                CLR
+                STW     DXOP
+                JSX     KDXP
+                EXIT    KDRB
+KDWB            SUBR
+                STW     DXARG
+                LDW     K1
+                STW     DXOP
+                JSX     KDXP
+                EXIT    KDWB
+KDXP            SUBR
+                LDX     DXARG           ; the caller's three words
+                LDW     *0
+                STW     DXSEC
+                LDW     *1
+                AND     K3FFF
+                STW     DXCNT
+                LDW     *2
+                STW     DXBUF
+                JSX     DXFER
+                EXIT    KDXP
+
+; One sector -- ACR is its index -- into the 47 words DXBUF names.
+DRD1            SUBR
+                STW     DXSEC
+                LDW     K47
+                STW     DXCNT
+                CLR
+                STW     DXOP
+                JSX     DXFER
+                EXIT    DRD1
+
+; Move DXCNT words between the disc, from sector DXSEC on, and core at
+; DXBUF -- to the disc if DXOP is set -- and return the controller's
+; status, zero for a clean transfer.  The caller holds IOLOCK.  It waits
+; on the transfer the way a task waits on anything here: masked, look,
+; and if not yet, mark itself waiting and hand the processor on, and
+; DSERV wakes it; DWTR names the node for that.  A unit that is not
+; there reads not-ready, and that comes back at once rather than waiting
+; for a completion that would never come.
+DXFER           SUBR
+                MSK
+                DIN     1,0
                 SAP                     ; not ready?  say so
-                JMP     DRNRD
+                JMP     DXNRD
                 LDW     CURT
                 STW     DWTR
                 LDW     K1
                 STW     DBUSY           ; before the DOT: the completion can be next
-                LDW     DRBUF
+                LDW     DXBUF
                 DOT     1,1             ; the core address (5-9.5.2)
-                LDW     DRSEC
+                LDW     DXSEC
                 AND     K7F
-                STW     DRTS
-                LDW     DRSEC
+                STW     DXTS
+                LDW     DXSEC
                 SRL     7
                 SLL     10
-                ORI     DRTS
+                ORI     DXTS
                 DOT     1,2             ; track in bits 0-5, sector in 7-15 (5-9.5.3)
-                LDW     K47
-                DOT     1,6             ; unit 0, one sector, read (5-9.5.4)
-DRWT            LDW     DBUSY
+                LDW     DXOP
+                SAZ
+                JMP     DXWR
+                LDW     DXCNT
+                DOT     1,6             ; unit 0, the count, read (5-9.5.4)
+                JMP     DXWT
+DXWR            LDW     DXCNT
+                DOT     1,4             ; ...write
+DXWT            LDW     DBUSY
                 SAZ                     ; over?
-                JMP     DRBLK
-                JMP     DRDN
-DRBLK           LDX     CURT
+                JMP     DXBLK
+                JMP     DXDN
+DXBLK           LDX     CURT
                 LDW     KWAIT
                 STW     *T.STA
                 JSX     SWTCH           ; until DSERV says so
                 MSK
-                JMP     DRWT
-DRDN            LDW     DSTAT
-                STW     DRRES
+                JMP     DXWT
+DXDN            LDW     DSTAT
+                STW     DXRES
                 LDW     KM1
                 STW     DWTR
                 UNM
-                LDW     DRRES
-                EXIT    DREAD
-DRNRD           UNM
-                EXIT    DREAD
+                LDW     DXRES
+                EXIT    DXFER
+DXNRD           UNM
+                EXIT    DXFER
 
 ; What the machine runs when every task is asleep.  A branch to self is a
 ; legal idle here -- the levels are enabled and unmasked, so the tick that
@@ -964,21 +1161,30 @@ DRNRD           UNM
 ; the queue, and hand the processor on.  Q.PUT wakes it and forgets it.
 ; One waiter to a queue, so one reader to a queue -- a second task
 ; blocking here would displace the first, which would then never wake.
-Q.GET           SUBR
+; Tasks reading different queues may be in here together, so the link and
+; the queue are kept in the caller's node across the wait, not in a slot
+; of this routine's: masked from its first instruction, and the static
+; cells good only until the processor is handed on.
+Q.GET           MSK
+                STX     QGLNK
+                LDX     CURT
+                STW     *T.KAR
+                LDW     QGLNK
+                STW     *T.KLK
+QGL             LDX     CURT
+                LDW     *T.KAR
                 STW     QGD
-QGL             MSK
-                LDX     QGD
+                CAX
                 LDW     *Q.CNT
                 SAZ                     ; anything in it?
                 JMP     QGT
-                JMP     QGW
-QGW             LDW     CURT
-                LDX     QGD
+                LDW     CURT            ; no: wait on it
                 STW     *Q.WTR
-                LDX     CURT
+                CAX
                 LDW     KWAIT
                 STW     *T.STA
                 JSX     SWTCH           ; gone until Q.PUT wakes this task
+                MSK
                 JMP     QGL             ; awake: look again
 QGT             LDW     *Q.BUF
                 ADD     *Q.HEAD
@@ -995,9 +1201,13 @@ QGT             LDW     *Q.BUF
                 LDW     *Q.CNT
                 SUB     K1
                 STW     *Q.CNT
-                UNM
+                LDX     CURT
+                LDW     *T.KLK
+                STW     QGLNK
                 LDW     QGI
-                EXIT    Q.GET
+                LDX     QGLNK
+                UNM
+                JSX     *0
 
 IDLE            JMP     IDLE
 
@@ -1055,20 +1265,23 @@ LPARK           JMP     LPARK           ; parked; a legal idle, levels live
 ; address, K.ALLCW wants the payload inside one 2048-word page and
 ; K.ALLCB inside one 1024-word byte page -- what a module needs, since
 ; its M fields are page offsets.  The answer is the payload address, or
-; zero, which is never in the pool.  The whole search is masked, and the
-; link is kept by hand because the stubs fall into the body with IXR
-; still holding it.
-ALLOCW          STW     ALSIZ
+; zero, which is never in the pool.  Any task may call, so every entry
+; is masked from its first instruction to its return: the cells are one
+; caller's at a time, and the link is kept by hand because the stubs
+; fall into the body with IXR still holding it.
+ALLOCW          MSK
+                STW     ALSIZ
                 LDW     K2047
                 JMP     ALCOM
-ALLOCB          STW     ALSIZ
+ALLOCB          MSK
+                STW     ALSIZ
                 LDW     K1023
                 JMP     ALCOM
-ALLOC           STW     ALSIZ
+ALLOC           MSK
+                STW     ALSIZ
                 CLR
 ALCOM           STW     ALMSK           ; the window less one, or zero for any
                 STX     ALRET
-                MSK
                 CLR
                 STW     ALPRV           ; the free block before F; zero: the head
                 LDW     FREHD
@@ -1201,8 +1414,8 @@ ALHDR           LDX     ALH             ; the header: size, and the owner
                 LDW     ALP
                 JMP     ALOUT
 ALNONE          CLR
-ALOUT           UNM
-                LDX     ALRET
+ALOUT           LDX     ALRET           ; the link first: past the UNM the
+                UNM                     ; cells are the next caller's
                 JSX     *0
 
 ; Give a block back.  FREEI does the work with the mask held by its
@@ -1214,11 +1427,12 @@ ALOUT           UNM
 ; grows here: the freed block's own may grow to swallow the one above it,
 ; and the one below it may grow to swallow this one, so a walk of the
 ; pool by size strides stays right through a block just freed.
-FREE            SUBR
-                MSK
+FREE            MSK
+                STX     FRRET
                 JSX     FREEI
+                LDX     FRRET
                 UNM
-                EXIT    FREE
+                JSX     *0
 
 FREEI           SUBR
                 SUB     K2
@@ -1309,6 +1523,7 @@ ALW             WORD    0               ; and the one after that
 ALFE            WORD    0               ; the block's end
 ALH             WORD    0               ; the new header
 ALNX            WORD    0               ; what follows it on the list
+FRRET           WORD    0               ; FREE's link
 FRH             WORD    0               ; the block being freed
 FRPRV           WORD    0               ; the free blocks on either side
 FRNX            WORD    0
@@ -1365,10 +1580,11 @@ SPAWN           SUBR
 ; the node is unlinked and counted off, and LASTS, where KICK's scan
 ; starts, moved off it; CURT is pointed at the predecessor BEFORE
 ; anything is freed, since PICK starts from CURT's link; then every block
-; in the pool tagged with the node is given back, its own block among
-; them, and the processor goes to whoever PICK finds, through the second
+; in the pool tagged with the node is given back, and the processor goes
+; to whoever PICK finds, through the second
 ; half of SWTCH with nothing parked.  Masked throughout: the one unmasked
-; instruction on the way out is SWTCH's INR 3, inside the range.
+; instruction on the way out is SWTCH's INR 3, inside the range.  The
+; node goes back to its arena last of all.
 TEXIT           MSK
                 LDX     CURT
                 LDW     *T.MBX
@@ -1421,7 +1637,7 @@ TXCUR           LDW     XPRED
 TXSWP           STW     XB
                 CMW     KPOOLE
                 SLS                     ; the end of the pool?
-                JMP     SWRES           ; then on to whoever can run
+                JMP     TXNOD
 TXSW1           CAX
                 LDW     *1
                 SAM                     ; allocated?
@@ -1438,6 +1654,36 @@ TXSNX           LDX     XB
                 ADD     XB
                 ADD     K2
                 JMP     TXSWP
+TXNOD           LDW     XDEAD           ; the node last, to the arena
+                JSX     NFREE
+                JMP     SWRES           ; then on to whoever can run
+
+; A node from the arena, or zero when every one is in use; and a node
+; given back.  Callers hold the mask.  A node keeps its job number for
+; good, and comes out with nothing else of its last task left in it.
+NALLOC          SUBR
+                LDW     NFREH
+                SAZ
+                JMP     NAL1
+                EXIT    NALLOC
+NAL1            CAX
+                LDW     *T.NXT
+                STW     NFREH
+                CLR
+                STW     *T.KLK
+                STW     *T.KAR
+                STW     *T.KDS
+                STW     *T.ARG
+                STW     *T.SWP
+                CXA
+                EXIT    NALLOC
+NFREE           SUBR
+                CAX
+                LDW     NFREH
+                STW     *T.NXT
+                CXA
+                STW     NFREH
+                EXIT    NFREE
 
 SPNOD           WORD    0               ; SPAWN's node
 XDEAD           WORD    0               ; TEXIT's: the node going, its
@@ -1697,7 +1943,11 @@ SHBASI          LDW     SHKBA0          ; BASIC: RUN BASIC, the name put
                 STW     STOK1
                 LDW     SHK1
                 STW     LDCON
-SHLD1           JSX     LDMOD
+SHLD1           JSX     SHIOC           ; the disc, for the whole load
+                JSX     LDMOD
+                STW     SHW2
+                JSX     SHIOR
+                LDW     SHW2
                 SAZ                     ; a node, or an error already named?
                 JMP     SHLD2
                 JMP     SHLOOP
@@ -1777,9 +2027,10 @@ LDCN            LDW     LDCP
                 ADD     SHK4
                 STW     LDCP
                 JMP     LDCL
-LDFND           LDW     SHKLDN          ; a node from the pool
-                SMB     ALLOC
-                JSX     ALLOC
+LDFND           MSK                     ; a node from the arena
+                SMB     NALLOC
+                JSX     NALLOC
+                UNM
                 SAZ
                 JMP     LDF1
                 JMP     LDEMX
@@ -1906,8 +2157,8 @@ LDEND           JSX     LDGETW          ; END: the entry, relocated
                 JMP     LDDONE
                 JMP     LDELC
 
-; Loaded: fill the node, and tag both blocks as the new task's own, so
-; that its exit finds them.
+; Loaded: fill the node, and tag the block as the new task's own, so
+; that its exit finds it.
 LDDONE          LDX     LDNODE
                 LDW     LDEXEC
                 STW     *T.PCR
@@ -1918,11 +2169,6 @@ LDDONE          LDX     LDNODE
                 LDW     LDNODE
                 ORI     SHK8000
                 STW     LDTAG
-                LDW     LDNODE
-                SUB     SHK1
-                CAX
-                LDW     LDTAG
-                STW     *0
                 LDW     LDBLK
                 SUB     SHK1
                 CAX
@@ -1951,8 +2197,10 @@ LDER2           LDW     LDNODE
                 SAZ
                 JMP     LDER3
                 JMP     LDER4
-LDER3           SMB     FREE
-                JSX     FREE
+LDER3           MSK
+                SMB     NFREE
+                JSX     NFREE
+                UNM
 LDER4           CLR
                 EXIT    LDMOD
 
@@ -1960,11 +2208,11 @@ LDER4           CLR
 ; else the disc's status.
 LDCAT           SUBR
                 LDW     SHKLDB
-                SMB     DRBUF
-                STW     DRBUF
+                SMB     DXBUF
+                STW     DXBUF
                 LDW     SHK1
-                SMB     DREAD
-                JSX     DREAD
+                SMB     DRD1
+                JSX     DRD1
                 EXIT    LDCAT
 
 ; RELO11: the base added into the M field, the opcode and index bit kept.
@@ -2032,9 +2280,12 @@ LDGCRD          SUBR
                 JMP     LDELC
 LDGC1           SUB     SHK1
                 STW     LDNSEC
+                LDW     SHKLDB
+                SMB     DXBUF
+                STW     DXBUF
                 LDW     LDSEC
-                SMB     DREAD
-                JSX     DREAD
+                SMB     DRD1
+                JSX     DRD1
                 SAZ
                 JMP     LDEDE
                 LDW     LDSEC
@@ -2078,10 +2329,41 @@ LDCKT           LDW     LDSUM
                 STW     LDBP
                 EXIT    LDGCRD
 
+; The disc for the shell, and the disc given up: the claim every user of
+; DXFER makes, a tick's sleep at a time until it succeeds.  A task's call
+; through the vector makes it in KENTER; this is the shell's own, for the
+; loader and DIR, which read the disc from the shell's task.
+SHIOC           SUBR
+SHIOCL          MSK
+                SMB     IOTRY
+                JSX     IOTRY
+                SAZ                     ; ours?
+                JMP     SHIOCW
+                UNM
+                EXIT    SHIOC
+SHIOCW          LDW     SHK1
+                SMB     SH.DLY
+                STW     SH.DLY
+                LDW     SHKSLP
+                SMB     SH.STA
+                STW     SH.STA
+                SMB     SWTCH
+                JSX     SWTCH
+                JMP     SHIOCL
+SHIOR           SUBR
+                LDW     SHKM1
+                SMB     IOLOCK
+                STW     IOLOCK
+                EXIT    SHIOR
+
 ; DIR: the catalogue, a line to a file -- its name, its first sector and
 ; how many sectors it has.  A name shorter than four characters prints as
 ; its letters alone, since a zero byte is nothing to the printer.
-SHDIR           JSX     LDCAT
+SHDIR           JSX     SHIOC
+                JSX     LDCAT
+                STW     SHW2
+                JSX     SHIOR
+                LDW     SHW2
                 SAZ
                 JMP     SHDRE
                 LDW     SHKLDB
@@ -2424,6 +2706,7 @@ SHGLE           LDW     SHFIL           ; terminate it; SHKLBE leaves room
 ; ---------------------------------------------------------------- shell data
 SH.STA          EQU     SHTCB+T.STA     ; this task's own state word...
 SH.MBX          EQU     SHTCB+T.MBX     ; ...and its own mailbox
+SH.DLY          EQU     SHTCB+T.DLY     ; and its delay, for a sleep
 
 SHCUR           WORD    0               ; the cursor into the line, a byte
 SHFIL           WORD    0               ; and where SHGETL is filling it
@@ -2484,6 +2767,7 @@ SHK7FF          WORD    X'07FF'
 SHKF800         WORD    X'F800'
 SHK8000         WORD    X'8000'
 SHK0FF          WORD    X'00FF'
+SHKM1           WORD    X'FFFF'
 SHKTEN          WORD    10
 SHKZER          WORD    '0'
 SHKSP           WORD    ' '
@@ -2505,7 +2789,6 @@ SHKCTB          WORD    LDCTAB
 SHKLDB          WORD    LDBUF           ; the sector buffer, as a word address...
 SHKDBB          WORD    LDBUF*2         ; ...its first byte, the marker...
 SHKDBL          WORD    LDBUF*2+93      ; ...and its last, the checksum
-SHKLDN          WORD    T.LEN           ; words in a node
 SHKALW          WORD    ALLOCW          ; the allocator's page entries, for
 SHKALB          WORD    ALLOCB          ; an indexed JSX
 SHKBA0          WORD    'BA'            ; BASIC's name, as SHTOK packs it

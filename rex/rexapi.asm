@@ -37,7 +37,15 @@ K.EXIT          EQU     X'14'           ; the task is over; never returns
 K.SWTCH         EQU     X'15'           ; hand the processor on; returns when next picked
 K.KICK          EQU     X'16'           ; start the printer on the next full mailbox
 K.QGET          EQU     X'17'           ; ACR = a queue descriptor -> ACR = the next word
-K.DREAD         EQU     X'18'           ; ACR = a sector index, DRBUF = buffer -> ACR = status
+K.DREAD         EQU     X'18'           ; ACR = a transfer block -> ACR = status: disc to core
+K.DWRIT         EQU     X'19'           ; the same, core to disc
+;                                       ; A transfer block is three words of
+;                                       ; the caller's own: the first sector's
+;                                       ; index, track*128+sector; the word
+;                                       ; count, up to 16,383, which may run
+;                                       ; across sectors and tracks; and the
+;                                       ; core address.  Status zero is clean.
+;                                       ; The call waits its turn at the disc.
 
 ; ---------------------------------------------------------------- the cells
 ; Words X'20'-X'2F', the blocks of levels 8-11.
@@ -54,7 +62,6 @@ KCONSQ          EQU     X'23'           ; the console queue's descriptor address
 ;                                       ; module that reads the console tests
 ;                                       ; T.CON at entry and refuses when it
 ;                                       ; is clear.
-DRBUF           EQU     X'24'           ; K.DREAD's buffer: a word address, 47 words
 
 ; ---------------------------------------------------------------- a task node
 T.STA           EQU     0               ; state
@@ -72,7 +79,13 @@ T.CON           EQU     11              ; nonzero: this task holds the console -
                                         ; RUN set it, LOAD did not, and it is
                                         ; what says whether reading KCONSQ is
                                         ; this task's to do
-T.LEN           EQU     12              ; words in a node
+T.ID            EQU     12              ; the job number
+T.KLK           EQU     13              ; the kernel's, while the task is
+T.KAR           EQU     14              ; blocked in one of its calls
+T.KDS           EQU     15
+T.ARG           EQU     16              ; the command tail's block, or zero
+T.SWP           EQU     17              ; nonzero: the task is swapped out
+T.LEN           EQU     18              ; words in a node
 
 SRUN            EQU     0
 SSLP            EQU     1

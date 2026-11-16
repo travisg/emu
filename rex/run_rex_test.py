@@ -33,9 +33,18 @@ satisfied by the first. The printer is shared character by character, so
 nothing here matches a line a letter task could be printing into -- the
 letter tasks are stopped before anything is matched exactly.
 
+A second machine, without --fast-io so that a transfer takes its time,
+runs three copies of the disc exerciser (dskt.asm) at once. They print
+nothing; each leaves its verdict in a sector of its own, read here off
+the platter, and the kernel's count of tasks that found the disc taken
+must not be zero -- three tasks that never met at the disc prove nothing
+about the lock.
+
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
   nohello  a platter without the hello module
+  nolock   the kernel's wait for the disc patched out, so a task that
+           finds it taken goes in anyway
 """
 
 import contextlib
@@ -51,13 +60,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 
-from emudbg import Emu  # noqa: E402
+from emudbg import Emu, Symbols  # noqa: E402
 
 EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
 BUILD = os.path.join(HERE, 'build')
 ROM_FILE = os.path.join(BUILD, 'rex.bin')
 HELLO_OBJ = os.path.join(BUILD, 'hello.obj')
 BASIC_OBJ = os.path.join(BUILD, 'basic.obj')
+DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
+REX_LST = os.path.join(BUILD, 'rex.lst')
 MKDISC = os.path.join(ROOT, 'tools', 'mkdisc703.py')
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, 'rex_test.log')
 CONTROL = os.environ.get('REX_CONTROL', '')
@@ -248,6 +259,81 @@ def session(emu):
         raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
 
 
+# dskt.asm's constants, and the platter's geometry.
+DSKT_SECTOR = 4000
+DSKT_ROUNDS = 150
+DSKT_COPIES = 3
+FIRST_JOB = 5                   # NARID: the first node the loader hands out
+SECTOR_WORDS = 47
+NOP = 0x0900                    # SRA 0
+
+
+def disc_session(emu, image):
+    """Three tasks at the disc at once, each writing and reading back a
+    sector of its own 150 times over."""
+    symbols = Symbols()
+    symbols.load(REX_LST)
+    if CONTROL == 'nolock':
+        # KECLM is JSX IOTRY / SAZ / JMP KEWAIT: without the jump a task
+        # that finds the disc taken carries on into the body
+        emu.writew(symbols.value('KECLM') + 2, [NOP])
+    s = Session(emu)
+    emu.run()
+    s.wait(b'REX 703 UP')
+    # Typed ahead in one go, so the three loads follow each other as fast
+    # as the shell can make them and the tasks overlap for most of their
+    # lives. The shell's queue holds the lot. The keyboard's echo of the
+    # second and third lands inside the prompts in between, so there is
+    # no prompt to count here: quiet is the three of them loaded.
+    s.wait(PROMPT)
+    emu.wait_quiet()
+    emu.key('LOAD DSKT\r' * DSKT_COPIES)
+    emu.wait_quiet(idle=1.0, timeout=120)
+
+    # They are DS on the ring until they exit: all three at once at some
+    # point, and then none. STAT's last line is the idle node's.
+    together = False
+    for _ in range(400):
+        mark = len(emu.output)
+        emu.key('STAT\r')
+        emu.wait_for_output(re.compile(rb'^ID RUN', re.M), start=mark, timeout=120)
+        emu.wait_quiet(timeout=120)
+        on_ring = len(re.findall(rb'^DS ', s.since(mark), re.M))
+        if on_ring == DSKT_COPIES:
+            together = True
+        if on_ring == 0:
+            break
+    else:
+        raise AssertionError('the disc exercisers never finished')
+    s.at = len(emu.output)
+
+    emu.halt()
+    waits = emu.memw(symbols.value('IOWAITS'), 1)[0]
+    emu.run()
+    if waits == 0:
+        raise AssertionError('no task ever found the disc taken: the lock was not exercised')
+
+    with open(image, 'rb') as f:
+        platter = f.read()
+    for job in range(FIRST_JOB, FIRST_JOB + DSKT_COPIES):
+        at = (DSKT_SECTOR + job) * SECTOR_WORDS * 2
+        got = [int.from_bytes(platter[at + 2 * i:at + 2 * i + 2], 'big') for i in range(SECTOR_WORDS)]
+        want = [(job * 256 + DSKT_ROUNDS + i) & 0xffff for i in range(SECTOR_WORDS)]
+        if got != want:
+            raise AssertionError('job %d: its sector holds %s' % (job, ' '.join('%04X' % w for w in got[:8])))
+
+    # Last, since an exerciser that failed exits at once and the sectors
+    # above say so more plainly than this would.
+    if not together:
+        raise AssertionError('STAT never showed the three exercisers on the ring together')
+
+    emu.key('HALT\r')
+    s.wait(b'REX 703 DOWN', timeout=120)
+    stopped = emu.wait_stopped()
+    if stopped.reason != 'hlt':
+        raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
+
+
 def verdict(paper):
     """What the shell had to have printed, on lines of its own: the
     terminal's echo of a command begins with the prompt instead."""
@@ -292,12 +378,21 @@ def make_platter(workdir, log):
         pass
     elif CONTROL == 'nohello':
         cmd += ['--add', 'BASIC', BASIC_OBJ]
-    elif CONTROL == '':
-        cmd += ['--add', 'HELLO', HELLO_OBJ, '--add', 'BASIC', BASIC_OBJ]
+    elif CONTROL in ('', 'nolock'):
+        cmd += ['--add', 'HELLO', HELLO_OBJ, '--add', 'BASIC', BASIC_OBJ, '--add', 'DSKT', DSKT_OBJ]
     else:
         sys.exit('REX_CONTROL=%s: not a control this harness has' % CONTROL)
     subprocess.run(cmd, check=True, stdout=log)
     log.flush()
+    return image
+
+
+def finish(emu):
+    emu.kill()
+    emu.wait_exited()
+    status = emu.wait_exit()
+    if status != 0:
+        raise AssertionError('the emulator exited with status %d' % status)
 
 
 def main():
@@ -305,7 +400,7 @@ def main():
         print('error: emulator binary not found at %s' % EMU_BIN, file=sys.stderr)
         print('build first with: cargo build', file=sys.stderr)
         return 1
-    for path in (ROM_FILE, HELLO_OBJ, BASIC_OBJ):
+    for path in (ROM_FILE, HELLO_OBJ, BASIC_OBJ, DSKT_OBJ, REX_LST):
         if not os.path.isfile(path):
             print('error: %s is missing' % path, file=sys.stderr)
             print('build it with: make -C rex', file=sys.stderr)
@@ -315,7 +410,7 @@ def main():
     os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     with open(LOG_FILE, 'wb') as log, tempfile.TemporaryDirectory(prefix='rex-test-') as workdir:
         try:
-            make_platter(workdir, log)
+            image = make_platter(workdir, log)
             with cwd(workdir):
                 emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE,
                                  '--fast-io', '--no-throttle'], log=log)
@@ -323,12 +418,16 @@ def main():
             failed = verdict(bytes(emu.output))
             if failed:
                 raise AssertionError('not on the paper: ' + ', '.join(failed))
-            emu.kill()
-            emu.wait_exited()
-            status = emu.wait_exit()
-            if status != 0:
-                raise AssertionError('the emulator exited with status %d' % status)
+            finish(emu)
             log.write(b'\n--- paper ---\n' + bytes(emu.output))
+
+            # Device time is machine time here: a transfer takes its half
+            # revolution and a tick can land inside it.
+            with cwd(workdir):
+                emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--no-throttle'], log=log)
+            disc_session(emu, image)
+            finish(emu)
+            log.write(b'\n--- paper, the disc session ---\n' + bytes(emu.output))
         except Exception:
             log.write(b'\n--- harness failure ---\n')
             log.write(traceback.format_exc().encode())
