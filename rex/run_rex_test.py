@@ -34,11 +34,15 @@ nothing here matches a line a letter task could be printing into -- the
 letter tasks are stopped before anything is matched exactly.
 
 The filesystem is held to the host's reading of it (tools/fs703.py): the
-session runs the file calls' exerciser (fst.asm) twice, and afterwards
-the platter's directory has to pass the host's check of its rules, hold
-exactly the files the exerciser leaves with the bytes it wrote, and still
-hold every module byte for byte -- and the platter as it was made has to
-hold none of the exerciser's files, so the check cannot pass on nothing.
+session runs the file calls' exerciser (fst.asm) twice, makes, copies,
+renames and deletes files with the utilities, deletes a file the platter
+was made with in front of everything else and has SQUISH move the lot
+down over it, and afterwards the platter's directory has to pass the
+host's check of its rules, be one run of files with one hole behind it,
+hold exactly the text files expected with the bytes the guest wrote, and
+still hold every module byte for byte -- and the platter as it was made
+has to hold none of the guest's files, so the check cannot pass on
+nothing.
 
 A second machine, without --fast-io so that a transfer takes its time,
 runs three copies of the disc exerciser (dskt.asm) at once. They print
@@ -53,6 +57,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nolock   the kernel's wait for the disc patched out, so a task that
            finds it taken goes in anyway
   nosave   the directory never written back to the disc
+  noguard  the kernel's refusal of a console read by a task that does
+           not have the console patched out
 """
 
 import contextlib
@@ -78,7 +84,21 @@ HELLO_OBJ = os.path.join(BUILD, 'hello.obj')
 BASIC_OBJ = os.path.join(BUILD, 'basic.obj')
 DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
 FST_OBJ = os.path.join(BUILD, 'fst.obj')
-MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ))
+MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
+    (name, os.path.join(BUILD, name.lower() + '.obj'))
+    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP'))
+
+# What the platter is made with besides the modules. PAD.TX goes on first,
+# in front of everything, so that deleting it leaves a hole SQUISH has to
+# move every other file down over. MSG.TX has a host's bare newlines.
+PAD = bytes(range(256)) + bytes(144)
+MSG = b'FIRST LINE\nSECOND LINE\n'
+CMDS = b'ECHO FROM A FILE\r\nMEM\r\nHELLO\r\n'
+INIT = b'ECHO INIT RAN\r\n'
+# What PUT is given, and what it puts: the keys as the teletype sends
+# them, bit 7 set, a line feed after every carriage return.
+NOTE_KEYS = 'LINE ONE\rLINE TWO\r'
+NOTE = bytes(c | 0x80 for c in b'LINE ONE\r\nLINE TWO\r\n')
 REX_LST = os.path.join(BUILD, 'rex.lst')
 MKDISC = os.path.join(ROOT, 'tools', 'mkdisc703.py')
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, 'rex_test.log')
@@ -152,8 +172,18 @@ def session(emu):
         symbols = Symbols()
         symbols.load(REX_LST)
         emu.writew(symbols.value('FDSAVE') + 2, [CLR])
+    if CONTROL == 'noguard':
+        # Q.GET is MSK / STX / STW / CMW KCONSQ / SEQ / JMP QGIN: without
+        # the skip every caller is let in
+        symbols = Symbols()
+        symbols.load(REX_LST)
+        emu.writew(symbols.value('Q.GET') + 4, [NOP])
     emu.run()
     s.wait(b'REX 703 UP')
+
+    # INIT.CM is read before the keyboard is: its one command, echoed as
+    # if typed, and what the command printed.
+    s.wait(re.compile(rb'^INIT RAN\r', re.M))
 
     # Nothing is running yet, so this one is quiet and exact.
     s.say('STAT')
@@ -194,7 +224,7 @@ def session(emu):
     for _ in range(40):
         s.wait(PROMPT)
         emu.wait_quiet()
-        if not re.search(rb'^HE ', s.since(mark), re.M):
+        if not re.search(rb'^\d+ HE ', s.since(mark), re.M):
             break
         seen = True
         mark = len(emu.output)
@@ -212,6 +242,70 @@ def session(emu):
         s.say('RUN FST')
         s.wait(re.compile(rb'FST (OK|BAD \d+)'))
     s.say('DIR')
+    s.say('MEM')
+
+    # A word that is not a command is a program: its name, then the rest
+    # of the line for it to read.
+    s.say('HELLO')
+    s.wait(b'HELLO FROM WORD')
+    s.say('TYPE MSG')
+    s.say('PUT NOTE')
+    emu.key(NOTE_KEYS + '\x1a')        # the shell's queue holds it for PUT
+    s.say('TYPE NOTE')
+    s.say('COPY NOTE COPY2')
+    s.say('REN COPY2 THIRD')
+    s.say('DEL NOTE')
+    s.say('DEL NOPE')
+    s.say('DUMP THIRD')
+    mark = s.say('DIR')
+    s.wait(b'SECTORS FREE')
+    listed = s.since(mark)
+    for name, there in ((b'THIRD.TX 1', True), (b'NOTE.TX', False), (b'COPY2.TX', False)):
+        if (re.search(rb'^' + re.escape(name), listed, re.M) is not None) != there:
+            raise AssertionError('DIR after the utilities: %r' % listed)
+
+    # The file in front of everything goes, and every other file moves
+    # down over the hole -- the modules too, which is what the next
+    # program run is loaded from.
+    s.say('DEL PAD')
+    s.say('SQUISH')
+    s.say('HELLO')
+    s.wait(b'HELLO FROM WORD')
+    s.say('@CMDS')
+    s.wait(re.compile(rb'^FROM A FILE\r', re.M))
+    s.wait(b'HELLO FROM WORD')
+    s.say('MEM')
+
+    # Jobs. NAP never ends: started behind the prompt it first tries to
+    # read the console, which the kernel refuses, and then sleeps for
+    # ever. STOP, START and KILL take its number, as STAT gives it.
+    mark = s.say('LOAD NAP')
+    emu.wait_for_output(b'THE CONSOLE WAS REFUSED', start=mark)
+    emu.wait_quiet()
+    mark = s.say('STAT')
+    job = emu.wait_for_output(re.compile(rb'^(\d+) NA ', re.M), start=mark).group(1).decode()
+    s.say('STOP ' + job)
+    mark = s.say('STAT')
+    emu.wait_for_output(re.compile(rb'^' + job.encode() + rb' NA OFF', re.M), start=mark)
+    s.say('START ' + job)
+    s.say('KILL ' + job)
+    mark = s.say('STAT')
+    emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark)
+    emu.wait_quiet()
+    if re.search(rb'^\d+ NA ', s.since(mark), re.M):
+        raise AssertionError('NAP is still there after KILL')
+    mark = s.say('KILL ' + job)
+    emu.wait_for_output(b'NO SUCH TASK', start=mark)
+    s.say('MEM')
+
+    # In the foreground it has the console and takes no notice of Ctrl-C,
+    # so the second one is the shell's to act on.
+    s.say('NAP')
+    emu.wait_quiet()
+    emu.key('\x03')
+    time.sleep(0.2)
+    emu.key('\x03')
+    s.wait(b'KILLED')
     s.say('MEM')
 
     # A BASIC session: the module comes off the platter, the console
@@ -249,7 +343,7 @@ def session(emu):
     # afresh, with nothing to LIST.
     mark = s.say('STAT')
     s.say('MEM')
-    if re.search(rb'^BA ', s.since(mark), re.M):
+    if re.search(rb'^\d+ BA ', s.since(mark), re.M):
         raise AssertionError('BASIC is still on the ring after BYE')
     s.say('BASIC')
     s.basic('LIST\r')
@@ -309,15 +403,18 @@ def check_platter(image, pristine):
         with open(path, 'rb') as f:
             if platter.read(name, 'RX') != f.read():
                 raise AssertionError('%s.RX is not the module that was put there' % name)
-    want = {'T2.TX': bytes(fst_byte(i) for i in range(10)), 'T4.TX': b''}
+    want = {'T2.TX': bytes(fst_byte(i) for i in range(10)), 'T4.TX': b'', 'MSG.TX': MSG, 'THIRD.TX': NOTE}
     made = {e.title: platter.read(e.name, e.type) for e in platter.files() if e.type == 'TX'}
     if made != want:
-        raise AssertionError('the exerciser left %r' % made)
-    unclosed = [e for e in platter.entries() if e.what == fs703.TENTATIVE]
-    if len(unclosed) != 1 or unclosed[0].title != 'T5.TX':
-        raise AssertionError('one unclosed T5.TX was expected, not %r' % unclosed)
-    if any(e.type == 'TX' for e in fs703.Platter(bytearray(pristine)).entries()):
-        raise AssertionError('the platter had the exerciser\'s files before it ran')
+        raise AssertionError('the text files are %r' % made)
+    # SQUISH ran after the last file was made or deleted: the files are
+    # one run from the first data sector, and what is free is one hole.
+    kinds = [e.what for e in platter.entries()]
+    if kinds != [fs703.FILE] * (len(kinds) - 1) + [fs703.HOLE]:
+        raise AssertionError('not squished: %r' % platter.entries())
+    before = {e.title for e in fs703.Platter(bytearray(pristine)).files()}
+    if before & {'T2.TX', 'T4.TX', 'THIRD.TX'} or 'PAD.TX' not in before:
+        raise AssertionError('the platter as made holds %r' % sorted(before))
 
 
 def disc_session(emu, image):
@@ -345,9 +442,9 @@ def disc_session(emu, image):
     emu.wait_quiet()
     mark = len(emu.output)
     emu.key('LOAD DSKT\r' * DSKT_COPIES + 'STAT\r')
-    idle_line = re.compile(rb'^ID RUN', re.M)
+    idle_line = re.compile(rb'^0 ID RUN', re.M)
     emu.wait_for_output(idle_line, start=mark, timeout=120)
-    together = len(re.findall(rb'^DS ', s.since(mark), re.M)) == DSKT_COPIES
+    together = len(re.findall(rb'^\d+ DS ', s.since(mark), re.M)) == DSKT_COPIES
 
     # ...and then none.
     for _ in range(400):
@@ -355,7 +452,7 @@ def disc_session(emu, image):
         mark = len(emu.output)
         emu.key('STAT\r')
         emu.wait_for_output(idle_line, start=mark, timeout=120)
-        if not re.search(rb'^DS ', s.since(mark), re.M):
+        if not re.search(rb'^\d+ DS ', s.since(mark), re.M):
             break
     else:
         raise AssertionError('the disc exercisers never finished')
@@ -403,9 +500,9 @@ def verdict(paper):
     free = re.findall(rb'^FREE (\d+)', text, re.M)
     checks = [
         ('uptime', line(rb'UPTIME \d+ SEC')),
-        ('A stopped', line(rb'^A  OFF')),
-        ('shell running', line(rb'^SH RUN')),
-        ('idle listed', line(rb'^ID RUN')),
+        ('A stopped', line(rb'^1 A  OFF')),
+        ('shell running', line(rb'^4 SH RUN')),
+        ('idle listed', line(rb'^0 ID RUN')),
         ('help', line(rb'^COMMANDS HELP STAT UPTIME')),
         ('echo', line(rb'^SHELL OUTPUT OK')),
         ('unknown command', line(rb'^WHAT')),
@@ -420,7 +517,12 @@ def verdict(paper):
         ('the file calls, twice', count(rb'^FST OK$') == 2),
         ('directory: the file left', line(rb'^T2\.TX 1$')),
         ('directory: the empty file', line(rb'^T4\.TX 0$')),
-        ('six MEMs', len(free) >= 6),
+        ('a host file typed', line(rb'^FIRST LINE\nSECOND LINE$')),
+        ('a file made here typed', count(rb'^LINE ONE\nLINE TWO$') == 2),
+        ('an error in words', count(rb'^NO SUCH FILE$') == 2),
+        ('a file dumped', line(rb'^0000 CCC9 CEC5 A0CF CEC5 8D8A CCC9 CEC5 A0D4$')),
+        ('a command file', line(rb'^FROM A FILE$')),
+        ('ten MEMs', len(free) >= 10),
         ('the pool whole after every load', len(set(free)) == 1),
         ('two runs', count(rb'^SQ9') == 2),
         ('two breaks', count(rb'BREAK AT 50') == 2),
@@ -435,11 +537,15 @@ def make_platter(workdir, log):
     cmd = [sys.executable, MKDISC, image]
     if CONTROL == 'blank':
         pass
-    elif CONTROL == 'nohello':
-        cmd += ['--add', 'BASIC', BASIC_OBJ]
-    elif CONTROL in ('', 'nolock', 'nosave'):
-        for name, path in MODULES:
-            cmd += ['--add', name, path]
+    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard'):
+        files = []
+        for name, data in (('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT)):
+            files.append((name, os.path.join(workdir, name)))
+            with open(files[-1][1], 'wb') as f:
+                f.write(data)
+        for name, path in files[:1] + list(MODULES) + files[1:]:
+            if (CONTROL, name) != ('nohello', 'HELLO'):
+                cmd += ['--add', name, path]
     else:
         sys.exit('REX_CONTROL=%s: not a control this harness has' % CONTROL)
     subprocess.run(cmd, check=True, stdout=log)

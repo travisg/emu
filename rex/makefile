@@ -31,7 +31,21 @@ $(BUILD)/rex.bin: $(KERNEL) rexapi.asm $(ASM703) $(APICHECK)
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record
 # format, each a deck that begins with rexapi.asm.
-modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/dskt.obj $(BUILD)/fst.obj
+# The utilities, each a file in util/ behind rexlib.asm, and the test
+# modules beside them.
+UTILS := type copy del ren squish dump put
+UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
+
+modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
+         $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj
+
+$(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexlib.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm rexlib.asm $< --object $@ -l $(BUILD)/$*.lst
+
+$(BUILD)/nap.obj: rexapi.asm rexlib.asm nap.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm rexlib.asm nap.asm --object $@ -l $(BUILD)/nap.lst
 
 $(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -82,7 +96,8 @@ DISC := ../disks/ray703-disc0.img
 
 disc: modules
 	@mkdir -p ../disks
-	$(MKDISC703) $(DISC) --add HELLO $(BUILD)/hello.obj --add BASIC $(BUILD)/basic.obj
+	$(MKDISC703) $(DISC) --add HELLO $(BUILD)/hello.obj --add BASIC $(BUILD)/basic.obj \
+	    $(foreach u,$(UTILS),--add $(u) $(BUILD)/$(u).obj)
 
 # The scripted session, on a platter it makes for itself in a scratch
 # directory -- so it wants the kernel and the modules, not `disc`, which

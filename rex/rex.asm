@@ -18,17 +18,27 @@
 ; The letter tasks come up stopped; START sets them going.  The commands:
 ;
 ;   HELP or ?    the command list
-;   STAT         every task's state, and how long each sleeper has left
 ;   UPTIME, UP   seconds since the executive came up
+;   STAT         every task's job number, name and state, and how long
+;                each sleeper has left
 ;   STOP  [A-C]  suspend a letter task, or all three
 ;   START [A-C]  release one, or all three
+;   STOP n, START n   the same for a loaded task, by job number
+;   KILL n       end a loaded task
 ;   ECHO text    print the rest of the line
 ;   MEM          the words free in the pool
 ;   DIR          the disc's directory: name, type, sectors; then what is free
 ;   LOAD name    a module off the disc -- name.RX -- run behind the prompt
 ;   RUN  name    the same, given the console until it exits
-;   BASIC        RUN BASIC
+;   @name        the shell's lines from name.CM until it runs out; INIT.CM
+;                is read this way when the machine comes up
 ;   HALT         park the tasks, drain the printer and stop the machine
+;
+; and any other word is RUN of that name: TYPE, COPY, DEL and the rest are
+; programs on the disc, not commands here.  What follows a program's name
+; on the line is its command tail, which the loader leaves in a block of
+; the task's own for it to read (T.ARG).  A second Ctrl-C, with the first
+; still untaken by the program that has the console, ends that program.
 ;
 ; The Model 33 echoes what is typed in hardware, so the keyboard is armed
 ; for it at start-up (DOT 14,11) and nothing here echoes a character.
@@ -128,11 +138,16 @@
 ;   shell when it is clear, the task RUN loaded when it is set.  RUN
 ;   raises it in the same masked window that clears the break flag, then
 ;   waits on the cell itself -- reading no queue -- until the task's
-;   K.EXIT clears it and wakes the shell under SERV's guard.  Ctrl-C
-;   never enters the queue at all: SERV raises BRKREQ instead, so a
-;   running program that reads no input can still be broken, and the
-;   grant clears the flag so a break aimed at nobody cannot land on the
-;   session that follows it.
+;   K.EXIT clears it and wakes the shell under SERV's guard.  Q.GET
+;   holds everybody else to it: the console's queue answers the shell
+;   and a task whose node says it has the console, and tells any other
+;   caller no.  Ctrl-C never enters the queue at all: SERV raises BRKREQ
+;   instead, so a running program that reads no input can still be
+;   broken, and the grant clears the flag so a break aimed at nobody
+;   cannot land on the session that follows it.  A second Ctrl-C that
+;   finds the first still there raises KILLRQ and wakes the shell out of
+;   its wait, and the shell ends the task that has the console: the way
+;   out of a program that is not listening.
 ;
 ; * SHUTDOWN ORDERING.  Every letter task reads SHUTREQ inside the same
 ;   masked window as its deposit, and the shell -- the only writer of
@@ -170,9 +185,12 @@
 ;   T.NXT links, counted or bounded by coming back around.  So a node may
 ;   live anywhere in core, and adding a task is linking a node in under
 ;   MSK -- the doorway a loader would use.  What a task IS is data in its
-;   node: STOP, START, STAT and HALT act on whatever nodes the walk
-;   finds, and a letter task is any node with a letter in T.CHR.  SPAWN
-;   is that doorway, and the shell's loader goes through it.
+;   node: STOP, START and HALT act on whatever nodes the walk finds,
+;   and a letter task is any node with a letter in T.CHR.  SPAWN is that
+;   doorway, and the shell's loader goes through it.  STAT alone does not
+;   walk the ring -- it prints at the teletype's pace, and a task leaving
+;   the ring under it would send the walk astray -- but goes through the
+;   nodes where they lie.
 ;
 ; * A FRESH TASK'S STATUS is GLB plus its entry page.  A zero status word
 ;   would resume the task in local mode with EXR 0 and its first memory
@@ -214,11 +232,15 @@
 ; * A TASK ENDS THROUGH K.EXIT, and takes everything with it: its last
 ;   character waited out, the console handed back if it held it, the
 ;   node unlinked with CURT moved to its predecessor before anything is
-;   freed, every block in the pool tagged with the node given back, the
-;   node itself returned to its arena, and the processor handed on
-;   through the second half of SWTCH with nothing parked.  The loader
-;   tags a module's block with the node as it makes it, which is what
-;   makes the sweep complete.
+;   freed, its channels let go, every block in the pool tagged with the
+;   node given back, the node itself returned to its arena, and the
+;   processor handed on through the second half of SWTCH with nothing
+;   parked.  The loader tags a module's block and its command tail with
+;   the node as it makes them, which is what makes the sweep complete.
+;   REAP is everything after the console, and the shell's KILL ends
+;   another task through the same routine -- having claimed the disc, so
+;   the task is in no transfer, stopped it, and waited out a character
+;   of its that the printer was on.
 ;
 ; * A LOADED TASK'S NODE COMES FROM THE ARENA, not the pool: NARN nodes
 ;   at the top of core, on a free list.  A node stays where it is for as
@@ -325,6 +347,7 @@ K.PUTC          JMP     KPUTC           ; ACR = channel*256 + character -> zero,
 K.CLOSE         JMP     KCLOSE          ; ACR = a channel -> zero, or why not
 K.DELET         JMP     KDELET          ; ACR = a name -> zero, or why not
 K.RENAM         JMP     KRENAM          ; ACR = two names, old and new -> zero, or why not
+K.SQUSH         JMP     KSQUSH          ; -> zero, or why not: the holes closed up
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
@@ -370,6 +393,7 @@ SRUN           EQU     0
 SSLP           EQU     1
 SOFF           EQU     2               ; suspended by the shell's STOP
 SWAI           EQU     3               ; blocked on a queue
+SFREE          EQU     4               ; an arena node nobody is using
 
 ; A queue: a ring of words, a count, and the one task waiting on it.
 ; Words rather than characters because the next thing to go through one
@@ -451,6 +475,8 @@ STNAR           CAX
                 ADD     KNARID
                 SUB     K1
                 STW     *T.ID
+                LDW     KSFREE
+                STW     *T.STA
                 LDW     NACNT
                 SUB     K1
                 STW     NACNT
@@ -617,8 +643,23 @@ SRX1            STW     QITEM
                 LDW     KCONSQ          ; so an in-band break could never be
                 JSX     Q.PUT           ; seen.  Whoever consumes the flag
                 JMP     SEXIT           ; clears it.
-SRXBRK          LDW     K1
+SRXBRK          LDW     BRKREQ
+                SAZ                     ; one already there that nobody took?
+                JMP     SRXKIL
+                LDW     K1
                 STW     BRKREQ
+                JMP     SEXIT
+SRXKIL          LDW     K1              ; then this one is for the shell: the
+                STW     KILLRQ          ; program is not listening
+                LDX     KSHELL
+                LDW     *T.STA
+                CMW     KWAIT
+                SEQ                     ; only out of a wait, like any wake
+                JMP     SEXIT
+                CLR
+                STW     *T.STA
+                LDW     K1
+                STW     RESCHD
 
 ; Return -- as somebody else, if waking a task made one runnable that was
 ; not before.  This is the second half of the scheduling: the tick takes
@@ -929,6 +970,8 @@ LASTS           WORD    ATCB            ; last node served, for fairness
 KCAND           WORD    0               ; KICK's scan scratch
 KTRY            WORD    0
 SHUTREQ         WORD    0               ; set by the shell's HALT, read by tasks
+KILLRQ          WORD    0               ; a second Ctrl-C came with the first
+                                        ; still untaken: the shell's to act on
 RESCHD          WORD    0               ; a wake happened: reschedule at the
                                         ; next service routine exit that is
                                         ; standing on a task's frame
@@ -978,10 +1021,12 @@ KKPUTC          WORD    FBPUTC
 KKCLOS          WORD    FBCLOS
 KKDELE          WORD    FBDELE
 KKRENA          WORD    FBRENA
+KKSQSH          WORD    FBSQSH
 K7F             WORD    X'7F'
 K60             WORD    60
 KM1             WORD    X'FFFF'
 KWAIT           WORD    SWAI
+KSFREE          WORD    SFREE
 
 ; The console queue: what the teletype's service routine puts characters
 ; into and the shell takes them out of.  The service routine fills it at
@@ -1143,6 +1188,12 @@ KRENAM          MSK
                 LDW     KKRENA
                 JMP     KENTER
 
+KSQUSH          MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     KKSQSH
+                JMP     KENTER
+
 KDRB            SUBR
                 STW     DXARG
                 CLR
@@ -1256,13 +1307,33 @@ DXNRD           UNM
 ; the queue, and hand the processor on.  Q.PUT wakes it and forgets it.
 ; One waiter to a queue, so one reader to a queue -- a second task
 ; blocking here would displace the first, which would then never wake.
+; The console's queue is therefore read only by whoever has the console,
+; the shell or the task RUN gave it to, and any other caller gets minus
+; one back instead of a place in the queue.
 ; Tasks reading different queues may be in here together, so the link and
 ; the queue are kept in the caller's node across the wait, not in a slot
 ; of this routine's: masked from its first instruction, and the static
 ; cells good only until the processor is handed on.
 Q.GET           MSK
                 STX     QGLNK
-                LDX     CURT
+                STW     QGD
+                CMW     KCONSQ
+                SEQ                     ; the console's queue?
+                JMP     QGIN
+                LDW     CURT
+                CMW     KSHELL
+                SNE                     ; the shell reads it by right,
+                JMP     QGIN
+                CAX
+                LDW     *T.CON
+                SAZ                     ; and so does the task RUN gave it to;
+                JMP     QGIN
+                LDW     KM1             ; anybody else is told no, at once
+                LDX     QGLNK
+                UNM
+                JSX     *0
+QGIN            LDX     CURT
+                LDW     QGD
                 STW     *T.KAR
                 LDW     QGLNK
                 STW     *T.KLK
@@ -1668,18 +1739,13 @@ SPAWN           SUBR
                 UNM
                 EXIT    SPAWN
 
-; TEXIT: the running task is over, and takes everything with it.  In
-; this order: its last character is waited out, since OWNER must never
-; name a node that is gone; the console is handed back if it held it --
-; CONBSY down, and the shell woken out of its wait, only out of that;
-; the node is unlinked and counted off, and LASTS, where KICK's scan
-; starts, moved off it; CURT is pointed at the predecessor BEFORE
-; anything is freed, since PICK starts from CURT's link; then every block
-; in the pool tagged with the node is given back, and the processor goes
-; to whoever PICK finds, through the second
-; half of SWTCH with nothing parked.  Masked throughout: the one unmasked
-; instruction on the way out is SWTCH's INR 3, inside the range.  The
-; node goes back to its arena last of all.
+; TEXIT: the running task is over, and takes everything with it.  Its
+; last character is waited out, since OWNER must never name a node that
+; is gone; the console is handed back if it held it -- CONBSY down, and
+; the shell woken out of its wait, only out of that; REAP takes the rest;
+; and the processor goes to whoever PICK finds, through the second half
+; of SWTCH with nothing parked.  Masked throughout: the one unmasked
+; instruction on the way out is SWTCH's INR 3, inside the range.
 TEXIT           MSK
                 LDX     CURT
                 LDW     *T.MBX
@@ -1705,13 +1771,25 @@ TXCON           CLR
                 JMP     TXRING
                 CLR
                 STW     *T.STA
-TXRING          LDW     XDEAD           ; the predecessor: whose link names us
-TXPL            STW     XPRED
+TXRING          JSX     REAP
+                JMP     SWRES           ; on to whoever can run
+
+; The task XDEAD names is over, and everything it had goes: the node off
+; the ring and counted off, LASTS -- where KICK's scan starts -- and CURT
+; moved to its predecessor if they named it, CURT before anything is
+; freed since PICK starts from CURT's link; a queue that had it down as
+; its waiter told otherwise; its channels let go; every block in the
+; pool tagged with it given back; and the node returned to the arena,
+; marked free.  Masked throughout, for the running task (TEXIT) and for
+; one the shell is ending (KILLT) alike.
+REAP            SUBR
+                LDW     XDEAD           ; the predecessor: whose link names it
+RPPL            STW     XPRED
                 CAX
                 LDW     *T.NXT
                 CMW     XDEAD
                 SEQ
-                JMP     TXPL
+                JMP     RPPL
                 LDX     XDEAD           ; unlink
                 LDW     *T.NXT
                 LDX     XPRED
@@ -1721,40 +1799,68 @@ TXPL            STW     XPRED
                 STW     KNRING
                 LDW     LASTS
                 CMW     XDEAD
-                SNE
-                JMP     TXLS
-                JMP     TXCUR
-TXLS            LDW     XPRED
+                SEQ
+                JMP     RPCUR
+                LDW     XPRED
                 STW     LASTS
-TXCUR           LDW     XPRED
+RPCUR           LDW     CURT
+                CMW     XDEAD
+                SEQ
+                JMP     RPQ
+                LDW     XPRED
                 STW     CURT
-                LDW     XDEAD           ; its channels
+RPQ             LDW     QCONS+Q.WTR
+                CMW     XDEAD
+                SEQ
+                JMP     RPCH
+                LDW     KM1
+                STW     QCONS+Q.WTR
+RPCH            LDW     XDEAD           ; its channels
                 SMB     FCREL
                 JSX     FCREL
                 LDW     KPOOLB          ; the sweep, block by block
-TXSWP           STW     XB
+RPSWP           STW     XB
                 CMW     KPOOLE
                 SLS                     ; the end of the pool?
-                JMP     TXNOD
-TXSW1           CAX
+                JMP     RPNOD
+                CAX
                 LDW     *1
                 SAM                     ; allocated?
-                JMP     TXSNX
+                JMP     RPSNX
                 AND     K7FFF
                 CMW     XDEAD
-                SEQ                     ; ours?
-                JMP     TXSNX
+                SEQ                     ; its own?
+                JMP     RPSNX
                 LDW     XB
                 ADD     K2
                 JSX     FREEI
-TXSNX           LDX     XB
+RPSNX           LDX     XB
                 LDW     *0
                 ADD     XB
                 ADD     K2
-                JMP     TXSWP
-TXNOD           LDW     XDEAD           ; the node last, to the arena
+                JMP     RPSWP
+RPNOD           LDX     XDEAD           ; the node last, to the arena
+                LDW     KSFREE
+                STW     *T.STA
+                LDW     XDEAD
                 JSX     NFREE
-                JMP     SWRES           ; then on to whoever can run
+                EXIT    REAP
+
+; End the task ACR names, which is not the one running: the shell's KILL.
+; The caller holds the mask and the disc -- so the task is in no transfer
+; and no file call -- has stopped it, and has seen that the printer is
+; not on a character of its.
+KILLT           SUBR
+                STW     XDEAD
+                CAX
+                LDW     *T.CON
+                SAZ                     ; the console's?  it comes back
+                JMP     KLCON
+                JMP     KLREAP
+KLCON           CLR
+                STW     CONBSY
+KLREAP          JSX     REAP
+                EXIT    KILLT
 
 ; A node from the arena, or zero when every one is in use; and a node
 ; given back.  Callers hold the mask.  A node keeps its job number for
@@ -1803,12 +1909,31 @@ SHELL           LDW     SHMBAN
                 JSX     SHMSG
                 LDW     SHMHNT
                 JSX     SHMSG
+                LDW     SHKIN0          ; INIT.CM, if the disc has one, is
+                STW     SHFN            ; read before the keyboard is
+                LDW     SHKIN1
+                STW     SHFN+1
+                CLR
+                STW     SHFN+2
+                LDW     SHKCM
+                STW     SHFN+3
+                JSX     SHCMOP
 
-SHLOOP          LDW     SHMPRM
+SHLOOP          CLR                     ; a kill aimed at nobody is forgotten
+                SMB     KILLRQ
+                STW     KILLRQ
+                LDW     SHMPRM
                 JSX     SHMSG
                 JSX     SHGETL          ; a line, however long that takes
                 LDW     SHKLBB
                 STW     SHCUR
+                JSX     SHSKB
+                LDX     SHCUR
+                CLR
+                LDB     *0
+                CMW     SHKAT
+                SNE                     ; @NAME: commands from a file
+                JMP     SHAT
                 JSX     SHTOK           ; the command word: its second half,
                 LDW     STOK1           ; since a short word fills only that
                 SAZ                     ; an empty line is not an error
@@ -1844,14 +1969,65 @@ SHDNX           LDW     SHTP
                 ADD     SHK3
                 STW     SHTP
                 JMP     SHDL
-SHDNF           LDW     SHMWHT
+; Not a command: then it is a program -- the word as a name, type RX,
+; run as RUN would run it -- and WHAT only if the disc has no such file.
+SHDNF           LDW     SHKLBB
+                STW     SHCUR
+                LDW     SHK1
+                STW     LDCON
+                STW     SHIMPL
+                LDW     SHKRX
+                STW     SHDTY
+                JSX     SHNAME
+                JMP     SHLD1
+
+; @NAME: the shell's lines come from NAME.CM until it runs out.
+SHAT            LDW     SHCUR
+                ADD     SHK1
+                STW     SHCUR
+                LDW     SHKCM
+                STW     SHDTY
+                JSX     SHNAME
+                JSX     SHCMOP
+                SAP                     ; no such file, or no channel
+                JMP     SHATNO
+                JMP     SHLOOP
+SHATNO          LDW     SHMNOF
                 JSX     SHMSG
                 JMP     SHLOOP
+
+; Open the file SHFN names as the command file, in place of one that is
+; open already: the channel, or minus.
+SHCMOP          SUBR
+                JSX     SHCMCL
+                CLR
+                STW     SHFN+4          ; to read
+                LDW     SHKFN
+                SMB     K.OPEN
+                JSX     K.OPEN
+                SAP
+                JMP     SHCMOX
+                STW     SHCMCH
+SHCMOX          EXIT    SHCMOP
+
+; Close the command file, if one is open.
+SHCMCL          SUBR
+                LDW     SHCMCH
+                SAZ
+                JMP     SHCMC1
+                EXIT    SHCMCL
+SHCMC1          SMB     K.CLOSE
+                JSX     K.CLOSE
+                CLR
+                STW     SHCMCH
+                EXIT    SHCMCL
 
 ; ---------------------------------------------------------------- commands
 SHHELP          LDW     SHMHL1
                 JSX     SHMSG
                 LDW     SHMHL2
+                JSX     SHMSG
+                LDW     SHMHL3
                 JSX     SHMSG
                 JMP     SHLOOP
 
@@ -1872,23 +2048,63 @@ SHPUP           SUBR
                 JSX     SHMSG
                 EXIT    SHPUP
 
-; The tasks: name, state, and how much longer a sleeper has.  A walk of
-; the ring, then the idle node -- it is off the ring, so the walk ends by
-; visiting it explicitly instead of following a link back to the start.
+; The tasks: job number, name, state, and how much longer a sleeper has.
+; Not a walk of the ring, which a task leaving it part way through would
+; send astray: the four nodes that are always here, in the order they
+; lie in core, then every arena node that is in use, then idle.
 SHSTAT          JSX     SHPUP
                 LDW     SHKRNG
-                STW     SHTO            ; the node being printed
-                SMB     KNRING          ; the ring as it stands, and idle
-                LDW     KNRING
-                ADD     SHK1
+                STW     SHTO
+                LDW     SHK4
                 STW     SHTI
-SHSTL           LDX     SHTO
+SHST1           JSX     SHSTLN
+                LDW     SHTO
+                ADD     SHKTLN
+                STW     SHTO
+                LDW     SHTI
+                SUB     SHK1
+                STW     SHTI
+                SAZ
+                JMP     SHST1
+                LDW     SHKNAB
+                STW     SHTO
+                LDW     SHKNAN
+                STW     SHTI
+SHST2           LDX     SHTO
+                LDW     *T.STA
+                CMW     SHKFRE
+                SNE                     ; in use?
+                JMP     SHST3
+                JSX     SHSTLN
+SHST3           LDW     SHTO
+                ADD     SHKTLN
+                STW     SHTO
+                LDW     SHTI
+                SUB     SHK1
+                STW     SHTI
+                SAZ
+                JMP     SHST2
+                LDW     SHKIDL
+                STW     SHTO
+                JSX     SHSTLN
+                JMP     SHLOOP
+
+; One line of it, for the node in SHTO.  The state is read once: the task
+; may change it between the name and the number.
+SHSTLN          SUBR
+                LDX     SHTO
+                LDW     *T.ID
+                JSX     SHDEC
+                LDW     SHKSP
+                JSX     SHPUTC
+                LDX     SHTO
                 LDW     *T.NAM          ; its two-character name
                 JSX     SHPW2
                 LDW     SHKSP
                 JSX     SHPUTC
                 LDX     SHTO            ; its state, as four characters
                 LDW     *T.STA
+                STW     SHSS
                 SLL     1
                 ADD     SHKSTA
                 STW     SHSA
@@ -1898,8 +2114,7 @@ SHSTL           LDX     SHTO
                 LDX     SHSA
                 LDW     *1
                 JSX     SHPW2
-                LDX     SHTO
-                LDW     *T.STA
+                LDW     SHSS
                 CMW     SHKSLP          ; asleep? then say for how long
                 SEQ
                 JMP     SHSTN
@@ -1907,22 +2122,7 @@ SHSTL           LDX     SHTO
                 LDW     *T.DLY
                 JSX     SHDEC
 SHSTN           JSX     SHNL
-                LDW     SHTI
-                SUB     SHK1
-                STW     SHTI
-                SAZ                     ; more of them to print?
-                JMP     SHST2
-                JMP     SHLOOP
-SHST2           CMW     SHK1            ; only idle left?
-                SEQ
-                JMP     SHST3
-                LDW     SHKIDL          ; then visit it, off the ring
-                STW     SHTO
-                JMP     SHSTL
-SHST3           LDX     SHTO
-                LDW     *T.NXT
-                STW     SHTO
-                JMP     SHSTL
+                EXIT    SHSTLN
 
 ; STOP and START differ only in the state they store.  With no argument
 ; they take every letter task; with one they take the task whose letter
@@ -1939,7 +2139,35 @@ SHSTRT          CLR
 SHSSET          JSX     SHARG
                 LDW     SHARGF
                 SAZ                     ; no argument: all of them
+                JMP     SHSARG
+                JMP     SHSALL
+SHSARG          LDW     SHARGV
+                CMW     SHKZER
+                SLS                     ; a digit begins a job number
+                JMP     SHSJOB
                 JMP     SHSONE
+
+; ...by job number: a task the shell loaded.  Not one that has the
+; console, which would leave the shell waiting on a hand-back nobody
+; could make; and the state goes in with the disc claimed, so that it is
+; never a task part way through a transfer that is left standing.
+SHSJOB          CMW     SHK9P
+                SLS
+                JMP     SHSONE
+                JSX     SHJOB
+                SAZ
+                JMP     SHSJ1
+                JMP     SHLOOP
+SHSJ1           CAX
+                LDW     *T.CON
+                SAZ
+                JMP     SHSOBD
+                JSX     SHIOC
+                LDX     SHKN
+                LDW     SHNST
+                STW     *T.STA
+                JSX     SHIOR
+                JMP     SHLOOP
 SHSALL          LDW     SHKRNG          ; once round the ring
                 STW     SHTO
 SHSAL1          LDX     SHTO
@@ -1981,6 +2209,100 @@ SHSOBD          LDW     SHMNOT
                 JSX     SHMSG
                 JMP     SHLOOP
 
+; KILL n: the task with that job number is over, whatever it was doing.
+SHKILL          JSX     SHJOB
+                SAZ
+                JMP     SHKL1
+                JMP     SHLOOP
+SHKL1           JSX     SHKDO
+                JMP     SHLOOP
+
+; The job number at SHCUR as a task the shell loaded: its node, left in
+; SHKN as well -- or zero, NO SUCH TASK having been said.
+SHJOB           SUBR
+                JSX     SHSKB
+                CLR
+                STW     SHNV
+SHJBL           LDX     SHCUR
+                CLR
+                LDB     *0
+                SUB     SHKZER
+                STW     SHW2
+                SAP                     ; below '0'
+                JMP     SHJBD
+                CMW     SHK10
+                SLS                     ; above '9'
+                JMP     SHJBD
+                LDW     SHNV            ; times ten, and the digit
+                SLL     3
+                ADD     SHNV
+                ADD     SHNV
+                ADD     SHW2
+                STW     SHNV
+                LDW     SHCUR
+                ADD     SHK1
+                STW     SHCUR
+                JMP     SHJBL
+SHJBD           LDW     SHKNAB          ; the arena node with that number
+                STW     SHKN
+                LDW     SHKNAN
+                STW     SHTI
+SHJBF           LDX     SHKN
+                LDW     *T.ID
+                CMW     SHNV
+                SEQ
+                JMP     SHJBN
+                LDW     *T.STA
+                CMW     SHKFRE
+                SNE                     ; and in use
+                JMP     SHJBN
+                LDW     SHKN
+                EXIT    SHJOB
+SHJBN           LDW     SHKN
+                ADD     SHKTLN
+                STW     SHKN
+                LDW     SHTI
+                SUB     SHK1
+                STW     SHTI
+                SAZ
+                JMP     SHJBF
+                LDW     SHMNOT
+                JSX     SHMSG
+                CLR
+                EXIT    SHJOB
+
+; End the task in SHKN.  The disc first: with it claimed here the task
+; is inside no transfer and no file call.  Then, masked, it is stopped --
+; so it deposits nothing more -- and if the printer is on a character of
+; its, that is waited out a tick at a time, since OWNER must never name
+; a node that is gone.
+SHKDO           SUBR
+                JSX     SHIOC
+SHKDL           MSK
+                LDX     SHKN
+                LDW     SHKOFF
+                STW     *T.STA
+                SMB     OWNER
+                LDW     OWNER
+                CMW     SHKN
+                SNE
+                JMP     SHKDW
+                LDW     SHKN
+                SMB     KILLT
+                JSX     KILLT
+                UNM
+                JSX     SHIOR
+                EXIT    SHKDO
+SHKDW           LDW     SHK1
+                SMB     SH.DLY
+                STW     SH.DLY
+                LDW     SHKSLP
+                SMB     SH.STA
+                STW     SH.STA
+                SMB     SWTCH
+                JSX     SWTCH
+                JMP     SHKDL
+
 ; Print the rest of the line back.
 SHECHO          JSX     SHSKB
 SHECL           LDX     SHCUR
@@ -2007,13 +2329,49 @@ SHBWT           MSK
                 SAZ                     ; handed back yet?
                 JMP     SHBWB
                 JMP     SHBWD
-SHBWB           LDW     SHKWAI
+SHBWB           SMB     KILLRQ
+                LDW     KILLRQ
+                SAZ                     ; a second Ctrl-C nobody took?
+                JMP     SHBWK
+                LDW     SHKWAI
                 SMB     SH.STA
                 STW     SH.STA
                 SMB     SWTCH
                 JSX     SWTCH
                 JMP     SHBWT
 SHBWD           UNM
+                JMP     SHLOOP
+
+; Two Ctrl-Cs and the program took neither: it is not listening, and the
+; task that has the console is ended from here.
+SHBWK           CLR
+                SMB     KILLRQ
+                STW     KILLRQ
+                UNM
+                LDW     SHKNAB
+                STW     SHKN
+                LDW     SHKNAN
+                STW     SHTI
+SHBWF           LDX     SHKN
+                LDW     *T.STA
+                CMW     SHKFRE
+                SNE
+                JMP     SHBWN
+                LDW     *T.CON
+                SAZ
+                JMP     SHBWG
+SHBWN           LDW     SHKN
+                ADD     SHKTLN
+                STW     SHKN
+                LDW     SHTI
+                SUB     SHK1
+                STW     SHTI
+                SAZ
+                JMP     SHBWF
+                JMP     SHBWT           ; it went of its own accord
+SHBWG           JSX     SHKDO
+                LDW     SHMKIL
+                JSX     SHMSG
                 JMP     SHLOOP
 
 ; Shut the machine down.  The letter tasks park at their next masked
@@ -2028,23 +2386,14 @@ SHBWD           UNM
 ; after the grant: the task cannot run before it is on the ring, and
 ; nothing but a task that holds the console can lower CONBSY.
 SHRUN           LDW     SHK1
-                STW     LDCON
-                JSX     SHNAME          ; the name
-                JMP     SHLD1
+                JMP     SHLD0
 SHLOAD          CLR
-                STW     LDCON
-                JSX     SHNAME
-                JMP     SHLD1
-SHBASI          LDW     SHKBA0          ; BASIC: RUN BASIC, the name put
-                STW     SHFN            ; where SHNAME would have put it
-                LDW     SHKBA1
-                STW     SHFN+1
-                LDW     SHKBA2
-                STW     SHFN+2
+SHLD0           STW     LDCON
+                CLR
+                STW     SHIMPL
                 LDW     SHKRX
-                STW     SHFN+3
-                LDW     SHK1
-                STW     LDCON
+                STW     SHDTY
+                JSX     SHNAME          ; the name
 SHLD1           JSX     SHIOC           ; the disc, for the whole load
                 JSX     LDMOD
                 STW     SHW2
@@ -2064,6 +2413,8 @@ SHLDRN          MSK
                 CLR
                 SMB     BRKREQ
                 STW     BRKREQ
+                SMB     KILLRQ
+                STW     KILLRQ
                 LDW     SHK1
                 SMB     CONBSY
                 STW     CONBSY
@@ -2261,10 +2612,70 @@ LDDONE          LDX     LDNODE
                 CAX
                 LDW     LDTAG
                 STW     *0
-                LDW     LDNODE
+
+; The command tail: what is left of the line past the name, blanks
+; skipped, in a block of the task's own with a zero after it.  T.ARG
+; stays zero when there is nothing.
+                JSX     SHSKB
+                LDW     SHCUR
+                STW     LDTP
+LDTL            LDX     LDTP
+                CLR
+                LDB     *0
+                SAZ
+                JMP     LDTN
+                JMP     LDTE
+LDTN            LDW     LDTP
+                ADD     SHK1
+                STW     LDTP
+                JMP     LDTL
+LDTE            LDW     LDTP
+                SUB     SHCUR
+                SAZ                     ; anything?
+                JMP     LDTA
+                JMP     LDTX
+LDTA            ADD     SHK2            ; its bytes and the zero, in words
+                SRL     1
+                SMB     ALLOC
+                JSX     ALLOC
+                SAZ
+                JMP     LDTB
+                JMP     LDEMX
+LDTB            STW     LDARG
+                SUB     SHK1
+                CAX
+                LDW     LDTAG
+                STW     *0
+                LDW     LDARG
+                SLL     1
+                STW     LDTP
+LDTC            LDX     SHCUR
+                CLR
+                LDB     *0
+                STW     LDW1
+                LDX     LDTP
+                STB     *0
+                LDW     SHCUR
+                ADD     SHK1
+                STW     SHCUR
+                LDW     LDTP
+                ADD     SHK1
+                STW     LDTP
+                LDW     LDW1
+                SAZ                     ; the zero went across too
+                JMP     LDTC
+                LDX     LDNODE
+                LDW     LDARG
+                STW     *T.ARG
+LDTX            LDW     LDNODE
                 EXIT    LDMOD
 
-LDNOF           LDW     SHMNOF
+LDNOF           LDW     SHIMPL          ; a word that was neither a command
+                SAZ                     ; nor a program
+                JMP     LDNOFW
+                LDW     SHMNOF
+                JMP     LDERR
+LDNOFW          LDW     SHMWHT
                 JMP     LDERR
 LDEDE           LDW     SHMEDE
                 JMP     LDERR
@@ -2631,14 +3042,15 @@ SHTKD           EXIT    SHTOK
 
 ; The file name at SHCUR into SHFN, as the directory holds one: up to
 ; six characters, left-justified in three words and zero-filled, then
-; the type, two characters after a dot -- or RX, a module, when the name
-; has no dot.  Characters past the six, or the two, are stepped over.
+; the type, two characters after a dot -- or the type in SHDTY when the
+; name has no dot.  Characters past the six, or the two, are stepped
+; over.
 SHNAME          SUBR
                 CLR
                 STW     SHFN
                 STW     SHFN+1
                 STW     SHFN+2
-                LDW     SHKRX
+                LDW     SHDTY
                 STW     SHFN+3
                 JSX     SHSKB
                 LDW     SHKFNB
@@ -2820,10 +3232,56 @@ SHDL2           LDW     SHV
 SHGETL          SUBR
                 LDW     SHKLBB
                 STW     SHFIL
-SHGL            LDW     SHKCQ
+                CLR
+                STW     SHLFF
+SHGL            LDW     SHCMCH
+                SAZ                     ; a command file open?
+                JMP     SHGLF
+                LDW     SHKCQ
                 SMB     Q.GET
                 JSX     Q.GET
+                JMP     SHGLC
+
+; From the file: a character through its channel, given bit 7 in case
+; the file came from a host that leaves it off.  A carriage return ends
+; a line as it does from the keyboard; a line feed ends one that has
+; something in it and is otherwise passed over, so either ending, or
+; both, reads as one line.  The end of the file, or Ctrl-C, closes it
+; and the keyboard has the shell again -- after the last line, if that
+; had no ending of its own.
+SHGLF           SMB     BRKREQ
+                LDW     BRKREQ
+                SAZ
+                JMP     SHGLFX
+                LDW     SHCMCH
+                SMB     K.GETC
+                JSX     K.GETC
+                SAP
+                JMP     SHGLFX
+                ORI     SHK80
                 STW     SHCH
+                LDW     SHK1
+                STW     SHLFF
+                LDW     SHCH
+                CLB     X'8A'
+                SEQ
+                JMP     SHGLC
+                LDW     SHFIL
+                CMW     SHKLBB
+                SEQ
+                JMP     SHGLE
+                JMP     SHGL
+SHGLFX          JSX     SHCMCL
+                CLR
+                SMB     BRKREQ
+                STW     BRKREQ
+                LDW     SHFIL
+                CMW     SHKLBB
+                SEQ
+                JMP     SHGLE
+                JMP     SHGL
+
+SHGLC           STW     SHCH
                 CLB     X'8D'           ; carriage return ends the line
                 SNE
                 JMP     SHGLE
@@ -2864,6 +3322,16 @@ SHGLE           LDW     SHFIL           ; terminate it; SHKLBE leaves room
                 CAX
                 CLR
                 STB     *0
+                LDW     SHLFF
+                SAZ                     ; from a file: nothing has printed
+                JMP     SHGLP           ; it, so print it as the keyboard's
+                EXIT    SHGETL          ; echo would have
+SHGLP           LDW     SHKLBB
+                STW     SHSP
+                LDW     SHFIL
+                STW     SHSE
+                JSX     SHPRT
+                JSX     SHNL
                 EXIT    SHGETL
 
 ; ---------------------------------------------------------------- shell data
@@ -2884,7 +3352,17 @@ SHARGV          WORD    0
 STOK0           WORD    0               ; the command word, four characters
 STOK1           WORD    0
 STKN            WORD    0               ; how many of them are still wanted
-SHFN            WORD    0,0,0,0         ; a file's name and type, as SHNAME leaves them
+SHFN            WORD    0,0,0,0,0       ; a file's name and type, as SHNAME leaves
+                                        ; them, and the mode K.OPEN wants after
+SHDTY           WORD    0               ; the type a name without one is given
+SHIMPL          WORD    0               ; the name was the command word itself
+SHCMCH          WORD    0               ; the command file's channel; zero: none
+SHLFF           WORD    0               ; this line came from it
+SHKN            WORD    0               ; the node a job number named
+SHNV            WORD    0               ; the number
+SHSS            WORD    0               ; STAT's one reading of a state
+LDARG           WORD    0               ; the command tail's block
+LDTP            WORD    0               ; and a byte pointer over the tail
 SHNP            WORD    0               ; where SHNAME's next character goes...
 SHNN            WORD    0               ; ...and how many more it will take
 SHW2            WORD    0               ; scratch
@@ -2927,6 +3405,16 @@ SHK3            WORD    3
 SHK4            WORD    4
 SHK6            WORD    6
 SHK8            WORD    8
+SHK10           WORD    10
+SHK9P           WORD    '9'+1
+SHKAT           WORD    '@'
+SHKCM           WORD    'CM'
+SHKIN0          WORD    'IN'            ; INIT, as SHNAME leaves a name
+SHKIN1          WORD    'IT'
+SHKTLN          WORD    T.LEN
+SHKFRE          WORD    SFREE
+SHKNAB          WORD    NARB            ; the arena, and how many nodes
+SHKNAN          WORD    NARN
 SHK0C           WORD    12              ; the control codes, 0..B
 SHK0F           WORD    X'000F'
 SHK80           WORD    X'0080'
@@ -2967,12 +3455,10 @@ SHKDBB          WORD    LDBUF*2         ; ...its first byte, the marker...
 SHKDBL          WORD    LDBUF*2+93      ; ...and its last, the checksum
 SHKALW          WORD    ALLOCW          ; the allocator's page entries, for
 SHKALB          WORD    ALLOCB          ; an indexed JSX
-SHKBA0          WORD    'BA'            ; BASIC's name, as SHNAME leaves one
-SHKBA1          WORD    'SI'
-SHKBA2          WORD    X'C300'         ; 'C', and nothing
 
-; Four characters a state, indexed by the state doubled.
-SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT'
+; Four characters a state, indexed by the state doubled.  The last is a
+; node that went back to the arena while its line was being printed.
+SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT','GO','NE'
 
 LBUF            RES     32              ; the line the shell is reading
 LDBUF           RES     47              ; the loader's sector
@@ -2989,7 +3475,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'ST','OP',SHSTOP
                 WORD    'ST','AR',SHSTRT
                 WORD    'EC','HO',SHECHO
-                WORD    'BA','SI',SHBASI
+                WORD    'KI','LL',SHKILL
                 WORD    'M','EM',SHMEM
                 WORD    'D','IR',SHDIR
                 WORD    'LO','AD',SHLOAD
@@ -3016,6 +3502,8 @@ SHMUPM          WORD    SHUPM
 SHMSEC          WORD    SHSEC
 SHMDWN          WORD    SHDWN
 SHMNOT          WORD    SHNOT
+SHMKIL          WORD    SHKIL
+SHMHL3          WORD    SHHL3
 
 SHBAN           WORD    SHBANT*2,SHBANE*2
 SHHNT           WORD    SHHNTT*2,SHHNTE*2
@@ -3036,6 +3524,8 @@ SHUPM           WORD    SHUPMT*2,SHUPME*2
 SHSEC           WORD    SHSECT*2,SHSECE*2
 SHDWN           WORD    SHDWNT*2,SHDWNE*2
 SHNOT           WORD    SHNOTT*2,SHNOTE*2
+SHKIL           WORD    SHKILT*2,SHKILE*2
+SHHL3           WORD    SHHL3T*2,SHHL3E*2
 
 SHBANT          TEXT    "REX 703 UP\r\n"
 SHBANE          EQU     $
@@ -3045,10 +3535,12 @@ SHPRMT          TEXT    "REX>  "
 SHPRME          EQU     $
 SHWHTT          TEXT    "WHAT\r\n"
 SHWHTE          EQU     $
-SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START ECHO MEM DIR LOAD RUN BASIC HALT \r\n"
+SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START KILL ECHO MEM DIR LOAD RUN HALT\r\n"
 SHHL1E          EQU     $
-SHHL2T          TEXT    "STOP AND START TAKE A B OR C\r\n"
+SHHL2T          TEXT    "STOP AND START TAKE A B C OR A JOB NUMBER, KILL A JOB NUMBER\r\n"
 SHHL2E          EQU     $
+SHHL3T          TEXT    "@NAME RUNS A FILE OF COMMANDS. ANY OTHER WORD RUNS THAT PROGRAM \r\n"
+SHHL3E          EQU     $
 SHFRET          TEXT    "FREE"
 SHFREE          EQU     $
 SHNOFT          TEXT    "NO SUCH FILE\r\n"
@@ -3075,3 +3567,5 @@ SHDWNT          TEXT    "REX 703 DOWN\r\n"
 SHDWNE          EQU     $
 SHNOTT          TEXT    "NO SUCH TASK\r\n"
 SHNOTE          EQU     $
+SHKILT          TEXT    "KILLED\r\n"
+SHKILE          EQU     $

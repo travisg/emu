@@ -67,6 +67,9 @@ K.CLOSE         EQU     X'2C'           ; ACR = a channel -> zero, or E.
 K.DELET         EQU     X'2D'           ; ACR = a name -> zero, or E.
 K.RENAM         EQU     X'2E'           ; ACR = eight words, the old name and the
 ;                                       ; new -> zero, or E.
+K.SQUSH         EQU     X'2F'           ; -> zero, or E.: every file moved down
+;                                       ; over the hole in front of it.  E.CHN
+;                                       ; while any channel is open.
 
 ; ---------------------------------------------------------------- the cells
 ; Words X'20'-X'23', the block of level 8.
@@ -76,13 +79,12 @@ CONBSY          EQU     X'22'           ; the console belongs to a task, not the
 KCONSQ          EQU     X'23'           ; the console queue's descriptor address
 ;                                       ; K.QGET on it is for the console's
 ;                                       ; owner alone: the queue holds one
-;                                       ; waiter, so a second reader's
-;                                       ; registration lands on the first's.
-;                                       ; RUN grants the console and fills in
-;                                       ; T.CON; LOAD grants nothing, so a
-;                                       ; module that reads the console tests
-;                                       ; T.CON at entry and refuses when it
-;                                       ; is clear.
+;                                       ; waiter.  RUN grants the console and
+;                                       ; fills in T.CON; LOAD grants nothing,
+;                                       ; and a task without it gets X'FFFF'
+;                                       ; from K.QGET at once.  A module that
+;                                       ; reads the console tests T.CON at
+;                                       ; entry and says so when it is clear.
 
 ; ---------------------------------------------------------------- a task node
 T.STA           EQU     0               ; state
@@ -104,7 +106,10 @@ T.ID            EQU     12              ; the job number
 T.KLK           EQU     13              ; the kernel's, while the task is
 T.KAR           EQU     14              ; blocked in one of its calls
 T.KDS           EQU     15
-T.ARG           EQU     16              ; the command tail's block, or zero
+T.ARG           EQU     16              ; the command tail: the word address of
+                                        ; what followed the program's name on
+                                        ; its line, a zero byte after it -- or
+                                        ; zero, if nothing did
 T.SWP           EQU     17              ; nonzero: the task is swapped out
 T.LEN           EQU     18              ; words in a node
 

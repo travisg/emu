@@ -10,11 +10,13 @@ tests it.
     rex.asm            the executive: scheduler, drivers, queues, the shell
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexapi.asm         the kernel interface a module is assembled against
-    rexlib.asm         the printer's routines, for a module's deck
+    rexlib.asm         the printer and the command line, for a module's deck
     brex.asm           the wrapper that makes Tiny BASIC a module
     hello.asm          a module: prints where it landed, sleeps, exits
+    util/              the utilities: TYPE, PUT, COPY, REN, DEL, DUMP, SQUISH
     dskt.asm           a test module: writes a disc sector and reads it back, over and over
     fst.asm            a test module: makes, reads, replaces, renames and deletes files
+    nap.asm            a test module: never ends, for the shell to end
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
@@ -37,18 +39,44 @@ tenth of a second per character, and the scheduling slices are real machine
 time either way. The shell's commands:
 
     HELP or ?    the command list
-    STAT         every task's state, and how long each sleeper has left
+    STAT         every task's job number, name and state, and how long
+                 each sleeper has left
     UPTIME, UP   seconds since the executive came up
     STOP  [A-C]  suspend a letter task, or all three
     START [A-C]  release one, or all three
+    STOP n       the same for a task the shell loaded, by job number
+    START n
+    KILL n       end a loaded task, whatever it was doing
     ECHO text    print the rest of the line
     MEM          the words free in the pool
     DIR          the disc's directory: name, type, sectors; then what is free
     LOAD name    a module off the disc -- name.RX -- run behind the prompt
     RUN  name    the same, given the console until it exits -- the only
                  way to start a module that reads the console
-    BASIC        RUN BASIC
+    @name        take the shell's lines from name.CM until it runs out
     HALT         park the tasks, drain the printer and stop the machine
+
+Any other word is a program: `BASIC` is `RUN BASIC`, and whatever follows
+the name on the line is the program's to read. The utilities are programs
+on the disc, each a small module from `util/`:
+
+    TYPE name       a file on the printer
+    PUT name        the keyboard into a file, until Ctrl-Z
+    COPY from to    a file again, under another name
+    REN old new
+    DEL name
+    DUMP name       a file in hexadecimal
+    SQUISH          close up the holes between the files
+
+A file name is up to six characters and a type of two after a dot --
+`NOTE.TX`. A name given to `RUN`, `LOAD` or the shell without a type is a
+module, `.RX`; one given to `@` is a command file, `.CM`; one given to a
+utility is text, `.TX`. If the disc has an `INIT.CM`, the shell reads it
+when the machine comes up, before the keyboard.
+
+Ctrl-C is the running program's to act on, and Tiny BASIC does. A second
+Ctrl-C while the first is still untaken ends the program that has the
+console, which is the way out of one that is not listening.
 
 `START` sets the letter tasks going and they tick along behind whatever is
 typed -- a BASIC session included, letters interleaving with `PRINT`'s output
@@ -66,8 +94,8 @@ of linked nodes, and whatever the shell loads joins them: everything that
 names a task -- the current-task cell, the printer's owner, a queue's
 waiter -- holds a node's address, a field is the indexed displacement off
 it, every scan walks the `T.NXT` links, and what a task *is* is data in
-its node, so `STOP`, `START`, `STAT` and `HALT` act on whatever the walk
-finds and adding a task is linking a node in under `MSK`, which is what
+its node, so `STOP`, `START` and `HALT` act on whatever the walk finds
+and adding a task is linking a node in under `MSK`, which is what
 the loader does through `SPAWN`. Three nodes run the one shared letter
 body (`LTASK`, which reads its letter, nap and mailbox out of its own node
 via `CURT`): print, sleep, repeat -- stopped at power-on, so the machine
@@ -138,9 +166,15 @@ break check reads it through the `T.BRK` alias), so a running program
 that reads nothing can still be broken. A break belongs to a run: the
 interpreter spends the flag at its `READY` loop, once the line is in, so
 one typed while the prompt was up is not kept for whatever runs next.
-`STOP`/`START` cannot name the shell or
-a loaded task -- only nodes with a letter -- because stopping the console's
-owner would leave the shell waiting on a hand-back nobody can make. **The
+`STOP`/`START` take a letter task by its letter or a loaded task by its job
+number, never the shell and never the task that has the console -- stopping
+the console's owner would leave the shell waiting on a hand-back nobody can
+make. The kernel holds the one-reader rule itself as well: `Q.GET` on the
+console's queue answers the shell and the task whose node says it has the
+console, and tells anybody else no at once. **A task is ended by one routine
+however it ends** -- `REAP`, from its own `K.EXIT` or from the shell's `KILL`
+-- and the shell claims the disc before it ends another task, so the task is
+inside no transfer and no file call when it goes. **The
 pool is owned word by word**: every block carries the node that asked for
 it, and a task's exit gives back all of them, which is what makes a
 module's memory come and go with the module. The node itself is not in the
@@ -172,7 +206,14 @@ checks every answer; afterwards the harness reads the platter the host's
 way (`../tools/fs703.py`): the directory has to pass the check of its
 rules, hold exactly the files the exerciser leaves with the bytes it
 wrote, and still hold every module byte for byte, and the platter as it
-was made has to hold none of them. A second machine, without `--fast-io` so that a disc
+was made has to hold none of them. The same session drives the shell and
+the utilities: a program run by its bare name, a host's file typed, a file
+made with `PUT` and typed back, copied, renamed, deleted and dumped, a
+command file, `INIT.CM` at start-up, a file deleted from in front of every
+module and `SQUISH` moving the lot down -- after which the next program has
+to load from where it was moved to -- and a task that never ends stopped,
+started and killed by job number and then, in the foreground, by two
+Ctrl-Cs. A second machine, without `--fast-io` so that a disc
 transfer takes its half revolution, then runs three copies of `dskt.asm`
 at once: each writes and reads back a sector of its own 250 times, leaves
 its verdict on the platter where the harness reads it, and the kernel's
@@ -182,10 +223,11 @@ the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
-`=nohello`, `=nolock` and `=nosave` are its negative controls -- a platter
-with nothing on it, one without the hello module, a kernel with its wait
-for the disc patched out, and one that never writes the directory back --
-which must all FAIL. Two things that make it hard
+`=nohello`, `=nolock`, `=nosave` and `=noguard` are its negative controls
+-- a platter with nothing on it, one without the hello module, a kernel
+with its wait for the disc patched out, one that never writes the
+directory back, and one that lets any task read the console -- which must
+all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
@@ -253,8 +295,12 @@ need -- gives it a task node and links it into the ring; `RUN` does the
 same and hands it the console until it exits. A task ends through
 `K.EXIT`, which gives back every block in the pool tagged with its node,
 the module included, and then the node; `MEM` prints the free words,
-and it reads the same before and after. `RUN HELLO` prints the address the
-loader put it at. Tiny BASIC is the real module: `brex.asm` over
+and it reads the same before and after. What followed the module's name on
+the command line is copied into a block of the task's own, a zero after it,
+and the node's `T.ARG` holds its address. `RUN HELLO` prints the address the
+loader put it at. `rexlib.asm` is a file a module's deck may put behind
+`rexapi.asm`: the printer's routines, the command tail read as file names,
+and a file call's error said in words. Tiny BASIC is the real module: `brex.asm` over
 `../test/703/bcore.asm` is `basic.obj`, and `RUN BASIC` (or `BASIC`) loads
 it, whereupon it takes its workspace -- line buffer, variables, stacks, the
 array and a heap, 2,192 words -- as one block from the pool, adds the

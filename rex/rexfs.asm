@@ -993,6 +993,150 @@ FBREX           LDW     FKEEXS
 FBRPR           LDW     FKEPRT
                 EXIT    FBRENA
 
+; K.SQUSH: every file that has a hole in front of it moves down over the
+; hole, a sector at a time through the first channel's buffer, until the
+; free sectors are one hole at the end.  A system file stays where it is,
+; and so does a hole in front of one.  No channel may be open: a channel
+; knows its file by sector.  The directory goes back to the disc after
+; each file has moved, so what the disc says is true between moves; a
+; machine stopped part way through one loses that file if the hole was
+; smaller than it.
+FBSQSH          SUBR
+                JSX     FDLOAD
+                SAZ
+                JMP     FBSX
+                LDW     FKCHA
+                STW     FCWP
+                LDW     FK4
+                STW     FCWC
+FBSC            LDX     FCWP
+                LDW     *0
+                CAX
+                LDW     *C.OWN
+                SAZ
+                JMP     FBSBSY
+                LDW     FCWP
+                ADD     FK1
+                STW     FCWP
+                LDW     FCWC
+                SUB     FK1
+                STW     FCWC
+                SAZ
+                JMP     FBSC
+                JSX     FDNORM
+                LDW     FKENT
+FBSL            STW     FSH             ; a hole, perhaps
+                CMW     FKEND
+                SLS
+                JMP     FBSDN
+                CAX
+                LDW     *DE.FLG
+                AND     FK0FF
+                SAZ
+                JMP     FBS1
+                JMP     FBSDN
+FBS1            CMW     FKHOLE
+                SEQ
+                JMP     FBSNX
+                LDW     *DE.SEC
+                STW     FSD
+                STW     FSHS
+                LDW     *DE.CNT
+                STW     FSHN
+                LDW     FSH             ; and what follows it
+                ADD     FK8
+                STW     FSF
+                CMW     FKEND
+                SLS
+                JMP     FBSDN
+                CAX
+                LDW     *DE.FLG
+                AND     FK0FF
+                CMW     FKFILE
+                SEQ
+                JMP     FBSNX
+                LDW     *DE.FLG
+                AND     FKSYS
+                SAZ
+                JMP     FBSNX
+                LDW     *DE.SEC
+                STW     FSS
+                LDW     *DE.CNT
+                STW     FSN
+                STW     FSFN
+FBSM            LDW     FSN             ; the sectors, lowest first, so the
+                SAZ                     ; move may overlap itself
+                JMP     FBSM1
+                JMP     FBSMD
+FBSM1           LDW     FKSBUF
+                SMB     DXBUF
+                STW     DXBUF
+                LDW     FSS
+                SMB     DRD1
+                JSX     DRD1
+                SAZ
+                JMP     FBSERR
+                LDW     FSD
+                SMB     DWR1
+                JSX     DWR1
+                SAZ
+                JMP     FBSERR
+                LDW     FSS
+                ADD     FK1
+                STW     FSS
+                LDW     FSD
+                ADD     FK1
+                STW     FSD
+                LDW     FSN
+                SUB     FK1
+                STW     FSN
+                JMP     FBSM
+FBSMD           LDW     FK8             ; the two entries change places: the
+                STW     FSN             ; file's goes into the hole's slot...
+FBSE            LDX     FSF
+                LDW     *0
+                LDX     FSH
+                STW     *0
+                LDW     FSF
+                ADD     FK1
+                STW     FSF
+                LDW     FSH
+                ADD     FK1
+                STW     FSH
+                LDW     FSN
+                SUB     FK1
+                STW     FSN
+                SAZ
+                JMP     FBSE
+                LDW     FSH             ; (both cursors are a slot on: FSH is
+                SUB     FK8             ; the hole's new slot, the file's is
+                CAX                     ; the one before it)
+                LDW     FSHS
+                STW     *DE.SEC         ; ...at the hole's sector...
+                LDW     FSH
+                JSX     FDHOLE          ; ...and the hole follows it
+                LDX     FSH
+                LDW     FSHS
+                ADD     FSFN
+                STW     *DE.SEC
+                LDW     FSHN
+                STW     *DE.CNT
+                JSX     FDMERG
+                JSX     FDSAVE
+                SAZ
+                JMP     FBSX
+                LDW     FSH             ; on from the hole, which may have
+                JMP     FBSL            ; another file behind it
+FBSNX           LDW     FSH
+                ADD     FK8
+                JMP     FBSL
+FBSDN           CLR
+FBSX            EXIT    FBSQSH
+FBSBSY          LDW     FKECHN
+                EXIT    FBSQSH
+FBSERR          LDW     FKEDSC
+                EXIT    FBSQSH
+
 ; ---------------------------------------------------------------- data
 FDVLD           WORD    0               ; the directory is in core
 FNPTR           WORD    0               ; the name a search is for
@@ -1028,6 +1172,14 @@ FCN             WORD    0               ; its sector count,
 FCE             WORD    0               ; its entry
 FCR             WORD    0               ; and what is left of the hole
 FRP             WORD    0               ; FBRENA's argument
+FSH             WORD    0               ; FBSQSH's hole, and the file after it
+FSF             WORD    0
+FSHS            WORD    0               ; the hole's sector and size
+FSHN            WORD    0
+FSS             WORD    0               ; the move: from, to, and how many
+FSD             WORD    0
+FSN             WORD    0
+FSFN            WORD    0               ; the file's sectors
 
 FK1             WORD    1
 FK2             WORD    2
@@ -1052,6 +1204,7 @@ FKDBUF          WORD    FDBUF
 FKENT           WORD    FDENT
 FKEND           WORD    FDEND
 FKCBUF          WORD    C.BUF
+FKSBUF          WORD    FCH1+C.BUF      ; FBSQSH's sector: the first channel's
 FKCHA           WORD    FCHTAB
 FKENOF          WORD    E.NOF
 FKECHN          WORD    E.CHN
