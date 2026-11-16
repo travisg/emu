@@ -275,10 +275,10 @@ pub fn save_machine(system: &str, cpu: &dyn Cpu, bus: &dyn Bus) -> Result<Vec<u8
 
 /// Load a whole machine saved by `save_machine` into `cpu` and `bus`,
 /// which must be the machine it was saved from. On an error the machine
-/// may be part loaded, its disks excepted -- a machine loads its disk
-/// devices last, and each of those reads its whole section before it
-/// changes anything -- and the caller puts back what it had with
-/// `roll_back`.
+/// may be part loaded, its disks excepted -- a disk device holds the
+/// disks it read aside, and `Bus::commit_loaded_disks` puts them in the
+/// drives only once the last byte has been read -- and the caller puts
+/// back what it had with `roll_back`.
 pub fn load_machine(data: &[u8], system: &str, cpu: &mut dyn Cpu, bus: &mut dyn Bus) -> Result<(), String> {
     load_with(Reader::new(data), system, cpu, bus)
 }
@@ -300,7 +300,9 @@ fn load_with(mut r: Reader, system: &str, cpu: &mut dyn Cpu, bus: &mut dyn Bus) 
     read_header(&mut r, system)?;
     r.section(b"CPU ", |r| cpu.load_state(r))?;
     r.section(b"BUS ", |r| bus.load_state(r))?;
-    r.finish()
+    r.finish()?;
+    bus.commit_loaded_disks();
+    Ok(())
 }
 
 /// The header: magic, version, system.

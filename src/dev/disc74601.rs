@@ -195,6 +195,8 @@ pub struct Disc74601 {
     word_cycles: u32,
     /// The panel window's rack lamps, when there is a panel to draw them.
     rack: Option<DiscRackState>,
+    /// The platters a snapshot load read, until `commit_loaded` mounts them.
+    loaded: Option<Vec<Option<DiscUnit>>>,
 }
 
 /// Each platter whole, as the Kaypro's floppies: a load puts it back in
@@ -205,6 +207,7 @@ impl crate::snapshot::Snapshot for Disc74601 {
         let Disc74601 {
             level: _wiring, connected, units, mem_addr, track, sector, active, fast_io: _session,
             access_cycles: _session_pacing, word_cycles: _session_pacing_too, rack: _mirror,
+            loaded: _mid_load,
         } = self;
         w.bool(*connected);
         for unit in units {
@@ -233,8 +236,8 @@ impl crate::snapshot::Snapshot for Disc74601 {
 
     fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
         self.connected = r.bool()?;
-        // every platter read before any goes on, so a section that fails
-        // part way leaves the units as they were
+        // the platters wait for `commit_loaded`: the snapshot can still be
+        // refused after this section, and the units must be as they were
         let mut platters = Vec::with_capacity(DISC_UNITS);
         for unit in 0..DISC_UNITS {
             platters.push(r.opt(|r| {
@@ -258,14 +261,7 @@ impl crate::snapshot::Snapshot for Disc74601 {
             };
             Ok(Active { unit, op, words: r.u16()?, remaining: r.u32()? })
         })?;
-        if !r.keeps_disks() {
-            for (unit, platter) in platters.into_iter().enumerate() {
-                if let Some(rack) = &self.rack {
-                    rack.set_online(unit, platter.is_some());
-                }
-                self.units[unit] = platter;
-            }
-        }
+        self.loaded = (!r.keeps_disks()).then_some(platters);
         Ok(())
     }
 }
@@ -284,6 +280,17 @@ impl Disc74601 {
             access_cycles: AVG_ACCESS_CYCLES,
             word_cycles: CYCLES_PER_WORD,
             rack: None,
+            loaded: None,
+        }
+    }
+
+    /// Mount the platters the last load read, if it was not a rollback's.
+    pub fn commit_loaded(&mut self) {
+        for (unit, platter) in self.loaded.take().into_iter().flatten().enumerate() {
+            if let Some(rack) = &self.rack {
+                rack.set_online(unit, platter.is_some());
+            }
+            self.units[unit] = platter;
         }
     }
 
@@ -698,6 +705,7 @@ mod tests {
         d.save(&mut w);
         let saved = w.into_bytes();
         d.load(&mut Reader::new(&saved)).unwrap();
+        d.commit_loaded();
         fill(&mut m, 0x100, 10);
         command(&mut d, FN_WRITE, 0x100, 0, 0, 0, 10);
         finish(&mut d, &mut m);

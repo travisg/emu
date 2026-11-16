@@ -246,6 +246,10 @@ impl Bus for Ray703 {
         r.section(b"DISC", |r| self.disc.load(r))
     }
 
+    fn commit_loaded_disks(&mut self) {
+        self.disc.commit_loaded();
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         Some(self.core.peek(addr & 0xffff))
     }
@@ -536,5 +540,30 @@ mod tests {
         for i in 0..10u16 {
             assert_eq!(sys.read16(0x600 + i as u32 * 2, Endian::Big), 0x5000 + i, "word {i}");
         }
+    }
+    /// A snapshot refused only once all of it has been read -- a byte too
+    /// many at its end -- has still changed no drive: the platter is the
+    /// file it was, and a write after the rollback reaches it.
+    #[test]
+    fn a_snapshot_refused_at_its_end_leaves_the_platter_its_file() {
+        use crate::snapshot::{load_machine, roll_back, save_machine};
+        let rom = scratch_file("refused-rom", &[0x01, 0x00]);
+        let platter = scratch_file("refused-disc", &vec![0u8; crate::dev::disc74601::IMAGE_BYTES]);
+        let mut sys = machine("", &rom).unwrap();
+        assert!(sys.mount_disc(0, &platter));
+        let mut cpu = crate::cpu::ray703::Cpu703::new();
+        let before = save_machine("ray703", &cpu, &sys).unwrap();
+        let mut long = before.clone();
+        long.push(0);
+        assert!(load_machine(&long, "ray703", &mut cpu, &mut sys).is_err());
+        roll_back(&before, "ray703", &mut cpu, &mut sys).unwrap();
+
+        sys.write16(0x200, 0x5a5a, Endian::Big);
+        sys.io_write16(0x11, 0x0100);
+        sys.io_write16(0x12, 0);
+        sys.io_write16(0x14, 1);
+        assert_eq!(sys.poll_interrupt_lines(u32::MAX), 1 << 1);
+        assert_eq!(std::fs::read(&platter).unwrap()[..2], [0x5a, 0x5a], "the write reached the file");
+        std::fs::remove_file(&platter).ok();
     }
 }

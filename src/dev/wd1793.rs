@@ -131,6 +131,8 @@ pub struct Wd1793 {
     images: [Option<DiskImage>; DRIVES],
     /// The bay window's lamps and labels, when there is a window.
     bay: Option<DriveBayState>,
+    /// The disks a snapshot load read, until `commit_loaded` puts them in.
+    loaded: Option<Vec<Option<DiskImage>>>,
 }
 
 impl Default for Wd1793 {
@@ -163,6 +165,7 @@ impl Wd1793 {
             pacing_hz: crate::system::kaypro::CLOCK_HZ,
             images: [None, None],
             bay: None,
+            loaded: None,
         }
     }
 
@@ -474,7 +477,7 @@ impl Wd1793 {
         let Wd1793 {
             status, track, sector, data, command, intrq, drq, index_pulse, index_counter, selected, motor,
             sector_index, buffer_count, sector_bytes, writing, write_drive, drq_in, intrq_in, pacing_hz: _session,
-            images, bay: _mirror,
+            images, bay: _mirror, loaded: _mid_load,
         } = self;
         for v in [status, track, sector, data, command] {
             w.u8(*v);
@@ -522,8 +525,8 @@ impl Wd1793 {
         self.write_drive = r.opt(|r| Ok(r.u8()? as usize))?;
         self.drq_in = r.u32()?;
         self.intrq_in = r.u32()?;
-        // every disk read before any goes in, so a section that fails
-        // part way leaves the drives as they were
+        // the disks wait for `commit_loaded`: the snapshot can still be
+        // refused after this section, and the drives must be as they were
         let mut disks = Vec::with_capacity(DRIVES);
         for _ in 0..DRIVES {
             disks.push(r.opt(|r| {
@@ -532,16 +535,19 @@ impl Wd1793 {
                 Ok(DiskImage::in_memory(path, r.bytes()?.to_vec(), write_protected))
             })?);
         }
-        if r.keeps_disks() {
-            return Ok(());
-        }
-        for (drive, image) in disks.into_iter().enumerate() {
+        self.loaded = (!r.keeps_disks()).then_some(disks);
+        Ok(())
+    }
+
+    /// Put in the drives the disks the last load read, if it was not a
+    /// rollback's.
+    pub fn commit_loaded(&mut self) {
+        for (drive, image) in self.loaded.take().into_iter().flatten().enumerate() {
             if let Some(bay) = &self.bay {
                 bay.set_mounted(drive, image.as_ref().map(|i| i.path.clone()));
             }
             self.images[drive] = image;
         }
-        Ok(())
     }
 
     fn selected_image(&self) -> Option<&DiskImage> {
@@ -824,6 +830,7 @@ mod tests {
         let written = std::fs::read(&p).unwrap();
 
         fdc.load_state(&mut Reader::new(&saved)).unwrap();
+        fdc.commit_loaded();
         fdc.write(1, 1);
         fdc.write(2, 1);
         fdc.write(0, 0x88);
@@ -849,7 +856,11 @@ mod tests {
         fdc.save_state(&mut w).unwrap();
         let saved = w.into_bytes();
         assert!(fdc.load_state(&mut Reader::new(&saved[..saved.len() - 100])).is_err());
+        // ...and one that reads to its end, refused later for something
+        // after it and so never committed
+        fdc.load_state(&mut Reader::new(&saved)).unwrap();
         fdc.load_state(&mut Reader::for_rollback(&saved)).unwrap();
+        fdc.commit_loaded();
         write_sector(&mut fdc, 1, 1, 0x99);
         let at = (SECTORS_PER_TRACK + 1) as usize * SECTOR_SIZE;
         assert_eq!(std::fs::read(&p).unwrap()[at], 0x99, "the write reached the file");

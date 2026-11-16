@@ -234,6 +234,12 @@ pub trait Bus {
         Err("this machine cannot save its state".into())
     }
 
+    /// Put in the drives the disks the last `load_state` read. A disk
+    /// device holds them aside until the whole snapshot has been read, so
+    /// a load refused anywhere, its last byte included, has changed no
+    /// drive.
+    fn commit_loaded_disks(&mut self) {}
+
     /// Back from a snapshot `save_state` wrote.
     fn load_state(&mut self, _r: &mut crate::snapshot::Reader) -> Result<(), String> {
         Err("this machine cannot load a state".into())

@@ -166,6 +166,10 @@ impl Bus for WatchBus<'_> {
     fn load_state(&mut self, r: &mut Reader) -> Result<(), String> {
         self.inner.load_state(r)
     }
+
+    fn commit_loaded_disks(&mut self) {
+        self.inner.commit_loaded_disks()
+    }
 }
 
 #[cfg(test)]
@@ -257,6 +261,9 @@ mod tests {
             self.marks.push("load_state");
             Ok(())
         }
+        fn commit_loaded_disks(&mut self) {
+            self.marks.push("commit_loaded_disks");
+        }
     }
 
     #[test]
@@ -286,6 +293,7 @@ mod tests {
         w.save_state(&mut saved).unwrap();
         assert_eq!(saved.into_bytes(), [0x5a]);
         w.load_state(&mut Reader::new(&[])).unwrap();
+        w.commit_loaded_disks();
         assert_eq!(w.hit, None);
         assert_eq!(
             inner.marks,
@@ -293,6 +301,7 @@ mod tests {
                 "read8", "write8", "poke8", "io_read8", "io_write8", "io_read16", "io_write16", "read16", "write16",
                 "read32", "write32", "poll_interrupts", "interrupt_acknowledge", "interrupt_return",
                 "poll_interrupt_lines", "set_device_pacing_hz", "change_disk", "load_state",
+                "commit_loaded_disks",
             ]
         );
     }

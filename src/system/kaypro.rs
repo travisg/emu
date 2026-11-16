@@ -374,6 +374,10 @@ impl Bus for Kaypro {
         r.section(b"FDC ", |r| self.fdc.load_state(r))
     }
 
+    fn commit_loaded_disks(&mut self) {
+        self.fdc.commit_loaded();
+    }
+
     fn peek8(&self, addr: u32) -> Option<u8> {
         let addr = (addr & 0xffff) as u16;
         Some(if self.bank1() && addr < ROM_SIZE as u16 {
