@@ -43,7 +43,8 @@ UTILS := type copy del ren squish dump put
 UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
 
 modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
-         $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj
+         $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj \
+         $(BUILD)/blip.obj
 
 $(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexlib.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -52,6 +53,10 @@ $(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexlib.asm $(ASM703)
 $(BUILD)/nap.obj: rexapi.asm rexlib.asm nap.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM703) rexapi.asm rexlib.asm nap.asm --object $@ -l $(BUILD)/nap.lst
+
+$(BUILD)/blip.obj: rexapi.asm rexlib.asm blip.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm rexlib.asm blip.asm --object $@ -l $(BUILD)/blip.lst
 
 $(BUILD)/hog.obj: rexapi.asm rexlib.asm hog.asm $(ASM703)
 	@mkdir -p $(BUILD)

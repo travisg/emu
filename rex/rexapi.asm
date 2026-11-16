@@ -106,25 +106,23 @@ T.PCR           EQU     4
 T.MST           EQU     5
 T.DLY           EQU     6               ; ticks left, while sleeping
 T.MBX           EQU     7               ; the printer mailbox: one character, zero = empty
-T.CHR           EQU     8               ; a letter task's letter, else zero
-T.NAP           EQU     9               ; a letter task's sleep, in ticks
-T.NAM           EQU     10              ; two characters, for STAT
-T.CON           EQU     11              ; nonzero: this task holds the console --
+T.NAM           EQU     8               ; two characters, for STAT
+T.CON           EQU     9               ; nonzero: this task holds the console --
                                         ; RUN set it, LOAD did not, and it is
                                         ; what says whether reading KCONSQ is
                                         ; this task's to do
-T.ID            EQU     12              ; the job number
-T.KLK           EQU     13              ; the kernel's, while the task is
-T.KAR           EQU     14              ; blocked in one of its calls
-T.KDS           EQU     15
-T.ARG           EQU     16              ; the command tail: the word address of
+T.ID            EQU     10              ; the job number
+T.KLK           EQU     11              ; the kernel's, while the task is
+T.KAR           EQU     12              ; blocked in one of its calls
+T.KDS           EQU     13
+T.ARG           EQU     14              ; the command tail: the word address of
                                         ; what followed the program's name on
                                         ; its line, a zero byte after it -- or
                                         ; zero, if nothing did
-T.SWP           EQU     17              ; nonzero: the task is swapped out
-T.MW            EQU     18              ; the kernel's, while the task waits for core
-T.RES           EQU     19              ; the second its blocks last arrived in core
-T.LEN           EQU     20              ; words in a node
+T.SWP           EQU     15              ; nonzero: the task is swapped out
+T.MW            EQU     16              ; the kernel's, while the task waits for core
+T.RES           EQU     17              ; the second its blocks last arrived in core
+T.LEN           EQU     18              ; words in a node
 
 SRUN            EQU     0
 SSLP            EQU     1

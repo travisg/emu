@@ -6,14 +6,16 @@
 # Use of this source code is governed by a MIT-style
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
-"""End-to-end test for REX, the 703 executive: boot it, start the three
-letter tasks from its shell and watch them run -- the scheduler, the line
-clock, the context switch, the sleeps and the mailbox teletype driver all
-at once -- load the hello module off a scratch platter both ways (RUN,
-which waits for it, and LOAD, which leaves it running behind the prompt)
-and see the pool's free words come back, run two Tiny BASIC sessions with
-a silent loop broken by Ctrl-C, then drive the rest of the commands and
-shut the machine down with HALT.
+"""End-to-end test for REX, the 703 executive: boot it, load three
+copies of blip.asm behind the prompt, each printing a mark of its own and
+sleeping an interval of its own, and watch them run -- the scheduler, the
+line clock, the context switch, the sleeps and the mailbox teletype
+driver all at once -- load the
+hello module off a scratch platter both ways (RUN, which waits for it, and
+LOAD, which leaves it running behind the prompt) and see the pool's free
+words come back, run two Tiny BASIC sessions with a silent loop broken by
+Ctrl-C, then drive the rest of the commands and shut the machine down
+with HALT, a task still loaded, which HALT has to leave stopped.
 
 The emulator is driven over its debug port (tools/emudbg.py), started
 halted so no output is missed: keys go in as `key` commands, the paper is
@@ -30,8 +32,9 @@ Every wait raises on its timeout and the handler at the bottom turns that
 into a FAIL with the transcript in the log. The walk over the output keeps
 a cursor: the same prompt comes round again, and a wait without one is
 satisfied by the first. The printer is shared character by character, so
-nothing here matches a line a letter task could be printing into -- the
-letter tasks are stopped before anything is matched exactly.
+nothing here matches a line while a task behind the prompt could be
+printing into it: the three blips are killed before anything is matched
+exactly.
 
 The filesystem is held to the host's reading of it (tools/fs703.py): the
 session runs the file calls' exerciser (fst.asm) twice, makes, copies,
@@ -82,6 +85,7 @@ REX_CONTROL names a negative control, each of which must FAIL:
   noswapin a task's blocks cut out of the free list where they were, but
            never read back into them
   nosys    a boot sector that was never told where the kernel is
+  nopark   HALT's stopping of the loaded tasks patched out
 """
 
 import contextlib
@@ -110,14 +114,29 @@ DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
 FST_OBJ = os.path.join(BUILD, 'fst.obj')
 MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
     (name, os.path.join(BUILD, name.lower() + '.obj'))
-    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG'))
+    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG', 'BLIP'))
 # Every module but BASIC goes on the platter marked as loadable above
 # word X'4000', where the kernel then puts it.
 LOW_ONLY = ('BASIC',)
 
 # The pool and the node arena, as rex.asm lays them out.
 POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
-NARB, NARN, T_LEN, T_STA, T_NAM, SFREE = 0x7e00, 24, 20, 0, 10, 4
+NARB, NARN, T_LEN, T_STA, T_NAM, SOFF, SFREE = 0x7e00, 24, 18, 0, 8, 2, 4
+
+
+def node_of(emu, name):
+    """The node of the one loaded task whose two-character name this is,
+    as its address and its words. For a machine that is halted."""
+    # the port gives 128 words to a request
+    arena = []
+    for start in range(NARB, NARB + NARN * T_LEN, 6 * T_LEN):
+        arena += emu.memw(start, 6 * T_LEN)
+    packed = ((ord(name[0]) | 0x80) << 8) | (ord(name[1]) | 0x80)
+    nodes = [(NARB + i * T_LEN, arena[i * T_LEN:(i + 1) * T_LEN]) for i in range(NARN)
+             if arena[i * T_LEN + T_STA] != SFREE and arena[i * T_LEN + T_NAM] == packed]
+    if len(nodes) != 1:
+        raise AssertionError('%d tasks named %s' % (len(nodes), name))
+    return nodes[0]
 
 
 def blocks_of(emu, name):
@@ -126,19 +145,11 @@ def blocks_of(emu, name):
     is halted for the look and set running again."""
     emu.halt()
     try:
-        # the port gives 128 words to a request
-        arena = []
-        for start in range(NARB, NARB + NARN * T_LEN, 6 * T_LEN):
-            arena += emu.memw(start, 6 * T_LEN)
-        packed = ((ord(name[0]) | 0x80) << 8) | (ord(name[1]) | 0x80)
-        nodes = [NARB + i * T_LEN for i in range(NARN)
-                 if arena[i * T_LEN + T_STA] != SFREE and arena[i * T_LEN + T_NAM] == packed]
-        if len(nodes) != 1:
-            raise AssertionError('%d tasks named %s' % (len(nodes), name))
+        node, _ = node_of(emu, name)
         mine, at = [], POOLB
         while at < POOLE:
             size, tag = emu.memw(at, 2)     # a block's header: its size, its owner
-            if tag == 0x8000 | nodes[0]:
+            if tag == 0x8000 | node:
                 mine.append((at + 2, at + 2 + size))
             at += size + 2
         if at != POOLE:
@@ -155,6 +166,9 @@ MSG = b'FIRST LINE\nSECOND LINE\n'
 CMDS = b'ECHO FROM A FILE\r\nMEM\r\nHELLO\r\n'
 INIT = b'ECHO INIT RAN\r\n'
 SQ = b'10 PRINT "FROM A HOST FILE"\n20 FOR I=1 TO 3\n30 PRINT I*I\n40 NEXT I\n'
+# The marks the three blips are given to print: characters that nothing
+# the shell prints or echoes while they run has in it.
+MARKS = b'+=*'
 
 # The swap session's: how big the swap file is, hog.asm's constants, and
 # the three programs the background BASICs run -- each counts, to be
@@ -179,10 +193,7 @@ MKDISC = os.path.join(ROOT, 'tools', 'mkdisc703.py')
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, 'rex_test.log')
 CONTROL = os.environ.get('REX_CONTROL', '')
 
-# The prompt, allowing for a letter task's letter landing anywhere inside
-# it: a task started at the prompt can put its letter between any two of
-# the shell's characters.
-PROMPT = re.compile(rb'R[ABC]*E[ABC]*X[ABC]*>')
+PROMPT = re.compile(rb'REX>')
 READY = re.compile(rb'READY')
 
 
@@ -210,8 +221,8 @@ class Session:
 
     def say(self, line, quiet=True):
         """Type a command at the next prompt -- once the printer has gone
-        quiet, unless the letter tasks are printing and it never will.
-        Returns where the paper stood when the keys went in."""
+        quiet, unless the caller says something is printing and it never
+        will. Returns where the paper stood when the keys went in."""
         self.wait(PROMPT)
         if quiet:
             self.emu.wait_quiet()
@@ -229,14 +240,13 @@ class Session:
         return bytes(self.emu.output[mark:end])
 
 
-def letters_ran(text):
-    """Every letter task has run several times and the printer has changed
-    hands repeatedly. Thresholds rather than exact counts: the tasks sleep
-    for 30, 45 and 60 ticks and drift through every phase against each
-    other."""
-    only = re.sub(rb'[^ABC]', b'', text)
+def marks_ran(text):
+    """Every blip has run several times and the printer has changed hands
+    repeatedly. Thresholds rather than exact counts: they sleep for 30,
+    45 and 60 ticks and drift through every phase against each other."""
+    only = re.sub(rb'[^' + re.escape(MARKS) + rb']', b'', text)
     runs = len(re.sub(rb'(.)\1+', rb'\1', only))
-    return all(only.count(c) >= 5 for c in (b'A', b'B', b'C')) and runs >= 9
+    return all(only.count(bytes([mark])) >= 5 for mark in MARKS) and runs >= 9
 
 
 def session(emu):
@@ -260,25 +270,33 @@ def session(emu):
     # if typed, and what the command printed.
     s.wait(re.compile(rb'^INIT RAN\r', re.M))
 
-    # Nothing is running yet, so this one is quiet and exact.
+    # Nothing is running yet, so these are quiet and exact.
     s.say('STAT')
+    s.say('MEM')
 
-    # Set the three going and let them run. What follows the echo of START
-    # until STOP is typed is prompts and letters, and neither the prompt
-    # nor anything else the shell prints there contains an A, a B or a C.
-    mark = s.say('START')
-    after = emu.wait_for_output(b'START', start=mark).end()
+    # Three blips behind the prompt, typed ahead in one go, and let them
+    # run. They are the first three tasks loaded, which is what their job
+    # numbers are and what their intervals come from. What is counted is
+    # what follows the keyboard's echo of the last line, where the marks
+    # are theirs alone.
+    s.wait(PROMPT)
+    emu.wait_quiet()
+    mark = len(emu.output)
+    lines = ['LOAD BLIP %c' % c for c in MARKS]
+    emu.key(''.join(line + '\r' for line in lines))
+    after = emu.wait_for_output(lines[-1].encode(), start=mark).end()
     deadline = time.monotonic() + 30
-    while not letters_ran(s.since(after)):
+    while not marks_ran(s.since(after)):
         if time.monotonic() > deadline:
-            raise AssertionError('the letter tasks did not all run: %r' % s.since(after))
+            raise AssertionError('the blips did not all run: %r' % s.since(after))
         time.sleep(0.05)
 
-    # Then stop them: with the printer quiet every command's output can be
+    # Then end them: with the printer quiet every command's output can be
     # matched exactly, and waiting for quiet becomes usable for pacing.
-    s.say('STOP', quiet=False)
-
-    s.say('STAT')
+    emu.key(''.join('KILL %d\r' % job for job in range(FIRST_JOB, FIRST_JOB + len(MARKS))))
+    stat_until_gone(emu, s, b'BL')
+    s.at = len(emu.output)
+    emu.key('STAT\r')
     s.say('HELP')
     s.say('ECHO SHELL OUTPUT OK')
     s.say('FROB')
@@ -504,29 +522,33 @@ def session(emu):
     emu.wait_quiet()
     s.say('MEM')
 
-    # One task back on its feet, and only that one: A and C stay stopped,
-    # so between the echo of START B and the STOP that ends the window
-    # neither of their letters may appear.
-    mark = s.say('START B')
-    after = emu.wait_for_output(b'START B', start=mark).end()
-    emu.wait_for_output(re.compile(rb'B[^B]*B[^B]*B'), start=after)
-    stop = s.say('STOP', quiet=False)
-    alone = s.since(after, stop)
-    if alone.count(b'B') < 3 or re.search(rb'[AC]', alone):
-        raise AssertionError('START B: wanted B alone, got %r' % alone)
-
+    # HALT with a task loaded: it has to be left stopped, which is what
+    # keeps anything of its out of the down-message.
+    if CONTROL == 'nopark':
+        # SHHD0 is LDX / LDW / CMW / SNE / JMP / LDW SHKOFF / STW *T.STA
+        symbols = Symbols()
+        symbols.load(REX_LST)
+        emu.halt()
+        emu.writew(symbols.value('SHHD0') + 6, [NOP])
+        emu.run()
+    mark = s.say('LOAD NAP')
+    emu.wait_for_output(b'THE CONSOLE WAS REFUSED', start=mark)
+    emu.wait_quiet()
     s.say('HALT')
     s.wait(b'REX 703 DOWN')
     stopped = emu.wait_stopped()
     if stopped.reason != 'hlt':
         raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
+    _, node = node_of(emu, 'NA')
+    if node[T_STA] != SOFF:
+        raise AssertionError('HALT left NAP in state %d' % node[T_STA])
 
 
 # dskt.asm's constants, and the platter's geometry.
 DSKT_SECTOR = 4000
 DSKT_ROUNDS = 250
 DSKT_COPIES = 3
-FIRST_JOB = 5                   # NARID: the first node the loader hands out
+FIRST_JOB = 1                   # NARID: the first node the loader hands out
 SECTOR_WORDS = 47
 NOP = 0x0900                    # SRA 0
 CLR = 0x0100
@@ -767,9 +789,10 @@ def boot_session(emu):
         raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
 
 
-def verdict(paper):
+def verdict(paper, programs):
     """What the shell had to have printed, on lines of its own: the
-    terminal's echo of a command begins with the prompt instead."""
+    terminal's echo of a command begins with the prompt instead. The
+    programs are the platter's, by name, in the directory's order."""
     text = paper.replace(b'\r', b'')
 
     def line(pattern):
@@ -784,10 +807,13 @@ def verdict(paper):
     hellos = [int(n) for n in re.findall(rb'^HELLO FROM WORD (\d+)$', text, re.M)]
     checks = [
         ('uptime', line(rb'UPTIME \d+ SEC')),
-        ('A stopped', line(rb'^1 A  OFF')),
-        ('shell running', line(rb'^4 SH RUN')),
+        ('shell running', line(rb'^0 SH RUN')),
         ('idle listed', line(rb'^0 ID RUN')),
-        ('help', line(rb'^COMMANDS HELP STAT UPTIME')),
+        ('help: what is built in', line(rb'^BUILT IN: HELP STAT UPTIME')),
+        # every one of them, eight to a line
+        ('help: what is on the disc', bool(programs) and line(b'^' + b'\n'.join(
+            b''.join(b' ' + name.encode() for name in programs[i:i + 8])
+            for i in range(0, len(programs), 8)) + b'$')),
         ('echo', line(rb'^SHELL OUTPUT OK')),
         ('unknown command', line(rb'^WHAT')),
         ('directory: hello', line(rb'^HELLO\.RX \d+$')),
@@ -826,7 +852,7 @@ def make_platter(workdir, log, swap=False, boot=False):
         cmd += ['--swap', str(SWAP_SECTORS)]
     if CONTROL == 'blank':
         pass
-    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys'):
+    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -875,7 +901,8 @@ def main():
                 emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE,
                                  '--fast-io', '--no-throttle'], log=log)
             session(emu)
-            failed = verdict(bytes(emu.output))
+            programs = [e.name for e in fs703.Platter(bytearray(pristine)).files() if e.type == 'RX']
+            failed = verdict(bytes(emu.output), programs)
             if failed:
                 raise AssertionError('not on the paper: ' + ', '.join(failed))
             finish(emu)

@@ -3,31 +3,28 @@
 ; REX -- Raytheon EXec: a round-robin executive for the 703, preemptive
 ; and cooperative at once.
 ;
-; Five tasks share the processor at power-on, their control blocks a ring
+; Two tasks share the processor at power-on, their control blocks a ring
 ; of linked nodes the scheduler walks, and whatever the shell loads joins
-; them.  Three print a letter through an interrupt-driven teletype driver
-; and then sleep for a fixed number of ticks, so the scheduling is
-; visible in the output: the letters arrive at their own intervals, and
-; when every task is asleep the idle task -- a fifth node, off the ring
-; -- has the processor.  One is the swapper (rexswap.asm), asleep until
-; more is loaded than core holds.  One is a shell, which waits on a queue of
-; keystrokes and runs a command, and can load a module off the disc as a
-; task of its own: Tiny BASIC, the interpreter of test/703/bcore.asm
-; behind the glue of brex.asm, is one, and RUN BASIC hands it the console
-; until its BYE -- or LOAD BASIC PROG runs a saved program behind the
-; prompt.
+; them; when every task is asleep or waiting the idle task -- a node off
+; the ring -- has the processor.  One is a shell, which waits on a queue
+; of keystrokes and runs a command, and can load a module off the disc
+; as a task of its own, printing through an interrupt-driven teletype
+; driver they all share: Tiny BASIC, the interpreter of
+; test/703/bcore.asm behind the glue of brex.asm, is one, and RUN BASIC
+; hands it the console until its BYE -- or LOAD BASIC PROG runs a saved
+; program behind the prompt.  The other is the swapper (rexswap.asm),
+; asleep until more is loaded than core holds.
 ;
-; The letter tasks come up stopped; START sets them going.  The commands:
+; The commands the shell has in it:
 ;
-;   HELP or ?    the command list
+;   HELP or ?    these, and then the programs the disc has
 ;   UPTIME, UP   seconds since the executive came up
 ;   STAT         every task's job number, name and state, how long each
 ;                sleeper has left, and OUT for one that is on the disc;
 ;                and, with a swap file, how many have gone out and come in
-;   STOP  [A-C]  suspend a letter task, or all three
-;   START [A-C]  release one, or all three
-;   STOP n, START n   the same for a loaded task, by job number
-;   KILL n       end a loaded task
+;   STOP n       suspend a loaded task, by job number
+;   START n      release one
+;   KILL n       end one
 ;   ECHO text    print the rest of the line
 ;   MEM          the words free in the pool
 ;   DIR          the disc's directory: name, type, sectors; then what is free
@@ -35,7 +32,8 @@
 ;   RUN  name    the same, given the console until it exits
 ;   @name        the shell's lines from name.CM until it runs out; INIT.CM
 ;                is read this way when the machine comes up
-;   HALT         park the tasks, drain the printer and stop the machine
+;   HALT         stop the loaded tasks, drain the printer and stop the
+;                machine
 ;
 ; and any other word is RUN of that name: TYPE, COPY, DEL and the rest are
 ; programs on the disc, not commands here.  What follows a program's name
@@ -152,13 +150,13 @@
 ;   its wait, and the shell ends the task that has the console: the way
 ;   out of a program that is not listening.
 ;
-; * SHUTDOWN ORDERING.  Every letter task reads SHUTREQ inside the same
-;   masked window as its deposit, and the shell -- the only writer of
-;   SHUTREQ -- cannot run inside that window, so a task that saw zero has
-;   its character banked before the shutdown exists and a task that saw
-;   the flag parks without depositing.  Once the shell's drain finds the
-;   letter tasks' mailboxes empty and the printer idle, nothing of theirs
-;   can chase the down-message.
+; * SHUTDOWN ORDERING.  HALT claims the disc, so no task is part way
+;   through a transfer, and then stops every loaded task under the mask.
+;   A task deposits a character only in a masked window of its own, so
+;   one that is stopped has either banked its character or will not
+;   deposit it.  Once the shell's drain finds the loaded tasks' mailboxes
+;   empty and the printer idle, nothing of theirs can chase the
+;   down-message.
 ;
 ; * SLEEP IS A STATE, A DELAY AND A SWITCH.  A task stores its delay and
 ;   marks itself SLEEPING in one masked window and calls SWTCH, which
@@ -187,19 +185,17 @@
 ;   is the indexed displacement off it, and every scan is a walk of the
 ;   T.NXT links, counted or bounded by coming back around.  So a node may
 ;   live anywhere in core, and adding a task is linking a node in under
-;   MSK -- the doorway a loader would use.  What a task IS is data in its
-;   node: STOP, START and HALT act on whatever nodes the walk finds,
-;   and a letter task is any node with a letter in T.CHR.  SPAWN is that
-;   doorway, and the shell's loader goes through it.  STAT alone does not
-;   walk the ring -- it prints at the teletype's pace, and a task leaving
-;   the ring under it would send the walk astray -- but goes through the
-;   nodes where they lie.
+;   MSK.  SPAWN is that doorway, and the shell's loader goes through
+;   it.  The shell does not walk the ring to find a task: STAT prints at
+;   the teletype's pace, and a task leaving the ring under it would send
+;   the walk astray, so it and the commands that take a job number go
+;   through the nodes where they lie.
 ;
 ; * A FRESH TASK'S STATUS is GLB plus its entry page.  A zero status word
 ;   would resume the task in local mode with EXR 0 and its first memory
 ;   reference would land in page 0.  For an entry on a 1024-word byte
-;   page boundary the EXR field is exactly (entry * 2); LTASK and IDLE
-;   are in page 0, where the field is plain zero.
+;   page boundary the EXR field is exactly (entry * 2); IDLE is in
+;   page 0, where the field is plain zero.
 ;
 ; * A ROUTINE ANY TASK MAY CALL HOLDS THE MASK FROM ITS FIRST INSTRUCTION.
 ;   A subroutine here has one link slot and keeps its work in static
@@ -299,9 +295,8 @@
 ;              KICK, PICK, SWTCH, Q.PUT and DSERV; then the kernel cells,
 ;              the console queue, the nodes of the tasks that are here
 ;              from power-on, the disc -- IOTRY, KENTER, DXFER -- Q.GET,
-;              the idle task, LTASK -- the one letter-task body all three
-;              letter nodes run -- the allocator, and the node arena's
-;              two doors
+;              the idle task, the allocator, and the node arena's two
+;              doors
 ;   0800-      page 1: the shell -- banner, prompt, commands, line
 ;              buffer -- and its loader, with the sector it reads
 ;   1000-6FFF  the pool, which the allocator hands out: what the shell
@@ -313,7 +308,7 @@
 ;              itself
 ;   7800-7BFF  the swapper (rexswap.asm, the third): its task, its table
 ;              of extents in the swap file, and two sectors of block lists
-;   7E00-7FDF  the node arena
+;   7E00-7FAF  the node arena
 ;
 ; Build with make -C rex: asm703.py over this file and rexfs.asm, as one
 ; deck, into rex/build, and the modules beside it -- brex.asm over test/703/bcore.asm is basic.obj, the
@@ -418,26 +413,25 @@ T.MST           EQU     5               ; machine status: EXR, indicators, mode
 T.DLY           EQU     6               ; ticks left, while sleeping
 T.MBX           EQU     7               ; the task's printer mailbox, one
                                         ; character; zero means empty
-T.CHR           EQU     8               ; a letter task's letter, and what
-                                        ; marks it as one: zero for the
-                                        ; tasks STOP/START may not touch
-T.NAP           EQU     9               ; a letter task's sleep, in ticks
-T.NAM           EQU     10              ; two characters, for STAT
-T.CON           EQU     11              ; nonzero: this task holds the console
-T.ID            EQU     12              ; the job number, fixed for the node
-T.KLK           EQU     13              ; a kernel call this task is blocked
-T.KAR           EQU     14              ; in: its way back, its argument and
-T.KDS           EQU     15              ; its body -- see KENTER
-T.ARG           EQU     16              ; the command tail's block, or zero
-T.SWP           EQU     17              ; where the task's blocks are: zero,
+T.NAM           EQU     8               ; two characters, for STAT
+T.CON           EQU     9               ; nonzero: this task holds the console
+T.ID            EQU     10              ; the job number, fixed for the node;
+                                        ; zero for the tasks that are here
+                                        ; from power-on, which no command
+                                        ; can name
+T.KLK           EQU     11              ; a kernel call this task is blocked
+T.KAR           EQU     12              ; in: its way back, its argument and
+T.KDS           EQU     13              ; its body -- see KENTER
+T.ARG           EQU     14              ; the command tail's block, or zero
+T.SWP           EQU     15              ; where the task's blocks are: zero,
                                         ; in core; minus one, on their way
                                         ; out or in; else on the disc, one
                                         ; more than the swap extent's sector
-T.MW            EQU     18              ; waiting for core: 1 asking, 2 told
+T.MW            EQU     16              ; waiting for core: 1 asking, 2 told
                                         ; there is nobody to put out, 3 told
                                         ; to try again
-T.RES           EQU     19              ; the second its blocks last arrived
-T.LEN           EQU     20              ; words in a node
+T.RES           EQU     17              ; the second its blocks last arrived
+T.LEN           EQU     18              ; words in a node
 
 SRUN           EQU     0
 SSLP           EQU     1
@@ -456,10 +450,10 @@ Q.BUF           EQU     4               ; word address of the ring
 Q.WTR           EQU     5               ; the block waiting, or -1
 QW              EQU     6               ; words per descriptor
 
-NRING           EQU     5               ; nodes on the ring at power-on: A,
-                                        ; B, C, the shell and the swapper.
-                                        ; Idle is off it, the scans'
-                                        ; explicit fallback.
+NRING           EQU     2               ; nodes on the ring at power-on: the
+                                        ; shell and the swapper.  Idle is
+                                        ; off it, the scans' explicit
+                                        ; fallback.
 
 POOLB           EQU     X'1000'         ; the pool: core the allocator hands
 POOLE           EQU     X'7000'         ; out, from the shell to the filesystem
@@ -497,7 +491,7 @@ SWAPST          EQU     X'F080'         ; the swapper's first status: global,
                                         ; and the page it starts in, X'7800'
 NARB            EQU     X'7E00'         ; the node arena: NARN nodes for what
 NARN            EQU     24              ; the shell loads, at the top of core
-NARID           EQU     5               ; the first one's job number
+NARID           EQU     1               ; the first one's job number
 
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
@@ -785,7 +779,7 @@ SEXPL           LDW     S0SAVA
                 INR     0
 
 ; Start the printer on the next occupied mailbox, round robin from the one
-; served last, or leave it idle if all three are empty.  OWNER is claimed
+; served last, or leave it idle if every one is empty.  OWNER is claimed
 ; before the DOT because the completion can arrive on the very next
 ; instruction (the disc exerciser's flag-before-DOT rule).
 KICK            SUBR
@@ -1042,10 +1036,9 @@ S2SAVA          WORD    0               ; level 2's register saves
 S2SAVX          WORD    0
 OWNER           WORD    X'FFFF'         ; node whose character is printing;
                                         ; minus one means the printer is idle
-LASTS           WORD    ATCB            ; last node served, for fairness
+LASTS           WORD    SHTCB           ; last node served, for fairness
 KCAND           WORD    0               ; KICK's scan scratch
 KTRY            WORD    0
-SHUTREQ         WORD    0               ; set by the shell's HALT, read by tasks
 KILLRQ          WORD    0               ; a second Ctrl-C came with the first
                                         ; still untaken: the shell's to act on
 RESCHD          WORD    0               ; a wake happened: reschedule at the
@@ -1116,7 +1109,7 @@ QCONSN          EQU     128
 QCONSB          RES     QCONSN
 KSLP            WORD    SSLP
 KNRING          WORD    NRING
-KRING           WORD    ATCB            ; where a walk of the ring starts
+KRING           WORD    SHTCB           ; where a walk of the ring starts
 KSWAP           WORD    SWTCB           ; the swapper's node
 KIDLE           WORD    IDTCB           ; and where a scan with nothing
                                         ; runnable falls back to
@@ -1125,28 +1118,22 @@ KGLB            WORD    X'0080'         ; doubled are a status word's EXR field
 KISRB           WORD    ISRBEG
 KISRE           WORD    ISREND
 
-; The task control nodes: A -> B -> C -> SH and round again, with idle
-; off the ring and its link re-entering it, which is what lets every walk
-; start uniformly at *T.NXT.  The shell's context is blank because the
-; kernel becomes the shell and the first tick fills it in.  A status is
-; GLB (X'80') plus the entry page in the EXR field, and LTASK and IDLE
-; live in page 0, so theirs is plain zero; the swapper's is its own
-; page's; SPAWN builds one for whatever the loader brings in.  A zero status word would resume a task in local
-; mode pointed at page 0.
+; The task control nodes that are here from power-on: SH -> SW and round
+; again, with idle off the ring and its link re-entering it, which is
+; what lets every walk start uniformly at *T.NXT.  The shell's context
+; is blank because the kernel becomes the shell and the first tick fills
+; it in.  A status is GLB (X'80') plus the entry page in the EXR field:
+; IDLE lives in page 0, so its is plain zero; the swapper's is its own
+; page's; SPAWN builds one for whatever the loader brings in.  A zero
+; status word would resume a task in local mode pointed at page 0.
 ;
-;                    STA    NXT   ACR IXR PCR    MST   DLY MBX CHR NAP NAM  CON
+;                    STA    NXT   ACR IXR PCR    MST   DLY MBX NAM  CON
 ;                    ID KLK KAR KDS ARG SWP MW RES
-ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80', 0,  0,  'A',30, 'A ',0
-                WORD 1, 0,  0,  0,  0,  0,  0, 0
-BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80', 0,  0,  'B',45, 'B ',0
-                WORD 2, 0,  0,  0,  0,  0,  0, 0
-CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80', 0,  0,  'C',60, 'C ',0
-                WORD 3, 0,  0,  0,  0,  0,  0, 0
-SHTCB           WORD SRUN, SWTCB,0,  0,  0,     0,     0,  0,  0,  0,  'SH',0
-                WORD 4, 0,  0,  0,  0,  0,  0, 0
-SWTCB           WORD SRUN, ATCB, 0,  0,  SWAPR, SWAPST,0,  0,  0,  0,  'SW',0
+SHTCB           WORD SRUN, SWTCB,0,  0,  0,     0,     0,  0,  'SH',0
                 WORD 0, 0,  0,  0,  0,  0,  0, 0
-IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80', 0,  0,  0,  0,  'ID',0
+SWTCB           WORD SRUN, SHTCB,0,  0,  SWAPR, SWAPST,0,  0,  'SW',0
+                WORD 0, 0,  0,  0,  0,  0,  0, 0
+IDTCB           WORD SRUN, SHTCB,0,  0,  IDLE,  X'80', 0,  0,  'ID',0
                 WORD 0, 0,  0,  0,  0,  0,  0, 0
 
 ; The disc has one user at a time, and IOLOCK says who.  Everything that
@@ -1455,52 +1442,6 @@ QGT             LDW     *Q.BUF
                 JSX     *0
 
 IDLE            JMP     IDLE
-
-; ---------------------------------------------------------------- the letters
-; The one letter task, run by three nodes at once: print my letter and
-; sleep my nap, forever.  Which task this is comes from CURT -- the only
-; identity that survives a switch -- and every read of it sits inside a
-; masked window, where CURT can only name self.  A node is born stopped,
-; and runs when the shell's START says so.  The first masked window is
-; the shutdown protocol: SHUTREQ read and the character deposited with
-; SERV locked out, so a deposit can never follow an observed shutdown.
-; Everything this task touches is in page 0, so unlike its callers in
-; other pages it needs no SMB anywhere.
-LTASK           MSK
-                LDW     SHUTREQ
-                SAZ
-                JMP     LQUIT
-                LDX     CURT            ; my node
-                LDW     *T.CHR          ; my letter...
-                STW     *T.MBX          ; ...deposited in my mailbox
-                JSX     KICK
-                UNM
-LWAIT           MSK
-                LDX     CURT
-                LDW     *T.MBX
-                SAZ                     ; printed yet?
-                JMP     LWBLK
-                JMP     LWDON
-LWBLK           LDW     KWAIT           ; no: stand down until SERV says so,
-                STW     *T.STA          ; and look again when it does -- a
-                JSX     SWTCH           ; wake is advice, not a promise
-                JMP     LWAIT
-LWDON           UNM
-
-; Sleep my nap: store the delay and the state in one masked window, so
-; the tick cannot read half of it, and hand the processor straight on.
-; SWTCH returns when the scheduler next picks this task, which the scan
-; will not do until the tick counts the delay down to nothing.
-                MSK
-                LDX     CURT
-                LDW     *T.NAP
-                STW     *T.DLY
-                LDW     KSLP
-                STW     *T.STA
-                JSX     SWTCH           ; and the processor goes elsewhere
-                JMP     LTASK           ; now, not at the next tick
-LQUIT           UNM
-LPARK           JMP     LPARK           ; parked; a legal idle, levels live
 
 ; ---------------------------------------------------------------- the pool
 ; First fit over a list of free blocks sorted by address, with the block
@@ -2021,8 +1962,6 @@ SPAWN           SUBR
                 STW     *T.IXR
                 STW     *T.DLY
                 STW     *T.MBX
-                STW     *T.CHR
-                STW     *T.NAP
                 LDW     *T.PCR
                 AND     KPGMSK
                 SLL     1
@@ -2205,15 +2144,12 @@ XB              WORD    0               ; sweep's cursor
 
 ; ---------------------------------------------------------------- the shell
 ; Prints the banner and then reads a line and runs it, forever.  It is
-; the only task running when the machine comes up.  Everything it prints goes
-; through its own mailbox one character at a time like any other task's
-; letter, so a command's output and the background letters interleave on
-; the printer exactly as two users' output did.
+; the only task running when the machine comes up.  Everything it prints
+; goes through its own mailbox one character at a time like any other
+; task's, so a command's output and what a task behind the prompt prints
+; interleave on the printer exactly as two users' output did.
                 ORG     X'800'
 
-; The letter tasks are born stopped, and stay that way until somebody
-; asks for them: an executive with nothing running is a better place to
-; start looking around than one already talking to itself.
 SHELL           LDW     SHMBAN
                 JSX     SHMSG
                 LDW     SHMHNT
@@ -2332,12 +2268,62 @@ SHCMC1          SMB     K.CLOSE
                 EXIT    SHCMCL
 
 ; ---------------------------------------------------------------- commands
+; HELP: the commands that are in the shell, and then the ones that are
+; not -- every program the directory has, eight names to a line.  With
+; no disc, or no directory on it, there are none to name.
 SHHELP          LDW     SHMHL1
                 JSX     SHMSG
                 LDW     SHMHL2
                 JSX     SHMSG
                 LDW     SHMHL3
                 JSX     SHMSG
+                JSX     SHDLD
+                SAM
+                JMP     SHHP0
+                JMP     SHLOOP
+SHHP0           CLR
+                STW     SHTI            ; names on the line so far
+                LDW     SHKFDE
+                STW     LDCP
+SHHPL           LDW     LDCP
+                CMW     SHKFDX
+                SLS                     ; inside the table?
+                JMP     SHHPX
+                CAX
+                LDW     *DE.FLG
+                AND     SHK0FF
+                SAZ                     ; an unused entry ends it
+                JMP     SHHP1
+                JMP     SHHPX
+SHHP1           CMW     SHKDKF
+                SEQ                     ; a file...
+                JMP     SHHPN
+                LDW     *DE.TYP
+                CMW     SHKRX
+                SEQ                     ; ...and a program?
+                JMP     SHHPN
+                LDW     SHKSP
+                JSX     SHPUTC
+                JSX     SHPNAM
+                LDW     SHTI
+                ADD     SHK1
+                STW     SHTI
+                CMW     SHK8
+                SLS                     ; room on the line for another?
+                JMP     SHHPW
+                JMP     SHHPN
+SHHPW           JSX     SHNL
+                CLR
+                STW     SHTI
+SHHPN           LDW     LDCP
+                ADD     SHK8
+                STW     LDCP
+                JMP     SHHPL
+SHHPX           LDW     SHTI
+                SAZ                     ; a line part made?
+                JMP     SHHPE
+                JMP     SHLOOP
+SHHPE           JSX     SHNL
                 JMP     SHLOOP
 
 ; Seconds since the executive came up. SECS is the scheduler's, counted
@@ -2359,7 +2345,7 @@ SHPUP           SUBR
 
 ; The tasks: job number, name, state, how much longer a sleeper has, and
 ; OUT for one whose blocks are on the disc.  Not a walk of the ring,
-; which a task leaving it part way through would send astray: the five
+; which a task leaving it part way through would send astray: the two
 ; nodes that are always here, in the order they lie in core, then every
 ; arena node that is in use, then idle.
 SHSTAT          JSX     SHPUP
@@ -2380,9 +2366,9 @@ SHSTSW          LDW     SHMSWP
                 JSX     SHDEC
                 LDW     SHMSWI
                 JSX     SHMSG
-SHST0           LDW     SHKRNG
+SHST0           LDW     SHKSHN
                 STW     SHTO
-                LDW     SHK5
+                LDW     SHK2
                 STW     SHTI
 SHST1           JSX     SHSTLN
                 LDW     SHTO
@@ -2458,37 +2444,18 @@ SHSTO           LDW     SHMOUT
 SHSTE           JSX     SHNL
                 EXIT    SHSTLN
 
-; STOP and START differ only in the state they store.  With no argument
-; they take every letter task; with one they take the task whose letter
-; matches, and nothing else.  What marks a letter task is data, not
-; position: a non-zero T.CHR.  The shell and BASIC have none, so neither
-; can be named -- the shell must not be able to suspend itself, since it
-; is the only way to start anything again, and a stopped console owner
-; would leave the shell waiting on a grant nobody can return.
+; STOP n and START n differ only in the state they store, into the task
+; with that job number: one the shell loaded, since no other has a
+; number.  Not one that has the console, which would leave the shell
+; waiting on a hand-back nobody could make; and the state goes in with
+; the disc claimed, so that it is never a task part way through a
+; transfer that is left standing.
 SHSTOP          LDW     SHKOFF
                 STW     SHNST
                 JMP     SHSSET
 SHSTRT          CLR
                 STW     SHNST
-SHSSET          JSX     SHARG
-                LDW     SHARGF
-                SAZ                     ; no argument: all of them
-                JMP     SHSARG
-                JMP     SHSALL
-SHSARG          LDW     SHARGV
-                CMW     SHKZER
-                SLS                     ; a digit begins a job number
-                JMP     SHSJOB
-                JMP     SHSONE
-
-; ...by job number: a task the shell loaded.  Not one that has the
-; console, which would leave the shell waiting on a hand-back nobody
-; could make; and the state goes in with the disc claimed, so that it is
-; never a task part way through a transfer that is left standing.
-SHSJOB          CMW     SHK9P
-                SLS
-                JMP     SHSONE
-                JSX     SHJOB
+SHSSET          JSX     SHJOB
                 SAZ
                 JMP     SHSJ1
                 JMP     SHLOOP
@@ -2501,43 +2468,6 @@ SHSJ1           CAX
                 LDW     SHNST
                 STW     *T.STA
                 JSX     SHIOR
-                JMP     SHLOOP
-SHSALL          LDW     SHKRNG          ; once round the ring
-                STW     SHTO
-SHSAL1          LDX     SHTO
-                LDW     *T.CHR
-                SAZ                     ; a letter task?
-                JMP     SHSAL2
-                JMP     SHSAL3
-SHSAL2          LDW     SHNST
-                STW     *T.STA
-SHSAL3          LDX     SHTO
-                LDW     *T.NXT
-                STW     SHTO
-                CMW     SHKRNG          ; all the way round?
-                SEQ
-                JMP     SHSAL1
-                JMP     SHLOOP
-SHSONE          LDW     SHKRNG          ; find the named letter
-                STW     SHTO
-SHSO1           LDX     SHTO
-                LDW     *T.CHR
-                SAZ                     ; only a letter task can be named
-                JMP     SHSO2
-                JMP     SHSO3
-SHSO2           CMW     SHARGV
-                SNE
-                JMP     SHSO4           ; this is the task
-SHSO3           LDX     SHTO
-                LDW     *T.NXT
-                STW     SHTO
-                CMW     SHKRNG
-                SEQ
-                JMP     SHSO1
-                JMP     SHSOBD          ; all the way round: no such task
-SHSO4           LDX     SHTO
-                LDW     SHNST
-                STW     *T.STA
                 JMP     SHLOOP
 SHSOBD          LDW     SHMNOT
                 JSX     SHMSG
@@ -2708,10 +2638,6 @@ SHBWG           JSX     SHKDO
                 JSX     SHMSG
                 JMP     SHLOOP
 
-; Shut the machine down.  The letter tasks park at their next masked
-; window, so once their mailboxes -- found the way STOP finds the tasks,
-; by T.CHR -- are empty and the printer is idle, nothing of theirs can
-; appear inside the down-message.
 ; LOAD name and RUN name: a module off the disc, started as a task.  RUN
 ; hands it the console and waits for it to be over -- the break flag
 ; cleared and CONBSY raised in one masked window, as the grant to BASIC
@@ -3166,7 +3092,8 @@ LDCKT           LDW     LDSUM
 ; The disc for the shell, and the disc given up: the claim every user of
 ; DXFER makes, a tick's sleep at a time until it succeeds.  A task's call
 ; through the vector makes it in KENTER; this is the shell's own, for the
-; loader and DIR, which read the disc from the shell's task.
+; loader and the directory's readers, which read the disc from the
+; shell's task.
 SHIOC           SUBR
 SHIOCL          MSK
                 SMB     IOTRY
@@ -3196,13 +3123,7 @@ SHIOR           SUBR
 ; kernel's copy, unclaimed, so that a listing at the teletype's pace does
 ; not hold every other task off the disc -- and a file made or deleted
 ; meanwhile may show in it twice or not at all.
-SHDIR           JSX     SHIOC
-                LDW     SHKFN
-                SMB     FSFND
-                JSX     FSFND
-                STW     SHW2
-                JSX     SHIOR
-                LDW     SHW2
+SHDIR           JSX     SHDLD
                 SAM                     ; an error is minus
                 JMP     SHDR0
                 CMW     SHKNDR
@@ -3228,14 +3149,7 @@ SHDRL           LDW     LDCP
 SHDR1           CMW     SHKDKF
                 SEQ                     ; a file?
                 JMP     SHDRH
-                LDW     *0
-                JSX     SHPW2
-                LDX     LDCP
-                LDW     *1
-                JSX     SHPW2
-                LDX     LDCP
-                LDW     *2
-                JSX     SHPW2
+                JSX     SHPNAM
                 LDW     SHKDOT
                 JSX     SHPUTC
                 LDX     LDCP
@@ -3263,6 +3177,32 @@ SHDRT           LDW     SHMTOT
 SHDRE           LDW     SHMNRD
                 JSX     SHMSG
                 JMP     SHLOOP
+
+; Bring the directory into the kernel's copy of it: what FSFND says,
+; which is minus for an error.  The name it looks for is whatever SHFN
+; holds, and beside the point.
+SHDLD           SUBR
+                JSX     SHIOC
+                LDW     SHKFN
+                SMB     FSFND
+                JSX     FSFND
+                STW     SHW2
+                JSX     SHIOR
+                LDW     SHW2
+                EXIT    SHDLD
+
+; The name of the directory entry LDCP is at.
+SHPNAM          SUBR
+                LDX     LDCP
+                LDW     *0
+                JSX     SHPW2
+                LDX     LDCP
+                LDW     *1
+                JSX     SHPW2
+                LDX     LDCP
+                LDW     *2
+                JSX     SHPW2
+                EXIT    SHPNAM
 
 ; The words free in the pool, below the fence and above it: the free
 ; list's sizes added up, under the mask that every walk of the list
@@ -3302,29 +3242,40 @@ SHMEMD          UNM
                 JSX     SHMSG
                 JMP     SHLOOP
 
-SHHALT          LDW     SHK1
-                SMB     SHUTREQ
-                STW     SHUTREQ
-SHHDR           CLR
-                STW     SHW2            ; the letter mailboxes, ORed up
-                LDW     SHKRNG
+; Shut the machine down.  The disc first, and kept: with it claimed here
+; no task is inside a transfer.  Then every loaded task is stopped, so
+; it deposits nothing more, and once their mailboxes are empty and the
+; printer is idle nothing of theirs can appear inside the down-message.
+; Each pass stops them over again, for one that something woke.
+SHHALT          JSX     SHIOC
+SHHDR           MSK
+                CLR
+                STW     SHW2            ; their mailboxes, ORed up
+                LDW     SHKNAB
                 STW     SHTO
+                LDW     SHKNAN
+                STW     SHTI
 SHHD0           LDX     SHTO
-                LDW     *T.CHR
-                SAZ                     ; a letter task?
-                JMP     SHHD1
+                LDW     *T.STA
+                CMW     SHKFRE
+                SNE                     ; in use?
                 JMP     SHHD2
-SHHD1           LDW     *T.MBX
+                LDW     SHKOFF
+                STW     *T.STA
+                LDW     *T.MBX
                 ORI     SHW2
                 STW     SHW2
-SHHD2           LDX     SHTO
-                LDW     *T.NXT
+SHHD2           LDW     SHTO
+                ADD     SHKTLN
                 STW     SHTO
-                CMW     SHKRNG          ; all the way round?
-                SEQ
+                LDW     SHTI
+                SUB     SHK1
+                STW     SHTI
+                SAZ
                 JMP     SHHD0
+                UNM
                 LDW     SHW2
-                SAZ                     ; every letter mailbox empty?
+                SAZ                     ; every one of them empty?
                 JMP     SHHDR
                 SMB     OWNER
                 LDW     OWNER
@@ -3454,31 +3405,12 @@ SHNDOT          CLR
                 JMP     SHN3
 SHNX            EXIT    SHNAME
 
-; An argument character: SHARGF is 0 for none, 1 with the character in
-; SHARGV.  Whether it names a task is the ring's to say -- SHSONE walks
-; the nodes comparing it against each T.CHR.
-SHARG           SUBR
-                CLR
-                STW     SHARGF
-                STW     SHARGV
-                JSX     SHSKB
-                LDX     SHCUR
-                CLR
-                LDB     *0
-                SAZ                     ; end of line: no argument
-                JMP     SHAG2
-                EXIT    SHARG
-SHAG2           STW     SHARGV
-                LDW     SHK1
-                STW     SHARGF
-                EXIT    SHARG
-
 ; ---------------------------------------------------------------- output
 ; One character from ACR: deposit in the shell's mailbox, kick the
 ; printer, and stand down until SERV reports it printed.  The deposit
 ; window is masked for KICK's sake, and so is each look at the mailbox
 ; afterwards, so that the completion cannot land between the look and the
-; decision to wait on it.  The letter tasks do the same thing; see task A.
+; decision to wait on it.
 SHPUTC          SUBR
                 AND     SHK0FF
                 MSK
@@ -3706,8 +3638,6 @@ SHTI            WORD    0               ; STAT's countdown over the nodes...
 SHTO            WORD    0               ; ...and the node a walk is visiting
 SHSA            WORD    0               ; the state name being printed
 SHNST           WORD    0               ; the state STOP or START will store
-SHARGF          WORD    0               ; 0 no argument, 1 in SHARGV
-SHARGV          WORD    0
 STOK0           WORD    0               ; the command word, four characters
 STOK1           WORD    0
 STKN            WORD    0               ; how many of them are still wanted
@@ -3764,7 +3694,6 @@ SHK1            WORD    1
 SHK2            WORD    2
 SHK3            WORD    3
 SHK4            WORD    4
-SHK5            WORD    5
 SHK6            WORD    6
 SHK8            WORD    8
 SHK10           WORD    10
@@ -3805,8 +3734,8 @@ SHKOFF          WORD    SOFF
 SHKWAI          WORD    SWAI
 SHKUPM          WORD    X'FFDF'         ; folds a letter to upper case
 SHKCQ           WORD    QCONS           ; the queue the keyboard fills
-SHKRNG          WORD    ATCB            ; the ring, where the shell's walks
-SHKIDL          WORD    IDTCB           ; start, and the idle node past it
+SHKSHN          WORD    SHTCB           ; the nodes that are always here, as
+SHKIDL          WORD    IDTCB           ; they lie in core, and the idle node
 SHKLBB          WORD    LBUF*2          ; the line, and the last byte its
 SHKLBE          WORD    LBUF*2+62       ; zero terminator may need
 SHKDBE          WORD    SHDB*2+5        ; the last byte of the digit buffer
@@ -3907,17 +3836,17 @@ SHHL3           WORD    SHHL3T*2,SHHL3E*2
 
 SHBANT          TEXT    "REX 703 UP\r\n"
 SHBANE          EQU     $
-SHHNTT          TEXT    "TYPE HELP, OR START FOR THE LETTER TASKS\r\n"
+SHHNTT          TEXT    "TYPE HELP FOR THE COMMANDS\r\n"
 SHHNTE          EQU     $
 SHPRMT          TEXT    "REX>  "
 SHPRME          EQU     $
 SHWHTT          TEXT    "WHAT\r\n"
 SHWHTE          EQU     $
-SHHL1T          TEXT    "COMMANDS HELP STAT UPTIME STOP START KILL ECHO MEM DIR LOAD RUN HALT\r\n"
+SHHL1T          TEXT    "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM DIR LOAD RUN HALT \r\n"
 SHHL1E          EQU     $
-SHHL2T          TEXT    "STOP AND START TAKE A B C OR A JOB NUMBER, KILL A JOB NUMBER\r\n"
+SHHL2T          TEXT    "STOP, START AND KILL TAKE A JOB NUMBER. @NAME RUNS A FILE OF COMMANDS.\r\n"
 SHHL2E          EQU     $
-SHHL3T          TEXT    "@NAME RUNS A FILE OF COMMANDS. ANY OTHER WORD RUNS THAT PROGRAM \r\n"
+SHHL3T          TEXT    "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. ON THE DISC:\r\n"
 SHHL3E          EQU     $
 SHFRET          TEXT    "FREE  "        ; five characters of it
 SHLOWT          TEXT    " LOW  "        ; and five of this

@@ -33,6 +33,7 @@ load, which must FAIL.
 
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -326,28 +327,30 @@ def ray703_demo(workdir, log):
 
 
 def rex(workdir, log):
-    """REX with its three letter tasks running, stopped between ticks: the
-    line clock armed and part way to its next, the scheduler's slices in
-    flight. Needs make -C rex all modules."""
+    """REX with three blips loaded and printing, stopped between ticks:
+    the line clock armed and part way to its next, the scheduler's slices
+    and the tasks' sleeps in flight. Needs make -C rex all modules."""
     build = os.path.join(ROOT, 'rex', 'build')
     os.makedirs(os.path.join(workdir, 'disks'), exist_ok=True)
     subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkdisc703.py'),
                     os.path.join(workdir, 'disks', 'ray703-disc0.img'),
-                    '--add', 'HELLO', os.path.join(build, 'hello.obj'),
-                    '--add', 'BASIC', os.path.join(build, 'basic.obj')], check=True, stdout=log)
+                    '--add-high', 'BLIP', os.path.join(build, 'blip.obj')], check=True, stdout=log)
     with cwd(workdir):
         emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', os.path.join(build, 'rex.bin'), '--no-throttle'], log=log)
     emu.run()
     emu.wait_for_output('REX 703 UP')
     emu.wait_quiet()
-    emu.key('START\r')
-    emu.wait_for_output('START')
+    # Typed ahead: the shell's queue holds what it has not read yet. The
+    # first two are printing by the time the third line is echoed, so
+    # the wait is for the third's own mark, several times over.
+    emu.key('LOAD BLIP A\rLOAD BLIP B\rLOAD BLIP C\r')
+    emu.wait_for_output(re.compile(rb'C[^C]*C[^C]*C[^C]*C'))
     time.sleep(1)
     emu.halt()
 
     def elsewhere():
         emu.run()
-        emu.key('STOP\r')
+        emu.key('KILL 1\rKILL 2\rKILL 3\r')
         emu.wait_quiet(timeout=60)
         emu.halt()
     return emu, elsewhere, 200000

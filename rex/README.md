@@ -19,6 +19,7 @@ tests it.
     dskt.asm           a test module: writes a disc sector and reads it back, over and over
     fst.asm            a test module: makes, reads, replaces, renames and deletes files
     nap.asm            a test module: never ends, for the shell to end
+    blip.asm           a test module: prints a character and sleeps, over and over
     hog.asm            a test module: holds a block of core and watches it
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
@@ -41,17 +42,15 @@ anything here.
 
 `--fast-io` makes the teletype instant; without it the Model 33 takes its real
 tenth of a second per character, and the scheduling slices are real machine
-time either way. The shell's commands:
+time either way. The commands the shell has in it:
 
-    HELP or ?    the command list
+    HELP or ?    these, and then the programs the disc has
     STAT         every task's job number, name and state, how long each
                  sleeper has left, and OUT for one that is on the disc
     UPTIME, UP   seconds since the executive came up
-    STOP  [A-C]  suspend a letter task, or all three
-    START [A-C]  release one, or all three
-    STOP n       the same for a task the shell loaded, by job number
-    START n
-    KILL n       end a loaded task, whatever it was doing
+    STOP n       suspend a task the shell loaded, by job number
+    START n      release one
+    KILL n       end one, whatever it was doing
     ECHO text    print the rest of the line
     MEM          the words free in the pool, below word X'4000' and above
     DIR          the disc's directory: name, type, sectors; then what is free
@@ -59,7 +58,8 @@ time either way. The shell's commands:
     RUN  name    the same, given the console until it exits -- the only
                  way to start a module that reads the console
     @name        take the shell's lines from name.CM until it runs out
-    HALT         park the tasks, drain the printer and stop the machine
+    HALT         stop the loaded tasks, drain the printer and stop the
+                 machine
 
 Any other word is a program: `BASIC` is `RUN BASIC`, and whatever follows
 the name on the line is the program's to read -- `BASIC PROG` loads and
@@ -84,9 +84,9 @@ Ctrl-C is the running program's to act on, and Tiny BASIC does. A second
 Ctrl-C while the first is still untaken ends the program that has the
 console, which is the way out of one that is not listening.
 
-`START` sets the letter tasks going and they tick along behind whatever is
-typed -- a BASIC session included, letters interleaving with `PRINT`'s output
-on the one printer. The Model 33 echoes what is typed in hardware here
+A task `LOAD` started ticks along behind whatever is typed -- a BASIC
+session included, its output interleaving with `PRINT`'s on the one
+printer. The Model 33 echoes what is typed in hardware here
 (`DOT 14,11`), so typing interleaves with the tasks' output character by
 character, the way two users on one printer did. Unlike standalone Tiny
 BASIC it has type-ahead: input goes through a queue, so a burst typed while
@@ -95,18 +95,14 @@ is lost.
 
 ## What it is
 
-Five tasks share the processor at power-on, their control blocks a ring
+Two tasks share the processor at power-on, their control blocks a ring
 of linked nodes, and whatever the shell loads joins them: everything that
 names a task -- the current-task cell, the printer's owner, a queue's
 waiter -- holds a node's address, a field is the indexed displacement off
-it, every scan walks the `T.NXT` links, and what a task *is* is data in
-its node, so `STOP`, `START` and `HALT` act on whatever the walk finds
-and adding a task is linking a node in under `MSK`, which is what
-the loader does through `SPAWN`. Three nodes run the one shared letter
-body (`LTASK`, which reads its letter, nap and mailbox out of its own node
-via `CURT`): print, sleep, repeat -- stopped at power-on, so the machine
-comes up quiet and `START` sets them going. One is the shell, and one the
-swapper, asleep until more is loaded than core holds. Tiny BASIC
+it, every scan walks the `T.NXT` links, and adding a task is linking a
+node in under `MSK`, which is what the loader does through `SPAWN`. One
+is the shell, and one the swapper, asleep until more is loaded than core
+holds; the machine comes up quiet, with nothing else running. Tiny BASIC
 is a module behind the `brex.asm` glue, which pays bcore's wrapper debts
 with the executive's services: a workspace from the pool at entry, output
 through the task's own mailbox, input through the console queue, the
@@ -139,9 +135,10 @@ it holds the processor to wait for a device: a task that has handed a
 character to the printer marks itself waiting and stands down until the
 completion interrupt wakes it, exactly as the shell waits on its input
 queue. So when every task is asleep or waiting the idle node -- a branch to
-self -- has the processor, which in a traced run with the letters going is
-~97% of the time, and the same ~97% whether or not `--fast-io` is on, which
-is the sign that nothing is spinning on I/O.
+self -- has the processor, which with three tasks printing and sleeping
+behind the prompt is ~98% of the time, sampled through the debug port, and
+the same ~98% whether or not `--fast-io` is on, which is the sign that
+nothing is spinning on I/O.
 
 ## The rules
 
@@ -178,8 +175,8 @@ neither stops for a Ctrl-C nor takes one that was meant for the program
 in front. A break belongs to a run: the
 interpreter spends the flag at its `READY` loop, once the line is in, so
 one typed while the prompt was up is not kept for whatever runs next.
-`STOP`/`START` take a letter task by its letter or a loaded task by its job
-number, never the shell and never the task that has the console -- stopping
+`STOP`/`START` take a loaded task by its job number, never the shell --
+which has none -- and never the task that has the console -- stopping
 the console's owner would leave the shell waiting on a hand-back nobody can
 make. The kernel holds the one-reader rule itself as well: `Q.GET` on the
 console's queue answers the shell and the task whose node says it has the
@@ -221,15 +218,18 @@ behind the claim is written like any single-task routine.
 
 `make -C rex test` runs `run_rex_test.py` on a platter it makes in a
 scratch directory, driving the emulator over its debug port
-(`../tools/emudbg.py`): boot, `STAT`, `START` and watch the letters interleave,
-`STOP`, the rest of the commands, hello both ways with `MEM` reading the
+(`../tools/emudbg.py`): boot, `STAT`, three copies of `blip.asm` loaded
+behind the prompt, each printing a mark of its own at an interval of its
+own, watched until they have interleaved and then killed, the rest of the
+commands, hello both ways with `MEM` reading the
 same after each, then two BASIC sessions -- a program entered and RUN, a
 silent `GOTO` loop broken with Ctrl-C through the kernel's flag, the
 program saved, `BYE` handing the console and the memory back, and a second
 session starting afresh, with nothing to list until `OLD` brings the
 program back -- then a host's program run by name, one run behind the
 prompt until it ends, and one that never ends left running behind the
-prompt through a Ctrl-C and then killed -- and `HALT`. The saved programs
+prompt through a Ctrl-C and then killed -- and `HALT`, typed with a task
+still loaded, whose node has to say stopped once the machine has. The saved programs
 are among the files the host reads back afterwards. In between it runs `fst.asm` twice, which makes,
 reads back, replaces, renames and deletes files through the vector and
 checks every answer; afterwards the harness reads the platter the host's
@@ -271,13 +271,13 @@ the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
-`=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin` and `=nosys` are
-its negative controls -- a platter with nothing on it, one without the
-hello module, a kernel with its wait for the disc patched out, one that
-never writes the directory back, one that lets any task read the console,
-one that cuts a returning task's blocks out of the free list but never
-reads them back, and a boot sector never told where the kernel is -- which
-must all FAIL. Two things that make it hard
+`=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin`, `=nosys` and
+`=nopark` are its negative controls -- a platter with nothing on it, one
+without the hello module, a kernel with its wait for the disc patched out,
+one that never writes the directory back, one that lets any task read the
+console, one that cuts a returning task's blocks out of the free list but
+never reads them back, a boot sector never told where the kernel is, and a
+`HALT` that stops no task -- which must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
