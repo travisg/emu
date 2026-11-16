@@ -290,7 +290,7 @@
 ;              level 2 (line clock), level 3 (never signalled -- SWTCH
 ;              stages a switch in it and loads it with INR 3)
 ;   0010-002F  the kernel interface for what loads under it: the jump
-;              vector, then the exported cells (rexapi.asm)
+;              vector, then the exported cells
 ;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
 ;              KICK, PICK, SWTCH, Q.PUT and DSERV; then the kernel cells,
 ;              the console queue, the nodes of the tasks that are here
@@ -310,9 +310,11 @@
 ;              of extents in the swap file, and two sectors of block lists
 ;   7E00-7FAF  the node arena
 ;
-; Build with make -C rex: asm703.py over this file and rexfs.asm, as one
-; deck, into rex/build, and the modules beside it -- brex.asm over test/703/bcore.asm is basic.obj, the
-; module RUN BASIC loads.  make -C rex disc puts them on the platter, and
+; Build with make -C rex: asm703.py over this file, rexfs.asm and
+; rexswap.asm, as one deck, into rex/build, with rexapi.asm, the
+; interface the modules are assembled against, and the modules beside it
+; -- brex.asm over test/703/bcore.asm is basic.obj, the module RUN BASIC
+; loads.  make -C rex disc puts them on the platter, and
 ; then, from the repo root:
 ;
 ;   ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io
@@ -342,51 +344,128 @@
 ; ---------------------------------------------------------------- the api
 ; Words X'10'-X'3F' are the blocks of levels 4-15, which nothing on this
 ; machine signals, so the kernel's interface to what loads under it lives
-; there: a jump vector, then the cells a module may read.  rexapi.asm
-; states the same addresses as EQUs for the modules, and the build holds
-; the two to each other (tools/apicheck703.py over the listing).  A
-; module reaches an entry with an SMB/JSX pair: the JSX leaves its link
-; in IXR and forces global, and the JMP here carries it into the routine,
-; whose SUBR takes the link as from any caller.  An entry with nothing
-; behind it is a zero word, so a call to it halts.
+; there: a jump vector, then the cells a module may read.  The JMP at an
+; entry carries the caller's link into the routine, whose SUBR takes it
+; as from any caller.  An entry with nothing behind it is a zero word, so
+; a call to it halts.
+;
+; The NTRY cards from here down to the file calls' answers are that
+; interface as a module sees it.  The build writes their names out as
+; build/rexapi.asm, the file every module deck begins with, each NTRY
+; card's under the comment that stands over it and each name with the
+; comment its own card carries (asm703.py --exports).  So those comments
+; are written for a module's author, and what only the kernel wants to
+; know of a name is in a comment of its own above the card.
+
+; The REX kernel interface, for what loads under it.
+;
+; A module is assembled from word 0 and placed by the loader wherever the
+; allocator finds room, so it can know nothing of the kernel's layout
+; except what is here: a jump vector at fixed words, the cells the kernel
+; exports, the shape of a task node and the values that go in it.
+;
+; A module reaches an entry with an adjacent SMB/JSX pair, which is what
+; rexmac.asm's CALL writes, and a cell with an adjacent SMB/LDW or
+; SMB/STW pair --
+;
+;       SMB     K.QGET
+;       JSX     K.QGET
+;
+; which assemble to absolute words with a page selection in front, so
+; nothing is linked at load time.  JSX leaves the link in IXR and forces
+; global mode; the vector's JMP carries it into the kernel, and the
+; kernel's EXIT returns through it to wherever the module lies.
+;
+; A task runs global -- its status word says so -- and gives the processor
+; up either through K.SWTCH, after marking its own node sleeping or
+; waiting in one masked window, or for good through K.EXIT, which frees
+; everything the task allocated, its node included, and never returns.
+;
+; The vector, at X'10'-X'1B'.
+                NTRY    K.ALLOC,K.ALLCW,K.ALLCB,K.FREE,K.EXIT,K.SWTCH
+                NTRY    K.KICK,K.QGET,K.DREAD,K.DWRIT,K.ALLHI,K.ALHIW
                 ORG     X'10'
-K.ALLOC         JMP     ALLOC           ; ACR = words wanted -> the block, or 0
-K.ALLCW         JMP     ALLOCW          ; ...inside one 2048-word page
-K.ALLCB         JMP     ALLOCB          ; ...inside one 1024-word byte page
+K.ALLOC         JMP     ALLOC           ; ACR = words wanted -> ACR = the block, or 0.
+                                        ; These three hand out core below word
+                                        ; X'4000' only
+K.ALLCW         JMP     ALLOCW          ; ...contained in one 2048-word page
+K.ALLCB         JMP     ALLOCB          ; ...contained in one 1024-word byte page
 K.FREE          JMP     FREE            ; ACR = a block from K.ALLOC
 K.EXIT          JMP     TEXIT           ; the task is over; never returns
-K.SWTCH         JMP     SWTCH           ; hand the processor on
-K.KICK          JMP     KICK            ; start the printer
-K.QGET          JMP     Q.GET           ; ACR = a queue descriptor -> the next word
-K.DREAD         JMP     KDREAD          ; ACR = a transfer block -> status
-K.DWRIT         JMP     KDWRIT          ; the same, core to disc
-K.ALLHI         JMP     ALLOCH          ; K.ALLOC, above X'4000' for choice
-K.ALHIW         JMP     ALLCHW          ; K.ALLCW, the same
+K.SWTCH         JMP     SWTCH           ; hand the processor on; returns when next picked
+K.KICK          JMP     KICK            ; start the printer on the next full mailbox
+K.QGET          JMP     Q.GET           ; ACR = a queue descriptor -> ACR = the next word
+K.DREAD         JMP     KDREAD          ; ACR = a transfer block -> ACR = status: disc to core
+K.DWRIT         JMP     KDWRIT          ; the same, core to disc.
+                                        ; A transfer block is three words of
+                                        ; the caller's own: the first sector's
+                                        ; index, track*128+sector; the word
+                                        ; count, up to 16,383, which may run
+                                        ; across sectors and tracks; and the
+                                        ; core address.  Status zero is clean.
+                                        ; The call waits its turn at the disc.
+K.ALLHI         JMP     ALLOCH          ; K.ALLOC and K.ALLCW for a caller that
+K.ALHIW         JMP     ALLCHW          ; compares no byte addresses in what it
+                                        ; gets: above word X'4000' if there is
+                                        ; room there, below if not.  A byte
+                                        ; address up there is negative as a
+                                        ; signed number, which is the only kind
+                                        ; of compare this machine has; a byte
+                                        ; is still reached through the index.
                 WORD    0,0,0,0         ; X'1C'-X'1F'
 
+; The cells, at X'20'-X'23', the block of level 8.
+                NTRY    CURT,BRKREQ,CONBSY,KCONSQ
                 ORG     X'20'
-CURT            WORD    SHTCB           ; the current task's node: the kernel
-                                        ; becomes the shell, so it starts on
-                                        ; the shell's own
-BRKREQ          WORD    0               ; Ctrl-C arrived; set by SERV, cleared
-                                        ; by whoever owns the console
-CONBSY          WORD    0               ; the console belongs to BASIC: set by
-                                        ; the shell as it grants, cleared by
-                                        ; BASIC as it hands back, and the
-                                        ; cell the shell waits on meanwhile
-KCONSQ          WORD    QCONS           ; the console queue's descriptor
+; CURT starts on the shell's node, since the kernel becomes the shell.
+; SERV sets BRKREQ.  The shell sets CONBSY as it grants the console and
+; waits on it until the task clears it, handing back.
+CURT            WORD    SHTCB           ; the running task's node
+BRKREQ          WORD    0               ; Ctrl-C arrived; the console's owner clears it
+CONBSY          WORD    0               ; the console belongs to a task, not the shell
+KCONSQ          WORD    QCONS           ; the console queue's descriptor address.
+                                        ; K.QGET on it is for the console's
+                                        ; owner alone: the queue holds one
+                                        ; waiter.  RUN grants the console and
+                                        ; fills in T.CON; LOAD grants nothing,
+                                        ; and a task without it gets X'FFFF'
+                                        ; from K.QGET at once.  A module that
+                                        ; reads the console tests T.CON at
+                                        ; entry and says so when it is clear.
 
-; The vector goes on at X'28': files, each through KENTER to its body in
-; rexfs.asm.
+; Files: the vector goes on at X'28'-X'2F'.  A name is four words, as the
+; directory holds one: six characters and then two of type, bit 7 set,
+; each left-justified and zero-filled -- HELLO.RX is 'HE','LL',X'CF00',
+; 'RX'.  A file is read or written a character at a time through a
+; channel, of which the kernel has four; what a task leaves open is let
+; go when it exits, and a file it was writing and never closed is gone.
+; A new file replaces an older one of its name when it is closed, not
+; before, and has half of the largest run of free sectors to grow into.
+; Every answer that is not what was asked for is one of the E. values
+; below, all minus.
+                NTRY    K.LOOK,K.OPEN,K.GETC,K.PUTC,K.CLOSE,K.DELET,K.RENAM,K.SQUSH
                 ORG     X'28'
-K.LOOK          JMP     KLOOK           ; ACR = a name and four words -> zero, or why not
-K.OPEN          JMP     KOPEN           ; ACR = a name and a mode -> a channel, or why not
-K.GETC          JMP     KGETC           ; ACR = a channel -> a character, or minus
-K.PUTC          JMP     KPUTC           ; ACR = channel*256 + character -> zero, or why not
-K.CLOSE         JMP     KCLOSE          ; ACR = a channel -> zero, or why not
-K.DELET         JMP     KDELET          ; ACR = a name -> zero, or why not
-K.RENAM         JMP     KRENAM          ; ACR = two names, old and new -> zero, or why not
-K.SQUSH         JMP     KSQUSH          ; -> zero, or why not: the holes closed up
+; Each goes through KENTER to its body in rexfs.asm.
+K.LOOK          JMP     KLOOK           ; ACR = eight words, the first four a name
+                                        ; -> zero and the last four filled in --
+                                        ; DE.SEC, DE.CNT, DE.LST, DE.FLG -- or E.
+K.OPEN          JMP     KOPEN           ; ACR = five words: a name, then zero to
+                                        ; read or one to write -> a channel, or E.
+                                        ; E.PROT to write under a system file's name
+K.GETC          JMP     KGETC           ; ACR = a channel -> the next character,
+                                        ; or E.NOF at the end of the file
+K.PUTC          JMP     KPUTC           ; ACR = channel*256 + character -> zero, or E.,
+                                        ; and after one E. the same for the rest
+K.CLOSE         JMP     KCLOSE          ; ACR = a channel -> zero, or E.  A file
+                                        ; written replaces an older one of its name
+                                        ; here; one K.PUTC refused a character of
+                                        ; is given up instead, with K.PUTC's answer
+K.DELET         JMP     KDELET          ; ACR = a name -> zero, or E.
+K.RENAM         JMP     KRENAM          ; ACR = eight words, the old name and the
+                                        ; new -> zero, or E.
+K.SQUSH         JMP     KSQUSH          ; -> zero, or E.: every file moved down
+                                        ; over the hole in front of it.  E.CHN
+                                        ; while any channel is open.
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
@@ -403,6 +482,8 @@ L3ST            EQU     14              ; for the same reason, before INR 3
 ; the index register and using the field offset as the displacement, so a
 ; node may live anywhere in core.  The ring is what the scans walk;
 ; adding a task is linking a node in under MSK.
+                NTRY    T.STA,T.NXT,T.ACR,T.IXR,T.PCR,T.MST,T.DLY,T.MBX,T.NAM,T.CON
+                NTRY    T.ID,T.KLK,T.KAR,T.KDS,T.ARG,T.SWP,T.MW,T.RES,T.LEN
 T.STA           EQU     0               ; state -- offset 0, so the pick
                                         ; scan's test is a bare *T.STA
 T.NXT           EQU     1               ; the next node on the ring
@@ -414,40 +495,50 @@ T.DLY           EQU     6               ; ticks left, while sleeping
 T.MBX           EQU     7               ; the task's printer mailbox, one
                                         ; character; zero means empty
 T.NAM           EQU     8               ; two characters, for STAT
-T.CON           EQU     9               ; nonzero: this task holds the console
+T.CON           EQU     9               ; nonzero: this task holds the console --
+                                        ; RUN set it, LOAD did not, and it is
+                                        ; what says whether reading KCONSQ is
+                                        ; this task's to do
 T.ID            EQU     10              ; the job number, fixed for the node;
                                         ; zero for the tasks that are here
                                         ; from power-on, which no command
                                         ; can name
-T.KLK           EQU     11              ; a kernel call this task is blocked
-T.KAR           EQU     12              ; in: its way back, its argument and
-T.KDS           EQU     13              ; its body -- see KENTER
-T.ARG           EQU     14              ; the command tail's block, or zero
+T.KLK           EQU     11              ; the kernel's, for a call this task is
+T.KAR           EQU     12              ; blocked in: its way back, its argument
+T.KDS           EQU     13              ; and its body -- see KENTER
+T.ARG           EQU     14              ; the command tail: the word address of
+                                        ; what followed the program's name on
+                                        ; its line, a zero byte after it -- or
+                                        ; zero, if nothing did
 T.SWP           EQU     15              ; where the task's blocks are: zero,
                                         ; in core; minus one, on their way
                                         ; out or in; else on the disc, one
                                         ; more than the swap extent's sector
-T.MW            EQU     16              ; waiting for core: 1 asking, 2 told
-                                        ; there is nobody to put out, 3 told
-                                        ; to try again
+T.MW            EQU     16              ; the kernel's, while the task waits for
+                                        ; core: 1 asking, 2 told there is
+                                        ; nobody to put out, 3 told to try
+                                        ; again
 T.RES           EQU     17              ; the second its blocks last arrived
 T.LEN           EQU     18              ; words in a node
 
-SRUN           EQU     0
-SSLP           EQU     1
-SOFF           EQU     2               ; suspended by the shell's STOP
-SWAI           EQU     3               ; blocked on a queue
-SFREE          EQU     4               ; an arena node nobody is using
+; What T.STA holds.
+                NTRY    SRUN,SSLP,SOFF,SWAI
+SRUN            EQU     0
+SSLP            EQU     1
+SOFF            EQU     2               ; suspended by the shell's STOP
+SWAI            EQU     3               ; blocked on a queue or a device
+SFREE           EQU     4               ; an arena node nobody is using
 
 ; A queue: a ring of words, a count, and the one task waiting on it.
 ; Words rather than characters because the next thing to go through one
 ; is a message between tasks.
+                NTRY    Q.HEAD,Q.TAIL,Q.CNT,Q.CAP,Q.BUF,Q.WTR,QW
 Q.HEAD          EQU     0               ; where the next one comes from
 Q.TAIL          EQU     1               ; where the next one goes
 Q.CNT           EQU     2
 Q.CAP           EQU     3
 Q.BUF           EQU     4               ; word address of the ring
-Q.WTR           EQU     5               ; the block waiting, or -1
+Q.WTR           EQU     5               ; the node waiting, or -1
 QW              EQU     6               ; words per descriptor
 
 NRING           EQU     2               ; nodes on the ring at power-on: the
@@ -464,20 +555,25 @@ FENCE           EQU     POOLH-2         ; behind a block that is never free
 ; A directory entry (rexfs.asm, tools/fs703.py), and the eight words a
 ; task hands K.LOOK, whose first four it fills in and whose last four the
 ; kernel does.
-DE.NAM          EQU     0               ; six characters, left-justified, zero-filled
-DE.TYP          EQU     3               ; two more
+                NTRY    DE.NAM,DE.TYP,DE.SEC,DE.CNT,DE.LST,DE.FLG,DE.LEN
+                NTRY    DK.FILE,DF.HIGH,DF.SYS
+DE.NAM          EQU     0               ; the name: three words, six characters
+DE.TYP          EQU     3               ; the type: one word, two more
 DE.SEC          EQU     4               ; the first sector
-DE.CNT          EQU     5               ; how many
-DE.LST          EQU     6               ; bytes used in the last
-DE.FLG          EQU     7               ; what it is, and what is special about it
+DE.CNT          EQU     5               ; how many sectors
+DE.LST          EQU     6               ; bytes used in the last one
+DE.FLG          EQU     7               ; what it is in the low byte, DK.FILE to
+                                        ; a module, and what is special about
+                                        ; it above that: DF.HIGH, DF.SYS
 DE.LEN          EQU     8
-DK.HOLE         EQU     1               ; DE.FLG's low byte: a hole,
-DK.FILE         EQU     2               ; a file,
-DK.TENT         EQU     3               ; a file being written; zero is unused
+DK.HOLE         EQU     1               ; DE.FLG's low byte for a hole
+DK.FILE         EQU     2               ; DE.FLG's low byte for a file
+DK.TENT         EQU     3               ; and for one being written; zero is unused
 DF.HIGH         EQU     X'0100'         ; a module that may load above X'4000'
 DF.SYS          EQU     X'0200'         ; never moved, renamed or deleted
 
 ; What a file call answers when it cannot do what was asked: all minus.
+                NTRY    E.NOF,E.CHN,E.DFUL,E.FULL,E.DISC,E.NDIR,E.PROT,E.EXST
 E.NOF           EQU     X'FFFF'         ; no such file; K.GETC's end of file
 E.CHN           EQU     X'FFFE'         ; no channel free, or not this task's, or the wrong way
 E.DFUL          EQU     X'FFFD'         ; the directory is full

@@ -11,7 +11,6 @@ tests it.
     boot.asm           the boot sector: reads the kernel in off the platter
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
-    rexapi.asm         the kernel interface a module is assembled against
     rexmac.asm         the macros a deck is written with: conditional jumps, CALL, MSG
     rexlib.asm         the printer and the command line, for a module's deck
     brex.asm           the wrapper that makes Tiny BASIC a module
@@ -24,6 +23,9 @@ tests it.
     hog.asm            a test module: holds a block of core and watches it
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
+
+`build/rexapi.asm`, the kernel interface every module deck begins with, is
+made there with the kernel (see Modules).
 
 Two things it depends on stay where they are, reached by relative path from
 the makefile: the interpreter itself is `../test/703/bcore.asm`, shared with
@@ -392,12 +394,12 @@ whole after every change, one 376-word transfer each way. A task reads or
 writes a file a character at a time through one of four channels
 (`K.OPEN`, `K.GETC`, `K.PUTC`, `K.CLOSE`), and there are `K.LOOK`,
 `K.DELET` and `K.RENAM` beside them and the raw `K.DREAD` and `K.DWRIT`
-underneath; `rexapi.asm` says what each takes and gives. Every one of them
+underneath; the vector in `rex.asm` says what each takes and gives. Every one of them
 comes through `KENTER` and so runs with the disc claimed, one at a time.
 
 ## Modules
 
-A module is a program assembled from word 0 against `rexapi.asm` and
+A module is a program assembled from word 0 against `build/rexapi.asm` and
 written by `asm703.py --object` as relocatable object text -- the record
 format of the 1968 relocating loader (DN 390682C), whose transcript is
 `../test/703/listings/`. The assembler's docstring lists the codes. Every
@@ -408,12 +410,18 @@ whole; and an absolute address -- a kernel entry, an exported cell -- is
 reached only through a page selection in front of it, since the module's
 own page is not known until it is placed.
 
-`rexapi.asm` is the whole of what a module may know about the kernel: a
+`build/rexapi.asm` is the whole of what a module may know about the kernel: a
 jump vector at words X'10'-X'1F' and X'28'-X'3F', exported cells at
 X'20'-X'23', the shape of a task node and of a directory entry, the state
 values and the file calls' error values, all as EQUs. A module calls an entry
 with an adjacent `SMB`/`JSX` pair and reads a cell with an adjacent
-`SMB`/`LDW` pair; nothing is linked at load time.
+`SMB`/`LDW` pair; nothing is linked at load time. The file is the kernel's
+own statement of itself: `rex.asm` lists the interface's names on `NTRY`
+cards, and assembling the kernel writes each out at the value it has in
+that build, with the comments it has there (`asm703.py --exports`). So the
+interface is described once, in `rex.asm`, a module cannot be assembled
+against a layout the kernel does not have, and a change to the kernel
+assembles every module again.
 
 `hello.asm` is the smallest module that exercises every kind of word the
 format carries. `make -C rex reloc-check` assembles it absolute at two

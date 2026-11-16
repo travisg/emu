@@ -531,7 +531,7 @@ FCRNX           LDW     FCRP
 ; ---------------------------------------------------------------- the calls
 ; Each is the body of a vector entry, run by KENTER with the disc
 ; claimed: ACR is the caller's argument on the way in and the answer on
-; the way out.  rexapi.asm states what each takes and gives.
+; the way out.  The vector in rex.asm states what each takes and gives.
 
 ; The shell's own way in, with the disc claimed by SHIOC: the file whose
 ; name ACR addresses, as its entry's address -- or zero for no such

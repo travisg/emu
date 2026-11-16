@@ -15,7 +15,7 @@
 ; program comes to be in core -- and asm703.py assembles the deck as one.
 ; basic.asm is the wrapper for the standalone machine, an absolute image;
 ; rex/brex.asm the wrapper that makes it a module under REX, relocatable,
-; with rex/rexapi.asm ahead of both.
+; with the kernel's interface, rex/build/rexapi.asm, ahead of both.
 ;
 ; What the wrapper provides, and what the core holds it to:
 ;

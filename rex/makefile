@@ -10,7 +10,6 @@ ASM703    := ../tools/asm703.py
 # What the assembler warns of is a mistake here: the build stops on one.
 ASM       := $(ASM703) --werror
 RELOAD703 := ../tools/reload703.py
-APICHECK  := ../tools/apicheck703.py
 MKDISC703 := ../tools/mkdisc703.py
 BCORE     := ../test/703/bcore.asm
 BUILD     := build
@@ -20,15 +19,21 @@ BUILD     := build
 all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules disc
 
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
-# the filesystem and the swapper at the top of core. rexapi.asm states the kernel's
-# vector, cells and node layout as EQUs for the modules; the check holds
-# the kernel's own labels to them.
+# the filesystem and the swapper at the top of core. Assembling it also
+# writes rexapi.asm, the kernel's vector, cells and node layout as EQUs,
+# which is all a module knows of it: the names rex.asm's NTRY cards list,
+# at the values they have in this build.
 KERNEL := rex.asm rexfs.asm rexswap.asm
+API    := $(BUILD)/rexapi.asm
 
-$(BUILD)/rex.bin: $(KERNEL) rexapi.asm $(ASM703) $(APICHECK)
+$(BUILD)/rex.bin: $(KERNEL) $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) $(KERNEL) -o $@ -l $(BUILD)/rex.lst
-	$(APICHECK) rexapi.asm $(BUILD)/rex.lst
+	$(ASM) $(KERNEL) -o $@ -l $(BUILD)/rex.lst --exports $(API)
+
+# Written by the rule above, after the image. A change to the kernel
+# rewrites it, so every module is assembled again against the kernel it
+# will run under.
+$(API): $(BUILD)/rex.bin ;
 
 # The boot sector the disc controller's LOAD button reads: one sector, 47
 # words, which mkdisc703.py holds it to.
@@ -38,7 +43,7 @@ $(BUILD)/boot.bin: boot.asm $(ASM703)
 
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record
-# format, each a deck that begins with rexapi.asm.
+# format, each a deck that begins with the kernel's rexapi.asm.
 # The utilities, each a file in util/ behind rexlib.asm, and the test
 # modules beside them.
 UTILS := type copy del ren squish dump put
@@ -48,43 +53,43 @@ modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
          $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj \
          $(BUILD)/blip.obj
 
-$(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexmac.asm rexlib.asm $(ASM703)
+$(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm $(API) rexmac.asm rexlib.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexmac.asm rexlib.asm $< --object $@ -l $(BUILD)/$*.lst
+	$(ASM) $(API) rexmac.asm rexlib.asm $< --object $@ -l $(BUILD)/$*.lst
 
-$(BUILD)/nap.obj: rexapi.asm rexmac.asm rexlib.asm nap.asm $(ASM703)
+$(BUILD)/nap.obj: $(API) rexmac.asm rexlib.asm nap.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexmac.asm rexlib.asm nap.asm --object $@ -l $(BUILD)/nap.lst
+	$(ASM) $(API) rexmac.asm rexlib.asm nap.asm --object $@ -l $(BUILD)/nap.lst
 
-$(BUILD)/blip.obj: rexapi.asm rexmac.asm rexlib.asm blip.asm $(ASM703)
+$(BUILD)/blip.obj: $(API) rexmac.asm rexlib.asm blip.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexmac.asm rexlib.asm blip.asm --object $@ -l $(BUILD)/blip.lst
+	$(ASM) $(API) rexmac.asm rexlib.asm blip.asm --object $@ -l $(BUILD)/blip.lst
 
-$(BUILD)/hog.obj: rexapi.asm rexmac.asm rexlib.asm hog.asm $(ASM703)
+$(BUILD)/hog.obj: $(API) rexmac.asm rexlib.asm hog.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexmac.asm rexlib.asm hog.asm --object $@ -l $(BUILD)/hog.lst
+	$(ASM) $(API) rexmac.asm rexlib.asm hog.asm --object $@ -l $(BUILD)/hog.lst
 
-$(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
+$(BUILD)/hello.obj: $(API) hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm hello.asm --object $@ -l $(BUILD)/hello.lst
+	$(ASM) $(API) hello.asm --object $@ -l $(BUILD)/hello.lst
 
 # The disc exerciser the scripted session runs three of at once.
-$(BUILD)/dskt.obj: rexapi.asm dskt.asm $(ASM703)
+$(BUILD)/dskt.obj: $(API) dskt.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm dskt.asm --object $@ -l $(BUILD)/dskt.lst
+	$(ASM) $(API) dskt.asm --object $@ -l $(BUILD)/dskt.lst
 
 # The file calls' exerciser. rexlib.asm is the printer, for a module
 # that would rather not write it again.
-$(BUILD)/fst.obj: rexapi.asm rexmac.asm rexlib.asm fst.asm $(ASM703)
+$(BUILD)/fst.obj: $(API) rexmac.asm rexlib.asm fst.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexmac.asm rexlib.asm fst.asm --object $@ -l $(BUILD)/fst.lst
+	$(ASM) $(API) rexmac.asm rexlib.asm fst.asm --object $@ -l $(BUILD)/fst.lst
 
 # Tiny BASIC as a module: the glue that pays the interpreter's wrapper
 # debts with the executive's services, over the interpreter itself, which
 # the standalone guest in test/703 shares.
-$(BUILD)/basic.obj: rexapi.asm brex.asm $(BCORE) $(ASM703)
+$(BUILD)/basic.obj: $(API) brex.asm $(BCORE) $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm brex.asm $(BCORE) --object $@ -l $(BUILD)/basic.lst
+	$(ASM) $(API) brex.asm $(BCORE) --object $@ -l $(BUILD)/basic.lst
 
 # The relocation check: assemble a module absolute at a base, place its
 # object at that base with the reference loader, and every word must
@@ -98,11 +103,11 @@ BASIC_BASES := 0x1000 0x1001
 
 reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
 	@for base in $(HELLO_BASES); do \
-	    $(ASM) --org $$base rexapi.asm hello.asm -m $(BUILD)/hello-$$base.map || exit 1; \
+	    $(ASM) --org $$base $(API) hello.asm -m $(BUILD)/hello-$$base.map || exit 1; \
 	    $(RELOAD703) $(BUILD)/hello.obj --base $$base --check $(BUILD)/hello-$$base.map || exit 1; \
 	done
 	@for base in $(BASIC_BASES); do \
-	    $(ASM) --org $$base rexapi.asm brex.asm $(BCORE) -m $(BUILD)/basic-$$base.map || exit 1; \
+	    $(ASM) --org $$base $(API) brex.asm $(BCORE) -m $(BUILD)/basic-$$base.map || exit 1; \
 	    $(RELOAD703) $(BUILD)/basic.obj --base $$base --check $(BUILD)/basic-$$base.map || exit 1; \
 	done
 
