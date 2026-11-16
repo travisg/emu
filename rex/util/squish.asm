@@ -4,8 +4,7 @@
 ; is one hole at the end.  The kernel does the moving (K.SQUSH), since
 ; the directory is its; this is the way to ask.
 
-SQUISH          SMB     K.SQUSH
-                JSX     K.SQUSH
+SQUISH          CALL    K.SQUSH
                 SAZ
                 JSX     L.ERR
                 JMP     L.EXIT

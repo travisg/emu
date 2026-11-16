@@ -10,18 +10,16 @@
 ; each other.  KILL is the way out of it.
 
 BLIP            JSX     L.ARGS
-BSKP            LDX     L.AP            ; past the blanks, to the character
+.SKP            LDX     L.AP            ; past the blanks, to the character
                 CLR
                 LDB     *0
                 CMW     =' '
-                SEQ
-                JMP     BGOT
+                JNE     .GOT
                 JSX     L.NADV
-                JMP     BSKP
-BGOT            SAZ                     ; the tail ran out first?
-                JMP     BKEEP
+                JMP     .SKP
+.GOT            JNZ     .KEEP           ; the tail ran out first?
                 LDW     ='.'
-BKEEP           STW     BCH
+.KEEP           STW     BCH
 
                 SMB     CURT
                 LDX     CURT
@@ -29,20 +27,19 @@ BKEEP           STW     BCH
                 STW     BN
                 LDW     =15
                 STW     BNAP
-BMUL            LDW     BNAP            ; fifteen more, the job number times
+.MUL            LDW     BNAP            ; fifteen more, the job number times
                 ADD     =15
                 STW     BNAP
                 LDW     BN
                 SUB     =1
                 STW     BN
-                SAZ
-                JMP     BMUL
+                JNZ     .MUL
 
-BLOOP           LDW     BCH
+.LOOP           LDW     BCH
                 JSX     L.PUTC
                 LDW     BNAP
                 JSX     L.SLEEP
-                JMP     BLOOP
+                JMP     .LOOP
 
 BCH             WORD    0               ; the character
 BN              WORD    0               ; the multiply's count

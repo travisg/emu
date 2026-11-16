@@ -11,72 +11,55 @@
 PUT             SMB     CURT
                 LDX     CURT
                 LDW     *T.CON
-                SAZ                     ; the console?
-                JMP     P0
+                JNZ     .ARGS             ; the console?
                 LDW     =PNCON
                 JSX     L.MSG
                 JMP     L.EXIT
-P0              JSX     L.ARGS
+.ARGS             JSX     L.ARGS
                 LDW     =PNAM
                 JSX     L.NAME
-                SAZ
-                JMP     P1
+                JNZ     .OPEN
                 LDW     =PUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-P1              LDW     =1
+.OPEN             LDW     =1
                 STW     PNAM+4          ; to write
                 LDW     =PNAM
-                SMB     K.OPEN
-                JSX     K.OPEN
-                SAP
-                JMP     PERR
+                CALL    K.OPEN
+                JMI     .ERR
                 SLL     8
                 STW     PCH
-PLOOP           SMB     KCONSQ
+.LOOP           SMB     KCONSQ
                 LDW     KCONSQ
-                SMB     K.QGET
-                JSX     K.QGET
+                CALL    K.QGET
                 AND     =X'00FF'
                 STW     PC
                 CMW     =PKCTLZ
-                SNE
-                JMP     PDONE
+                JEQ     .DONE
                 ORI     PCH
-                SMB     K.PUTC
-                JSX     K.PUTC
-                SAZ
-                JMP     PERR
+                CALL    K.PUTC
+                JNZ     .ERR
                 LDW     PC
                 CMW     =L.KCR
-                SEQ
-                JMP     PLOOP
+                JNE     .LOOP
                 LDW     =L.KLF
                 ORI     PCH
-                SMB     K.PUTC
-                JSX     K.PUTC
-                SAZ
-                JMP     PERR
-                JMP     PLOOP
-PDONE           LDW     PCH
+                CALL    K.PUTC
+                JNZ     .ERR
+                JMP     .LOOP
+.DONE           LDW     PCH
                 SRL     8
-                SMB     K.CLOSE
-                JSX     K.CLOSE
-                SAZ
-                JMP     PERR
+                CALL    K.CLOSE
+                JNZ     .ERR
                 JSX     L.NL
                 JMP     L.EXIT
-PERR            JSX     L.ERR
+.ERR            JSX     L.ERR
                 JMP     L.EXIT
 
 PNAM            WORD    0,0,0,0,0
 PCH             WORD    0               ; the channel, times 256
 PC              WORD    0               ; the character
 PKCTLZ          EQU     X'009A'         ; Ctrl-Z
-PUSE            WORD    PUSET*2,PUSEE*2
-PNCON           WORD    PNCONT*2,PNCONE*2
-PUSET           TEXT    "PUT NAME\r\n"
-PUSEE           EQU     $
-PNCONT          TEXT    "PUT NEEDS THE CONSOLE \r\n"
-PNCONE          EQU     $
+PUSE            MSG     "PUT NAME\r\n"
+PNCON           MSG     "PUT NEEDS THE CONSOLE\r\n"
                 END     PUT

@@ -27,16 +27,13 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
                 STW     FSTEP           ; in the last
                 LDW     =FL1
                 JSX     FLOOK
-                SAZ
-                JMP     FFAIL
+                JNZ     FFAIL
                 LDW     FL1+DE.CNT
                 CMW     =4
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
                 LDW     FL1+DE.LST
                 CMW     =18
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
 
                 LDW     =3              ; 3: read it back, to its end and
                 STW     FSTEP           ; no further
@@ -45,11 +42,9 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
                 LDW     =300
                 JSX     FREAD
                 LDW     FCHN
-                SMB     K.GETC
-                JSX     K.GETC
+                CALL    K.GETC
                 CMW     =E.NOF
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
                 JSX     FCLOSE
 
                 LDW     =4              ; 4: T2.TX, one sector exactly
@@ -61,37 +56,29 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
                 JSX     FCLOSE
                 LDW     =FL2
                 JSX     FLOOK
-                SAZ
-                JMP     FFAIL
+                JNZ     FFAIL
                 LDW     FL2+DE.CNT
                 CMW     =1
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
                 LDW     FL2+DE.LST
                 CMW     =94
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
 
                 LDW     =5              ; 5: T1.TX becomes T3.TX
                 STW     FSTEP
                 LDW     =FR13
-                SMB     K.RENAM
-                JSX     K.RENAM
-                SAZ
-                JMP     FFAIL
+                CALL    K.RENAM
+                JNZ     FFAIL
                 LDW     =FL1
                 JSX     FLOOK
                 CMW     =E.NOF
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
                 LDW     =FL3
                 JSX     FLOOK
-                SAZ
-                JMP     FFAIL
+                JNZ     FFAIL
                 LDW     FL3+DE.CNT
                 CMW     =4
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
 
                 LDW     =6              ; 6: a new T2.TX takes the old one's
                 STW     FSTEP           ; place when it is closed
@@ -102,12 +89,10 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
                 JSX     FCLOSE
                 LDW     =FL2
                 JSX     FLOOK
-                SAZ
-                JMP     FFAIL
+                JNZ     FFAIL
                 LDW     FL2+DE.LST
                 CMW     =10
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
                 LDW     =FO2R
                 JSX     FOPEN
                 LDW     =10
@@ -117,15 +102,12 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
                 LDW     =7              ; 7: T3.TX goes
                 STW     FSTEP
                 LDW     =FL3
-                SMB     K.DELET
-                JSX     K.DELET
-                SAZ
-                JMP     FFAIL
+                CALL    K.DELET
+                JNZ     FFAIL
                 LDW     =FL3
                 JSX     FLOOK
                 CMW     =E.NOF
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
 
                 LDW     =8              ; 8: T4.TX, nothing in it
                 STW     FSTEP
@@ -134,23 +116,18 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
                 JSX     FCLOSE
                 LDW     =FL4
                 JSX     FLOOK
-                SAZ
-                JMP     FFAIL
+                JNZ     FFAIL
                 LDW     FL4+DE.CNT
-                SAZ
-                JMP     FFAIL
+                JNZ     FFAIL
                 LDW     FL4+DE.LST
-                SAZ
-                JMP     FFAIL
+                JNZ     FFAIL
 
                 LDW     =9              ; 9: a name in use is not to be
                 STW     FSTEP           ; had by renaming
                 LDW     =FR24
-                SMB     K.RENAM
-                JSX     K.RENAM
+                CALL    K.RENAM
                 CMW     =E.EXST
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
 
                 LDW     =10             ; 10: four channels and no fifth
                 STW     FSTEP
@@ -163,19 +140,16 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
                 LDW     =FO2R
                 JSX     FOPEN
                 LDW     =FO2R
-                SMB     K.OPEN
-                JSX     K.OPEN
+                CALL    K.OPEN
                 CMW     =E.CHN
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
                 LDW     =4
                 STW     FCHN
-FCL4            JSX     FCLOSE
+.CL4            JSX     FCLOSE
                 LDW     FCHN
                 SUB     =1
                 STW     FCHN
-                SAZ
-                JMP     FCL4
+                JNZ     .CL4
 
                 LDW     =11             ; 11: T5.TX, begun and abandoned
                 STW     FSTEP
@@ -201,26 +175,21 @@ FFAIL           LDW     =FMBAD
 ; Open the file whose five words ACR addresses, leaving the channel in
 ; FCHN.
 FOPEN           SUBR
-                SMB     K.OPEN
-                JSX     K.OPEN
-                SAP                     ; an error is minus
-                JMP     FFAIL
+                CALL    K.OPEN
+                JMI     FFAIL           ; an error is minus
                 STW     FCHN
                 EXIT    FOPEN
 
 FCLOSE          SUBR
                 LDW     FCHN
-                SMB     K.CLOSE
-                JSX     K.CLOSE
-                SAZ
-                JMP     FFAIL
+                CALL    K.CLOSE
+                JNZ     FFAIL
                 EXIT    FCLOSE
 
 ; K.LOOK on the eight words ACR addresses; the answer is the caller's to
 ; judge.
 FLOOK           SUBR
-                SMB     K.LOOK
-                JSX     K.LOOK
+                CALL    K.LOOK
                 EXIT    FLOOK
 
 ; Write ACR bytes of the pattern to FCHN, and read as many and hold them
@@ -229,35 +198,29 @@ FWRITE          SUBR
                 STW     FN
                 CLR
                 STW     FI
-FWL             JSX     FBYTE
+.WL             JSX     FBYTE
                 STW     FB
                 LDW     FCHN
                 SLL     8
                 ORI     FB
-                SMB     K.PUTC
-                JSX     K.PUTC
-                SAZ
-                JMP     FFAIL
+                CALL    K.PUTC
+                JNZ     FFAIL
                 JSX     FSTEPI
-                SAZ
-                JMP     FWL
+                JNZ     .WL
                 EXIT    FWRITE
 
 FREAD           SUBR
                 STW     FN
                 CLR
                 STW     FI
-FRL             JSX     FBYTE
+.RL             JSX     FBYTE
                 STW     FB
                 LDW     FCHN
-                SMB     K.GETC
-                JSX     K.GETC
+                CALL    K.GETC
                 CMW     FB
-                SEQ
-                JMP     FFAIL
+                JNE     FFAIL
                 JSX     FSTEPI
-                SAZ
-                JMP     FRL
+                JNZ     .RL
                 EXIT    FREAD
 
 FBYTE           SUBR                    ; byte FI of the pattern
@@ -296,10 +259,6 @@ FL4             WORD    'T4',0,0,'TX',0,0,0,0
 FR13            WORD    'T1',0,0,'TX','T3',0,0,'TX'
 FR24            WORD    'T2',0,0,'TX','T4',0,0,'TX'
 
-FMOK            WORD    FMOKT*2,FMOKE*2
-FMBAD           WORD    FMBADT*2,FMBADE*2
-FMOKT           TEXT    "FST OK\r\n"
-FMOKE           EQU     $
-FMBADT          TEXT    "FST BAD "
-FMBADE          EQU     $
+FMOK            MSG     "FST OK\r\n"
+FMBAD           MSG     "FST BAD "
                 END     FST

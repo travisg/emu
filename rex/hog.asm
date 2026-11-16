@@ -30,16 +30,14 @@ HOG             SMB     CURT
                 JSX     L.ARGS
                 CLR                     ; n, in decimal, from the command tail
                 STW     HN
-HNL             LDX     L.AP
+.NL             LDX     L.AP
                 CLR
                 LDB     *0
                 SUB     ='0'
                 STW     HD
-                SAP                     ; below '0', the tail's zero included
-                JMP     HND
+                JMI     .ND             ; below '0', the tail's zero included
                 CMW     =10
-                SLS
-                JMP     HND
+                JGE     .ND
                 LDW     HN
                 SLL     3
                 ADD     HN
@@ -49,54 +47,47 @@ HNL             LDX     L.AP
                 LDW     L.AP
                 ADD     =1
                 STW     L.AP
-                JMP     HNL
-HND             LDW     HN
-                SAZ
-                JMP     HGET
+                JMP     .NL
+.ND             LDW     HN
+                JNZ     .GET
                 JMP     L.EXIT          ; no size, no hog
-HGET            SMB     K.ALLHI
-                JSX     K.ALLHI
-                SAZ
-                JMP     HGOT
+.GET            CALL    K.ALLHI
+                JNZ     .GOT
                 LDW     =HKNOC
-                JMP     HVERD
-HGOT            STW     HB
+                JMP     .VERD
+.GOT            STW     HB
                 JSX     HFIRST          ; the pattern
-HFL             LDX     HP
+.FL             LDX     HP
                 LDW     HV
                 STW     *0
                 JSX     HNEXT
-                SAZ
-                JMP     HFL
+                JNZ     .FL
                 LDW     =HOGRND
                 STW     HR
-HRL             LDW     =20
+.RL             LDW     =20
                 JSX     L.SLEEP
                 JSX     HFIRST          ; and is it still there?
-HVL             LDX     HP
+.VL             LDX     HP
                 LDW     *0
                 CMW     HV
-                SEQ
-                JMP     HBAD
+                JNE     .BAD
                 JSX     HNEXT
-                SAZ
-                JMP     HVL
+                JNZ     .VL
                 LDW     HR
                 SUB     =1
                 STW     HR
-                SAZ
-                JMP     HRL
+                JNZ     .RL
                 LDW     =HKGOOD
-                JMP     HVERD
-HBAD            LDW     =HKDEAD
+                JMP     .VERD
+.BAD            LDW     =HKDEAD
 
 ; The verdict, a sector of it.
-HVERD           STW     HV
+.VERD           STW     HV
                 LDW     =HBUF
                 STW     HP
                 LDW     =47
                 STW     HC
-HWL             LDX     HP
+.WL             LDX     HP
                 LDW     HV
                 STW     *0
                 LDW     HP
@@ -105,11 +96,9 @@ HWL             LDX     HP
                 LDW     HC
                 SUB     =1
                 STW     HC
-                SAZ
-                JMP     HWL
+                JNZ     .WL
                 LDW     =HBLK
-                SMB     K.DWRIT
-                JSX     K.DWRIT
+                CALL    K.DWRIT
                 JMP     L.EXIT
 
 ; The walk over the block: HFIRST starts it, HNEXT steps the pointer and

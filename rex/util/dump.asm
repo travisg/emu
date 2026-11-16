@@ -7,38 +7,32 @@
 DUMP            JSX     L.ARGS
                 LDW     =UNAM
                 JSX     L.NAME
-                SAZ
-                JMP     U1
+                JNZ     .OPEN
                 LDW     =UUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-U1              CLR
+.OPEN             CLR
                 STW     UNAM+4
                 STW     UOFF
                 LDW     =UNAM
-                SMB     K.OPEN
-                JSX     K.OPEN
-                SAP
-                JMP     UERR
+                CALL    K.OPEN
+                JMI     .ERR
                 STW     UCH
-ULINE           JSX     L.BRK
-                SAZ
-                JMP     UDONE
+.LINE           JSX     L.BRK
+                JNZ     .DONE
                 JSX     UBYTE           ; the line's first byte, or none
-                SAP
-                JMP     UDONE
+                JMI     .DONE
                 STW     UW
                 LDW     UOFF            ; less the byte just read
                 SUB     =1
                 JSX     L.HEX
                 LDW     =8
                 STW     UN
-                JMP     UWORD
-UNEXT           JSX     UBYTE
-                SAP
-                JMP     UEOL
+                JMP     .WORD
+.NEXT           JSX     UBYTE
+                JMI     .EOL
                 STW     UW
-UWORD           LDW     =' '
+.WORD           LDW     =' '
                 JSX     L.PUTC
                 JSX     UBYTE           ; the word's low half
                 SAP
@@ -51,31 +45,27 @@ UWORD           LDW     =' '
                 LDW     UN
                 SUB     =1
                 STW     UN
-                SAZ
-                JMP     UNEXT
+                JNZ     .NEXT
                 JSX     L.NL
-                JMP     ULINE
-UEOL            JSX     L.NL
-UDONE           LDW     UCH
-                SMB     K.CLOSE
-                JSX     K.CLOSE
+                JMP     .LINE
+.EOL            JSX     L.NL
+.DONE           LDW     UCH
+                CALL    K.CLOSE
                 JMP     L.EXIT
-UERR            JSX     L.ERR
+.ERR            JSX     L.ERR
                 JMP     L.EXIT
 
 ; The next byte, counted, or minus at the end.
 UBYTE           SUBR
                 LDW     UCH
-                SMB     K.GETC
-                JSX     K.GETC
-                SAP
-                JMP     UBX
+                CALL    K.GETC
+                JMI     .BX
                 STW     UB
                 LDW     UOFF
                 ADD     =1
                 STW     UOFF
                 LDW     UB
-UBX             EXIT    UBYTE
+.BX             EXIT    UBYTE
 
 UNAM            WORD    0,0,0,0,0
 UCH             WORD    0               ; the channel
@@ -84,7 +74,5 @@ UN              WORD    0               ; words left on the line
 UW              WORD    0               ; a word's halves
 UW2             WORD    0
 UB              WORD    0
-UUSE            WORD    UUSET*2,UUSEE*2
-UUSET           TEXT    "DUMP NAME \r\n"
-UUSEE           EQU     $
+UUSE            MSG     "DUMP NAME\r\n"
                 END     DUMP

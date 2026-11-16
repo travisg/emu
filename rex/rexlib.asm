@@ -3,12 +3,13 @@
 ; What most modules want and none should write twice: the printer, and
 ; the command line.
 ;
-; A deck that wants these puts this file between rexapi.asm and its own,
-; and they are assembled into the module like any of its own routines --
-; nothing is shared at run time, and the words count against the module's
-; one page.  Each is an ordinary subroutine of the module's task: one
-; activation, static cells.  Nothing here compares one byte address with
-; another, so a module that uses it may load above word X'4000'.
+; A deck that wants these puts this file behind rexapi.asm and rexmac.asm
+; and in front of its own, and they are assembled into the module like
+; any of its own routines -- nothing is shared at run time, and the words
+; count against the module's one page.  Each is an ordinary subroutine of
+; the module's task: one activation, static cells.  Nothing here compares
+; one byte address with another, so a module that uses it may load above
+; word X'4000'.
 ;
 ;   L.PUTC   the character in ACR's low half, through the task's mailbox
 ;   L.PUTW   the bytes from ACR up to L.PWEND
@@ -36,20 +37,17 @@ L.PUTC          SUBR
                 SMB     CURT
                 LDX     CURT
                 STW     *T.MBX
-                SMB     K.KICK
-                JSX     K.KICK
+                CALL    K.KICK
                 UNM
 L.PCWT          MSK
                 SMB     CURT
                 LDX     CURT
                 LDW     *T.MBX
-                SAZ                     ; printed yet?
-                JMP     L.PCWB
+                JNZ     L.PCWB          ; printed yet?
                 JMP     L.PCWD
 L.PCWB          LDW     =SWAI           ; no: stand down until SERV says so
                 STW     *T.STA
-                SMB     K.SWTCH
-                JSX     K.SWTCH
+                CALL    K.SWTCH
                 JMP     L.PCWT
 L.PCWD          UNM
                 EXIT    L.PUTC
@@ -58,8 +56,7 @@ L.PUTW          SUBR
                 STW     L.PWP
 L.PWL           LDW     L.PWP
                 CMW     L.PWEND
-                SNE
-                JMP     L.PWDN
+                JEQ     L.PWDN
                 CAX
                 CLR                     ; LDB replaces only the low half
                 LDB     *0
@@ -107,8 +104,7 @@ L.DL            LDW     L.V
                 SUB     =1
                 STW     L.DP
                 LDW     L.V
-                SAZ                     ; nothing left of it?
-                JMP     L.DL
+                JNZ     L.DL            ; nothing left of it?
                 LDW     =L.KDBE
                 ADD     =1
                 STW     L.PWEND
@@ -126,8 +122,7 @@ L.SLEEP         SUBR
                 STW     *T.DLY
                 LDW     =SSLP
                 STW     *T.STA
-                SMB     K.SWTCH
-                JSX     K.SWTCH
+                CALL    K.SWTCH
                 EXIT    L.SLEEP
 
 L.HEX           SUBR
@@ -147,16 +142,14 @@ L.HXL           LDW     L.V             ; the top digit, each time round
                 LDW     L.DP
                 SUB     =1
                 STW     L.DP
-                SAZ
-                JMP     L.HXL
+                JNZ     L.HXL
                 EXIT    L.HEX
 
 L.ARGS          SUBR
                 SMB     CURT
                 LDX     CURT
                 LDW     *T.ARG
-                SAZ                     ; a tail at all?
-                JMP     L.AR1
+                JNZ     L.AR1           ; a tail at all?
                 LDW     =L.NULW         ; none: a tail of nothing
 L.AR1           SLL     1
                 STW     L.AP
@@ -178,8 +171,7 @@ L.NSK           LDX     L.AP            ; past the blanks
                 CLR
                 LDB     *0
                 CMW     =' '
-                SEQ
-                JMP     L.NGO
+                JNE     L.NGO
                 JSX     L.NADV
                 JMP     L.NSK
 L.NGO           LDW     L.NB
@@ -190,19 +182,15 @@ L.NGO           LDW     L.NB
 L.NL1           LDX     L.AP
                 CLR
                 LDB     *0
-                SAZ                     ; the zero ends it
-                JMP     L.N1
+                JNZ     L.N1            ; the zero ends it
                 JMP     L.NX
 L.N1            CMW     =' '            ; and so does a blank
-                SNE
-                JMP     L.NX
+                JEQ     L.NX
                 CMW     ='.'            ; a dot starts the type
-                SNE
-                JMP     L.NDOT
+                JEQ     L.NDOT
                 STW     L.NC
                 LDW     L.NN            ; room for it?
-                SAZ
-                JMP     L.N2
+                JNZ     L.N2
                 JMP     L.N3
 L.N2            SUB     =1
                 STW     L.NN
@@ -252,8 +240,7 @@ L.BRK           SUBR
                 SMB     CURT
                 LDX     CURT
                 LDW     *T.CON
-                SAZ                     ; the console's holder?
-                JMP     L.BRK1
+                JNZ     L.BRK1          ; the console's holder?
                 EXIT    L.BRK
 L.BRK1          SMB     BRKREQ
                 LDW     BRKREQ

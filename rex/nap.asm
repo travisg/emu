@@ -12,28 +12,21 @@
 NAP             SMB     CURT
                 LDX     CURT
                 LDW     *T.CON
-                SAZ                     ; the console is ours?  then no test
-                JMP     NLOOP
+                JNZ     .LOOP           ; the console is ours?  then no test
                 SMB     KCONSQ
                 LDW     KCONSQ
-                SMB     K.QGET
-                JSX     K.QGET
+                CALL    K.QGET
                 CMW     =X'FFFF'
-                SEQ
-                JMP     NREAD
+                JNE     .READ
                 LDW     =NREF
                 JSX     L.MSG
-                JMP     NLOOP
-NREAD           LDW     =NBAD
+                JMP     .LOOP
+.READ           LDW     =NBAD
                 JSX     L.MSG
-NLOOP           LDW     =60
+.LOOP           LDW     =60
                 JSX     L.SLEEP
-                JMP     NLOOP
+                JMP     .LOOP
 
-NREF            WORD    NREFT*2,NREFE*2
-NBAD            WORD    NBADT*2,NBADE*2
-NREFT           TEXT    "NAP: THE CONSOLE WAS REFUSED\r\n"
-NREFE           EQU     $
-NBADT           TEXT    "NAP: READ THE CONSOLE \r\n"
-NBADE           EQU     $
+NREF            MSG     "NAP: THE CONSOLE WAS REFUSED\r\n"
+NBAD            MSG     "NAP: READ THE CONSOLE\r\n"
                 END     NAP

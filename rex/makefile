@@ -48,21 +48,21 @@ modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
          $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj \
          $(BUILD)/blip.obj
 
-$(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexlib.asm $(ASM703)
+$(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexmac.asm rexlib.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexlib.asm $< --object $@ -l $(BUILD)/$*.lst
+	$(ASM) rexapi.asm rexmac.asm rexlib.asm $< --object $@ -l $(BUILD)/$*.lst
 
-$(BUILD)/nap.obj: rexapi.asm rexlib.asm nap.asm $(ASM703)
+$(BUILD)/nap.obj: rexapi.asm rexmac.asm rexlib.asm nap.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexlib.asm nap.asm --object $@ -l $(BUILD)/nap.lst
+	$(ASM) rexapi.asm rexmac.asm rexlib.asm nap.asm --object $@ -l $(BUILD)/nap.lst
 
-$(BUILD)/blip.obj: rexapi.asm rexlib.asm blip.asm $(ASM703)
+$(BUILD)/blip.obj: rexapi.asm rexmac.asm rexlib.asm blip.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexlib.asm blip.asm --object $@ -l $(BUILD)/blip.lst
+	$(ASM) rexapi.asm rexmac.asm rexlib.asm blip.asm --object $@ -l $(BUILD)/blip.lst
 
-$(BUILD)/hog.obj: rexapi.asm rexlib.asm hog.asm $(ASM703)
+$(BUILD)/hog.obj: rexapi.asm rexmac.asm rexlib.asm hog.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexlib.asm hog.asm --object $@ -l $(BUILD)/hog.lst
+	$(ASM) rexapi.asm rexmac.asm rexlib.asm hog.asm --object $@ -l $(BUILD)/hog.lst
 
 $(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -75,9 +75,9 @@ $(BUILD)/dskt.obj: rexapi.asm dskt.asm $(ASM703)
 
 # The file calls' exerciser. rexlib.asm is the printer, for a module
 # that would rather not write it again.
-$(BUILD)/fst.obj: rexapi.asm rexlib.asm fst.asm $(ASM703)
+$(BUILD)/fst.obj: rexapi.asm rexmac.asm rexlib.asm fst.asm $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) rexapi.asm rexlib.asm fst.asm --object $@ -l $(BUILD)/fst.lst
+	$(ASM) rexapi.asm rexmac.asm rexlib.asm fst.asm --object $@ -l $(BUILD)/fst.lst
 
 # Tiny BASIC as a module: the glue that pays the interpreter's wrapper
 # debts with the executive's services, over the interpreter itself, which

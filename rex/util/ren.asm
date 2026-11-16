@@ -5,27 +5,21 @@
 REN             JSX     L.ARGS
                 LDW     =ROLD
                 JSX     L.NAME
-                SAZ
-                JMP     R1
-                JMP     RUSAGE
-R1              LDW     =RNEW
+                JNZ     .NEW
+                JMP     .USAGE
+.NEW             LDW     =RNEW
                 JSX     L.NAME
-                SAZ
-                JMP     R2
-RUSAGE          LDW     =RUSE
+                JNZ     .GO
+.USAGE          LDW     =RUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-R2              LDW     =ROLD           ; the two names lie together, which
-                SMB     K.RENAM         ; is how K.RENAM wants them
-                JSX     K.RENAM
+.GO             LDW     =ROLD           ; the two names lie together, which
+                CALL    K.RENAM         ; is how K.RENAM wants them
                 SAZ
                 JSX     L.ERR
                 JMP     L.EXIT
 
 ROLD            WORD    0,0,0,0
 RNEW            WORD    0,0,0,0
-RUSE            WORD    RUSET*2,RUSEE*2
-RUSET           TEXT    "REN OLD NEW "
-                TEXT    "\r\n"
-RUSEE           EQU     $
+RUSE            MSG     "REN OLD NEW\r\n"
                 END     REN

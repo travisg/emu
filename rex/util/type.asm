@@ -9,54 +9,43 @@
 TYPE            JSX     L.ARGS
                 LDW     =TNAM
                 JSX     L.NAME
-                SAZ                     ; a name?
-                JMP     TOPEN
+                JNZ     .OPEN           ; a name?
                 LDW     =TUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-TOPEN           CLR
+.OPEN           CLR
                 STW     TNAM+4          ; to read
                 LDW     =TNAM
-                SMB     K.OPEN
-                JSX     K.OPEN
-                SAP
-                JMP     TERR
+                CALL    K.OPEN
+                JMI     .ERR
                 STW     TCH
-TLOOP           JSX     L.BRK
-                SAZ
-                JMP     TDONE
+.LOOP           JSX     L.BRK
+                JNZ     .DONE
                 LDW     TCH
-                SMB     K.GETC
-                JSX     K.GETC
-                SAP                     ; the end
-                JMP     TDONE
+                CALL    K.GETC
+                JMI     .DONE           ; the end
                 ORI     =X'0080'        ; a host's file may lack bit 7
                 STW     TC
                 CMW     =L.KLF
-                SEQ
-                JMP     TPUT
+                JNE     .PUT
                 LDW     TLAST
                 CMW     =L.KCR
-                SNE
-                JMP     TPUT
+                JEQ     .PUT
                 LDW     =L.KCR
                 JSX     L.PUTC
-TPUT            LDW     TC
+.PUT            LDW     TC
                 STW     TLAST
                 JSX     L.PUTC
-                JMP     TLOOP
-TDONE           LDW     TCH
-                SMB     K.CLOSE
-                JSX     K.CLOSE
+                JMP     .LOOP
+.DONE           LDW     TCH
+                CALL    K.CLOSE
                 JMP     L.EXIT
-TERR            JSX     L.ERR
+.ERR            JSX     L.ERR
                 JMP     L.EXIT
 
 TNAM            WORD    0,0,0,0,0
 TCH             WORD    0               ; the channel
 TC              WORD    0               ; the character, and the one before it
 TLAST           WORD    0
-TUSE            WORD    TUSET*2,TUSEE*2
-TUSET           TEXT    "TYPE NAME \r\n"
-TUSEE           EQU     $
+TUSE            MSG     "TYPE NAME\r\n"
                 END     TYPE
