@@ -261,6 +261,12 @@ impl crate::snapshot::Snapshot for Disc74601 {
             };
             Ok(Active { unit, op, words: r.u16()?, remaining: r.u32()? })
         })?;
+        // a completion indexes the units with it and takes the platter
+        if let Some(a) = &self.active {
+            if !platters.get(a.unit).is_some_and(|p| p.is_some()) {
+                return Err(format!("disc: a transfer on unit {}, which has no platter", a.unit));
+            }
+        }
         self.loaded = (!r.keeps_disks()).then_some(platters);
         Ok(())
     }
@@ -690,6 +696,26 @@ mod tests {
         d.mount_blank(0);
         assert_eq!(d.din(0), 0, "all-zero status is ready (Table 5-29)");
         assert_eq!(d.din(1), ST_NOT_READY, "the other spindles are still absent");
+    }
+
+    /// A snapshot with a transfer under way on a unit that has no platter,
+    /// or on no unit at all, is refused: the completion would take it.
+    #[test]
+    fn a_snapshot_with_a_transfer_on_no_platter_is_refused() {
+        use crate::snapshot::{Reader, Snapshot, Writer};
+        let mut d = disc();
+        command(&mut d, FN_WRITE, 0x100, 0, 0, 0, 10);
+        let mut w = Writer::new();
+        d.save(&mut w);
+        let mut saved = w.into_bytes();
+        d.load(&mut Reader::new(&saved)).unwrap();
+        // the tail is the transfer: unit, operation, words, remaining
+        let unit = saved.len() - (1 + 1 + 2 + 4);
+        for bad in [1, DISC_UNITS as u8] {
+            saved[unit] = bad;
+            let err = d.load(&mut Reader::new(&saved)).unwrap_err();
+            assert!(err.contains("no platter"), "unit {bad}: {err}");
+        }
     }
 
     /// A loaded platter is the snapshot's, in memory: a write after the

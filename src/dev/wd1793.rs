@@ -518,11 +518,19 @@ impl Wd1793 {
             *v = r.bool()?;
         }
         self.index_counter = r.u32()?;
-        self.selected = r.opt(|r| Ok(r.u8()? as usize))?;
+        // each of these indexes the drives or the sector buffer
+        let drive = |r: &mut crate::snapshot::Reader| match r.u8()? as usize {
+            d if d < DRIVES => Ok(d),
+            d => Err(format!("wd1793: no drive {d}")),
+        };
+        self.selected = r.opt(drive)?;
         self.sector_index = r.u32()? as usize;
         self.buffer_count = r.u32()? as usize;
+        if self.buffer_count > SECTOR_SIZE {
+            return Err(format!("wd1793: a transfer of {} bytes", self.buffer_count));
+        }
         r.bytes_into(&mut self.sector_bytes)?;
-        self.write_drive = r.opt(|r| Ok(r.u8()? as usize))?;
+        self.write_drive = r.opt(drive)?;
         self.drq_in = r.u32()?;
         self.intrq_in = r.u32()?;
         // the disks wait for `commit_loaded`: the snapshot can still be
@@ -840,6 +848,41 @@ mod tests {
         write_sector(&mut fdc, 2, 2, 0x44);
         assert_eq!(fdc.read(0) & (STATUS_RECORD_NOT_FOUND | STATUS_WRITE_FAULT), 0);
         assert_eq!(std::fs::read(&p).unwrap(), written, "the file is not written");
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A snapshot naming a drive there is none of, or a transfer longer
+    /// than the sector buffer, is refused: each indexes with it.
+    #[test]
+    fn a_snapshot_with_no_such_drive_or_buffer_is_refused() {
+        use crate::snapshot::{Reader, Writer};
+        let p = image_with_pattern("snap-range");
+        let mut fdc = Wd1793::new();
+        fdc.load_image(0, &p, false);
+        fdc.write(1, 0);
+        fdc.write(2, 0);
+        fdc.write(0, 0xa8); // a write under way, so write_drive is set
+        let mut w = Writer::new();
+        fdc.save_state(&mut w).unwrap();
+        let saved = w.into_bytes();
+        fdc.load_state(&mut Reader::new(&saved)).unwrap();
+        // five registers, five flags and the index counter lead; then the
+        // selected drive, the buffer's index and count, the buffer, and
+        // the drive being written
+        let selected = 5 + 5 + 4 + 1;
+        let count = selected + 1 + 4;
+        let write_drive = count + 4 + 4 + SECTOR_SIZE + 1;
+        assert_eq!((saved[selected], saved[write_drive]), (0, 0));
+        for (at, bad, what) in [
+            (selected, DRIVES as u8, "no drive"),
+            (write_drive, DRIVES as u8, "no drive"),
+            (count + 1, 0xff, "a transfer of"),
+        ] {
+            let mut s = saved.clone();
+            s[at] = bad;
+            let err = fdc.load_state(&mut Reader::new(&s)).unwrap_err();
+            assert!(err.contains(what), "byte {at}: {err}");
+        }
         std::fs::remove_file(&p).ok();
     }
 

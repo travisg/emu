@@ -178,6 +178,12 @@ impl CompactFlash {
         self.eight_bit = r.bool()?;
         r.bytes_into(&mut self.buffer)?;
         self.index = r.u32()? as usize;
+        // with DRQ up a data-port access indexes the buffer with it, and
+        // in sixteen-bit mode with the byte after it
+        let off_the_end = self.index >= SECTOR_SIZE || (!self.eight_bit && !self.index.is_multiple_of(2));
+        if self.status & STATUS_DRQ != 0 && off_the_end {
+            return Err(format!("compact flash: no byte {} in a sector's transfer", self.index));
+        }
         self.remaining = r.u32()?;
         self.writing = r.bool()?;
         self.current = r.u64()?;
@@ -417,6 +423,31 @@ mod tests {
         let err = cf.load_state(&mut Reader::new(&saved)).unwrap_err();
         assert!(err.contains("has changed"), "{err}");
         assert_eq!(cf.read(0), 2, "nothing loaded: the transfer went on from {before}");
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// A snapshot whose transfer is past the end of the sector buffer is
+    /// refused: the next data-port access would index with it.
+    #[test]
+    fn a_snapshot_with_a_transfer_off_the_buffer_is_refused() {
+        use crate::snapshot::{Reader, Writer};
+        let p = image("snap-index", 4);
+        let mut cf = CompactFlash::new();
+        cf.mount(&p);
+        cf.write(2, 1);
+        cf.write(7, 0x20);
+        let mut w = Writer::new();
+        cf.save_state(&mut w).unwrap();
+        let mut saved = w.into_bytes();
+        // the tail: index, remaining, writing, current
+        let index = saved.len() - (4 + 4 + 1 + 8);
+        for bad in [SECTOR_SIZE as u32, 3] {
+            saved[index..index + 4].copy_from_slice(&bad.to_le_bytes());
+            let err = cf.load_state(&mut Reader::new(&saved)).unwrap_err();
+            assert!(err.contains("no byte"), "{bad}: {err}");
+        }
+        saved[index..index + 4].copy_from_slice(&2u32.to_le_bytes());
+        cf.load_state(&mut Reader::new(&saved)).unwrap();
         std::fs::remove_file(&p).ok();
     }
 

@@ -358,6 +358,9 @@ impl Channel {
     fn load(&mut self, r: &mut crate::snapshot::Reader, pacing_hz: u64, fast_io: bool) -> Result<(), String> {
         r.bytes_into(&mut self.wr)?;
         self.pointer = r.u8()?;
+        if self.pointer as usize >= self.wr.len() {
+            return Err(format!("sio: no write register {}", self.pointer));
+        }
         self.line = r.bytes()?.iter().copied().collect();
         self.rx_remaining = r.u32()?;
         self.rx_fifo = r.bytes()?.iter().copied().collect();
@@ -565,6 +568,24 @@ impl Z80Sio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A snapshot's register pointer past WR7 is refused: the next control
+    /// write would index the write registers with it.
+    #[test]
+    fn a_snapshot_with_no_such_write_register_is_refused() {
+        use crate::snapshot::{Reader, Snapshot, Writer};
+        let mut sio = rc2014_a();
+        let mut w = Writer::new();
+        sio.save(&mut w);
+        let mut saved = w.into_bytes();
+        // channel A leads: its eight write registers, counted, then the pointer
+        let pointer = 4 + 8;
+        saved[pointer] = 7;
+        sio.load(&mut Reader::new(&saved)).unwrap();
+        saved[pointer] = 8;
+        let err = sio.load(&mut Reader::new(&saved)).unwrap_err();
+        assert!(err.contains("no write register 8"), "{err}");
+    }
 
     /// An RC2014-shaped channel A: 7.3728 MHz in, WR4 x64 with one stop
     /// bit, eight data bits, no parity -- 115200 baud, 640 cycles a
