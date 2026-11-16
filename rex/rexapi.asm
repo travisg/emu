@@ -63,7 +63,8 @@ K.ALHIW         EQU     X'1B'           ; compares no byte addresses in what it
 ; or written a character at a time through a channel, of which the kernel
 ; has four; what a task leaves open is let go when it exits, and a file it
 ; was writing and never closed is gone.  A new file replaces an older one
-; of its name when it is closed, not before.  Every answer that is not
+; of its name when it is closed, not before, and has half of the largest
+; run of free sectors to grow into.  Every answer that is not
 ; what was asked for is one of the E. values below, all minus.
 K.LOOK          EQU     X'28'           ; ACR = eight words, the first four a name
 ;                                       ; -> zero and the last four filled in --
@@ -121,7 +122,9 @@ T.ARG           EQU     16              ; the command tail: the word address of
                                         ; its line, a zero byte after it -- or
                                         ; zero, if nothing did
 T.SWP           EQU     17              ; nonzero: the task is swapped out
-T.LEN           EQU     18              ; words in a node
+T.MW            EQU     18              ; the kernel's, while the task waits for core
+T.RES           EQU     19              ; the second its blocks last arrived in core
+T.LEN           EQU     20              ; words in a node
 
 SRUN            EQU     0
 SSLP            EQU     1

@@ -33,9 +33,10 @@ is read and written whole, as one 376-word transfer:
 Files are contiguous. The entries are in disc order and account for every
 data sector between them: a hole is an entry like any other, each entry
 starts where the one before it ends, no two holes touch, and the unused
-entries are all at the end. A file being written holds the hole it was
-given until it is closed, when it is cut to its length and the rest is a
-hole again; one that nobody closed is a hole to whoever looks next.
+entries are all at the end. A file being written holds what it was given --
+half of the largest hole there was -- until it is closed, when it is cut to
+its length and the rest is a hole again; one that nobody closed is a hole
+to whoever looks next.
 
 As a program this lists, checks, extracts and deletes; tools/mkdisc703.py
 is what makes a platter and puts files on it.

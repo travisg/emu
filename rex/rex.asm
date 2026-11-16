@@ -3,13 +3,14 @@
 ; REX -- Raytheon EXec: a round-robin executive for the 703, preemptive
 ; and cooperative at once.
 ;
-; Four tasks share the processor at power-on, their control blocks a ring
+; Five tasks share the processor at power-on, their control blocks a ring
 ; of linked nodes the scheduler walks, and whatever the shell loads joins
 ; them.  Three print a letter through an interrupt-driven teletype driver
 ; and then sleep for a fixed number of ticks, so the scheduling is
 ; visible in the output: the letters arrive at their own intervals, and
 ; when every task is asleep the idle task -- a fifth node, off the ring
-; -- has the processor.  One is a shell, which waits on a queue of
+; -- has the processor.  One is the swapper (rexswap.asm), asleep until
+; more is loaded than core holds.  One is a shell, which waits on a queue of
 ; keystrokes and runs a command, and can load a module off the disc as a
 ; task of its own: Tiny BASIC, the interpreter of test/703/bcore.asm
 ; behind the glue of brex.asm, is one, and RUN BASIC hands it the console
@@ -20,8 +21,9 @@
 ;
 ;   HELP or ?    the command list
 ;   UPTIME, UP   seconds since the executive came up
-;   STAT         every task's job number, name and state, and how long
-;                each sleeper has left
+;   STAT         every task's job number, name and state, how long each
+;                sleeper has left, and OUT for one that is on the disc;
+;                and, with a swap file, how many have gone out and come in
 ;   STOP  [A-C]  suspend a letter task, or all three
 ;   START [A-C]  release one, or all three
 ;   STOP n, START n   the same for a loaded task, by job number
@@ -226,6 +228,31 @@
 ;   is a promise to compare no byte addresses in it.  A module is put
 ;   above the fence only if its directory entry says it may be.
 ;
+; * A TASK'S BLOCKS MAY BE ON THE DISC, AND ITS NODE NEVER IS.  When an
+;   allocation finds nothing that fits, the caller's request goes into
+;   its node and the swapper is woken (ALWAIT); the swapper writes out
+;   every block some other task owns and frees them, and the caller
+;   tries again.  A task that is out has T.SWP set, and PICK passes over
+;   it -- waking the swapper instead, if the task could otherwise run --
+;   until its blocks have been cut out of the free list again exactly
+;   where they were (ALLOCAT) and read back.  They have to come back to
+;   the same words: a module is relocated once, when it is loaded.
+;   Everything that wakes a task touches only its node, so a task may
+;   go out in any state.  rexswap.asm's header has the rest: who may be
+;   put out, and how the disc is shared with a loader that is waiting
+;   for core.
+;
+; * EVERY BLOCK IS AN EVEN NUMBER OF WORDS, header included, so every
+;   block boundary in the pool is on an even word.  That is what makes
+;   cutting a block back out of the free list always possible when its
+;   words are free: what is left on either side is nothing, or room for
+;   a header.
+;
+; * NOTHING IS COMPARED AGAINST WHERE A BLOCK WOULD END.  A block's
+;   start plus a size of several thousand words can pass X'7FFF', which
+;   is minus to this machine's compares; the allocator compares the room
+;   in a free block with the size instead.
+;
 ; * THE POOL IS OWNED WORD BY WORD.  Core from POOLB to POOLE is a
 ;   first-fit list of free blocks, every block two words of header in
 ;   front of its payload: the size, and either the next free block or the
@@ -280,11 +307,13 @@
 ;   1000-6FFF  the pool, which the allocator hands out: what the shell
 ;              loads and its workspaces live there.  The fence is the
 ;              two words below 4000
-;   7000-763F  the filesystem (rexfs.asm, the second file of this deck):
+;   7000-76FF  the filesystem (rexfs.asm, the second file of this deck):
 ;              the directory's routines, the channels and the bodies of
 ;              the file calls, then the four channels and the directory
 ;              itself
-;   7E00-7FAF  the node arena
+;   7800-7BFF  the swapper (rexswap.asm, the third): its task, its table
+;              of extents in the swap file, and two sectors of block lists
+;   7E00-7FDF  the node arena
 ;
 ; Build with make -C rex: asm703.py over this file and rexfs.asm, as one
 ; deck, into rex/build, and the modules beside it -- brex.asm over test/703/bcore.asm is basic.obj, the
@@ -397,9 +426,15 @@ T.KLK           EQU     13              ; a kernel call this task is blocked
 T.KAR           EQU     14              ; in: its way back, its argument and
 T.KDS           EQU     15              ; its body -- see KENTER
 T.ARG           EQU     16              ; the command tail's block, or zero
-T.SWP           EQU     17              ; first sector of the swap extent;
-                                        ; zero: the task is in core
-T.LEN           EQU     18              ; words in a node
+T.SWP           EQU     17              ; where the task's blocks are: zero,
+                                        ; in core; minus one, on their way
+                                        ; out or in; else on the disc, one
+                                        ; more than the swap extent's sector
+T.MW            EQU     18              ; waiting for core: 1 asking, 2 told
+                                        ; there is nobody to put out, 3 told
+                                        ; to try again
+T.RES           EQU     19              ; the second its blocks last arrived
+T.LEN           EQU     20              ; words in a node
 
 SRUN           EQU     0
 SSLP           EQU     1
@@ -418,9 +453,10 @@ Q.BUF           EQU     4               ; word address of the ring
 Q.WTR           EQU     5               ; the block waiting, or -1
 QW              EQU     6               ; words per descriptor
 
-NRING           EQU     4               ; nodes on the ring at power-on: A,
-                                        ; B, C and the shell.  Idle is off
-                                        ; it, the scans' explicit fallback.
+NRING           EQU     5               ; nodes on the ring at power-on: A,
+                                        ; B, C, the shell and the swapper.
+                                        ; Idle is off it, the scans'
+                                        ; explicit fallback.
 
 POOLB           EQU     X'1000'         ; the pool: core the allocator hands
 POOLE           EQU     X'7000'         ; out, from the shell to the filesystem
@@ -454,6 +490,8 @@ E.NDIR          EQU     X'FFFA'         ; the platter has no directory
 E.PROT          EQU     X'FFF9'         ; a system file
 E.EXST          EQU     X'FFF8'         ; the new name is taken
 
+SWAPST          EQU     X'F080'         ; the swapper's first status: global,
+                                        ; and the page it starts in, X'7800'
 NARB            EQU     X'7E00'         ; the node arena: NARN nodes for what
 NARN            EQU     24              ; the shell loads, at the top of core
 NARID           EQU     5               ; the first one's job number
@@ -795,7 +833,17 @@ PKSCN           CAX
                 LDW     *T.STA
                 SAZ                     ; runnable?
                 JMP     PKNRD
+                LDW     *T.SWP
+                SAZ                     ; and its blocks in core?
+                JMP     PKOUT
                 JMP     PKPIK
+PKOUT           LDX     KSWAP           ; no: that is the swapper's to mend,
+                LDW     *T.STA          ; so it is woken -- only out of its
+                CMW     KWAIT           ; wait -- and the scan goes on
+                SEQ
+                JMP     PKNRD
+                CLR
+                STW     *T.STA
 PKNRD           LDW     SCTRY
                 SUB     K1
                 STW     SCTRY
@@ -1066,6 +1114,7 @@ QCONSB          RES     QCONSN
 KSLP            WORD    SSLP
 KNRING          WORD    NRING
 KRING           WORD    ATCB            ; where a walk of the ring starts
+KSWAP           WORD    SWTCB           ; the swapper's node
 KIDLE           WORD    IDTCB           ; and where a scan with nothing
                                         ; runnable falls back to
 KPGMSK          WORD    X'7C00'         ; the page bits of a word address, which
@@ -1078,22 +1127,24 @@ KISRE           WORD    ISREND
 ; start uniformly at *T.NXT.  The shell's context is blank because the
 ; kernel becomes the shell and the first tick fills it in.  A status is
 ; GLB (X'80') plus the entry page in the EXR field, and LTASK and IDLE
-; live in page 0, so theirs is plain zero; SPAWN builds one for whatever
-; the loader brings in.  A zero status word would resume a task in local
+; live in page 0, so theirs is plain zero; the swapper's is its own
+; page's; SPAWN builds one for whatever the loader brings in.  A zero status word would resume a task in local
 ; mode pointed at page 0.
 ;
 ;                    STA    NXT   ACR IXR PCR    MST   DLY MBX CHR NAP NAM  CON
-;                    ID KLK KAR KDS ARG SWP
+;                    ID KLK KAR KDS ARG SWP MW RES
 ATCB            WORD SOFF, BTCB, 0,  0,  LTASK, X'80', 0,  0,  'A',30, 'A ',0
-                WORD 1, 0,  0,  0,  0,  0
+                WORD 1, 0,  0,  0,  0,  0,  0, 0
 BTCB            WORD SOFF, CTCB, 0,  0,  LTASK, X'80', 0,  0,  'B',45, 'B ',0
-                WORD 2, 0,  0,  0,  0,  0
+                WORD 2, 0,  0,  0,  0,  0,  0, 0
 CTCB            WORD SOFF, SHTCB,0,  0,  LTASK, X'80', 0,  0,  'C',60, 'C ',0
-                WORD 3, 0,  0,  0,  0,  0
-SHTCB           WORD SRUN, ATCB, 0,  0,  0,     0,     0,  0,  0,  0,  'SH',0
-                WORD 4, 0,  0,  0,  0,  0
+                WORD 3, 0,  0,  0,  0,  0,  0, 0
+SHTCB           WORD SRUN, SWTCB,0,  0,  0,     0,     0,  0,  0,  0,  'SH',0
+                WORD 4, 0,  0,  0,  0,  0,  0, 0
+SWTCB           WORD SRUN, ATCB, 0,  0,  SWAPR, SWAPST,0,  0,  0,  0,  'SW',0
+                WORD 0, 0,  0,  0,  0,  0,  0, 0
 IDTCB           WORD SRUN, ATCB, 0,  0,  IDLE,  X'80', 0,  0,  0,  0,  'ID',0
-                WORD 0, 0,  0,  0,  0,  0
+                WORD 0, 0,  0,  0,  0,  0,  0, 0
 
 ; The disc has one user at a time, and IOLOCK says who.  Everything that
 ; starts a transfer holds it first -- a task's call through the vector,
@@ -1479,12 +1530,8 @@ ALLOC           MSK
 ALCOM           STW     ALMSK           ; the window less one, or zero for any
                 STX     ALRET
                 CLR
-                STW     ALHI            ; below the fence, and nowhere else
-ALLOW           CLR
-                STW     ALFLO
-                LDW     KFENCE
-                STW     ALCEI
-                JMP     ALGO
+                STW     ALHIQ           ; below the fence, and nowhere else
+                JMP     ALBEG
 ALLCHW          MSK
                 STW     ALSIZ
                 LDW     K2047
@@ -1499,8 +1546,31 @@ ALLOCH          MSK
 ALCOMH          STW     ALMSK
                 STX     ALRET
                 LDW     K1
-                STW     ALHI            ; above the fence, and below it if
-                LDW     KFENCE          ; there is nothing there
+                STW     ALHIQ           ; above the fence, and below it if
+                                        ; there is nothing there
+ALBEG           LDW     ALSIZ           ; an even number of words, always:
+                ADD     K1              ; every block then starts on an even
+                AND     KFFFE           ; word, which is what lets one that
+                STW     ALSIZ           ; was swapped out be cut out of the
+                LDW     ALMSK           ; free list again exactly where it
+                SAZ                     ; was (ALLOCAT).  And one that must
+                JMP     ALBW            ; lie in a window cannot be bigger
+                JMP     ALBGO           ; than the window
+ALBW            ADD     K1
+                CMW     ALSIZ
+                SLS
+                JMP     ALBGO
+                JMP     ALFAIL
+ALBGO           LDW     ALHIQ
+                STW     ALHI
+                SAZ
+                JMP     ALBH
+ALLOW           CLR
+                STW     ALFLO
+                LDW     KFENCE
+                STW     ALCEI
+                JMP     ALGO
+ALBH            LDW     KFENCE
                 STW     ALFLO
                 LDW     KPOOLE
                 STW     ALCEI
@@ -1566,15 +1636,22 @@ ALCK2           LDW     ALE             ; W, the window after E's
                 JMP     ALNXT
 
 ; Does [P, P+size) lie inside the block?  FE is the block's end, F+2+S.
+; The test is on the room from P to FE against the size, not on where
+; the block would end: with a size of several thousand words and P in
+; the upper half of core, P+size passes X'7FFF' and is minus, and this
+; machine's compares are signed.
 ALFIT           LDW     ALF
                 ADD     K2
                 ADD     ALS
                 STW     ALFE
-                LDW     ALP
+                SUB     ALP
+                CMW     ALSIZ
+                SLS                     ; less room than is wanted?
+                JMP     ALFITS
+                JMP     ALNXT
+ALFITS          LDW     ALP
                 ADD     ALSIZ
                 STW     ALEND
-                CMW     ALFE
-                SGR                     ; overruns the block?
                 JMP     ALTAKE
 ALNXT           LDW     ALF             ; on to the next free block
                 STW     ALPRV
@@ -1640,17 +1717,159 @@ ALHDR           LDX     ALH             ; the header: size, and the owner
                 LDW     CURT
                 ORI     K8000
                 STW     *1
+                LDX     CURT            ; no longer waiting for core, if it was
+                CLR
+                STW     *T.MW
                 LDW     ALP
                 JMP     ALOUT
 ALNONE          LDW     ALHI
                 SAZ                     ; a second try to make, below the fence?
                 JMP     ALAGN
+                LDW     SWSECS
+                SAZ                     ; nothing fits.  Is there a swap file?
+                JMP     ALWAIT
+ALFAIL          LDX     CURT
+                CLR
+                STW     *T.MW
 ALOUT           LDX     ALRET           ; the link first: past the UNM the
                 UNM                     ; cells are the next caller's
                 JSX     *0
 ALAGN           CLR
                 STW     ALHI
                 JMP     ALLOW
+
+; Nothing fits, and there is a swapper: ask it to put somebody out, and
+; wait.  The request goes into the caller's node -- its link, the size,
+; and the window with bit 0 set for a caller that will take core above
+; the fence -- since the cells here are the next caller's the moment the
+; processor is handed on.  The swapper answers in T.MW: 3, somebody has
+; gone, try again; 2, there is nobody to put out, and the caller gets its
+; zero.  Any other wake is advice, and the asking is simply repeated.
+ALWAIT          LDX     CURT
+                LDW     *T.MW
+                CMW     K2
+                SNE
+                JMP     ALFAIL
+                LDW     ALRET
+                STW     *T.KLK
+                LDW     ALSIZ
+                STW     *T.KAR
+                LDW     ALHIQ
+                SAZ
+                LDW     K8000
+                ORI     ALMSK
+                STW     *T.KDS
+                LDW     K1
+                STW     *T.MW
+                LDX     KSWAP
+                LDW     *T.STA
+                CMW     KWAIT
+                SEQ                     ; the swapper, out of its wait
+                JMP     ALW1
+                CLR
+                STW     *T.STA
+ALW1            LDX     CURT
+                LDW     KWAIT
+                STW     *T.STA
+                JSX     SWTCH
+                MSK
+                LDX     CURT
+                LDW     *T.KLK
+                STW     ALRET
+                LDW     *T.KAR
+                STW     ALSIZ
+                LDW     *T.KDS
+                AND     K7FFF
+                STW     ALMSK
+                LDW     *T.KDS
+                AND     K8000
+                STW     ALHIQ
+                JMP     ALBEG
+
+; Cut the words [H, H+n) out of the free list as an allocated block: ACR
+; is H, where its header goes, ATN is n, header and all, and ATTAG is the
+; owner tag.  One if it is done; zero if those words are not all free.
+; This is how a block that was swapped out comes back to where it was.
+; Every block boundary is on an even word, so what is left of the free
+; block on either side is nothing or at least a header.  The caller holds
+; the mask.
+ALLOCAT         SUBR
+                STW     ATH
+                ADD     ATN
+                STW     ATE
+                CLR
+                STW     ALPRV
+                LDW     FREHD
+ATSC            STW     ALF
+                SAZ
+                JMP     AT1
+                JMP     ATNO
+AT1             CMW     ATH
+                SGR                     ; a free block that starts past H:
+                JMP     AT2             ; the list is in address order, so
+                JMP     ATNO            ; H is in none
+AT2             CAX
+                LDW     *0
+                ADD     ALF
+                ADD     K2
+                STW     ALFE
+                CMW     ATH
+                SGR                     ; ends at or before H: the next one
+                JMP     ATNX
+                LDW     ALFE
+                CMW     ATE
+                SLS                     ; ends before H+n: not all free
+                JMP     ATFIT
+                JMP     ATNO
+ATNX            LDW     ALF
+                STW     ALPRV
+                CAX
+                LDW     *1
+                JMP     ATSC
+ATFIT           LDX     ALF
+                LDW     *1
+                STW     ALNX
+                LDW     ALFE            ; what is left above it stays free
+                SUB     ATE
+                SAZ
+                JMP     ATTL
+                JMP     ATLD
+ATTL            SUB     K2
+                LDX     ATE
+                STW     *0
+                LDW     ALNX
+                STW     *1
+                LDW     ATE
+                STW     ALNX
+ATLD            LDW     ATH             ; and so does what is left below
+                SUB     ALF
+                SAZ
+                JMP     ATLF
+                LDW     ALPRV           ; nothing below: F leaves the list
+                SAZ
+                JMP     ATU1
+                LDW     ALNX
+                STW     FREHD
+                JMP     ATHDR
+ATU1            CAX
+                LDW     ALNX
+                STW     *1
+                JMP     ATHDR
+ATLF            SUB     K2
+                LDX     ALF
+                STW     *0
+                LDW     ALNX
+                STW     *1
+ATHDR           LDX     ATH
+                LDW     ATN
+                SUB     K2
+                STW     *0
+                LDW     ATTAG
+                STW     *1
+                LDW     K1
+                EXIT    ALLOCAT
+ATNO            CLR
+                EXIT    ALLOCAT
 
 ; Give a block back.  FREEI does the work with the mask held by its
 ; caller, which is FREE for a task and the exit path for a task's whole
@@ -1750,6 +1969,12 @@ ALRET           WORD    0               ; the caller's link
 ALFLO           WORD    0               ; the search's floor and ceiling:
 ALCEI           WORD    0               ; a free block's header lies between
 ALHI            WORD    0               ; nothing above the fence fits: try below
+ALHIQ           WORD    0               ; the caller will take core above the fence
+ATH             WORD    0               ; ALLOCAT's block, where it ends,
+ATE             WORD    0
+ATN             WORD    0               ; its length and its owner tag
+ATTAG           WORD    0
+SWSECS          WORD    0               ; sectors in the swap file; zero: none
 ALPRV           WORD    0               ; the search: the free block before F
 ALF             WORD    0               ; F, and its payload S
 ALS             WORD    0
@@ -1769,6 +1994,7 @@ K3              WORD    3
 K1023           WORD    1023
 K2047           WORD    2047
 K8000           WORD    X'8000'
+KFFFE           WORD    X'FFFE'
 KPOOLB          WORD    POOLB           ; the pool: [POOLB, POOLE)
 KPOOLE          WORD    POOLE
 KPOOLH          WORD    POOLH           ; its high part's first block,
@@ -1799,6 +2025,8 @@ SPAWN           SUBR
                 SLL     1
                 ORI     KGLB
                 STW     *T.MST
+                LDW     SECS
+                STW     *T.RES
                 MSK
                 LDX     CURT
                 LDW     *T.NXT
@@ -1892,6 +2120,9 @@ RPQ             LDW     QCONS+Q.WTR
 RPCH            LDW     XDEAD           ; its channels
                 SMB     FCREL
                 JSX     FCREL
+                LDW     XDEAD           ; and its place in the swap file, if
+                SMB     SWXFRE          ; its blocks are there and not here
+                JSX     SWXFRE
                 LDW     KPOOLB          ; the sweep, block by block
 RPSWP           STW     XB
                 CMW     KPOOLE
@@ -1953,6 +2184,7 @@ NAL1            CAX
                 STW     *T.KDS
                 STW     *T.ARG
                 STW     *T.SWP
+                STW     *T.MW
                 CXA
                 EXIT    NALLOC
 NFREE           SUBR
@@ -2122,14 +2354,32 @@ SHPUP           SUBR
                 JSX     SHMSG
                 EXIT    SHPUP
 
-; The tasks: job number, name, state, and how much longer a sleeper has.
-; Not a walk of the ring, which a task leaving it part way through would
-; send astray: the four nodes that are always here, in the order they
-; lie in core, then every arena node that is in use, then idle.
+; The tasks: job number, name, state, how much longer a sleeper has, and
+; OUT for one whose blocks are on the disc.  Not a walk of the ring,
+; which a task leaving it part way through would send astray: the five
+; nodes that are always here, in the order they lie in core, then every
+; arena node that is in use, then idle.
 SHSTAT          JSX     SHPUP
-                LDW     SHKRNG
+                SMB     SWSECS
+                LDW     SWSECS
+                SAZ                     ; a swap file: then how busy it has been
+                JMP     SHSTSW
+                JMP     SHST0
+SHSTSW          LDW     SHMSWP
+                JSX     SHMSG
+                SMB     SWOUTS
+                LDW     SWOUTS
+                JSX     SHDEC
+                LDW     SHMSWO
+                JSX     SHMSG
+                SMB     SWINS
+                LDW     SWINS
+                JSX     SHDEC
+                LDW     SHMSWI
+                JSX     SHMSG
+SHST0           LDW     SHKRNG
                 STW     SHTO
-                LDW     SHK4
+                LDW     SHK5
                 STW     SHTI
 SHST1           JSX     SHSTLN
                 LDW     SHTO
@@ -2195,7 +2445,14 @@ SHSTLN          SUBR
                 LDX     SHTO
                 LDW     *T.DLY
                 JSX     SHDEC
-SHSTN           JSX     SHNL
+SHSTN           LDX     SHTO
+                LDW     *T.SWP
+                SAZ
+                JMP     SHSTO
+                JMP     SHSTE
+SHSTO           LDW     SHMOUT
+                JSX     SHMSG
+SHSTE           JSX     SHNL
                 EXIT    SHSTLN
 
 ; STOP and START differ only in the state they store.  With no argument
@@ -3504,6 +3761,7 @@ SHK1            WORD    1
 SHK2            WORD    2
 SHK3            WORD    3
 SHK4            WORD    4
+SHK5            WORD    5
 SHK6            WORD    6
 SHK8            WORD    8
 SHK10           WORD    10
@@ -3599,6 +3857,10 @@ SHMNOF          WORD    SHNOF
 SHMNRD          WORD    SHNRD
 SHMNDR          WORD    SHNDR
 SHMSFR          WORD    SHSFR
+SHMSWP          WORD    SHSWP
+SHMSWO          WORD    SHSWO
+SHMSWI          WORD    SHSWI
+SHMOUT          WORD    SHOUT
 SHMLOW          WORD    SHLOW
 SHMHIG          WORD    SHHIG
 SHMEDE          WORD    SHEDE
@@ -3623,6 +3885,10 @@ SHNOF           WORD    SHNOFT*2,SHNOFE*2
 SHNRD           WORD    SHNRDT*2,SHNRDE*2
 SHNDR           WORD    SHNDRT*2,SHNDRE*2
 SHSFR           WORD    SHSFRT*2,SHSFRE*2
+SHSWP           WORD    SHSWPT*2,SHSWPT*2+6
+SHSWO           WORD    SHSWOT*2,SHSWOT*2+5
+SHSWI           WORD    SHSWIT*2,SHSWIT*2+5
+SHOUT           WORD    SHOUTT*2,SHOUTT*2+4
 SHLOW           WORD    SHLOWT*2,SHLOWT*2+5
 SHHIG           WORD    SHHIGT*2,SHHIGT*2+7
 SHEDE           WORD    SHEDET*2,SHEDEE*2
@@ -3652,6 +3918,10 @@ SHHL3T          TEXT    "@NAME RUNS A FILE OF COMMANDS. ANY OTHER WORD RUNS THAT
 SHHL3E          EQU     $
 SHFRET          TEXT    "FREE  "        ; five characters of it
 SHLOWT          TEXT    " LOW  "        ; and five of this
+SHSWPT          TEXT    "SWAPS "
+SHSWOT          TEXT    " OUT  "        ; five
+SHSWIT          TEXT    " IN\r\n "      ; five
+SHOUTT          TEXT    " OUT"
 SHHIGT          TEXT    " HIGH\r\n "    ; and seven
 SHNOFT          TEXT    "NO SUCH FILE\r\n"
 SHNOFE          EQU     $

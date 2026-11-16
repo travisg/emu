@@ -51,6 +51,21 @@ the platter, and the kernel's count of tasks that found the disc taken
 must not be zero -- three tasks that never met at the disc prove nothing
 about the lock.
 
+A third machine, also without --fast-io, is the swapper's. Four copies
+of hog.asm each take 8,000 words of core, which is more than there is,
+fill them with a pattern of their own and check it thirty times over
+ten seconds; each leaves its verdict in a sector of its own. The first
+two are stopped before the other two are loaded, so they are the ones
+put out to make room, and STAT has to show them out and stopped; then
+they are started again. For all four to finish, each has to go out to
+the disc and come back to the same words, which another had in
+between, and at the end as many have to have come back as went. Then four Tiny BASICs want the
+core below word X'4000', which holds two: three run a program behind
+the prompt that counts and then saves itself under another name, and
+one is typed at in front of them. The saved listings are read back on
+the host -- a program that came through being put out and brought back
+with a word wrong would not list as it was written.
+
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
   nohello  a platter without the hello module
@@ -59,6 +74,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nosave   the directory never written back to the disc
   noguard  the kernel's refusal of a console read by a task that does
            not have the console patched out
+  noswapin a task's blocks cut out of the free list where they were, but
+           never read back into them
 """
 
 import contextlib
@@ -86,14 +103,14 @@ DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
 FST_OBJ = os.path.join(BUILD, 'fst.obj')
 MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
     (name, os.path.join(BUILD, name.lower() + '.obj'))
-    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP'))
+    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG'))
 # Every module but BASIC goes on the platter marked as loadable above
 # word X'4000', where the kernel then puts it.
 LOW_ONLY = ('BASIC',)
 
 # The pool and the node arena, as rex.asm lays them out.
 POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
-NARB, NARN, T_LEN, T_STA, T_NAM, SFREE = 0x7e00, 24, 18, 0, 10, 4
+NARB, NARN, T_LEN, T_STA, T_NAM, SFREE = 0x7e00, 24, 20, 0, 10, 4
 
 
 def blocks_of(emu, name):
@@ -104,8 +121,8 @@ def blocks_of(emu, name):
     try:
         # the port gives 128 words to a request
         arena = []
-        for start in range(NARB, NARB + NARN * T_LEN, 108):
-            arena += emu.memw(start, 108)
+        for start in range(NARB, NARB + NARN * T_LEN, 6 * T_LEN):
+            arena += emu.memw(start, 6 * T_LEN)
         packed = ((ord(name[0]) | 0x80) << 8) | (ord(name[1]) | 0x80)
         nodes = [NARB + i * T_LEN for i in range(NARN)
                  if arena[i * T_LEN + T_STA] != SFREE and arena[i * T_LEN + T_NAM] == packed]
@@ -131,6 +148,21 @@ MSG = b'FIRST LINE\nSECOND LINE\n'
 CMDS = b'ECHO FROM A FILE\r\nMEM\r\nHELLO\r\n'
 INIT = b'ECHO INIT RAN\r\n'
 SQ = b'10 PRINT "FROM A HOST FILE"\n20 FOR I=1 TO 3\n30 PRINT I*I\n40 NEXT I\n'
+
+# The swap session's: how big the swap file is, hog.asm's constants, and
+# the three programs the background BASICs run -- each counts, to be
+# running for a while, and then saves itself as OUTn.BA.
+SWAP_SECTORS = 1024
+HOG_WORDS = 8000
+HOG_COPIES = 4
+HOG_SECTOR = 4200
+HOG_GOOD = 0x600d
+JOBS = 3
+JOB_COUNT = 300
+
+
+def job_lines(n):
+    return [b'10 REM JOB %d' % n, b'20 FOR I=1 TO %d' % JOB_COUNT, b'30 NEXT I', b'40 SAVE OUT%d' % n]
 # What PUT is given, and what it puts: the keys as the teletype sends
 # them, bit 7 set, a line feed after every carriage return.
 NOTE_KEYS = 'LINE ONE\rLINE TWO\r'
@@ -599,6 +631,117 @@ def disc_session(emu, image):
         raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
 
 
+def stat_until_gone(emu, s, name, timeout=300):
+    """STAT, over and over, until no task of that two-character name is
+    listed; every listing there was, for the caller to look through."""
+    seen = []
+    row = re.compile(rb'^\d+ ' + name + rb' ', re.M)
+    deadline = time.monotonic() + timeout
+    while True:
+        emu.wait_quiet(timeout=120)
+        mark = len(emu.output)
+        emu.key('STAT\r')
+        emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark, timeout=120)
+        seen.append(s.since(mark))
+        if not row.search(seen[-1]):
+            emu.wait_quiet(timeout=120)
+            return seen
+        if time.monotonic() > deadline:
+            raise AssertionError('tasks named %s never finished: %r' % (name.decode(), seen[-1]))
+
+
+def swap_session(emu, image):
+    """More loaded than core holds, twice over."""
+    symbols = Symbols()
+    symbols.load(REX_LST)
+    if CONTROL == 'noswapin':
+        # SWIRL is LDW / CMW / SLS / JMP / JSX SWITEM / CLR / JSX SWXFER:
+        # without the last a block comes back as whatever is lying there
+        emu.writew(symbols.value('SWIRL') + 6, [NOP])
+    s = Session(emu)
+    emu.run()
+    s.wait(b'REX 703 UP')
+    s.wait(re.compile(rb'^INIT RAN\r', re.M))
+    mark = s.say('MEM')
+    s.wait(PROMPT)
+    before = re.search(rb'^FREE (\d+ LOW \d+ HIGH)', s.since(mark), re.M).group(1)
+    emu.wait_quiet()
+
+    # Two hogs, stopped; then two more, which there is no room for until
+    # the two that cannot run have gone out. All typed ahead, so that it
+    # is the machine's time the hogs' ten seconds are measured against,
+    # and the STAT at the end lists them as the fourth load leaves them.
+    first, second = FIRST_JOB, FIRST_JOB + 1
+    load = 'LOAD HOG %d\r' % HOG_WORDS
+    mark = len(emu.output)
+    emu.key(load * 2 + 'STOP %d\rSTOP %d\r' % (first, second) + load * 2 + 'STAT\r')
+    emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark, timeout=300)
+    listed = s.since(mark)
+    for job in (first, second):
+        if not re.search(rb'^%d HO OFF +OUT\r' % job, listed, re.M):
+            raise AssertionError('hog %d was not stopped and out: %r' % (job, listed))
+    if len(re.findall(rb'^\d+ HO ', listed, re.M)) != HOG_COPIES:
+        raise AssertionError('not four hogs: %r' % listed)
+    emu.wait_quiet(timeout=120)
+    emu.key('START %d\rSTART %d\r' % (first, second))
+    listings = stat_until_gone(emu, s, b'HO')
+    for job in range(FIRST_JOB, FIRST_JOB + HOG_COPIES):
+        with open(image, 'rb') as f:
+            f.seek((HOG_SECTOR + job) * SECTOR_WORDS * 2)
+            got = f.read(SECTOR_WORDS * 2)
+        if got != HOG_GOOD.to_bytes(2, 'big') * SECTOR_WORDS:
+            raise AssertionError('hog %d: its verdict is %s' % (job, got[:8].hex()))
+    swaps = re.search(rb'^SWAPS (\d+) OUT (\d+) IN', listings[-1], re.M)
+    if not swaps or int(swaps.group(1)) < HOG_COPIES or swaps.group(1) != swaps.group(2):
+        raise AssertionError('the swap counts: %r' % (swaps and swaps.group(0)))
+    s.at = len(emu.output)
+    emu.key('MEM\r')
+    emu.wait_for_output(b'FREE ' + before, start=s.at, timeout=60)
+
+    # BASIC lives below word 4000, where two of them fit: three behind
+    # the prompt and one in front.
+    emu.wait_quiet()
+    s.at = len(emu.output)
+    emu.key(''.join('LOAD BASIC JOB%d\r' % n for n in range(1, JOBS + 1)) + 'BASIC\r')
+    s.wait(b'TINY BASIC UNDER REX', timeout=300)
+    s.basic('10 FOR I=1 TO 3\r')
+    s.basic('20 PRINT "FG";I\r')
+    s.basic('30 NEXT I\r')
+    s.basic('RUN\r')
+    s.wait(b'FG1\r\nFG2\r\nFG3\r\n', timeout=300)
+    s.basic('SAVE FG\r')
+    s.basic('BYE\r')
+    s.wait(PROMPT, timeout=300)
+    listings = stat_until_gone(emu, s, b'BA')
+    swaps2 = re.search(rb'^SWAPS (\d+) OUT (\d+) IN', listings[-1], re.M)
+    if not swaps2 or int(swaps2.group(1)) <= int(swaps.group(1)) or swaps2.group(1) != swaps2.group(2):
+        raise AssertionError('four BASICs, and the swap counts: %r' % (swaps2 and swaps2.group(0)))
+    s.at = len(emu.output)
+    emu.key('MEM\r')
+    emu.wait_for_output(b'FREE ' + before, start=s.at, timeout=60)
+
+    emu.key('HALT\r')
+    s.wait(b'REX 703 DOWN', timeout=120)
+    stopped = emu.wait_stopped()
+    if stopped.reason != 'hlt':
+        raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
+
+    with open(image, 'rb') as f:
+        platter = fs703.Platter(bytearray(f.read()))
+    bad = platter.check()
+    if bad:
+        raise AssertionError('the directory breaks its rules: ' + '; '.join(bad))
+
+    def listing(lines):
+        return bytes(c | 0x80 for line in lines for c in line + b'\r\n')
+
+    for n in range(1, JOBS + 1):
+        if platter.read('OUT%d' % n, 'BA') != listing(job_lines(n)):
+            raise AssertionError('OUT%d.BA is not the program job %d ran' % (n, n))
+    if platter.read('FG', 'BA') != listing([b'10 FOR I=1 TO 3', b'20 PRINT "FG";I', b'30 NEXT I']):
+        raise AssertionError('FG.BA is not the program that was typed')
+
+
 def verdict(paper):
     """What the shell had to have printed, on lines of its own: the
     terminal's echo of a command begins with the prompt instead."""
@@ -611,7 +754,9 @@ def verdict(paper):
         return len(re.findall(pattern, text, re.M))
 
     free = re.findall(rb'^FREE (\d+ LOW \d+ HIGH)$', text, re.M)
-    hellos = [int(n) for n in re.findall(rb'HELLO FROM WORD (\d+)', text)]
+    # hello's line whole on a line of its own: the one LOAD started prints
+    # into whatever else is printing and may not be
+    hellos = [int(n) for n in re.findall(rb'^HELLO FROM WORD (\d+)$', text, re.M)]
     checks = [
         ('uptime', line(rb'UPTIME \d+ SEC')),
         ('A stopped', line(rb'^1 A  OFF')),
@@ -627,7 +772,7 @@ def verdict(paper):
         # prompt, a character at a time into whatever else is printing, so
         # it is taken from STAT's ring and the pool instead (session).
         ('hello ran under RUN', line(rb'^HELLO FROM WORD \d')),
-        ('hello loaded high every time', len(hellos) >= 5 and all(n >= POOLH for n in hellos)),
+        ('hello loaded high every time', len(hellos) >= 4 and all(n >= POOLH for n in hellos)),
         ('no such file', line(rb'^NO SUCH FILE')),
         ('the file calls, twice', count(rb'^FST OK$') == 2),
         ('directory: the file left', line(rb'^T2\.TX 1$')),
@@ -646,16 +791,19 @@ def verdict(paper):
     return [name for name, ok in checks if not ok]
 
 
-def make_platter(workdir, log):
+def make_platter(workdir, log, swap=False):
     os.makedirs(os.path.join(workdir, 'disks'))
     image = os.path.join(workdir, 'disks', 'ray703-disc0.img')
     cmd = [sys.executable, MKDISC, image]
+    if swap:
+        cmd += ['--swap', str(SWAP_SECTORS)]
     if CONTROL == 'blank':
         pass
-    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard'):
+    elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin'):
         files = []
-        for name, data in (('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
-                           ('SQ.BA', SQ)):
+        jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
+        for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
+                           ('SQ.BA', SQ)] + jobs:
             files.append((name, os.path.join(workdir, name)))
             with open(files[-1][1], 'wb') as f:
                 f.write(data)
@@ -714,6 +862,17 @@ def main():
             disc_session(emu, image)
             finish(emu)
             log.write(b'\n--- paper, the disc session ---\n' + bytes(emu.output))
+
+            # A platter of its own, with a swap file: the other sessions
+            # run without one, where an allocation that finds no room fails.
+            swapdir = os.path.join(workdir, 'swap')
+            os.makedirs(swapdir)
+            image = make_platter(swapdir, log, swap=True)
+            with cwd(swapdir):
+                emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--no-throttle'], log=log)
+            swap_session(emu, image)
+            finish(emu)
+            log.write(b'\n--- paper, the swap session ---\n' + bytes(emu.output))
         except Exception:
             log.write(b'\n--- harness failure ---\n')
             log.write(traceback.format_exc().encode())

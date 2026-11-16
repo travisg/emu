@@ -9,6 +9,7 @@ tests it.
 
     rex.asm            the executive: scheduler, drivers, queues, the shell
     rexfs.asm          the filesystem: the directory, channels, the file calls
+    rexswap.asm        the swapper: tasks out to the disc and back
     rexapi.asm         the kernel interface a module is assembled against
     rexlib.asm         the printer and the command line, for a module's deck
     brex.asm           the wrapper that makes Tiny BASIC a module
@@ -17,6 +18,7 @@ tests it.
     dskt.asm           a test module: writes a disc sector and reads it back, over and over
     fst.asm            a test module: makes, reads, replaces, renames and deletes files
     nap.asm            a test module: never ends, for the shell to end
+    hog.asm            a test module: holds a block of core and watches it
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
@@ -39,8 +41,8 @@ tenth of a second per character, and the scheduling slices are real machine
 time either way. The shell's commands:
 
     HELP or ?    the command list
-    STAT         every task's job number, name and state, and how long
-                 each sleeper has left
+    STAT         every task's job number, name and state, how long each
+                 sleeper has left, and OUT for one that is on the disc
     UPTIME, UP   seconds since the executive came up
     STOP  [A-C]  suspend a letter task, or all three
     START [A-C]  release one, or all three
@@ -90,7 +92,7 @@ is lost.
 
 ## What it is
 
-Four tasks share the processor at power-on, their control blocks a ring
+Five tasks share the processor at power-on, their control blocks a ring
 of linked nodes, and whatever the shell loads joins them: everything that
 names a task -- the current-task cell, the printer's owner, a queue's
 waiter -- holds a node's address, a field is the indexed displacement off
@@ -100,7 +102,8 @@ and adding a task is linking a node in under `MSK`, which is what
 the loader does through `SPAWN`. Three nodes run the one shared letter
 body (`LTASK`, which reads its letter, nap and mailbox out of its own node
 via `CURT`): print, sleep, repeat -- stopped at power-on, so the machine
-comes up quiet and `START` sets them going. One is the shell. Tiny BASIC
+comes up quiet and `START` sets them going. One is the shell, and one the
+swapper, asleep until more is loaded than core holds. Tiny BASIC
 is a module behind the `brex.asm` glue, which pays bcore's wrapper debts
 with the executive's services: a workspace from the pool at entry, output
 through the task's own mailbox, input through the console queue, the
@@ -246,21 +249,78 @@ transfer takes its half revolution, then runs three copies of `dskt.asm`
 at once: each writes and reads back a sector of its own 250 times, leaves
 its verdict on the platter where the harness reads it, and the kernel's
 count of tasks that found the disc taken has to be more than zero.
+
+A third machine is the swapper's, on a platter with a swap file. Four
+copies of `hog.asm` each take 8,000 words, which is more than there is,
+fill them with a pattern of their own and check it thirty times over ten
+seconds. The first two are stopped before the other two are loaded, so
+they are the ones put out to make room, and `STAT` has to show them out
+and stopped; then they are started again, and all four have to finish
+with their blocks whole -- each having come back to the same words, which
+another hog had in between -- and as many swaps in as out. Then four Tiny
+BASICs want the core below X'4000', which holds two: three run a program
+behind the prompt that counts and then saves itself under another name,
+one is typed at in front of them, and the saved listings are read back on
+the host.
 It runs `--fast-io` (the slices stay real machine time; the clock ignores
 the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
-`=nohello`, `=nolock`, `=nosave` and `=noguard` are its negative controls
--- a platter with nothing on it, one without the hello module, a kernel
-with its wait for the disc patched out, one that never writes the
-directory back, and one that lets any task read the console -- which must
-all FAIL. Two things that make it hard
+`=nohello`, `=nolock`, `=nosave`, `=noguard` and `=noswapin` are its
+negative controls -- a platter with nothing on it, one without the hello
+module, a kernel with its wait for the disc patched out, one that never
+writes the directory back, one that lets any task read the console, and
+one that cuts a returning task's blocks out of the free list but never
+reads them back -- which must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
 at ten characters a second has to be read as a whole field, not matched on
 its first digit.
+
+## Swapping
+
+When more is loaded than core holds, a task that is not running goes out
+to the disc and comes back when it can run again -- what TSS/8 did for its
+users, and what OS/8 never needed, having one. `rexswap.asm` is the whole
+of it, and its header is the reference.
+
+**A task cannot be moved**: its module was relocated once, when it was
+loaded, and has addresses of its own all through it. So what goes out is
+every block in the pool the task owns, each written from where it lies,
+and what comes back is the same blocks cut out of the free list at the
+same addresses -- whoever is in the way by then going out first. The
+task's node never moves, and everything that wakes a task touches only
+its node, so a task may be put out in any state: asleep, stopped, waiting
+on the keyboard or the printer, or runnable. The scheduler passes over one
+whose blocks are not in core, and wakes the swapper if it could otherwise
+run.
+
+The swapper is a task, the fifth on the ring, asleep until an allocation
+finds nothing that fits -- the caller then waits in the allocator with its
+request in its node, where it used to be told no -- or until a task that
+is out can run. It puts out a task that cannot run for choice. One that
+can run goes only once it has been in core through the second it arrived
+in and the next, which is what stops two tasks that want the same core
+from spending all their time changing places; if the only candidates are
+that new, the asker waits for one to age rather than fail. A task that is
+itself waiting for core, or has the disc, is never put out.
+
+On the disc a task is one extent of `SWAP.SY`, a system file the platter is
+made with (`mkdisc703.py --swap N`): a sector listing its blocks and then
+each block. With no `SWAP.SY` there is no swapping, and an allocation that
+finds no room fails as it always did. `STAT` marks a task that is out and
+counts how many have gone out and come in.
+
+Two things had to be true of the allocator first. **Every block is an even
+number of words**, so every boundary in the pool is on an even word and
+what is left either side of a block cut back out of the free list is
+nothing or room for a header. And **nothing is compared against where a
+block would end**: a start above X'4000' plus a size of several thousand
+words passes X'7FFF', which is minus to a machine whose compares are
+signed -- an 8,000-word request was once given a 3,280-word block that
+way -- so the room in a free block is compared with the size instead.
 
 ## The filesystem
 
@@ -272,9 +332,10 @@ of two, the first sector, the sector count, the bytes used in the last
 sector, and what the entry is -- and there are forty-six of them. They are
 kept in disc order and **account for every data sector between them, a
 hole being an entry like any other**, so there is no free map and nothing
-to get out of step with the directory: a new file is given the largest
-hole, whole, as a file being written, and closing it cuts it to its length
-and makes the rest a hole again. A new file replaces an older one of its
+to get out of step with the directory: a new file is given half of the
+largest hole as a file being written -- half, as RT-11 gave it, so that a
+second file can be begun before the first is closed -- and closing it cuts
+it to its length and makes the rest a hole again. A new file replaces an older one of its
 name when it is closed, not before. **A file being written that no channel
 holds is a hole** to whoever looks next -- its task exited, or the machine
 stopped -- which is all the recovery there is and all that is needed.

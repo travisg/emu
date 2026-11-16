@@ -18,10 +18,10 @@ BUILD     := build
 all: $(BUILD)/rex.bin modules disc
 
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
-# the filesystem at the top of core. rexapi.asm states the kernel's
+# the filesystem and the swapper at the top of core. rexapi.asm states the kernel's
 # vector, cells and node layout as EQUs for the modules; the check holds
 # the kernel's own labels to them.
-KERNEL := rex.asm rexfs.asm
+KERNEL := rex.asm rexfs.asm rexswap.asm
 
 $(BUILD)/rex.bin: $(KERNEL) rexapi.asm $(ASM703) $(APICHECK)
 	@mkdir -p $(BUILD)
@@ -37,7 +37,7 @@ UTILS := type copy del ren squish dump put
 UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
 
 modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
-         $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj
+         $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj
 
 $(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexlib.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -46,6 +46,10 @@ $(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm rexapi.asm rexlib.asm $(ASM703)
 $(BUILD)/nap.obj: rexapi.asm rexlib.asm nap.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM703) rexapi.asm rexlib.asm nap.asm --object $@ -l $(BUILD)/nap.lst
+
+$(BUILD)/hog.obj: rexapi.asm rexlib.asm hog.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM703) rexapi.asm rexlib.asm hog.asm --object $@ -l $(BUILD)/hog.lst
 
 $(BUILD)/hello.obj: rexapi.asm hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -91,15 +95,18 @@ reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
 
 # The platter on unit 0, with the modules on it -- every one but BASIC
 # marked as loadable above word X'4000', which leaves the core below it
-# to what has to be there: the emulator mounts
+# to what has to be there, and with a swap file: the emulator mounts
 # disks/ray703-disc0.img from the repo root, so after this the run line
 # in README.md has them. Made if absent; each module replaces its
 # namesake and nothing else on the platter moves.
 DISC := ../disks/ray703-disc0.img
+# The swap file, made once: room for a dozen tasks the size of BASIC.
+SWAP_SECTORS := 1024
 
 disc: modules
 	@mkdir -p ../disks
-	$(MKDISC703) $(DISC) --add BASIC $(BUILD)/basic.obj --add-high HELLO $(BUILD)/hello.obj \
+	$(MKDISC703) $(DISC) --swap $(SWAP_SECTORS) \
+	    --add BASIC $(BUILD)/basic.obj --add-high HELLO $(BUILD)/hello.obj \
 	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
 
 # The scripted session, on a platter it makes for itself in a scratch

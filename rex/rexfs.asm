@@ -10,9 +10,10 @@
 ; a type of two, the first sector, the sector count, the bytes used in
 ; the last sector, and what the entry is.  The entries are in disc order
 ; and account for every data sector between them, a hole being an entry
-; like any other, so there is no free map: a new file is given the
-; largest hole, whole, as a file being written, and closing it cuts it
-; to its length and makes the rest a hole again.  A file being written
+; like any other, so there is no free map: a new file is given half of
+; the largest hole as a file being written -- half, as RT-11 gave it, so
+; that another can be begun meanwhile -- and closing it cuts it to its
+; length and makes the rest a hole again.  A file being written
 ; that no channel holds -- its task ended, or the machine stopped -- is a
 ; hole to whoever looks next (FDNORM), which is all the recovery there is.
 ;
@@ -637,14 +638,20 @@ FBOR1           CAX
                 STW     *C.MOD
                 JMP     FBOOK
 
-; To write: the largest hole, whole, under the new name.  Closing the
-; file will want one more entry for what is left of the hole, so there
-; must be more unused entries than there are files being written.
+; To write: half of the largest hole, under the new name -- half, so
+; that a second file can be begun before the first is closed, which with
+; the whole hole taken it could not be when the free sectors are all in
+; one piece.  Halving the hole takes an entry now, and closing the file
+; may take another for what is left of its half, so there must be two
+; unused entries more than there are files being written.
 FBOCR           JSX     FDNORM
                 LDW     FKM1
                 JSX     FCWHO
+                LDW     FCWN
+                ADD     FK1
+                STW     FDN0
                 JSX     FDROOM
-                CMW     FCWN
+                CMW     FDN0
                 SGR
                 JMP     FBODF
                 CLR
@@ -679,7 +686,34 @@ FBOHD           LDW     FOB
                 JMP     FBOH2
                 LDW     FKEFUL
                 EXIT    FBOPEN
-FBOH2           LDX     FNPTR
+FBOH2           LDW     FOBN
+                SRL     1
+                SAZ                     ; a hole of one sector goes whole
+                JMP     FBOHV
+                JMP     FBOH3
+FBOHV           STW     FDN0            ; the file's half; the rest follows
+                LDX     FOB             ; it as a hole of its own
+                LDW     *DE.SEC
+                ADD     FDN0
+                STW     FDN1
+                LDW     FOBN
+                SUB     FDN0
+                STW     FDN2
+                LDW     FOB
+                ADD     FK8
+                STW     FDN3
+                JSX     FDINS
+                LDX     FDN3
+                LDW     FDN1
+                STW     *DE.SEC
+                LDW     FDN2
+                STW     *DE.CNT
+                LDW     FKHOLE
+                STW     *DE.FLG
+                LDX     FOB
+                LDW     FDN0
+                STW     *DE.CNT
+FBOH3           LDX     FNPTR
                 LDW     *0
                 STW     FDN0
                 LDW     *1
