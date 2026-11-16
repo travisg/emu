@@ -101,11 +101,13 @@ rc2014-zex-test:
 # where the registry's default_rom points; the contents of roms are gitignored,
 # so nothing generated lands in git.
 ASM703       := ../tools/asm703.py
+# What the assembler warns of is a mistake here: the build stops on one.
+ASM          := $(ASM703) --werror
 MKDISC703    := ../tools/mkdisc703.py
 RAY703_ROMS  := ../roms/703
 RAY703_DISKS := ../disks
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-dis-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-dis-test ray703-asm-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
 
 ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-listings
 
@@ -113,14 +115,14 @@ ray703-demo: $(RAY703_ROMS)/demo.bin
 
 $(RAY703_ROMS)/demo.bin: 703/demo.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM703) $< -o $@ -l 703/demo.lst
+	$(ASM) $< -o $@ -l 703/demo.lst
 
 # Exercises the 74601 disc: write, read back, verify, report on the teletype.
 ray703-disc: $(RAY703_ROMS)/disc.bin
 
 $(RAY703_ROMS)/disc.bin: 703/disc.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM703) $< -o $@ -l 703/disc.lst
+	$(ASM) $< -o $@ -l 703/disc.lst
 
 # The boot sector for the disc controller's LOAD button. It must fit in the
 # one sector the button reads -- 47 words, 94 bytes -- so the build enforces it.
@@ -128,7 +130,7 @@ ray703-boot: $(RAY703_ROMS)/boot.bin
 
 $(RAY703_ROMS)/boot.bin: 703/boot.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM703) $< -o $@ -l 703/boot.lst
+	$(ASM) $< -o $@ -l 703/boot.lst
 	@size=$$(wc -c < $@); if [ $$size -gt 94 ]; then \
 		echo "error: boot.bin is $$size bytes; the LOAD button reads one 94-byte sector"; \
 		rm -f $@; exit 1; fi
@@ -141,7 +143,7 @@ ray703-basic: $(RAY703_ROMS)/basic.bin
 
 $(RAY703_ROMS)/basic.bin: 703/basic.asm 703/bcore.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM703) 703/basic.asm 703/bcore.asm -o $@ -l 703/basic.lst
+	$(ASM) 703/basic.asm 703/bcore.asm -o $@ -l 703/basic.lst
 
 # tape.asm is punched rather than loaded: the .tape is what the ray703-ptb
 # subsystem feeds through the paper tape reader. The .bin beside it is only a
@@ -150,7 +152,7 @@ ray703-tape: $(RAY703_ROMS)/tape.tape
 
 $(RAY703_ROMS)/tape.tape: 703/tape.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM703) $< -o $(RAY703_ROMS)/tape.bin -t $@ -l 703/tape.lst
+	$(ASM) $< -o $(RAY703_ROMS)/tape.bin -t $@ -l 703/tape.lst
 
 # --- the transcribed period software -------------------------------------
 # X-RAY EXEC and the relocating loader, from the hand transcriptions of their
@@ -217,3 +219,7 @@ ray703-boot-test: ray703-boot
 # harness makes its core images from the transcripts itself.
 ray703-dis-test:
 	./run_ray703_dis_test.py
+
+# The assembler's literals and warnings, on decks the test writes itself.
+ray703-asm-test:
+	./run_ray703_asm_test.py

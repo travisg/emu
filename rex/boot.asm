@@ -69,7 +69,7 @@ BK47            WORD    47
 ; controller wants them, how many words it is, and the core address it
 ; goes to.
                 ORG     40
-BMARK           WORD    'RX'
+                WORD    'RX'            ; the mark
 BTAB            WORD    0,0,0
                 WORD    0,0,0
                 END     BOOT

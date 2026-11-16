@@ -3697,7 +3697,6 @@ SHK4            WORD    4
 SHK6            WORD    6
 SHK8            WORD    8
 SHK10           WORD    10
-SHK9P           WORD    '9'+1
 SHKAT           WORD    '@'
 SHKCM           WORD    'CM'
 SHKIN0          WORD    'IN'            ; INIT, as SHNAME leaves a name

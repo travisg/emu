@@ -34,6 +34,10 @@ jobs:
     # The 703 guests are built from source in this tree with stdlib python, and
     # the harnesses need only script(1), so these run without any third-party
     # ROM image. The 6809 BASIC test does need one and stays local.
+    # The assembler first, on its own: its literals and its warnings.
+    - name: 703 assembler test
+      run: make -C test ray703-asm-test
+
     - name: Build the 703 guest images
       run: make -C test ray703
 

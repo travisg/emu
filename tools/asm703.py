@@ -9,8 +9,9 @@
 """A small two-pass assembler for the Raytheon 703.
 
 The 703 predates anything this tree could reuse, and its own assembler (SYM II)
-exists only as scans, so the guests need something to build them. This is
-deliberately small -- no macros, no linking -- and produces two things:
+exists only as scans, so the guests need something to build them. There are
+no macros beyond SUBR and EXIT and there is no linking; it produces two
+things:
 
   - an absolute core image (`-o`): a flat binary of big-endian words starting
     at word 0, which is what `emu -s ray703` loads into core;
@@ -72,6 +73,42 @@ Operand prefixes, both from the PTB bootstrap listing:
 
 Numbers are decimal, `0x1F`, `X'1F'` or `'A'`; expressions take + - * and
 parentheses, and `$` is the address of the word being assembled.
+
+Two things here are this assembler's and no period listing's.
+
+A literal is a constant written where it is used. The machine has no
+instruction that carries a word, so every constant is a cell somewhere and
+the instruction a reference to it; `=` in front of an operand has the
+assembler make the cell:
+
+            LDW     =X'7FFF'
+            ADD     =1
+            LDX     =TABLE          ; the address of TABLE
+            ...
+            LPOOL                   ; the cells go here, each once
+
+An instruction that reads its operand may take one (LDW LDX ADD SUB ORI ORE
+AND CMW MPY DIV). The literals met since the last LPOOL are laid down at
+the next, and whatever is left over goes in front of the END. The reference
+is an ordinary direct one, so a pool must be in the page of the
+instructions that use it -- a deck of several pages wants an LPOOL in each,
+and the assembler says which literal cannot reach its pool -- and where
+execution does not run into it. The Literal class says when two literals
+are one cell.
+
+And it warns. A warning is something the machine does exactly as written
+and nobody means; it goes to stderr, and --werror makes it an error:
+
+  - a skip in front of a page selection, or of an instruction two words
+    long (EXIT, MPY, DIV, EXCH, a JSX with arguments): a skip passes over
+    one word, so the selection is skipped and its reference runs without
+    it, or the instruction is entered at its second word;
+  - a direct reference behind a page selection, to something that is not
+    in the page selected: the selection governs the next reference
+    whatever it names;
+  - a literal pool, or the cells before an END's, that execution can run
+    on into;
+  - a labelled cell that nothing in the deck refers to.
 """
 
 from collections import ChainMap
@@ -132,7 +169,21 @@ GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFT
 # an if/else pair, they are two independent guards, so the X-RAY listing writes
 # out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
 DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'RES', 'EQU',
-              'TRUE', 'FALS', 'ENDC', 'END'}
+              'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL'}
+
+# The instructions that only read their operand, and so may be given a
+# literal for one: `ADD =1` is a reference to a word holding 1, which the
+# assembler lays down in the next literal pool (see Literal).
+LITERAL_OPS = {'LDW', 'LDX', 'ADD', 'SUB', 'ORI', 'ORE', 'AND', 'CMW', 'MPY', 'DIV'}
+
+# What skips: the sixteen conditional skips, and the index steps, which skip
+# on the index's sign under either of their names.
+SKIPPERS = set(SKIPS) | {'IXS', 'DXS', 'SXP', 'SXM'}
+
+# Statements that are instructions and more than one word long. A skip in
+# front of one passes over its first word only.
+PAGE_SELECTS = {'SML', 'SMU', 'SMB'}
+DATA_OPS = {'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'RES', 'LPOOL'}
 
 # Mnemonics found only in the period listings, never in the reference manual,
 # because they are the assembler's rather than the machine's. Each is given
@@ -225,6 +276,51 @@ class AsmError(Exception):
         self.lineno = lineno
 
 
+class AsmWarning:
+    """Something that assembles and is almost certainly not what was meant."""
+    def __init__(self, lineno, message):
+        self.lineno = lineno
+        self.message = message
+
+    def __str__(self):
+        where = self.lineno if isinstance(self.lineno, Loc) else f'line {self.lineno}'
+        return f'{where}: warning: {self.message}'
+
+
+class Literal:
+    """A constant written where it is used: `LDW =X'7FFF'`, `ADD =1`,
+    `LDX =TABLE`, `CMW =BUF*2`.
+
+    The machine has no instruction that carries a word, so a constant is a
+    cell and the instruction a reference to it. A literal is that cell made
+    by the assembler: the ones met since the last pool are laid down, each
+    once, where an LPOOL card says, and whatever is left when the deck ends
+    goes in front of its END. The reference is an ordinary direct one, so
+    the pool has to be in the page of everything that uses it -- a deck of
+    several pages wants an LPOOL in each -- and somewhere execution does
+    not run into it.
+
+    Two literals are one cell when they are the same word: the same value
+    and the same relocation, where that is known as the literal is met --
+    `=1`, `=X'1'` and `=ONE` after `ONE EQU 1` share. One that names a
+    symbol defined further down the deck is known only by its spelling, and
+    shares with others spelled the same. `$` has no place in one: the cell
+    is not where the instruction is.
+    """
+    __slots__ = ('name', 'body', 'lineno')
+
+    def __init__(self, name, body, lineno):
+        self.name = name        # the symbol the pool slot is given
+        self.body = body        # the expression, as written
+        self.lineno = lineno    # where it was first asked for
+
+
+# What a literal's slot is called in the symbol table while the deck is
+# assembled: a name no card may use for a label, taken out again before
+# anyone sees the table.
+LITERAL_PREFIX = '_$LIT.'
+
+
 class UndefinedSymbol(AsmError):
     """Raised on its own so that EQU can retry a forward reference."""
 
@@ -238,10 +334,11 @@ class AsmErrorList(AsmError):
     listing and symbol table so main() can still write the -l file, which is
     where a pile of errors actually gets read.
     """
-    def __init__(self, errors, listing, symbols):
+    def __init__(self, errors, listing, symbols, warnings=()):
         self.errors = errors
         self.listing = listing
         self.symbols = symbols
+        self.warnings = list(warnings)
         Exception.__init__(self, '\n'.join(str(e) for e in errors))
 
 
@@ -281,6 +378,10 @@ class Expr:
     instruction's operand doubles the counted symbols along with their
     values, which is how SYM II told a location from a constant.
     """
+
+    # Every symbol an expression has looked up, while an assembly is
+    # collecting them: what was never looked up was never used.
+    seen = None
 
     TOKEN = re.compile(r"""
         \s*(?:
@@ -379,6 +480,8 @@ class Expr:
             return self.here, self.here_count
         if tok not in self.symbols:
             raise UndefinedSymbol(self.lineno, f'undefined symbol {tok!r}')
+        if Expr.seen is not None:
+            Expr.seen.add(tok)
         return self.symbols[tok], self.counts.get(tok, 0)
 
 
@@ -529,8 +632,8 @@ def sizeof(lineno, op, arg):
     """How many words a statement occupies."""
     if op is None:
         return 0
-    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END'):
-        return 0
+    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL'):
+        return 0    # a pool's words are counted where pass 1 lays it down
     if op in SUBR_MACROS or op == 'EXCH':
         return 2
     if op in GEN_TWOWORD:
@@ -594,8 +697,10 @@ KINDS = {'A': 4, 'W11': 0, 'W15': 1, 'B16': 2, 'B11': 3, 'B11I': 3}
 
 
 def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
-            counts=None, relocatable=False):
-    """encode(), always returning `(word, kind)`."""
+            counts=None, relocatable=False, info=None):
+    """encode(), always returning `(word, kind)`. `info`, a dict, is told
+    the page a direct operand of an absolute build is in -- a word page for
+    a word reference, a byte page for a byte reference."""
     if counts is None:
         counts = {}
 
@@ -684,6 +789,8 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
                 raise AsmError(lineno, f'{unit} address {addr} is negative')
             if relocatable:
                 if cnt == 0:
+                    if info is not None:
+                        info['page'] = addr >> 11
                     if not prev_selects_page:
                         raise AsmError(
                             lineno,
@@ -701,6 +808,8 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
             else:
                 ipage = here >> 10 if op in BYTE_REF else here >> 11
                 tpage = addr >> 11
+                if info is not None:
+                    info['page'] = tpage
                 if tpage != ipage and not prev_selects_page:
                     raise AsmError(
                         lineno,
@@ -843,6 +952,48 @@ def _assemble(paths, origin=0, relocatable=False):
     counts = {}
     # The END card's operand, which names a module's entry.
     end_card = None
+    # Literals: the ones waiting for a pool, by what makes two of them the
+    # same cell, and every one there is, by its slot's name.
+    pending = {}
+    literals = {}
+    warnings = []
+    Expr.seen = set()
+    # Labels on data, for the report of cells nothing refers to.
+    cells = {}
+
+    def literal(lineno, op, arg):
+        """The name of the pool slot `=expr` asks for."""
+        if op not in LITERAL_OPS:
+            raise AsmError(lineno, f'{op} takes no literal: one is a cell the '
+                                   f'assembler makes, for an instruction that reads it')
+        body = arg.strip()[1:].strip()
+        if not body:
+            raise AsmError(lineno, 'a literal needs an expression after its =')
+        probe = Expr(body, symbols, None, lineno, counts)
+        if '$' in probe.tokens:
+            raise AsmError(lineno, 'a literal cannot hold $: its cell is in the '
+                                   'pool, not here, so name the place')
+        try:
+            value, cnt = probe.reloc()
+            key = (value & 0xffff if cnt == 0 else value, cnt)
+        except UndefinedSymbol:
+            key = ''.join(body.split())     # defined further down: by spelling
+        if key not in pending:
+            name = f'{LITERAL_PREFIX}{len(literals)}'
+            pending[key] = literals[name] = Literal(name, body, lineno)
+        return pending[key].name
+
+    def pool():
+        """Lay the waiting literals down from `here` on."""
+        nonlocal here
+        laid = list(pending.values())
+        for lit in laid:
+            symbols[lit.name] = here
+            counts[lit.name] = 1
+            here += 1
+        pending.clear()
+        return laid
+
     for idx, (lineno, label, op, arg, text) in enumerate(statements):
         try:
             if op in CONDITIONALS:
@@ -866,6 +1017,9 @@ def _assemble(paths, origin=0, relocatable=False):
                 placed.append((lineno, here, None, arg, text))
                 continue
             if op == 'END':
+                if pending:
+                    at = here
+                    placed.append((lineno, at, 'LPOOL', pool(), None))
                 placed.append((lineno, here, op, arg, text))
                 end_card = (lineno, arg)
                 # Trailing cards in the same file are dropped, as they always
@@ -896,10 +1050,23 @@ def _assemble(paths, origin=0, relocatable=False):
             if label:
                 if label in symbols:
                     raise AsmError(lineno, f'{label!r} is defined twice')
+                if label.startswith(LITERAL_PREFIX):
+                    raise AsmError(lineno, f'{label!r}: names beginning '
+                                           f'{LITERAL_PREFIX} are the literal pools\'')
                 # SUBR lays down a return slot and then the STX that fills it; the
                 # name belongs to the STX, so that callers jump to code.
                 symbols[label] = here + 1 if op == 'SUBR' else here
                 counts[label] = 1
+                if op in DATA_OPS:
+                    cells[label] = lineno
+            if op == 'LPOOL':
+                if arg:
+                    raise AsmError(lineno, 'LPOOL takes no operand')
+                at = here
+                placed.append((lineno, at, op, pool(), text))
+                continue
+            if arg and arg.lstrip().startswith('='):
+                arg = literal(lineno, op, arg)
             if op in ('ORG', 'ORIG'):
                 target, cnt = Expr(arg or '', symbols, here, lineno, counts).reloc()
                 # A module is one contiguous stream from word 0, placed by the
@@ -940,6 +1107,11 @@ def _assemble(paths, origin=0, relocatable=False):
             except (AsmError, TypeError):
                 here += 1
 
+    if pending:
+        # a deck with no END card: the pool closes it all the same
+        at = here
+        placed.append((statements[-1][0] if statements else 0, at, 'LPOOL', pool(), None))
+
     # Settle the deferred EQUs. Each sweep that resolves anything may unblock
     # another, so sweep until one achieves nothing: either they are all done or
     # what is left is a genuine undefined symbol (or a cycle), and every one of
@@ -972,11 +1144,77 @@ def _assemble(paths, origin=0, relocatable=False):
         v, c = Expr(part, symbols, at, lineno, counts).reloc()
         return v & 0xffff, data_kind(lineno, c, relocatable, what)
 
+    # The lint's view of what has been emitted: the last two statements
+    # that put words down, as (mnemonic, words), and what the page selection
+    # in force, if the last of them was one, selected.
+    before = [(None, 0), (None, 0)]
+    selected = None
+
+    def warn(lineno, message):
+        warnings.append(AsmWarning(lineno, message))
+
+    def falls_into(lineno, what):
+        """Warn if execution can run on into data laid down here."""
+        (op2, _), (op1, _) = before
+        if op1 is None or op1 in DATA_OPS:
+            return
+        if op1 in ('JMP', 'EXIT', 'HLT') and op2 not in SKIPPERS:
+            return
+        warn(lineno, f'{what} follows {op1}'
+                     + (f' under {op2}' if op2 in SKIPPERS and op1 in ('JMP', 'EXIT', 'HLT') else '')
+                     + ', which can run on into it')
+
+    def lint(lineno, op, arg, words, wkinds, info):
+        """The mistakes this machine makes easy, looked for in what is about
+        to be emitted. Each is something the hardware does exactly as
+        written and nobody means."""
+        prev = before[1][0]
+        if prev in SKIPPERS:
+            # A skip passes over one word.
+            if op in PAGE_SELECTS:
+                warn(lineno, f'{prev} skips this {op} and not the reference after it, '
+                             f'which then runs without its page')
+            elif len(words) > 1 and op not in DATA_OPS:
+                warn(lineno, f'{op} is {len(words)} words and {prev} skips only the first')
+        if prev in PAGE_SELECTS and op in MEMREF and not arg.strip().startswith('*'):
+            # A page selection governs this reference whatever it names, so
+            # what it names had better be in the page selected.
+            page, located = selected
+            if relocatable and located != (wkinds[0] != 'A'):
+                # all a module knows of its own page is that it is its own
+                where = 'the module\'s own page' if located else f'byte page {page}'
+                warn(lineno, f'{op} {arg.strip()} is read under the selection of '
+                             f'{where}, which is not where it is')
+            elif 'page' in info:
+                unit = 'byte' if op in BYTE_REF else 'word'
+                want = page if op in BYTE_REF else page >> 1
+                if info['page'] != want:
+                    warn(lineno, f'{op} {arg.strip()} is in {unit} page {info["page"]} and '
+                                 f'{unit} page {want} is selected')
+
     for lineno, addr, op, arg, text in placed:
         words = []
         wkinds = []
+        pooled = None
+        info = {}
         try:
-            if op in ('WORD', 'DATA', 'D'):
+            if op == 'LPOOL':
+                pooled = arg
+                for i, lit in enumerate(pooled):
+                    w, k = data(lit.body, addr + i, lit.lineno, '=' + lit.body)
+                    words.append(w)
+                    wkinds.append(k)
+                if pooled:
+                    falls_into(lineno, 'a literal pool')
+            elif arg in literals and op in MEMREF and not relocatable \
+                    and symbols[arg] >> 11 != addr >> 11:
+                lit, slot = literals[arg], symbols[arg]
+                raise AsmError(
+                    lineno,
+                    f'the literal ={lit.body} is pooled at {slot:#x}, in word page '
+                    f'{slot >> 11}, and this instruction runs in word page {addr >> 11}: '
+                    f'put an LPOOL after it in its own page')
+            elif op in ('WORD', 'DATA', 'D'):
                 for part in operand_list(arg):
                     w, k = data(part, addr + len(words), lineno, part.strip())
                     words.append(w)
@@ -1019,7 +1257,7 @@ def _assemble(paths, origin=0, relocatable=False):
             elif op == 'JSX' and arg and len(operand_list(arg)) > 1:
                 parts = operand_list(arg)
                 w, k = encode2(lineno, op, parts[0], symbols, addr, prev_selects,
-                               counts, relocatable)
+                               counts, relocatable, info)
                 words, wkinds = [w], [k]
                 for i, part in enumerate(parts[1:], 1):
                     w, k = data(part, addr + i, lineno, part.strip())
@@ -1068,7 +1306,7 @@ def _assemble(paths, origin=0, relocatable=False):
                 words = []
             else:
                 w, k = encode2(lineno, op, arg, symbols, addr, prev_selects,
-                               counts, relocatable)
+                               counts, relocatable, info)
                 words, wkinds = [w], [k]
 
             for i, (w, k) in enumerate(zip(words, wkinds)):
@@ -1076,12 +1314,30 @@ def _assemble(paths, origin=0, relocatable=False):
                     raise AsmError(lineno, f'word {addr + i:#x} is assembled twice')
                 core[addr + i] = w
                 kinds[addr + i] = k
+            if words and pooled is None:
+                lint(lineno, op, arg, words, wkinds, info)
         except AsmError as e:
             errors.append(e)
             words = []
         if words:
-            prev_selects = op in ('SML', 'SMU', SELECT_BASE)
-        listing.append((addr, words, text))
+            prev_selects = op in PAGE_SELECTS
+            before = [before[1], (op, len(words))]
+            if prev_selects:
+                # the byte page selected, and whether it is a location's --
+                # which in a module is all that is known of it
+                if op == SELECT_BASE:
+                    target, cnt = Expr(arg, symbols, addr, lineno, counts).reloc()
+                    selected = ((target >> 10) & 0x1f, bool(cnt))
+                else:
+                    selected = ((words[0] & 0xf) | (0x10 if op == 'SMU' else 0), False)
+        if pooled is None:
+            listing.append((addr, words, text))
+        else:
+            # the card, if there was one, and then a line to each literal
+            if text is not None:
+                listing.append((addr, [], text))
+            for i, lit in enumerate(pooled):
+                listing.append((addr + i, words[i:i + 1], f'{"":32}; ={lit.body}'))
 
     size = max(core) + 1 if core else 0
     sizeb = False
@@ -1102,13 +1358,23 @@ def _assemble(paths, origin=0, relocatable=False):
         elif entry is None:
             errors.append(AsmError(where, 'a module needs an END naming its entry'))
 
+    Expr.seen, seen = None, Expr.seen
+    for name in literals:
+        symbols.pop(name, None)
+    # A cell nothing names is a word of core doing nothing: a label on
+    # data that no expression in the deck ever looked up.
+    for name, lineno in cells.items():
+        if name not in seen and not errors:
+            warn(lineno, f'{name} is never referred to')
+
+    def order(e):
+        where = getattr(e, 'lineno', 0)
+        return where.seq if isinstance(where, Loc) else where
+    warnings.sort(key=order)
     if errors:
         # Both passes contribute, so put the report back in deck order.
-        def order(e):
-            where = getattr(e, 'lineno', 0)
-            return where.seq if isinstance(where, Loc) else where
         errors.sort(key=order)
-        raise AsmErrorList(errors, listing, symbols)
+        raise AsmErrorList(errors, listing, symbols, warnings)
     if not core:
         raise AsmError(0, 'nothing was assembled')
 
@@ -1117,7 +1383,7 @@ def _assemble(paths, origin=0, relocatable=False):
         image += core.get(word, 0).to_bytes(2, 'big')
     return {'image': bytes(image), 'listing': listing, 'symbols': symbols,
             'core': core, 'kinds': kinds, 'size': size, 'entry': entry,
-            'sizeb': sizeb}
+            'sizeb': sizeb, 'warnings': warnings}
 
 
 # The relocating loader's record: a zero marker, ninety-two bytes of text and
@@ -1211,6 +1477,8 @@ def main():
     # Must agree with PTB_LOAD_ORIGIN in src/system/ray703.rs, which is where
     # the machine presets the index register. A tape is a bare run of frames
     # with no address in it, so it is meaningless anywhere else.
+    ap.add_argument('-W', '--werror', action='store_true',
+                    help='a warning is an error: nothing is written')
     ap.add_argument('--tape-origin', default='0x100',
                     help='word the tape loads at; must match PTB_LOAD_ORIGIN '
                          'in src/system/ray703.rs (default 0x100)')
@@ -1223,13 +1491,22 @@ def main():
 
     deck = ' '.join(args.sources)
     try:
+        r = _assemble(args.sources, origin=int(args.org, 0), relocatable=bool(args.object))
+        image, listing, symbols, core, size = (r['image'], r['listing'], r['symbols'],
+                                               r['core'], r['size'])
         if args.object:
-            stream, listing, symbols, core, size = assemble_object(args.sources)
+            stream = object_stream(core, r['kinds'], size, r['entry'], r['sizeb'])
             image = b''.join(core[a].to_bytes(2, 'big') for a in range(size))
-        else:
-            image, listing, symbols, core = assemble(args.sources, int(args.org, 0))
+        for w in r['warnings']:
+            print(w, file=sys.stderr)
+        if args.werror and r['warnings']:
+            n = len(r['warnings'])
+            print(f'{deck}: {n} warning{"s" if n != 1 else ""} under --werror, '
+                  f'no image written', file=sys.stderr)
+            return 1
     except AsmErrorList as e:
-        for err in e.errors:
+        for err in sorted(e.errors + e.warnings, key=lambda x: (
+                x.lineno.seq if isinstance(x.lineno, Loc) else x.lineno)):
             print(err, file=sys.stderr)
         n = len(e.errors)
         print(f'{deck}: {n} error{"s" if n != 1 else ""}, no image written',

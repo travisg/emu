@@ -29,6 +29,6 @@ RKNEW           WORD    RNEW
 RKUSE           WORD    RUSE
 RUSE            WORD    RUSET*2,RUSEE*2
 RUSET           TEXT    "REN OLD NEW "
-RUSEX           TEXT    "\r\n"
+                TEXT    "\r\n"
 RUSEE           EQU     $
                 END     REN

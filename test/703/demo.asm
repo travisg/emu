@@ -170,15 +170,16 @@ RXCR            LDX     ECHOA
                 STW     OUTE
 
 ; Count the record, in a word that lives out in page 4.  Each reference picks
-; its page with SMB and gives the 11-bit M field as an offset from the page
-; base -- the assembler refuses a bare high address, because the machine
-; cannot encode one.  The ADD between them needs nothing: EXR has already
-; reloaded to this code's own page (1-3), which is where ONE lives.
+; its page with SMB, and the assembler takes the address in that page and
+; leaves the 11-bit M field -- with no SMB in front it refuses the address,
+; because the machine cannot encode one.  The ADD between them needs
+; nothing: EXR has already reloaded to this code's own page (1-3), which is
+; where ONE lives.
                 SMB     NECHO
-                LDW     NECHO-HIBASE
+                LDW     NECHO
                 ADD     ONE
                 SMB     NECHO
-                STW     NECHO-HIBASE
+                STW     NECHO
 
 TXNEXT          JSX     SEND
 ; If that finished the record it left the output pointer zero.  A character can
