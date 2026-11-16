@@ -13,7 +13,8 @@
 ; keystrokes and runs a command, and can load a module off the disc as a
 ; task of its own: Tiny BASIC, the interpreter of test/703/bcore.asm
 ; behind the glue of brex.asm, is one, and RUN BASIC hands it the console
-; until its BYE.
+; until its BYE -- or LOAD BASIC PROG runs a saved program behind the
+; prompt.
 ;
 ; The letter tasks come up stopped; START sets them going.  The commands:
 ;

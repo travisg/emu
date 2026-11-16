@@ -52,7 +52,17 @@
 ;               statements, B.BREAK clears it, and so does the READY
 ;               loop once a line is in -- a break belongs to a run, so
 ;               one that arrived with nothing running is spent there
-;               rather than taken by whatever runs next
+;               rather than taken by whatever runs next.  Under an
+;               executive (REXGLUE=1) the flag is not this program's
+;               alone, and the wrapper provides two routines in the
+;               cell's place: T.BRKQ, which answers in ACR whether a
+;               break is waiting for this task, and T.BRKC, which spends
+;               it
+;   B.SAVEX, B.OLDX, B.LISTX
+;               under an executive only: where the SAVE and OLD
+;               statements go -- the wrapper's, since the files are --
+;               each to leave through B.NEXT or B.FIN, and where LIST
+;               goes when it has listed everything, to go on to B.NEXT
 ;   K.LBUFA     cell: W.LBUF*2, the line buffer as a byte address
 ;
 ; Ground rules, program-wide -- the wrapper's driver follows them too
@@ -66,9 +76,8 @@
 ;    a direct reference reaches everything and there is no page selection
 ;    anywhere in this file -- the assembler's page check holds each build
 ;    to that (a reference that landed outside the page is a hard error,
-;    not a wrong page at run time).  The two exceptions are the T.BRK
-;    pairs: that cell is the wrapper's to place, and an executive's
-;    wrapper points it at a kernel cell in another page, so its two
+;    not a wrong page at run time).  The exceptions are the T.BRK
+;    pairs: that cell is the wrapper's to place, so its
 ;    references keep the adjacent SMB in front (SMB governs exactly the
 ;    one memory reference after it, 1-3, and selecting the current page
 ;    costs nothing when the cell is near).  Where an SMB/JMP or SMB/JSX
@@ -149,13 +158,14 @@ B.COLD          LDW     K1.HEAP         ; empty program
 B.RLOOP         LDW     K1.RDYD         ; prompt; the scripted harness paces
                 JSX     M.MSG           ; its typing on this string
                 JSX     T.GETL
+                TRUE    REXGLUE=0
                 CLR                     ; a break belongs to a run: one that
                 SMB     T.BRK           ; arrived while the prompt was up, or
                 STW     T.BRK           ; while this line was being typed, is
-                                        ; spent here rather than kept for
-                                        ; whatever runs next.  The SMB stays;
-                                        ; see B.STEP0.  S.INPUT's own T.GETL
-                                        ; is deliberately not cleared after:
+                ENDC                    ; spent here rather than kept for
+                FALS    REXGLUE=0       ; whatever runs next.  The SMB stays;
+                JSX     T.BRKC          ; see B.STEP0.  S.INPUT's own T.GETL
+                ENDC                    ; is deliberately not cleared after:
                                         ; a program waiting at INPUT is
                                         ; running, and Ctrl-C must still
                                         ; break it.
@@ -384,11 +394,14 @@ B.STEP          LDW     L.CURLIN        ; on to the next record
                 LDW     *1
                 ADD     L.CURLIN
                 STW     L.CURLIN
+                TRUE    REXGLUE=0
 B.STEP0         SMB     T.BRK           ; Ctrl-C lands between statements.
                 LDW     T.BRK           ; The SMB stays: T.BRK is the
-                                        ; wrapper's to place, and brex.asm
-                                        ; points it at a kernel cell in
-                                        ; another page.
+                ENDC                    ; wrapper's to place.
+                FALS    REXGLUE=0
+B.STEP0         JSX     T.BRKQ          ; under an executive the flag is
+                ENDC                    ; shared, and the wrapper says
+                                        ; whether a break is this task's
                 SAZ
                 JMP     B.BREAK
                 LDW     L.CURLIN        ; fell off the end?
@@ -405,9 +418,14 @@ B.FIN           CLR
                 STW     S.RUNMOD
                 JMP     B.RLOOP
 
+                TRUE    REXGLUE=0
 B.BREAK         CLR
                 SMB     T.BRK           ; the SMB stays; see B.STEP0
                 STW     T.BRK
+                ENDC
+                FALS    REXGLUE=0
+B.BREAK         JSX     T.BRKC
+                ENDC
                 LDW     K1.BRKD
                 JSX     M.MSG
                 JMP     E.ERR           ; " AT n", unwind, READY
@@ -591,7 +609,12 @@ S.LIST          LDW     K1.HEAP
 S.LSLP          LDW     S.LP
                 CMW     L.PGMEND
                 SLS
+                TRUE    REXGLUE=0
                 JMP     B.NEXT          ; every record listed
+                ENDC
+                FALS    REXGLUE=0
+                JMP     B.LISTX         ; ...which the wrapper wants to
+                ENDC                    ; know: a LIST may be SAVE's
                 CAX
                 LDW     *0
                 JSX     M.PUTN
@@ -675,7 +698,12 @@ K1.ARRW         WORD    W.ARRAY
 K1.RDYD         WORD    P1RDYD          ; message descriptors for M.MSG
 K1.BRKD         WORD    P1BRKD
 K1.THEND        WORD    P1THEN*2
+                TRUE    REXGLUE=0
 K1.KWN          WORD    15
+                ENDC
+                FALS    REXGLUE=0
+K1.KWN          WORD    17              ; with SAVE and OLD, the wrapper's
+                ENDC
 K1.KWADRW       WORD    KWADR
 K1.KWHNDW       WORD    KWHND
 
@@ -704,12 +732,22 @@ KW12            BYTE    4,'L','I','S','T'
 KW13            BYTE    3,'R','U','N'
 KW14            BYTE    3,'N','E','W'
 KW15            BYTE    3,'B','Y','E'
+                FALS    REXGLUE=0
+KW16            BYTE    4,'S','A','V','E'
+KW17            BYTE    3,'O','L','D'
+                ENDC
 KWADR           WORD    KW01*2,KW02*2,KW03*2,KW04*2,KW05*2
                 WORD    KW06*2,KW07*2,KW08*2,KW09*2,KW10*2
                 WORD    KW11*2,KW12*2,KW13*2,KW14*2,KW15*2
+                FALS    REXGLUE=0
+                WORD    KW16*2,KW17*2
+                ENDC
 KWHND           WORD    S.PRT,S.INPUT,S.LET,S.IF,S.GOSUB
                 WORD    S.GOTO,S.RET,S.FOR,S.NXT,S.REM
                 WORD    S.END,S.LIST,S.RUN,S.NEW,S.BYE
+                FALS    REXGLUE=0
+                WORD    B.SAVEX,B.OLDX
+                ENDC
 
 ; ========================================================= the evaluator
 ; The expression evaluator, the arithmetic, and the statements that lean on

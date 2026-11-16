@@ -57,7 +57,8 @@ time either way. The shell's commands:
     HALT         park the tasks, drain the printer and stop the machine
 
 Any other word is a program: `BASIC` is `RUN BASIC`, and whatever follows
-the name on the line is the program's to read. The utilities are programs
+the name on the line is the program's to read -- `BASIC PROG` loads and
+runs the saved program `PROG.BA`. The utilities are programs
 on the disc, each a small module from `util/`:
 
     TYPE name       a file on the printer
@@ -102,8 +103,9 @@ via `CURT`): print, sleep, repeat -- stopped at power-on, so the machine
 comes up quiet and `START` sets them going. One is the shell. Tiny BASIC
 is a module behind the `brex.asm` glue, which pays bcore's wrapper debts
 with the executive's services: a workspace from the pool at entry, output
-through the task's own mailbox, input through the console queue, `T.BRK`
-aliased to the kernel's break cell, `BYE` routed to `K.EXIT`. The idle
+through the task's own mailbox, input through the console queue, the
+break taken from the kernel's flag while the task has the console, `SAVE`
+and `OLD` through the file calls, `BYE` routed to `K.EXIT`. The idle
 task is a fifth node off the ring, the scans' explicit fallback.
 
 A context is four words, ACR, IXR and the hardware-saved PC and status, so
@@ -159,11 +161,15 @@ read the console**: `LOAD` grants nothing and leaves the shell in `Q.GET`,
 so a module that read the queue behind the prompt would put its own
 registration in the queue's one waiter slot on top of the shell's. A
 module that needs the console tests its node's `T.CON` at entry and
-refuses if it is clear, which is what `brex.asm` does; `hello.asm` only
-prints, which is what `LOAD` is for. Ctrl-C never enters the queue at
-all: the service routine raises the kernel's `BRKREQ` instead (BASIC's
-break check reads it through the `T.BRK` alias), so a running program
-that reads nothing can still be broken. A break belongs to a run: the
+says so if it is clear, which is what `brex.asm` does when it has no
+program to run instead; `hello.asm` only prints, which is what `LOAD` is
+for. Ctrl-C never enters the queue at all: the service routine raises the
+kernel's `BRKREQ` instead, so a running program that reads nothing can
+still be broken. **The break is the console's**: BASIC's check between
+statements goes through the wrapper, which answers for the kernel's flag
+only while its task has the console, so a BASIC running behind the prompt
+neither stops for a Ctrl-C nor takes one that was meant for the program
+in front. A break belongs to a run: the
 interpreter spends the flag at its `READY` loop, once the line is in, so
 one typed while the prompt was up is not kept for whatever runs next.
 `STOP`/`START` take a letter task by its letter or a loaded task by its job
@@ -198,9 +204,13 @@ scratch directory, driving the emulator over its debug port
 (`../tools/emudbg.py`): boot, `STAT`, `START` and watch the letters interleave,
 `STOP`, the rest of the commands, hello both ways with `MEM` reading the
 same after each, then two BASIC sessions -- a program entered and RUN, a
-silent `GOTO` loop broken with Ctrl-C through the kernel's flag, `BYE`
-handing the console and the memory back, and a second session starting
-afresh -- and `HALT`. In between it runs `fst.asm` twice, which makes,
+silent `GOTO` loop broken with Ctrl-C through the kernel's flag, the
+program saved, `BYE` handing the console and the memory back, and a second
+session starting afresh, with nothing to list until `OLD` brings the
+program back -- then a host's program run by name, one run behind the
+prompt until it ends, and one that never ends left running behind the
+prompt through a Ctrl-C and then killed -- and `HALT`. The saved programs
+are among the files the host reads back afterwards. In between it runs `fst.asm` twice, which makes,
 reads back, replaces, renames and deletes files through the vector and
 checks every answer; afterwards the harness reads the platter the host's
 way (`../tools/fs703.py`): the directory has to pass the check of its
@@ -305,4 +315,12 @@ and a file call's error said in words. Tiny BASIC is the real module: `brex.asm`
 it, whereupon it takes its workspace -- line buffer, variables, stacks, the
 array and a heap, 2,192 words -- as one block from the pool, adds the
 block's address to the core's address cells and prints READY; its `BYE`
-gives everything back, so the next session starts afresh.
+gives everything back, so the next session starts afresh. Under REX it has
+two statements the standalone interpreter has not: `SAVE name` lists the
+program down a file channel instead of to the printer, and `OLD name`
+empties the program and reads it back in from one, both as `name.BA`. A
+name on the command line -- `BASIC PROG` -- is `OLD PROG` and then `RUN`,
+and `LOAD BASIC PROG` runs it behind the prompt with no console: what the
+program prints is printed, nothing else is, and the task is over when the
+program ends or asks for input. A file that is not there is the
+interpreter's `HOW?`. The module is 2,047 words of its 2,048-word page.

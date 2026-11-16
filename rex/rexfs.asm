@@ -572,7 +572,13 @@ FBL1            CAX
 ; K.OPEN
 FBOPEN          SUBR
                 STW     FNPTR
-                LDW     FKCHA           ; a channel nobody has
+                CAX
+                LDW     *0
+                SAZ                     ; a name of nothing is no file's
+                JMP     FBON
+                LDW     FKENOF
+                EXIT    FBOPEN
+FBON            LDW     FKCHA           ; a channel nobody has
                 STW     FOP
                 LDW     FK4
                 STW     FOC

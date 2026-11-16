@@ -71,12 +71,12 @@ $(BUILD)/basic.obj: rexapi.asm brex.asm $(BCORE) $(ASM703)
 
 # The relocation check: assemble a module absolute at a base, place its
 # object at that base with the reference loader, and every word must
-# agree. Two bases to a module, one in each half of a word page, so a
-# loader that took the byte page from >>11 instead of >>10 would be caught
-# on the second; BASIC is too big for the upper half, so its second base
-# is as high as it fits.
+# agree. Two bases to a module. Hello's are one in each half of a word
+# page, so a loader that took the byte page from >>11 instead of >>10
+# would be caught on the second; BASIC fills its page to the last word,
+# so its two are the only ones it has, the page's first word and second.
 HELLO_BASES := 0x1080 0x1C40
-BASIC_BASES := 0x1080 0x1840
+BASIC_BASES := 0x1000 0x1001
 
 reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
 	@for base in $(HELLO_BASES); do \

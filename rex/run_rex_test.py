@@ -95,6 +95,7 @@ PAD = bytes(range(256)) + bytes(144)
 MSG = b'FIRST LINE\nSECOND LINE\n'
 CMDS = b'ECHO FROM A FILE\r\nMEM\r\nHELLO\r\n'
 INIT = b'ECHO INIT RAN\r\n'
+SQ = b'10 PRINT "FROM A HOST FILE"\n20 FOR I=1 TO 3\n30 PRINT I*I\n40 NEXT I\n'
 # What PUT is given, and what it puts: the keys as the teletype sends
 # them, bit 7 set, a line feed after every carriage return.
 NOTE_KEYS = 'LINE ONE\rLINE TWO\r'
@@ -335,19 +336,79 @@ def session(emu):
     emu.wait_quiet()
     emu.key('\x03')
     s.wait(b'BREAK AT 50')
+    s.basic('SAVE PROG\r')
     s.basic('BYE\r')
 
     # Back at the shell: BYE gave back the module, its node and its
     # workspace, so STAT has no BASIC node, MEM reads as before, and a
-    # second session -- BASIC is RUN BASIC under a shorter name -- starts
-    # afresh, with nothing to LIST.
+    # second session -- the bare word BASIC runs the program of that
+    # name -- starts afresh, with nothing to LIST until OLD brings the
+    # saved program back. Two more are made and saved for what follows:
+    # one that ends, and one that never does.
     mark = s.say('STAT')
     s.say('MEM')
     if re.search(rb'^\d+ BA ', s.since(mark), re.M):
         raise AssertionError('BASIC is still on the ring after BYE')
     s.say('BASIC')
+    mark = len(emu.output)
     s.basic('LIST\r')
+    s.basic('OLD PROG\r')
+    if b'PRINT' in s.since(mark):
+        raise AssertionError('a fresh BASIC had a program to list')
+    mark = len(emu.output)
+    s.basic('LIST\r')
+    s.basic('NEW\r')
+    if not re.search(rb'^10 FOR I=1 TO 3\r\n20 PRINT "SQ";I\*I\r\n30 NEXT I\r\n50 GOTO 50\r', s.since(mark), re.M):
+        raise AssertionError('OLD did not bring the saved program back: %r' % s.since(mark))
+    s.basic('10 FOR I=1 TO 3\r')
+    s.basic('20 PRINT "BG";I\r')
+    s.basic('30 NEXT I\r')
+    s.basic('SAVE BG\r')
+    s.basic('NEW\r')
+    s.basic('10 PRINT "LP"\r')
+    s.basic('20 GOTO 20\r')
+    s.basic('SAVE LP\r')
+    mark = len(emu.output)
+    s.basic('OLD NOPE\r')
     s.basic('BYE\r')
+    if not re.search(rb'^HOW\?', s.since(mark), re.M):
+        raise AssertionError('OLD of a file that is not there: %r' % s.since(mark))
+
+    # A program named on the command line is loaded and run. In the
+    # foreground the session stays at READY afterwards -- this one is a
+    # host's file, with bare newlines -- and behind the prompt the task
+    # prints what the program prints and is gone when the program ends.
+    s.say('BASIC SQ')
+    s.wait(b'FROM A HOST FILE\r\n1\r\n4\r\n9\r\n')
+    s.basic('BYE\r')
+    mark = s.say('LOAD BASIC BG')
+    emu.wait_for_output(b'BG3', start=mark)
+    for _ in range(40):
+        s.wait(PROMPT)
+        emu.wait_quiet()
+        mark = len(emu.output)
+        emu.key('STAT\r')
+        emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark)
+        if not re.search(rb'^\d+ BA ', s.since(mark), re.M):
+            break
+    else:
+        raise AssertionError('the background BASIC never ended')
+    s.say('MEM')
+
+    # The break is the console's. A BASIC behind the prompt does not have
+    # the console, so a Ctrl-C typed at the shell is not its to take: the
+    # loop is still running afterwards, and KILL is what ends it.
+    mark = s.say('LOAD BASIC LP')
+    emu.wait_for_output(b'LP', start=mark)
+    emu.wait_quiet()
+    emu.key('\x03')
+    time.sleep(0.5)
+    emu.key('STAT\r')
+    job = emu.wait_for_output(re.compile(rb'^(\d+) BA RUN', re.M), start=mark).group(1).decode()
+    if b'BREAK' in s.since(mark):
+        raise AssertionError('a background BASIC took the console\'s break')
+    s.say('KILL ' + job)
+    s.say('MEM')
 
     # The console has one reader, and LOAD grants it to nobody, so a module
     # that reads it refuses rather than registering over the shell's place
@@ -403,17 +464,25 @@ def check_platter(image, pristine):
         with open(path, 'rb') as f:
             if platter.read(name, 'RX') != f.read():
                 raise AssertionError('%s.RX is not the module that was put there' % name)
-    want = {'T2.TX': bytes(fst_byte(i) for i in range(10)), 'T4.TX': b'', 'MSG.TX': MSG, 'THIRD.TX': NOTE}
-    made = {e.title: platter.read(e.name, e.type) for e in platter.files() if e.type == 'TX'}
+    def listing(*lines):
+        return bytes(c | 0x80 for line in lines for c in line + b'\r\n')
+
+    want = {'T2.TX': bytes(fst_byte(i) for i in range(10)), 'T4.TX': b'', 'MSG.TX': MSG, 'THIRD.TX': NOTE,
+            'SQ.BA': SQ,
+            'PROG.BA': listing(b'10 FOR I=1 TO 3', b'20 PRINT "SQ";I*I', b'30 NEXT I', b'50 GOTO 50'),
+            'BG.BA': listing(b'10 FOR I=1 TO 3', b'20 PRINT "BG";I', b'30 NEXT I'),
+            'LP.BA': listing(b'10 PRINT "LP"', b'20 GOTO 20')}
+    made = {e.title: platter.read(e.name, e.type) for e in platter.files() if e.type in ('TX', 'BA')}
     if made != want:
-        raise AssertionError('the text files are %r' % made)
-    # SQUISH ran after the last file was made or deleted: the files are
-    # one run from the first data sector, and what is free is one hole.
+        raise AssertionError('the text files and saved programs are %r' % made)
+    # SQUISH ran after the last file was deleted, and every file made
+    # since went into the hole at the end: the files are one run from
+    # the first data sector, and what is free is one hole.
     kinds = [e.what for e in platter.entries()]
     if kinds != [fs703.FILE] * (len(kinds) - 1) + [fs703.HOLE]:
         raise AssertionError('not squished: %r' % platter.entries())
     before = {e.title for e in fs703.Platter(bytearray(pristine)).files()}
-    if before & {'T2.TX', 'T4.TX', 'THIRD.TX'} or 'PAD.TX' not in before:
+    if before & {'T2.TX', 'T4.TX', 'THIRD.TX', 'PROG.BA', 'BG.BA', 'LP.BA'} or 'PAD.TX' not in before:
         raise AssertionError('the platter as made holds %r' % sorted(before))
 
 
@@ -506,8 +575,8 @@ def verdict(paper):
         ('help', line(rb'^COMMANDS HELP STAT UPTIME')),
         ('echo', line(rb'^SHELL OUTPUT OK')),
         ('unknown command', line(rb'^WHAT')),
-        ('directory: hello', line(rb'^HELLO\.RX 4$')),
-        ('directory: basic', line(rb'^BASIC\.RX 47$')),
+        ('directory: hello', line(rb'^HELLO\.RX \d+$')),
+        ('directory: basic', line(rb'^BASIC\.RX \d+$')),
         ('directory: the free sectors', line(rb'^\d+ SECTORS FREE')),
         # RUN's hello has the printer to itself. LOAD's prints behind the
         # prompt, a character at a time into whatever else is printing, so
@@ -526,7 +595,7 @@ def verdict(paper):
         ('the pool whole after every load', len(set(free)) == 1),
         ('two runs', count(rb'^SQ9') == 2),
         ('two breaks', count(rb'BREAK AT 50') == 2),
-        ('the program typed once and listed never', count(rb'20 PRINT "SQ"') == 1),
+        ('the program typed once and listed once', count(rb'20 PRINT "SQ"') == 2),
     ]
     return [name for name, ok in checks if not ok]
 
@@ -539,7 +608,8 @@ def make_platter(workdir, log):
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard'):
         files = []
-        for name, data in (('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT)):
+        for name, data in (('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
+                           ('SQ.BA', SQ)):
             files.append((name, os.path.join(workdir, name)))
             with open(files[-1][1], 'wb') as f:
                 f.write(data)
