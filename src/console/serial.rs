@@ -117,11 +117,14 @@ fn open_pty(in_tx: Sender<u8>, out_rx: Receiver<u8>) -> io::Result<String> {
             libc::cfmakeraw(&mut t);
             libc::tcsetattr(slave, libc::TCSANOW, &t);
         }
-        let p = libc::ttyname(slave);
-        if p.is_null() {
-            return Err(io::Error::last_os_error());
+        // ttyname_r, into a buffer of this call's own: ttyname's is one
+        // static shared by every thread opening a pty
+        let mut buf = [0 as libc::c_char; 256];
+        let e = libc::ttyname_r(slave, buf.as_mut_ptr(), buf.len());
+        if e != 0 {
+            return Err(io::Error::from_raw_os_error(e));
         }
-        std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+        std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
     };
     // SAFETY: master is ours alone from here, owned by the File.
     let mut reader = unsafe { File::from_raw_fd(master) };
