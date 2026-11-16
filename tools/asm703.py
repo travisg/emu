@@ -10,7 +10,8 @@
 
 The 703 predates anything this tree could reuse, and its own assembler (SYM II)
 exists only as scans, so the guests need something to build them. There is
-no linking: a deck is assembled whole. It produces two things:
+no linking: a deck is assembled whole. It produces two things, and a third
+for the decks that come after:
 
   - an absolute core image (`-o`): a flat binary of big-endian words starting
     at word 0, which is what `emu -s ray703` loads into core;
@@ -41,6 +42,20 @@ no linking: a deck is assembled whole. It produces two things:
     until it is loaded, and a module must fit one page, since its M fields
     are page offsets. tools/reload703.py is the reference loader for this
     text, and rex/ has the one that runs on the machine.
+  - an entry deck (`--exports`): the names the deck's NTRY cards list, as
+    EQUs at the values they have here, for another deck to begin with.
+    That is how what loads under an executive knows its vector and its
+    cells without being linked to it:
+
+                NTRY    K.ALLOC,K.FREE,CURT
+
+    NTRY is the 1968 loader's word for a name a deck gives away. Each
+    name goes out with the comment of the card that defines it and of
+    the indented comment cards under that one, and each NTRY card with
+    the comment cards that stand directly over it, so the entry deck
+    reads as the interface's own description; a comment that begins in
+    column 1 anywhere else stays behind. In a module a location has no
+    value until it is loaded, so only its constants may be entries.
 
 Several source files may be named at once and are assembled strictly in order
 as one deck -- one location counter, one symbol table, one image -- exactly as
@@ -142,6 +157,7 @@ import argparse
 import itertools
 import re
 import sys
+import textwrap
 
 # Memory reference instructions: opcode in bits 0-3 (the manual numbers from
 # the left), index flag in bit 4, an 11-bit address in bits 5-15.
@@ -195,7 +211,7 @@ GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFT
 # an if/else pair, they are two independent guards, so the X-RAY listing writes
 # out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
 DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'STR', 'RES', 'EQU',
-              'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'MACRO', 'ENDM'}
+              'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'MACRO', 'ENDM', 'NTRY'}
 
 # The instructions that only read their operand, and so may be given a
 # literal for one: `ADD =1` is a reference to a word holding 1, which the
@@ -913,7 +929,7 @@ def sizeof(lineno, op, arg):
     """How many words a statement occupies."""
     if op is None:
         return 0
-    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL'):
+    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'NTRY'):
         return 0    # a pool's words are counted where pass 1 lays it down
     if op in SUBR_MACROS or op == 'EXCH':
         return 2
@@ -1246,6 +1262,10 @@ def _assemble(paths, origin=0, relocatable=False):
     # Where the location counter stood when an ORG moved it, by the ORG's
     # place in `placed`: the end of whatever is in front of it.
     left = {}
+    # The card each name is defined on, and the NTRY cards in deck order,
+    # each with the names it lists: what --exports writes.
+    defined = {}
+    entries = []
 
     def literal(lineno, op, arg):
         """The name of the pool slot `=expr` asks for."""
@@ -1337,6 +1357,7 @@ def _assemble(paths, origin=0, relocatable=False):
                     # every label. An EQU that some *later* EQU depends on still
                     # resolves, because the leftovers are iterated to a fixpoint.
                     deferred.append((lineno, label, arg, here))
+                defined[label] = (lineno, arg)
                 placed.append((lineno, here, op, arg, text))
                 continue
             if label:
@@ -1349,6 +1370,7 @@ def _assemble(paths, origin=0, relocatable=False):
                 # name belongs to the STX, so that callers jump to code.
                 symbols[label] = here + 1 if op == 'SUBR' else here
                 counts[label] = 1
+                defined[label] = (lineno, None)
                 if op in DATA_OPS:
                     cells[label] = lineno
             if op == 'LPOOL':
@@ -1625,6 +1647,24 @@ def _assemble(paths, origin=0, relocatable=False):
                     if cnt != 1:
                         raise AsmError(lineno, f'entry {arg.strip()!r} is not a location in the module')
                 words = []
+            elif op == 'NTRY':
+                names = [n.strip() for n in operand_list(arg or '')]
+                for name in names:
+                    if LOCAL_MARK in name:
+                        raise AsmError(lineno, f'{shown(name)} is a local label, '
+                                               f'which nothing outside its routine names')
+                    if not NAMES.fullmatch(name):
+                        raise AsmError(lineno, f'NTRY takes names, and {name!r} is not one')
+                    if any(name in listed for _, listed in entries):
+                        raise AsmError(lineno, f'{name} is an entry twice')
+                    _, cnt = Expr(name, symbols, addr, lineno, counts).reloc()
+                    if relocatable and cnt:
+                        raise AsmError(
+                            lineno,
+                            f'{name} is a location in a module, which has no value '
+                            f'until the loader places it: an entry here is a constant')
+                entries.append((lineno, names))
+                words = []
             elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', None):
                 words = []
             else:
@@ -1718,7 +1758,9 @@ def _assemble(paths, origin=0, relocatable=False):
         image += core.get(word, 0).to_bytes(2, 'big')
     return {'image': bytes(image), 'listing': listing, 'symbols': symbols,
             'core': core, 'kinds': kinds, 'size': size, 'entry': entry,
-            'sizeb': sizeb, 'warnings': warnings}
+            'sizeb': sizeb, 'warnings': warnings,
+            'entries': [(lineno, [(name, symbols[name], *defined[name]) for name in names])
+                        for lineno, names in entries]}
 
 
 # The relocating loader's record: a zero marker, ninety-two bytes of text and
@@ -1793,6 +1835,64 @@ def write_listing(path, listing, symbols):
             f.write(f'  {name:<10} {symbols[name] & 0xffff:04X}\n')
 
 
+# A number as a card writes one, which an entry deck can say again as written.
+NUMBER = re.compile(r"\d+|0[xX][0-9A-Fa-f]+|X'[0-9A-Fa-f]+'")
+
+
+def comment_of(line):
+    """The comment on a card, without its semicolon, or None."""
+    quoted = False
+    for i, c in enumerate(line):
+        if c == '"':
+            quoted = not quoted
+        elif c == ';' and not quoted:
+            return line[i + 1:].strip()
+    return None
+
+
+def write_exports(path, sources, entries):
+    """The deck's entries as a deck of EQUs (see the module docstring)."""
+    files = {}
+
+    def lines(loc):
+        """The source around a card, or nothing for one a macro made."""
+        if not isinstance(loc, Loc) or loc.via or not loc.line:
+            return []
+        if loc.path not in files:
+            with open(loc.path, encoding='utf-8') as f:
+                files[loc.path] = f.read().split('\n')
+        return files[loc.path]
+
+    out = ['; vim: ts=8:sw=8:expandtab:', ';']
+    out += textwrap.wrap(
+        f'The entries of {", ".join(sources)}: each name an NTRY card there lists, '
+        f'at its value and with the comments it has there.  asm703.py --exports '
+        f'writes this file.', width=72, initial_indent='; ', subsequent_indent='; ')
+    for loc, names in entries:
+        src = lines(loc)
+        over = loc.line - 1 if src else 0
+        while over > 0 and src[over - 1].startswith(';'):
+            over -= 1
+        if src and over < loc.line - 1:
+            out.append('')
+            out.extend(src[over:loc.line - 1])
+        for name, value, at, arg in names:
+            said = f"X'{value & 0xffff:04X}'"
+            if arg and NUMBER.fullmatch(arg.strip()):
+                said = arg.strip()
+            src = lines(at)
+            comment = comment_of(src[at.line - 1]) if src else None
+            card = f'{name:<16}EQU     {said}'
+            out.append(f'{card:<40}; {comment}' if comment else card)
+            under = at.line if src else 0
+            while src and under < len(src) and src[under][:1].isspace() \
+                    and src[under].lstrip().startswith(';'):
+                out.append(src[under])
+                under += 1
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(out) + '\n')
+
+
 def main():
     ap = argparse.ArgumentParser(description='Raytheon 703 assembler')
     ap.add_argument('sources', metavar='source', nargs='+',
@@ -1804,6 +1904,8 @@ def main():
                     help='where the location counter starts (default 0); an '
                          'absolute build of a module source at a chosen base')
     ap.add_argument('-l', '--listing', help='write an address/word/source listing')
+    ap.add_argument('-x', '--exports', help='write the names on the deck\'s NTRY cards '
+                                            'as a deck of EQUs')
     # Deliberately the same "addr word" shape that xraylist.py --obj emits, so
     # that reassembling a transcribed listing and diffing it against the object
     # code the 1968 assembler printed is a plain `diff` of two sorted files.
@@ -1819,8 +1921,8 @@ def main():
                          'in src/system/ray703.rs (default 0x100)')
     args = ap.parse_args()
 
-    if not (args.output or args.object or args.map or args.listing):
-        ap.error('nothing to write: give -o, --object, -m or -l')
+    if not (args.output or args.object or args.map or args.listing or args.exports):
+        ap.error('nothing to write: give -o, --object, -m, -l or -x')
     if args.object and args.org != '0':
         ap.error('--org places an absolute build; a module is placed by the loader')
 
@@ -1880,6 +1982,13 @@ def main():
 
     if args.listing:
         write_listing(args.listing, listing, symbols)
+
+    # Last, so that it is never older than the image a makefile lists it behind.
+    if args.exports:
+        if not r['entries']:
+            print(f'{deck}: no NTRY card, so nothing to write to {args.exports}', file=sys.stderr)
+            return 1
+        write_exports(args.exports, args.sources, r['entries'])
 
     if args.object:
         records = len(stream) // (RECORD_DATA + 2)

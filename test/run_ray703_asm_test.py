@@ -7,7 +7,7 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 """tools/asm703.py held to itself: its literals, its macros and local
-labels, and its warnings.
+labels, its warnings, and the entries it writes for another deck.
 
 The images the tree builds say the assembler still assembles what it did;
 this says what the parts no image exercises do. Each case is a small deck
@@ -20,7 +20,9 @@ pool goes. The rest are the rules -- which literals share a cell, where a
 pool may be and what happens with none, what may not take one. Macros and
 local labels get the same treatment: the deck written with them against
 the deck written out. Then the warnings, each from a deck that has the
-mistake and not from its neighbour that does not.
+mistake and not from its neighbour that does not. And the entries: a deck
+that begins with what --exports wrote has to come out as the same deck
+with the numbers written in.
 """
 
 import os
@@ -58,6 +60,7 @@ def check(name, ok, detail=''):
     if not ok:
         FAILED.append(name)
         print('FAIL: %s%s' % (name, ': %s' % (detail,) if detail else ''))
+    return ok
 
 
 def errors_of(result):
@@ -606,12 +609,139 @@ def command_line():
         check('--werror', r.returncode == 1 and not os.path.exists(out), (r.returncode, r.stderr))
 
 
+KERNEL = """; a kernel
+
+; The vector.
+;
+; Called with SMB and JSX.
+                NTRY    K.GET,K.PUT
+                NTRY    CELL
+                ORG     X'10'
+; what only the kernel wants to know
+K.GET           JMP     GET             ; ACR = a queue -> the next word
+                                        ; or minus one
+K.PUT           JMP     PUT
+; and so is this, of the kernel only
+
+; A node.
+                NTRY    T.STA,T.LEN,T.TWO,E.NOF
+CELL            TEXT    "A;"            ; a text
+T.STA           EQU     0               ; state
+T.OWN           EQU     1               ; the kernel's own
+T.LEN           EQU     18
+T.TWO           EQU     T.LEN*2
+E.NOF           EQU     X'FFFF'
+GET             HLT
+PUT             HLT
+                END
+"""
+
+# A module's deck over the kernel's entries, and the same with the
+# numbers written in.
+USER = """START   SMB     K.GET
+        JSX     K.GET
+        SMB     CELL
+        LDW     CELL
+        LDW     *T.LEN-1
+        ADD     =T.TWO
+        CMW     =E.NOF
+        HLT
+        END     START
+"""
+USER_BY_HAND = """START   SMB     X'10'
+        JSX     X'10'
+        SMB     X'12'
+        LDW     X'12'
+        LDW     *17
+        ADD     =36
+        CMW     =X'FFFF'
+        HLT
+        END     START
+"""
+
+
+def entries():
+    """NTRY and --exports: a deck's names, written out for the next deck."""
+    asm = [sys.executable, os.path.join(TOOLS, 'asm703.py'), '--werror']
+    with tempfile.TemporaryDirectory() as d:
+        def put(name, text):
+            path = os.path.join(d, name)
+            with open(path, 'w') as f:
+                f.write(text)
+            return path
+
+        def run(*args):
+            return subprocess.run(asm + list(args), capture_output=True, text=True)
+
+        kernel, api = put('k.asm', KERNEL), os.path.join(d, 'api.asm')
+        r = run(kernel, '-o', os.path.join(d, 'k.bin'), '--exports', api)
+        # CELL is a cell nothing in the kernel reads: being an entry is
+        # being referred to, or --werror would have stopped this.
+        if not check('a deck with entries assembles and writes them',
+                     r.returncode == 0 and os.path.exists(api), (r.returncode, r.stderr)):
+            return
+        with open(api) as f:
+            text = f.read()
+        names = [line.split()[0] for line in text.split('\n')
+                 if line and not line[0].isspace() and not line.startswith(';')]
+        check('the entries are the names listed, in the cards\' order',
+              names == ['K.GET', 'K.PUT', 'CELL', 'T.STA', 'T.LEN', 'T.TWO', 'E.NOF'], names)
+        for want, what in (
+                ("K.GET           EQU     X'0010'         ; ACR = a queue -> the next word\n"
+                 "                                        ; or minus one\n"
+                 "K.PUT           EQU     X'0011'\n",
+                 'a label is its address, with its card\'s comment and the indented ones under it'),
+                ('\n; The vector.\n;\n; Called with SMB and JSX.\nK.GET ',
+                 'the comment over an NTRY card goes over its names'),
+                ("CELL            EQU     X'0012'         ; a text\n\n; A node.\nT.STA           EQU     0  ",
+                 'a second NTRY card runs on, and a semicolon in a string begins no comment'),
+                ("T.LEN           EQU     18\nT.TWO           EQU     X'0024'\nE.NOF           EQU     X'FFFF'\n",
+                 'a number is said as the card says it, and an expression as its value')):
+            check(what, want in text, text)
+        check('a comment in column 1 that is not over an NTRY card stays behind',
+              'kernel only' not in text and 'only the kernel' not in text and 'a kernel' not in text, text)
+
+        # The entries are worth what they say: a deck over them is the
+        # deck with the numbers written in.
+        outs = []
+        for deck in ([api, put('u.asm', USER)], [put('h.asm', USER_BY_HAND)]):
+            m = os.path.join(d, 'm%d.map' % len(outs))
+            r = run(*deck, '--org', '0x100', '-m', m)
+            check('a deck over the entries assembles', r.returncode == 0, r.stderr)
+            outs.append(open(m).read() if os.path.exists(m) else None)
+        check('a deck over the entries is the deck with the numbers written in',
+              outs[0] is not None and outs[0] == outs[1], outs)
+
+        r = run(put('n.asm', 'START   HLT\n        END     START\n'), '--exports', api + '2')
+        check('--exports of a deck with no NTRY card fails',
+              r.returncode == 1 and 'no NTRY card' in r.stderr and not os.path.exists(api + '2'),
+              (r.returncode, r.stderr))
+
+    def refused(name, deck, want, relocatable=False):
+        got = errors_of(build(deck, relocatable))
+        check(name, len(got) == 1 and want in got[0], got)
+
+    frame = 'T.X     EQU     4\n%sGO      HLT\n.L      JMP     .L\n        END     GO\n'
+    refused('an entry nothing defines', frame % '        NTRY    NOPE\n', "undefined symbol 'NOPE'")
+    refused('an entry listed twice', frame % '        NTRY    T.X\n        NTRY    GO,T.X\n',
+            'T.X is an entry twice')
+    refused('an entry is a name', frame % '        NTRY    T.X+1\n', "'T.X+1' is not one")
+    refused('a local label is no entry', 'T.X     EQU     4\nGO      HLT\n.L      JMP     .L\n'
+            '        NTRY    .L\n        END     GO\n', 'is a local label')
+    refused('a module\'s location is no entry', frame % '        NTRY    GO\n',
+            'GO is a location in a module', relocatable=True)
+    r = build(frame % '        NTRY    T.X\n', relocatable=True)
+    check('a module\'s constant is an entry', not errors_of(r) and not isinstance(r, asm703.AsmErrorList)
+          and [n for n, *_ in r['entries'][0][1]] == ['T.X'], errors_of(r))
+
+
 def main():
     literals()
     forward_literals()
     macros()
     lint()
     command_line()
+    entries()
     if FAILED:
         print('FAIL: asm703 test (%d: %s)' % (len(FAILED), ', '.join(FAILED)))
         return 1
