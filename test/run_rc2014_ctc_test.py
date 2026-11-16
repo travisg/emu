@@ -126,7 +126,12 @@ def main():
                 last = insns
                 emu.run()
             emu.remove_break(HANDLER)
-            emu.halt()
+            # the handler's return, not a `halt`, which could land ahead
+            # of its inc
+            emu.add_break(AFTER_HALT)
+            stop = emu.wait_stopped()
+            if stop.reason != 'break' or stop.pc != AFTER_HALT:
+                raise AssertionError('expected the return past the halt, got %r' % (stop,))
             if emu.mem(COUNTER, 1)[0] < TICKS:
                 raise AssertionError('the counter fell behind after the breakpoint came off')
             emu.kill()
