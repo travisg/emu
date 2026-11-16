@@ -17,12 +17,15 @@
 
 HOGSEC          EQU     4200
 HOGRND          EQU     30
+HKGOOD          EQU     X'600D'         ; the verdicts: every check passed,
+HKDEAD          EQU     X'DEAD'         ; a word was not what was put there,
+HKNOC           EQU     X'0C0E'         ; and there was no core to be had
 
 HOG             SMB     CURT
                 LDX     CURT
                 LDW     *T.ID
                 STW     HID
-                ADD     HKSEC
+                ADD     =HOGSEC
                 STW     HBLK            ; the verdict's sector
                 JSX     L.ARGS
                 CLR                     ; n, in decimal, from the command tail
@@ -30,11 +33,11 @@ HOG             SMB     CURT
 HNL             LDX     L.AP
                 CLR
                 LDB     *0
-                SUB     HKZER
+                SUB     ='0'
                 STW     HD
                 SAP                     ; below '0', the tail's zero included
                 JMP     HND
-                CMW     HK10
+                CMW     =10
                 SLS
                 JMP     HND
                 LDW     HN
@@ -44,7 +47,7 @@ HNL             LDX     L.AP
                 ADD     HD
                 STW     HN
                 LDW     L.AP
-                ADD     HK1
+                ADD     =1
                 STW     L.AP
                 JMP     HNL
 HND             LDW     HN
@@ -55,7 +58,7 @@ HGET            SMB     K.ALLHI
                 JSX     K.ALLHI
                 SAZ
                 JMP     HGOT
-                LDW     HKNOC
+                LDW     =HKNOC
                 JMP     HVERD
 HGOT            STW     HB
                 JSX     HFIRST          ; the pattern
@@ -65,9 +68,9 @@ HFL             LDX     HP
                 JSX     HNEXT
                 SAZ
                 JMP     HFL
-                LDW     HKRND
+                LDW     =HOGRND
                 STW     HR
-HRL             LDW     HK20
+HRL             LDW     =20
                 JSX     L.SLEEP
                 JSX     HFIRST          ; and is it still there?
 HVL             LDX     HP
@@ -79,32 +82,32 @@ HVL             LDX     HP
                 SAZ
                 JMP     HVL
                 LDW     HR
-                SUB     HK1
+                SUB     =1
                 STW     HR
                 SAZ
                 JMP     HRL
-                LDW     HKGOOD
+                LDW     =HKGOOD
                 JMP     HVERD
-HBAD            LDW     HKDEAD
+HBAD            LDW     =HKDEAD
 
 ; The verdict, a sector of it.
 HVERD           STW     HV
-                LDW     HKBUF
+                LDW     =HBUF
                 STW     HP
-                LDW     HK47
+                LDW     =47
                 STW     HC
 HWL             LDX     HP
                 LDW     HV
                 STW     *0
                 LDW     HP
-                ADD     HK1
+                ADD     =1
                 STW     HP
                 LDW     HC
-                SUB     HK1
+                SUB     =1
                 STW     HC
                 SAZ
                 JMP     HWL
-                LDW     HKBLK
+                LDW     =HBLK
                 SMB     K.DWRIT
                 JSX     K.DWRIT
                 JMP     L.EXIT
@@ -122,13 +125,13 @@ HFIRST          SUBR
                 EXIT    HFIRST
 HNEXT           SUBR
                 LDW     HV
-                ADD     HK1
+                ADD     =1
                 STW     HV
                 LDW     HP
-                ADD     HK1
+                ADD     =1
                 STW     HP
                 LDW     HC
-                SUB     HK1
+                SUB     =1
                 STW     HC
                 EXIT    HNEXT
 
@@ -143,16 +146,4 @@ HP              WORD    0               ; where it is,
 HC              WORD    0               ; and how many are left
 HBLK            WORD    0,47,HBUF       ; the verdict's transfer: sector, words, core
 HBUF            RES     47
-HK1             WORD    1
-HK10            WORD    10
-HK20            WORD    20
-HK47            WORD    47
-HKZER           WORD    '0'
-HKSEC           WORD    HOGSEC
-HKRND           WORD    HOGRND
-HKGOOD          WORD    X'600D'
-HKDEAD          WORD    X'DEAD'
-HKNOC           WORD    X'0C0E'
-HKBLK           WORD    HBLK
-HKBUF           WORD    HBUF
                 END     HOG

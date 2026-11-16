@@ -18,22 +18,18 @@ NAP             SMB     CURT
                 LDW     KCONSQ
                 SMB     K.QGET
                 JSX     K.QGET
-                CMW     NKM1
+                CMW     =X'FFFF'
                 SEQ
                 JMP     NREAD
-                LDW     NKREF
+                LDW     =NREF
                 JSX     L.MSG
                 JMP     NLOOP
-NREAD           LDW     NKBAD
+NREAD           LDW     =NBAD
                 JSX     L.MSG
-NLOOP           LDW     NK60
+NLOOP           LDW     =60
                 JSX     L.SLEEP
                 JMP     NLOOP
 
-NK60            WORD    60
-NKM1            WORD    X'FFFF'
-NKREF           WORD    NREF
-NKBAD           WORD    NBAD
 NREF            WORD    NREFT*2,NREFE*2
 NBAD            WORD    NBADT*2,NBADE*2
 NREFT           TEXT    "NAP: THE CONSOLE WAS REFUSED\r\n"

@@ -5,17 +5,17 @@
 ; half of a word.  Ctrl-C stops it, where it has the console.
 
 DUMP            JSX     L.ARGS
-                LDW     UKNAM
+                LDW     =UNAM
                 JSX     L.NAME
                 SAZ
                 JMP     U1
-                LDW     UKUSE
+                LDW     =UUSE
                 JSX     L.MSG
                 JMP     L.EXIT
 U1              CLR
                 STW     UNAM+4
                 STW     UOFF
-                LDW     UKNAM
+                LDW     =UNAM
                 SMB     K.OPEN
                 JSX     K.OPEN
                 SAP
@@ -29,16 +29,16 @@ ULINE           JSX     L.BRK
                 JMP     UDONE
                 STW     UW
                 LDW     UOFF            ; less the byte just read
-                SUB     UK1
+                SUB     =1
                 JSX     L.HEX
-                LDW     UK8
+                LDW     =8
                 STW     UN
                 JMP     UWORD
 UNEXT           JSX     UBYTE
                 SAP
                 JMP     UEOL
                 STW     UW
-UWORD           LDW     UKSP
+UWORD           LDW     =' '
                 JSX     L.PUTC
                 JSX     UBYTE           ; the word's low half
                 SAP
@@ -49,7 +49,7 @@ UWORD           LDW     UKSP
                 ORI     UW2
                 JSX     L.HEX
                 LDW     UN
-                SUB     UK1
+                SUB     =1
                 STW     UN
                 SAZ
                 JMP     UNEXT
@@ -72,7 +72,7 @@ UBYTE           SUBR
                 JMP     UBX
                 STW     UB
                 LDW     UOFF
-                ADD     UK1
+                ADD     =1
                 STW     UOFF
                 LDW     UB
 UBX             EXIT    UBYTE
@@ -84,11 +84,6 @@ UN              WORD    0               ; words left on the line
 UW              WORD    0               ; a word's halves
 UW2             WORD    0
 UB              WORD    0
-UK1             WORD    1
-UK8             WORD    8
-UKSP            WORD    ' '
-UKNAM           WORD    UNAM
-UKUSE           WORD    UUSE
 UUSE            WORD    UUSET*2,UUSEE*2
 UUSET           TEXT    "DUMP NAME \r\n"
 UUSEE           EQU     $

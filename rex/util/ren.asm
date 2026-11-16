@@ -3,19 +3,19 @@
 ; REN old new -- a file under another name.
 
 REN             JSX     L.ARGS
-                LDW     RKOLD
+                LDW     =ROLD
                 JSX     L.NAME
                 SAZ
                 JMP     R1
                 JMP     RUSAGE
-R1              LDW     RKNEW
+R1              LDW     =RNEW
                 JSX     L.NAME
                 SAZ
                 JMP     R2
-RUSAGE          LDW     RKUSE
+RUSAGE          LDW     =RUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-R2              LDW     RKOLD           ; the two names lie together, which
+R2              LDW     =ROLD           ; the two names lie together, which
                 SMB     K.RENAM         ; is how K.RENAM wants them
                 JSX     K.RENAM
                 SAZ
@@ -24,9 +24,6 @@ R2              LDW     RKOLD           ; the two names lie together, which
 
 ROLD            WORD    0,0,0,0
 RNEW            WORD    0,0,0,0
-RKOLD           WORD    ROLD
-RKNEW           WORD    RNEW
-RKUSE           WORD    RUSE
 RUSE            WORD    RUSET*2,RUSEE*2
 RUSET           TEXT    "REN OLD NEW "
                 TEXT    "\r\n"

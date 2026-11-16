@@ -13,27 +13,27 @@ BLIP            JSX     L.ARGS
 BSKP            LDX     L.AP            ; past the blanks, to the character
                 CLR
                 LDB     *0
-                CMW     L.KSP
+                CMW     =' '
                 SEQ
                 JMP     BGOT
                 JSX     L.NADV
                 JMP     BSKP
 BGOT            SAZ                     ; the tail ran out first?
                 JMP     BKEEP
-                LDW     L.KDOT
+                LDW     ='.'
 BKEEP           STW     BCH
 
                 SMB     CURT
                 LDX     CURT
                 LDW     *T.ID
                 STW     BN
-                LDW     BK15
+                LDW     =15
                 STW     BNAP
 BMUL            LDW     BNAP            ; fifteen more, the job number times
-                ADD     BK15
+                ADD     =15
                 STW     BNAP
                 LDW     BN
-                SUB     L.K1
+                SUB     =1
                 STW     BN
                 SAZ
                 JMP     BMUL
@@ -47,5 +47,4 @@ BLOOP           LDW     BCH
 BCH             WORD    0               ; the character
 BN              WORD    0               ; the multiply's count
 BNAP            WORD    0               ; the sleep, in ticks
-BK15            WORD    15
                 END     BLIP

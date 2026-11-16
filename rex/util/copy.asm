@@ -3,29 +3,29 @@
 ; COPY from to -- a file, again, under another name.
 
 COPY            JSX     L.ARGS
-                LDW     CKFROM
+                LDW     =CFROM
                 JSX     L.NAME
                 SAZ
                 JMP     C1
                 JMP     CUSAGE
-C1              LDW     CKTO
+C1              LDW     =CTO
                 JSX     L.NAME
                 SAZ
                 JMP     C2
-CUSAGE          LDW     CKUSE
+CUSAGE          LDW     =CUSE
                 JSX     L.MSG
                 JMP     L.EXIT
 C2              CLR
                 STW     CFROM+4         ; one to read...
-                LDW     CKFROM
+                LDW     =CFROM
                 SMB     K.OPEN
                 JSX     K.OPEN
                 SAP
                 JMP     CERR
                 STW     CIN
-                LDW     CK1
+                LDW     =1
                 STW     CTO+4           ; ...and one to write
-                LDW     CKTO
+                LDW     =CTO
                 SMB     K.OPEN
                 JSX     K.OPEN
                 SAP
@@ -57,10 +57,6 @@ CFROM           WORD    0,0,0,0,0
 CTO             WORD    0,0,0,0,0
 CIN             WORD    0               ; the channel read from
 COUT            WORD    0               ; and the one written to, times 256
-CK1             WORD    1
-CKFROM          WORD    CFROM
-CKTO            WORD    CTO
-CKUSE           WORD    CUSE
 CUSE            WORD    CUSET*2,CUSEE*2
 CUSET           TEXT    "COPY FROM TO\r\n"
 CUSEE           EQU     $

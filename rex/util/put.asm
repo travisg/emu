@@ -13,20 +13,20 @@ PUT             SMB     CURT
                 LDW     *T.CON
                 SAZ                     ; the console?
                 JMP     P0
-                LDW     PKNCON
+                LDW     =PNCON
                 JSX     L.MSG
                 JMP     L.EXIT
 P0              JSX     L.ARGS
-                LDW     PKNAM
+                LDW     =PNAM
                 JSX     L.NAME
                 SAZ
                 JMP     P1
-                LDW     PKUSE
+                LDW     =PUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-P1              LDW     PK1
+P1              LDW     =1
                 STW     PNAM+4          ; to write
-                LDW     PKNAM
+                LDW     =PNAM
                 SMB     K.OPEN
                 JSX     K.OPEN
                 SAP
@@ -37,9 +37,9 @@ PLOOP           SMB     KCONSQ
                 LDW     KCONSQ
                 SMB     K.QGET
                 JSX     K.QGET
-                AND     PK0FF
+                AND     =X'00FF'
                 STW     PC
-                CMW     PKCTLZ
+                CMW     =PKCTLZ
                 SNE
                 JMP     PDONE
                 ORI     PCH
@@ -48,10 +48,10 @@ PLOOP           SMB     KCONSQ
                 SAZ
                 JMP     PERR
                 LDW     PC
-                CMW     PKCR
+                CMW     =L.KCR
                 SEQ
                 JMP     PLOOP
-                LDW     PKLF
+                LDW     =L.KLF
                 ORI     PCH
                 SMB     K.PUTC
                 JSX     K.PUTC
@@ -72,14 +72,7 @@ PERR            JSX     L.ERR
 PNAM            WORD    0,0,0,0,0
 PCH             WORD    0               ; the channel, times 256
 PC              WORD    0               ; the character
-PK1             WORD    1
-PK0FF           WORD    X'00FF'
-PKCR            WORD    X'008D'
-PKLF            WORD    X'008A'
-PKCTLZ          WORD    X'009A'
-PKNAM           WORD    PNAM
-PKUSE           WORD    PUSE
-PKNCON          WORD    PNCON
+PKCTLZ          EQU     X'009A'         ; Ctrl-Z
 PUSE            WORD    PUSET*2,PUSEE*2
 PNCON           WORD    PNCONT*2,PNCONE*2
 PUSET           TEXT    "PUT NAME\r\n"

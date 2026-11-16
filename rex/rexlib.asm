@@ -31,7 +31,7 @@
 ; Deposit under MSK, kick the printer, then masked-look/SWAI/SWTCH until
 ; SERV clears the cell -- the shell's SHPUTC against this task's own node.
 L.PUTC          SUBR
-                AND     L.K0FF
+                AND     =X'00FF'
                 MSK
                 SMB     CURT
                 LDX     CURT
@@ -46,7 +46,7 @@ L.PCWT          MSK
                 SAZ                     ; printed yet?
                 JMP     L.PCWB
                 JMP     L.PCWD
-L.PCWB          LDW     L.KWAI          ; no: stand down until SERV says so
+L.PCWB          LDW     =SWAI           ; no: stand down until SERV says so
                 STW     *T.STA
                 SMB     K.SWTCH
                 JSX     K.SWTCH
@@ -65,7 +65,7 @@ L.PWL           LDW     L.PWP
                 LDB     *0
                 JSX     L.PUTC
                 LDW     L.PWP
-                ADD     L.K1
+                ADD     =1
                 STW     L.PWP
                 JMP     L.PWL
 L.PWDN          EXIT    L.PUTW
@@ -79,9 +79,9 @@ L.MSG           SUBR
                 EXIT    L.MSG
 
 L.NL            SUBR
-                LDW     L.KCR
+                LDW     =L.KCR
                 JSX     L.PUTC
-                LDW     L.KLF
+                LDW     =L.KLF
                 JSX     L.PUTC
                 EXIT    L.NL
 
@@ -91,29 +91,29 @@ L.NL            SUBR
 ; build.
 L.DEC           SUBR
                 STW     L.V
-                LDW     L.KDBE
+                LDW     =L.KDBE
                 STW     L.DP
 L.DL            LDW     L.V
                 SRL     15
                 CAX
                 LDW     L.V
-                DIV     L.KTEN
+                DIV     =10
                 STW     L.V             ; the quotient
                 CXA                     ; the remainder is the digit
-                ADD     L.KZER
+                ADD     ='0'
                 LDX     L.DP
                 STB     *0
                 LDW     L.DP
-                SUB     L.K1
+                SUB     =1
                 STW     L.DP
                 LDW     L.V
                 SAZ                     ; nothing left of it?
                 JMP     L.DL
-                LDW     L.KDBE
-                ADD     L.K1
+                LDW     =L.KDBE
+                ADD     =1
                 STW     L.PWEND
                 LDW     L.DP
-                ADD     L.K1
+                ADD     =1
                 JSX     L.PUTW
                 EXIT    L.DEC
 
@@ -124,7 +124,7 @@ L.SLEEP         SUBR
                 SMB     CURT
                 LDX     CURT
                 STW     *T.DLY
-                LDW     L.KSLP
+                LDW     =SSLP
                 STW     *T.STA
                 SMB     K.SWTCH
                 JSX     K.SWTCH
@@ -132,20 +132,20 @@ L.SLEEP         SUBR
 
 L.HEX           SUBR
                 STW     L.V
-                LDW     L.K4
+                LDW     =4
                 STW     L.DP
 L.HXL           LDW     L.V             ; the top digit, each time round
                 SRL     12
-                CMW     L.KTEN
+                CMW     =10
                 SLS                     ; a letter?
-                ADD     L.K7
-                ADD     L.KZER
+                ADD     =L.K7
+                ADD     ='0'
                 JSX     L.PUTC
                 LDW     L.V
                 SLL     4
                 STW     L.V
                 LDW     L.DP
-                SUB     L.K1
+                SUB     =1
                 STW     L.DP
                 SAZ
                 JMP     L.HXL
@@ -157,7 +157,7 @@ L.ARGS          SUBR
                 LDW     *T.ARG
                 SAZ                     ; a tail at all?
                 JMP     L.AR1
-                LDW     L.KNUL          ; none: a tail of nothing
+                LDW     =L.NULW         ; none: a tail of nothing
 L.AR1           SLL     1
                 STW     L.AP
                 EXIT    L.ARGS
@@ -177,7 +177,7 @@ L.NAME          SUBR
 L.NSK           LDX     L.AP            ; past the blanks
                 CLR
                 LDB     *0
-                CMW     L.KSP
+                CMW     =' '
                 SEQ
                 JMP     L.NGO
                 JSX     L.NADV
@@ -185,7 +185,7 @@ L.NSK           LDX     L.AP            ; past the blanks
 L.NGO           LDW     L.NB
                 SLL     1
                 STW     L.NP
-                LDW     L.K6
+                LDW     =6
                 STW     L.NN
 L.NL1           LDX     L.AP
                 CLR
@@ -193,10 +193,10 @@ L.NL1           LDX     L.AP
                 SAZ                     ; the zero ends it
                 JMP     L.N1
                 JMP     L.NX
-L.N1            CMW     L.KSP           ; and so does a blank
+L.N1            CMW     =' '            ; and so does a blank
                 SNE
                 JMP     L.NX
-                CMW     L.KDOT          ; a dot starts the type
+                CMW     ='.'            ; a dot starts the type
                 SNE
                 JMP     L.NDOT
                 STW     L.NC
@@ -204,13 +204,13 @@ L.N1            CMW     L.KSP           ; and so does a blank
                 SAZ
                 JMP     L.N2
                 JMP     L.N3
-L.N2            SUB     L.K1
+L.N2            SUB     =1
                 STW     L.NN
                 LDX     L.NP
                 LDW     L.NC
                 STB     *0
                 LDW     L.NP
-                ADD     L.K1
+                ADD     =1
                 STW     L.NP
 L.N3            JSX     L.NADV
                 JMP     L.NL1
@@ -219,9 +219,9 @@ L.NDOT          LDX     L.NB
                 STW     *3
                 LDW     L.NB
                 SLL     1
-                ADD     L.K6
+                ADD     =6
                 STW     L.NP
-                LDW     L.K2
+                LDW     =2
                 STW     L.NN
                 JMP     L.N3
 L.NX            LDX     L.NB
@@ -229,7 +229,7 @@ L.NX            LDX     L.NB
                 EXIT    L.NAME
 L.NADV          SUBR
                 LDW     L.AP
-                ADD     L.K1
+                ADD     =1
                 STW     L.AP
                 EXIT    L.NADV
 
@@ -237,13 +237,13 @@ L.NADV          SUBR
 ; an index into the table.
 L.ERR           SUBR
                 STW     L.V
-                LDW     L.KM1
+                LDW     =X'FFFF'
                 SUB     L.V
-                CMW     L.KNERR
+                CMW     =L.KNERR
                 SLS                     ; one of them?
                 CLR
                 SLL     1
-                ADD     L.KETAB
+                ADD     =L.ETAB
                 JSX     L.MSG
                 JSX     L.NL
                 EXIT    L.ERR
@@ -274,25 +274,11 @@ L.NN            WORD    0               ; how many more it will take,
 L.NC            WORD    0               ; and the character in hand
 L.DTY           WORD    'TX'            ; the type a bare name is given
 L.NULW          WORD    0               ; a tail of nothing
-L.K1            WORD    1
-L.K2            WORD    2
-L.K4            WORD    4
-L.K6            WORD    6
-L.K7            WORD    7               ; from '9'+1 to 'A'
-L.K0FF          WORD    X'00FF'
-L.KM1           WORD    X'FFFF'
-L.KTEN          WORD    10
-L.KZER          WORD    '0'
-L.KSP           WORD    ' '
-L.KDOT          WORD    '.'
-L.KCR           WORD    X'008D'
-L.KLF           WORD    X'008A'
-L.KSLP          WORD    SSLP
-L.KWAI          WORD    SWAI
-L.KDBE          WORD    L.DB*2+5        ; the last byte of the digit buffer
-L.KNUL          WORD    L.NULW
-L.KNERR         WORD    8               ; how many E. values there are
-L.KETAB         WORD    L.ETAB
+L.KCR           EQU     X'008D'         ; carriage return and line feed, as
+L.KLF           EQU     X'008A'         ; the teletype sends and takes them
+L.K7            EQU     7               ; from '9'+1 to 'A'
+L.KDBE          EQU     L.DB*2+5        ; the last byte of the digit buffer
+L.KNERR         EQU     8               ; how many E. values there are
 
 L.ETAB          WORD    L.E1T*2,L.E1E*2 ; E.NOF, and on down
                 WORD    L.E2T*2,L.E2E*2

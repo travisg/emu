@@ -3,14 +3,14 @@
 ; DEL name -- a file gone, and its sectors a hole.
 
 DEL             JSX     L.ARGS
-                LDW     DKNAM
+                LDW     =DNAM
                 JSX     L.NAME
                 SAZ
                 JMP     D1
-                LDW     DKUSE
+                LDW     =DUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-D1              LDW     DKNAM
+D1              LDW     =DNAM
                 SMB     K.DELET
                 JSX     K.DELET
                 SAZ
@@ -18,8 +18,6 @@ D1              LDW     DKNAM
                 JMP     L.EXIT
 
 DNAM            WORD    0,0,0,0
-DKNAM           WORD    DNAM
-DKUSE           WORD    DUSE
 DUSE            WORD    DUSET*2,DUSEE*2
 DUSET           TEXT    "DEL NAME\r\n"
 DUSEE           EQU     $
