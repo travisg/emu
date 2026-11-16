@@ -218,6 +218,14 @@
 ;   across the wait for a transfer's completion too, and is written like
 ;   any single-task routine.
 ;
+; * A BYTE ADDRESS ABOVE WORD X'4000' IS NEGATIVE, and this machine's
+;   compares are signed.  So the pool is in two parts with a fence
+;   between them -- a block of no words that is never free, so nothing
+;   is ever joined across it -- and what a task asks for comes from
+;   below the fence unless it asks otherwise (K.ALLHI, K.ALHIW), which
+;   is a promise to compare no byte addresses in it.  A module is put
+;   above the fence only if its directory entry says it may be.
+;
 ; * THE POOL IS OWNED WORD BY WORD.  Core from POOLB to POOLE is a
 ;   first-fit list of free blocks, every block two words of header in
 ;   front of its payload: the size, and either the next free block or the
@@ -269,8 +277,9 @@
 ;              two doors
 ;   0800-      page 1: the shell -- banner, prompt, commands, line
 ;              buffer -- and its loader, with the sector it reads
-;   1000-3FFF  the pool, which the allocator hands out: what the shell
-;              loads and its workspaces live there
+;   1000-6FFF  the pool, which the allocator hands out: what the shell
+;              loads and its workspaces live there.  The fence is the
+;              two words below 4000
 ;   7000-763F  the filesystem (rexfs.asm, the second file of this deck):
 ;              the directory's routines, the channels and the bodies of
 ;              the file calls, then the four channels and the directory
@@ -324,7 +333,9 @@ K.KICK          JMP     KICK            ; start the printer
 K.QGET          JMP     Q.GET           ; ACR = a queue descriptor -> the next word
 K.DREAD         JMP     KDREAD          ; ACR = a transfer block -> status
 K.DWRIT         JMP     KDWRIT          ; the same, core to disc
-                WORD    0,0,0,0,0,0     ; X'1A'-X'1F'
+K.ALLHI         JMP     ALLOCH          ; K.ALLOC, above X'4000' for choice
+K.ALHIW         JMP     ALLCHW          ; K.ALLCW, the same
+                WORD    0,0,0,0         ; X'1C'-X'1F'
 
                 ORG     X'20'
 CURT            WORD    SHTCB           ; the current task's node: the kernel
@@ -412,7 +423,10 @@ NRING           EQU     4               ; nodes on the ring at power-on: A,
                                         ; it, the scans' explicit fallback.
 
 POOLB           EQU     X'1000'         ; the pool: core the allocator hands
-POOLE           EQU     X'4000'         ; out, from the end of the image
+POOLE           EQU     X'7000'         ; out, from the shell to the filesystem
+POOLH           EQU     X'4000'         ; where a byte address turns negative:
+                                        ; the pool's high part starts here,
+FENCE           EQU     POOLH-2         ; behind a block that is never free
 
 ; A directory entry (rexfs.asm, tools/fs703.py), and the eight words a
 ; task hands K.LOOK, whose first four it fills in and whose last four the
@@ -456,10 +470,20 @@ NARID           EQU     5               ; the first one's job number
 ; the shell's block, which is exactly right.
 START           MSK
                 SGM                     ; flat addressing, everywhere, always
-                LDW     KPOOLB          ; the pool: one free block, the lot
-                STW     FREHD
-                CAX
+                LDW     KPOOLB          ; the pool: a free block below the
+                STW     FREHD           ; fence, the fence, and a free
+                CAX                     ; block above it
                 LDW     KPOOLN
+                STW     *0
+                LDW     KPOOLH
+                STW     *1
+                LDX     KFENCE
+                CLR
+                STW     *0
+                LDW     K8000
+                STW     *1
+                LDX     KPOOLH
+                LDW     KPOOHN
                 STW     *0
                 CLR
                 STW     *1
@@ -1431,7 +1455,12 @@ LPARK           JMP     LPARK           ; parked; a legal idle, levels live
 ; node with bit 0 set.  Three entries share one body: K.ALLOC takes any
 ; address, K.ALLCW wants the payload inside one 2048-word page and
 ; K.ALLCB inside one 1024-word byte page -- what a module needs, since
-; its M fields are page offsets.  The answer is the payload address, or
+; its M fields are page offsets.  Those three hand out core below the
+; fence only, where a byte address is positive; K.ALLHI and K.ALHIW (and
+; ALLCHB, the loader's) are the same three for a caller that compares
+; no byte addresses in what it gets, and look above the fence first.
+; The search is the same either way, over the part of the list between
+; a floor and a ceiling.  The answer is the payload address, or
 ; zero, which is never in the pool.  Any task may call, so every entry
 ; is masked from its first instruction to its return: the cells are one
 ; caller's at a time, and the link is kept by hand because the stubs
@@ -1450,12 +1479,45 @@ ALLOC           MSK
 ALCOM           STW     ALMSK           ; the window less one, or zero for any
                 STX     ALRET
                 CLR
+                STW     ALHI            ; below the fence, and nowhere else
+ALLOW           CLR
+                STW     ALFLO
+                LDW     KFENCE
+                STW     ALCEI
+                JMP     ALGO
+ALLCHW          MSK
+                STW     ALSIZ
+                LDW     K2047
+                JMP     ALCOMH
+ALLCHB          MSK
+                STW     ALSIZ
+                LDW     K1023
+                JMP     ALCOMH
+ALLOCH          MSK
+                STW     ALSIZ
+                CLR
+ALCOMH          STW     ALMSK
+                STX     ALRET
+                LDW     K1
+                STW     ALHI            ; above the fence, and below it if
+                LDW     KFENCE          ; there is nothing there
+                STW     ALFLO
+                LDW     KPOOLE
+                STW     ALCEI
+ALGO            CLR
                 STW     ALPRV           ; the free block before F; zero: the head
                 LDW     FREHD
 ALSCN           STW     ALF             ; F, a free block's header
                 SAZ                     ; the end of the list: nothing fits
-                JMP     ALTRY
+                JMP     ALTRY0
                 JMP     ALNONE
+ALTRY0          CMW     ALCEI
+                SLS                     ; at the ceiling: the list is in
+                JMP     ALNONE          ; address order, so nothing fits
+                CMW     ALFLO
+                SLS                     ; below the floor: not this one
+                JMP     ALTRY
+                JMP     ALNXT
 ALTRY           CAX
                 LDW     *0
                 STW     ALS             ; S, its payload
@@ -1580,10 +1642,15 @@ ALHDR           LDX     ALH             ; the header: size, and the owner
                 STW     *1
                 LDW     ALP
                 JMP     ALOUT
-ALNONE          CLR
+ALNONE          LDW     ALHI
+                SAZ                     ; a second try to make, below the fence?
+                JMP     ALAGN
 ALOUT           LDX     ALRET           ; the link first: past the UNM the
                 UNM                     ; cells are the next caller's
                 JSX     *0
+ALAGN           CLR
+                STW     ALHI
+                JMP     ALLOW
 
 ; Give a block back.  FREEI does the work with the mask held by its
 ; caller, which is FREE for a task and the exit path for a task's whole
@@ -1680,6 +1747,9 @@ FREHD           WORD    0               ; the first free block
 ALSIZ           WORD    0               ; the request: words...
 ALMSK           WORD    0               ; ...and the window less one, or zero
 ALRET           WORD    0               ; the caller's link
+ALFLO           WORD    0               ; the search's floor and ceiling:
+ALCEI           WORD    0               ; a free block's header lies between
+ALHI            WORD    0               ; nothing above the fence fits: try below
 ALPRV           WORD    0               ; the search: the free block before F
 ALF             WORD    0               ; F, and its payload S
 ALS             WORD    0
@@ -1701,7 +1771,10 @@ K2047           WORD    2047
 K8000           WORD    X'8000'
 KPOOLB          WORD    POOLB           ; the pool: [POOLB, POOLE)
 KPOOLE          WORD    POOLE
-KPOOLN          WORD    POOLE-POOLB-2   ; as one free block's payload
+KPOOLH          WORD    POOLH           ; its high part's first block,
+KFENCE          WORD    FENCE           ; the fence in front of that,
+KPOOLN          WORD    FENCE-POOLB-2   ; and the two parts as free blocks'
+KPOOHN          WORD    POOLE-POOLH-2   ; payloads
 K7FFF           WORD    X'7FFF'
 KSHELL          WORD    SHTCB           ; the shell's node, for the console's return
 
@@ -2466,6 +2539,9 @@ LDM2            SAP                     ; an error is minus
                 STW     LDSEC
                 LDW     *DE.CNT         ; ...and how many sectors
                 STW     LDNSEC
+                LDW     *DE.FLG         ; and whether it may load high
+                AND     SHKDFH
+                STW     LDHIGH
 LDFND           MSK                     ; a node from the arena
                 SMB     NALLOC
                 JSX     NALLOC
@@ -2569,9 +2645,19 @@ LDIL2           SUB     SHK1
                 JSX     LDSTOR
                 JMP     LDIL1
 LDSIZW          LDW     SHKALW          ; SIZE: the block, from the allocator
-                JMP     LDSIZ           ; entry the code names
-LDSIZB          LDW     SHKALB
-LDSIZ           STW     LDALE
+                JMP     LDSIZ           ; entry the code names -- or the one
+LDSIZB          LDW     SHKALB          ; after it in the table, its twin
+LDSIZ           STW     LDALE           ; for a module that may load high
+                LDW     LDHIGH
+                SAZ
+                JMP     LDSIZH
+                JMP     LDSIZG
+LDSIZH          LDW     LDALE
+                ADD     SHK1
+                STW     LDALE
+LDSIZG          LDX     LDALE
+                LDW     *0
+                STW     LDALE
                 LDW     LDBASE
                 SAZ                     ; a second SIZE?
                 JMP     LDELC
@@ -2918,30 +3004,42 @@ SHDRE           LDW     SHMNRD
                 JSX     SHMSG
                 JMP     SHLOOP
 
-; The words free in the pool: the free list's sizes added up, under the
-; mask that every walk of the list holds.
+; The words free in the pool, below the fence and above it: the free
+; list's sizes added up, under the mask that every walk of the list
+; holds.
 SHMEM           MSK
                 CLR
                 STW     SHMTOT
+                STW     SHMHI
                 SMB     FREHD
                 LDW     FREHD
 SHMEML          SAZ                     ; the end of the list?
                 JMP     SHMEM1
                 JMP     SHMEMD
 SHMEM1          CAX
+                CMW     SHKPLH
+                SLS                     ; above the fence?
+                JMP     SHMEMH
                 LDW     *0
                 ADD     SHMTOT
                 STW     SHMTOT
-                LDW     *1
+                JMP     SHMEMN
+SHMEMH          LDW     *0
+                ADD     SHMHI
+                STW     SHMHI
+SHMEMN          LDW     *1
                 JMP     SHMEML
 SHMEMD          UNM
                 LDW     SHMFRE
                 JSX     SHMSG
-                LDW     SHKSP
-                JSX     SHPUTC
                 LDW     SHMTOT
                 JSX     SHDEC
-                JSX     SHNL
+                LDW     SHMLOW
+                JSX     SHMSG
+                LDW     SHMHI
+                JSX     SHDEC
+                LDW     SHMHIG
+                JSX     SHMSG
                 JMP     SHLOOP
 
 SHHALT          LDW     SHK1
@@ -3363,12 +3461,14 @@ SHKN            WORD    0               ; the node a job number named
 SHNV            WORD    0               ; the number
 SHSS            WORD    0               ; STAT's one reading of a state
 LDARG           WORD    0               ; the command tail's block
+LDHIGH          WORD    0               ; nonzero: the module may load high
 LDTP            WORD    0               ; and a byte pointer over the tail
 SHNP            WORD    0               ; where SHNAME's next character goes...
 SHNN            WORD    0               ; ...and how many more it will take
 SHW2            WORD    0               ; scratch
 SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
-SHMTOT          WORD    0               ; MEM's running total
+SHMTOT          WORD    0               ; MEM's running totals, below the
+SHMHI           WORD    0               ; fence and above it
 LDCON           WORD    0               ; the loader's: RUN (1) or LOAD (0)
 LDBLK           WORD    0               ; the module's block, and its node
 LDNODE          WORD    0
@@ -3430,6 +3530,7 @@ SHKSP           WORD    ' '
 SHKDOT          WORD    '.'
 SHKRX           WORD    'RX'            ; a module's type
 SHKDKF          WORD    DK.FILE
+SHKPLH          WORD    POOLH
 SHKNDR          WORD    E.NDIR
 SHKFN           WORD    SHFN            ; the name, as a word address...
 SHKFNB          WORD    SHFN*2          ; ...its first byte...
@@ -3454,8 +3555,11 @@ SHKCTB          WORD    LDCTAB
 SHKLDB          WORD    LDBUF           ; the sector buffer, as a word address...
 SHKDBB          WORD    LDBUF*2         ; ...its first byte, the marker...
 SHKDBL          WORD    LDBUF*2+93      ; ...and its last, the checksum
-SHKALW          WORD    ALLOCW          ; the allocator's page entries, for
-SHKALB          WORD    ALLOCB          ; an indexed JSX
+SHKALW          WORD    SHALW           ; the allocator's page entries, for
+SHKALB          WORD    SHALB           ; an indexed JSX: each with its
+SHALW           WORD    ALLOCW,ALLCHW   ; twin above the fence after it
+SHALB           WORD    ALLOCB,ALLCHB
+SHKDFH          WORD    DF.HIGH
 
 ; Four characters a state, indexed by the state doubled.  The last is a
 ; node that went back to the arena while its line was being printed.
@@ -3495,6 +3599,8 @@ SHMNOF          WORD    SHNOF
 SHMNRD          WORD    SHNRD
 SHMNDR          WORD    SHNDR
 SHMSFR          WORD    SHSFR
+SHMLOW          WORD    SHLOW
+SHMHIG          WORD    SHHIG
 SHMEDE          WORD    SHEDE
 SHMECK          WORD    SHECK
 SHMELC          WORD    SHELC
@@ -3512,11 +3618,13 @@ SHPRM           WORD    SHPRMT*2,SHPRME*2
 SHWHT           WORD    SHWHTT*2,SHWHTE*2
 SHHL1           WORD    SHHL1T*2,SHHL1E*2
 SHHL2           WORD    SHHL2T*2,SHHL2E*2
-SHFRE           WORD    SHFRET*2,SHFREE*2
+SHFRE           WORD    SHFRET*2,SHFRET*2+5
 SHNOF           WORD    SHNOFT*2,SHNOFE*2
 SHNRD           WORD    SHNRDT*2,SHNRDE*2
 SHNDR           WORD    SHNDRT*2,SHNDRE*2
 SHSFR           WORD    SHSFRT*2,SHSFRE*2
+SHLOW           WORD    SHLOWT*2,SHLOWT*2+5
+SHHIG           WORD    SHHIGT*2,SHHIGT*2+7
 SHEDE           WORD    SHEDET*2,SHEDEE*2
 SHECK           WORD    SHECKT*2,SHECKE*2
 SHELC           WORD    SHELCT*2,SHELCE*2
@@ -3542,8 +3650,9 @@ SHHL2T          TEXT    "STOP AND START TAKE A B C OR A JOB NUMBER, KILL A JOB N
 SHHL2E          EQU     $
 SHHL3T          TEXT    "@NAME RUNS A FILE OF COMMANDS. ANY OTHER WORD RUNS THAT PROGRAM \r\n"
 SHHL3E          EQU     $
-SHFRET          TEXT    "FREE"
-SHFREE          EQU     $
+SHFRET          TEXT    "FREE  "        ; five characters of it
+SHLOWT          TEXT    " LOW  "        ; and five of this
+SHHIGT          TEXT    " HIGH\r\n "    ; and seven
 SHNOFT          TEXT    "NO SUCH FILE\r\n"
 SHNOFE          EQU     $
 SHNRDT          TEXT    "DISC NOT READY\r\n"

@@ -29,7 +29,10 @@ works on an existing image without --force, and makes the image if there is
 none; a platter with no directory is given one first, provided sectors 1-8
 are blank or hold the four-word catalogue this tool wrote before there was a
 filesystem -- whose files were only ever modules it put there itself, so
-they are dropped rather than carried over. --list prints the directory.
+they are dropped rather than carried over. --add-high is --add for a module
+that compares no byte addresses within itself, and so may be loaded above word
+X'4000' (rex/rex.asm's header says why that matters); the directory entry
+carries the fact. --list prints the directory.
 
 An existing image is otherwise left alone unless --force is given: a disc the
 guest has been writing to is data, not a build product.
@@ -98,13 +101,18 @@ def main():
     parser.add_argument("--add", nargs=2, action="append", default=[],
                         metavar=("NAME", "FILE"),
                         help="put FILE on the platter as NAME, or NAME.TY; a bare name is a module, .RX")
+    parser.add_argument("--add-high", nargs=2, action="append", default=[],
+                        metavar=("NAME", "FILE"),
+                        help="the same, for a module that may be loaded above word X'4000'")
     parser.add_argument("--list", action="store_true", help="print the directory")
     parser.add_argument("--force", action="store_true",
                         help="overwrite an existing image")
     args = parser.parse_args()
 
     exists = args.output.exists()
-    if exists and (args.add or args.list) and not args.boot and not args.force:
+    adding = [(name, path, 0) for name, path in args.add]
+    adding += [(name, path, fs703.HIGH) for name, path in args.add_high]
+    if exists and (adding or args.list) and not args.boot and not args.force:
         image = bytearray(args.output.read_bytes())
         if len(image) != IMAGE_BYTES:
             sys.exit(f"{args.output} is {len(image)} bytes, not a {IMAGE_BYTES}-byte platter")
@@ -124,16 +132,16 @@ def main():
         what = f"{len(boot) // 2} words of {args.boot.name} in sector 0"
 
     try:
-        if args.add:
+        if adding:
             platter, note = filesystem(image, args.output)
-            for name, path in args.add:
-                platter.add(*fs703.parse_name(name), Path(path).read_bytes())
+            for name, path, flags in adding:
+                platter.add(*fs703.parse_name(name), Path(path).read_bytes(), flags)
             files = len(platter.files())
             what += f", {files} file{'s' if files != 1 else ''}, {platter.free_sectors()} sectors free{note}"
 
         if args.list:
             print('\n'.join(fs703.listing(fs703.Platter(image))))
-            if not args.add and not args.boot:
+            if not adding and not args.boot:
                 return
     except fs703.FsError as e:
         sys.exit(f"{args.output}: {e}")

@@ -48,7 +48,7 @@ time either way. The shell's commands:
     START n
     KILL n       end a loaded task, whatever it was doing
     ECHO text    print the rest of the line
-    MEM          the words free in the pool
+    MEM          the words free in the pool, below word X'4000' and above
     DIR          the disc's directory: name, type, sectors; then what is free
     LOAD name    a module off the disc -- name.RX -- run behind the prompt
     RUN  name    the same, given the console until it exits -- the only
@@ -187,6 +187,20 @@ module's memory come and go with the module. The node itself is not in the
 pool: a loaded task's comes from an arena of twenty-four at the top of
 core, and stays put for as long as the task lives.
 
+The pool runs from the end of the shell to the filesystem's page, words
+X'1000' to X'6FFF', and **it is in two parts, because a byte address above
+word X'4000' is negative** and this machine compares signed. Reaching a
+byte up there through the index register works like anywhere else; what
+goes wrong is comparing two byte addresses, which is how most code walks a
+buffer to its end. So a fence stands at X'4000' -- a block of no words that
+is never free, so nothing is ever joined across it -- and what a task asks
+for comes from below it unless the task asks otherwise (`K.ALLHI`,
+`K.ALHIW`), which is a promise to compare no byte addresses in what it
+gets. A module is loaded above the fence only if its directory entry says
+it may be (`mkdisc703.py --add-high`): everything here but BASIC, whose
+interpreter walks its own tables and its workspace by byte address and so
+has the core below the fence to itself.
+
 Any number of tasks may be in the kernel at once, on a machine whose
 subroutines each have one static slot for the return address. So **a
 routine any task may call holds the mask from its first instruction** --
@@ -223,7 +237,11 @@ command file, `INIT.CM` at start-up, a file deleted from in front of every
 module and `SQUISH` moving the lot down -- after which the next program has
 to load from where it was moved to -- and a task that never ends stopped,
 started and killed by job number and then, in the foreground, by two
-Ctrl-Cs. A second machine, without `--fast-io` so that a disc
+Ctrl-Cs. Where things are loaded is looked at directly, through the port,
+in the pool's own block headers: a module marked for it has to be above
+word X'4000', hello has to print an address up there every time it runs,
+and BASIC's module and workspace both have to be below. A second
+machine, without `--fast-io` so that a disc
 transfer takes its half revolution, then runs three copies of `dskt.asm`
 at once: each writes and reads back a sector of its own 250 times, leaves
 its verdict on the platter where the harness reads it, and the kernel's
@@ -305,7 +323,7 @@ need -- gives it a task node and links it into the ring; `RUN` does the
 same and hands it the console until it exits. A task ends through
 `K.EXIT`, which gives back every block in the pool tagged with its node,
 the module included, and then the node; `MEM` prints the free words,
-and it reads the same before and after. What followed the module's name on
+below the fence and above it, and reads the same before and after. What followed the module's name on
 the command line is copied into a block of the task's own, a zero after it,
 and the node's `T.ARG` holds its address. `RUN HELLO` prints the address the
 loader put it at. `rexlib.asm` is a file a module's deck may put behind

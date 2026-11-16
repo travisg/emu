@@ -29,7 +29,9 @@
 ; ---------------------------------------------------------------- the vector
 ; Words X'10'-X'1F' are the interrupt blocks of levels 4-7, which nothing on
 ; this machine signals; the kernel keeps its vector there.
-K.ALLOC         EQU     X'10'           ; ACR = words wanted -> ACR = the block, or 0
+K.ALLOC         EQU     X'10'           ; ACR = words wanted -> ACR = the block, or 0.
+;                                       ; These three hand out core below word
+;                                       ; X'4000' only
 K.ALLCW         EQU     X'11'           ; ...contained in one 2048-word page
 K.ALLCB         EQU     X'12'           ; ...contained in one 1024-word byte page
 K.FREE          EQU     X'13'           ; ACR = a block from K.ALLOC
@@ -39,6 +41,14 @@ K.KICK          EQU     X'16'           ; start the printer on the next full mai
 K.QGET          EQU     X'17'           ; ACR = a queue descriptor -> ACR = the next word
 K.DREAD         EQU     X'18'           ; ACR = a transfer block -> ACR = status: disc to core
 K.DWRIT         EQU     X'19'           ; the same, core to disc
+K.ALLHI         EQU     X'1A'           ; K.ALLOC and K.ALLCW for a caller that
+K.ALHIW         EQU     X'1B'           ; compares no byte addresses in what it
+;                                       ; gets: above word X'4000' if there is
+;                                       ; room there, below if not.  A byte
+;                                       ; address up there is negative as a
+;                                       ; signed number, which is the only kind
+;                                       ; of compare this machine has; a byte
+;                                       ; is still reached through the index.
 ;                                       ; A transfer block is three words of
 ;                                       ; the caller's own: the first sector's
 ;                                       ; index, track*128+sector; the word

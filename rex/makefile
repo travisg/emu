@@ -71,11 +71,12 @@ $(BUILD)/basic.obj: rexapi.asm brex.asm $(BCORE) $(ASM703)
 
 # The relocation check: assemble a module absolute at a base, place its
 # object at that base with the reference loader, and every word must
-# agree. Two bases to a module. Hello's are one in each half of a word
-# page, so a loader that took the byte page from >>11 instead of >>10
-# would be caught on the second; BASIC fills its page to the last word,
+# agree. Hello's bases are one in each half of a word page, so a loader
+# that took the byte page from >>11 instead of >>10 would be caught on
+# the second, below word X'4000' and above it, where a byte address has
+# its top bit set; BASIC fills its page to the last word,
 # so its two are the only ones it has, the page's first word and second.
-HELLO_BASES := 0x1080 0x1C40
+HELLO_BASES := 0x1080 0x1C40 0x4080 0x5C40
 BASIC_BASES := 0x1000 0x1001
 
 reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
@@ -88,7 +89,9 @@ reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
 	    $(RELOAD703) $(BUILD)/basic.obj --base $$base --check $(BUILD)/basic-$$base.map || exit 1; \
 	done
 
-# The platter on unit 0, with the modules on it: the emulator mounts
+# The platter on unit 0, with the modules on it -- every one but BASIC
+# marked as loadable above word X'4000', which leaves the core below it
+# to what has to be there: the emulator mounts
 # disks/ray703-disc0.img from the repo root, so after this the run line
 # in README.md has them. Made if absent; each module replaces its
 # namesake and nothing else on the platter moves.
@@ -96,8 +99,8 @@ DISC := ../disks/ray703-disc0.img
 
 disc: modules
 	@mkdir -p ../disks
-	$(MKDISC703) $(DISC) --add HELLO $(BUILD)/hello.obj --add BASIC $(BUILD)/basic.obj \
-	    $(foreach u,$(UTILS),--add $(u) $(BUILD)/$(u).obj)
+	$(MKDISC703) $(DISC) --add BASIC $(BUILD)/basic.obj --add-high HELLO $(BUILD)/hello.obj \
+	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
 
 # The scripted session, on a platter it makes for itself in a scratch
 # directory -- so it wants the kernel and the modules, not `disc`, which

@@ -87,6 +87,41 @@ FST_OBJ = os.path.join(BUILD, 'fst.obj')
 MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
     (name, os.path.join(BUILD, name.lower() + '.obj'))
     for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP'))
+# Every module but BASIC goes on the platter marked as loadable above
+# word X'4000', where the kernel then puts it.
+LOW_ONLY = ('BASIC',)
+
+# The pool and the node arena, as rex.asm lays them out.
+POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
+NARB, NARN, T_LEN, T_STA, T_NAM, SFREE = 0x7e00, 24, 18, 0, 10, 4
+
+
+def blocks_of(emu, name):
+    """The pool blocks of the loaded task whose two-character name this
+    is, as (first word, one past the last) of each payload. The machine
+    is halted for the look and set running again."""
+    emu.halt()
+    try:
+        # the port gives 128 words to a request
+        arena = []
+        for start in range(NARB, NARB + NARN * T_LEN, 108):
+            arena += emu.memw(start, 108)
+        packed = ((ord(name[0]) | 0x80) << 8) | (ord(name[1]) | 0x80)
+        nodes = [NARB + i * T_LEN for i in range(NARN)
+                 if arena[i * T_LEN + T_STA] != SFREE and arena[i * T_LEN + T_NAM] == packed]
+        if len(nodes) != 1:
+            raise AssertionError('%d tasks named %s' % (len(nodes), name))
+        mine, at = [], POOLB
+        while at < POOLE:
+            size, tag = emu.memw(at, 2)     # a block's header: its size, its owner
+            if tag == 0x8000 | nodes[0]:
+                mine.append((at + 2, at + 2 + size))
+            at += size + 2
+        if at != POOLE:
+            raise AssertionError('the pool\'s blocks end at %04x' % at)
+        return mine
+    finally:
+        emu.run()
 
 # What the platter is made with besides the modules. PAD.TX goes on first,
 # in front of everything, so that deleting it leaves a hole SQUISH has to
@@ -283,6 +318,9 @@ def session(emu):
     mark = s.say('LOAD NAP')
     emu.wait_for_output(b'THE CONSOLE WAS REFUSED', start=mark)
     emu.wait_quiet()
+    held = blocks_of(emu, 'NA')
+    if not held or any(first < POOLH for first, _ in held):
+        raise AssertionError('a module marked for it was not loaded high: %r' % held)
     mark = s.say('STAT')
     job = emu.wait_for_output(re.compile(rb'^(\d+) NA ', re.M), start=mark).group(1).decode()
     s.say('STOP ' + job)
@@ -315,6 +353,12 @@ def session(emu):
     # that prints nothing and reads nothing.
     s.say('RUN BASIC')
     s.wait(b'TINY BASIC UNDER REX')
+    s.wait(READY)
+    emu.wait_quiet()
+    held = blocks_of(emu, 'BA')         # the module and its workspace
+    if len(held) != 2 or any(end > POOLH for _, end in held):
+        raise AssertionError('BASIC is not all below word 4000: %r' % held)
+    s.at -= len(b'READY')               # for the next line to find
     s.basic('10 FOR I=1 TO 3\r')
     s.basic('20 PRINT "SQ";I*I\r')
     s.basic('30 NEXT I\r')
@@ -566,7 +610,8 @@ def verdict(paper):
     def count(pattern):
         return len(re.findall(pattern, text, re.M))
 
-    free = re.findall(rb'^FREE (\d+)', text, re.M)
+    free = re.findall(rb'^FREE (\d+ LOW \d+ HIGH)$', text, re.M)
+    hellos = [int(n) for n in re.findall(rb'HELLO FROM WORD (\d+)', text)]
     checks = [
         ('uptime', line(rb'UPTIME \d+ SEC')),
         ('A stopped', line(rb'^1 A  OFF')),
@@ -582,6 +627,7 @@ def verdict(paper):
         # prompt, a character at a time into whatever else is printing, so
         # it is taken from STAT's ring and the pool instead (session).
         ('hello ran under RUN', line(rb'^HELLO FROM WORD \d')),
+        ('hello loaded high every time', len(hellos) >= 5 and all(n >= POOLH for n in hellos)),
         ('no such file', line(rb'^NO SUCH FILE')),
         ('the file calls, twice', count(rb'^FST OK$') == 2),
         ('directory: the file left', line(rb'^T2\.TX 1$')),
@@ -615,7 +661,8 @@ def make_platter(workdir, log):
                 f.write(data)
         for name, path in files[:1] + list(MODULES) + files[1:]:
             if (CONTROL, name) != ('nohello', 'HELLO'):
-                cmd += ['--add', name, path]
+                high = (name, path) in MODULES and name not in LOW_ONLY
+                cmd += ['--add-high' if high else '--add', name, path]
     else:
         sys.exit('REX_CONTROL=%s: not a control this harness has' % CONTROL)
     subprocess.run(cmd, check=True, stdout=log)
