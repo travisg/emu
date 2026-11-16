@@ -70,10 +70,12 @@ disc: modules
 	@mkdir -p ../disks
 	$(MKDISC703) $(DISC) --add HELLO $(BUILD)/hello.obj --add BASIC $(BUILD)/basic.obj
 
-# The scripted session. EMU_BIN in the environment names another emulator
-# binary; the default is the debug build.
-test: all modules
-	./run_rex_test.sh
+# The scripted session, on a platter it makes for itself in a scratch
+# directory -- so it wants the kernel and the modules, not `disc`, which
+# writes the user's own platter. EMU_BIN in the environment names another
+# emulator binary; the default is the debug build.
+test: $(BUILD)/rex.bin modules
+	./run_rex_test.py
 
 clean:
 	rm -rf $(BUILD)

@@ -11,7 +11,7 @@ tests it.
     rexapi.asm         the kernel interface a module is assembled against
     brex.asm           the wrapper that makes Tiny BASIC a module
     hello.asm          a module: prints where it landed, sleeps, exits
-    run_rex_test.sh    the end-to-end test
+    run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
 Two things it depends on stay where they are, reached by relative path from
@@ -143,17 +143,21 @@ module's memory come and go with the module.
 
 ## The test
 
-`make -C rex test` runs `run_rex_test.sh` on a platter it makes in a
-scratch directory: boot, `STAT`, `START` and watch the letters interleave,
+`make -C rex test` runs `run_rex_test.py` on a platter it makes in a
+scratch directory, driving the emulator over its debug port
+(`../tools/emudbg.py`): boot, `STAT`, `START` and watch the letters interleave,
 `STOP`, the rest of the commands, hello both ways with `MEM` reading the
 same after each, then two BASIC sessions -- a program entered and RUN, a
 silent `GOTO` loop broken with Ctrl-C through the kernel's flag, `BYE`
 handing the console and the memory back, and a second session starting
 afresh -- and `HALT`.
 It runs `--fast-io` (the slices stay real machine time; the clock ignores
-the flag) with a `-l` instruction-limit hang guard, and paces every command
-on the prompt count and then on the printer falling quiet, which is the
-rule for driving any 703 guest from a script. Two things that make it hard
+the flag), walks the paper with a cursor so each wait finds the next prompt
+rather than the first, and paces every command on that prompt and then on
+the printer falling quiet, which is the rule for driving any 703 guest from
+a script. Every wait raises on its timeout, and `REX_CONTROL=blank` and
+`=nohello` are its negative controls -- a platter with nothing on it, and
+one without the hello module -- which must both FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
