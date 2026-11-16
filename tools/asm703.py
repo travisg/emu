@@ -9,9 +9,8 @@
 """A small two-pass assembler for the Raytheon 703.
 
 The 703 predates anything this tree could reuse, and its own assembler (SYM II)
-exists only as scans, so the guests need something to build them. There are
-no macros beyond SUBR and EXIT and there is no linking; it produces two
-things:
+exists only as scans, so the guests need something to build them. There is
+no linking: a deck is assembled whole. It produces two things:
 
   - an absolute core image (`-o`): a flat binary of big-endian words starting
     at word 0, which is what `emu -s ray703` loads into core;
@@ -74,7 +73,7 @@ Operand prefixes, both from the PTB bootstrap listing:
 Numbers are decimal, `0x1F`, `X'1F'` or `'A'`; expressions take + - * and
 parentheses, and `$` is the address of the word being assembled.
 
-Two things here are this assembler's and no period listing's.
+Four things here are this assembler's and no period listing's.
 
 A literal is a constant written where it is used. The machine has no
 instruction that carries a word, so every constant is a cell somewhere and
@@ -96,13 +95,40 @@ and the assembler says which literal cannot reach its pool -- and where
 execution does not run into it. The Literal class says when two literals
 are one cell.
 
+A label that begins with a dot is local to the last label above it that
+does not, so every routine may have its own `.LOOP` and `.DONE`:
+
+    TYPE    JSX     L.ARGS
+    .LOOP   LDW     TCH
+            ...
+            JMP     .LOOP
+
+and nothing outside the routine can name them, the symbol table included.
+
+A macro is a run of cards under a name, with the call's arguments put in
+where its parameters stand (see Macro for the rules):
+
+    JNZ     MACRO   TARGET          ; go there if ACR is not zero
+            SAZ
+            JMP     TARGET
+            ENDM
+            ...
+            JNZ     .LOOP
+
+A `.LABEL` in a macro's body is its own at each call. The listing shows a
+call and then, marked `+`, what it generated. Two things exist for macros
+to use: STR, which is TEXT that may be an odd number of bytes, the last
+word's low half then zero; and LEN("..."), in any expression, the number
+of bytes in a string.
+
 And it warns. A warning is something the machine does exactly as written
 and nobody means; it goes to stderr, and --werror makes it an error:
 
   - a skip in front of a page selection, or of an instruction two words
-    long (EXIT, MPY, DIV, EXCH, a JSX with arguments): a skip passes over
-    one word, so the selection is skipped and its reference runs without
-    it, or the instruction is entered at its second word;
+    long (EXIT, MPY, DIV, EXCH, a JSX with arguments), or of a macro call
+    that generates more than one: a skip passes over one word, so the
+    selection is skipped and its reference runs without it, or the
+    instruction is entered at its second word;
   - a direct reference behind a page selection, to something that is not
     in the page selected: the selection governs the next reference
     whatever it names;
@@ -168,8 +194,8 @@ GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFT
 # bracket conditionally assembled code and are closed by `ENDC` -- they are not
 # an if/else pair, they are two independent guards, so the X-RAY listing writes
 # out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
-DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'RES', 'EQU',
-              'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL'}
+DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'STR', 'RES', 'EQU',
+              'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'MACRO', 'ENDM'}
 
 # The instructions that only read their operand, and so may be given a
 # literal for one: `ADD =1` is a reference to a word holding 1, which the
@@ -183,7 +209,7 @@ SKIPPERS = set(SKIPS) | {'IXS', 'DXS', 'SXP', 'SXM'}
 # Statements that are instructions and more than one word long. A skip in
 # front of one passes over its first word only.
 PAGE_SELECTS = {'SML', 'SMU', 'SMB'}
-DATA_OPS = {'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'RES', 'LPOOL'}
+DATA_OPS = {'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'STR', 'RES', 'LPOOL'}
 
 # Mnemonics found only in the period listings, never in the reference manual,
 # because they are the assembler's rather than the machine's. Each is given
@@ -258,15 +284,20 @@ class Loc:
     order the cards were read. Plain integers still work everywhere a Loc
     does (xraylist.py hands encode() bare card numbers) and print as `line N`.
     """
-    __slots__ = ('path', 'line', 'seq')
+    __slots__ = ('path', 'line', 'seq', 'via', 'exps')
 
-    def __init__(self, path, line, seq):
+    def __init__(self, path, line, seq, via=None, exps=()):
         self.path = path
         self.line = line
         self.seq = seq
+        # For a card a macro generated: the call it came from, as words for
+        # a message, and the expansions it is inside, outermost first.
+        self.via = via
+        self.exps = exps
 
     def __str__(self):
-        return f'{self.path} line {self.line}'
+        where = f'{self.path} line {self.line}'
+        return f'{where} (in {self.via})' if self.via else where
 
 
 class AsmError(Exception):
@@ -323,6 +354,215 @@ LITERAL_PREFIX = '_$LIT.'
 
 class UndefinedSymbol(AsmError):
     """Raised on its own so that EQU can retry a forward reference."""
+
+
+# A label that begins with a dot is local: it belongs to the last label
+# above it that does not, and two routines may each have their `.LOOP`.
+# Before anything else looks at the deck each one is rewritten into a name
+# of the whole deck's -- the scope, this, and the label less its dot -- so
+# the two passes know nothing about them. A macro's own are scoped to the
+# one expansion. They are taken out of the symbol table again at the end.
+LOCAL_MARK = '$$'
+TOP_SCOPE = '_$TOP'
+MACRO_SCOPE = '_$M'
+
+
+LOCALIZED = re.compile(r'[A-Za-z0-9_$.]+?\$\$(?=[A-Za-z0-9_])')
+
+
+def shown(name):
+    """A symbol as a message should name it: a local by what was written."""
+    if LOCAL_MARK not in name:
+        return repr(name)
+    scope, local = name.split(LOCAL_MARK, 1)
+    if scope.startswith(MACRO_SCOPE):
+        return f"'.{local}' of the macro"
+    if scope == TOP_SCOPE:
+        return f"'.{local}', above the deck's first label,"
+    return f"'.{local}' under {scope}"
+
+
+def rewrite(text, name_fn):
+    """`text` with every name in it passed through `name_fn`, which returns
+    what to put in its place. Quoted text is left alone -- a string, a
+    character constant, the digits of X'1F' -- and so is a number."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in '\'"':
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if text[j] == '\\' else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif c.isdigit():
+            j = i
+            while j < n and (text[j].isalnum() or text[j] == '_'):
+                j += 1
+            out.append(text[i:j])
+            i = j
+        elif c.isalpha() or c in '_$.':
+            j = i + 1
+            while j < n and (text[j].isalnum() or text[j] in '_$.'):
+                j += 1
+            name = text[i:j]
+            # X'1F': the X is the constant's, not a name
+            quoted = j < n and text[j] == "'" and name in ('X', 'x')
+            out.append(name if quoted else name_fn(name))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return ''.join(out)
+
+
+def localize(text, scope):
+    """The local labels in an operand, as the deck-wide names they stand for."""
+    if text is None or '.' not in text:
+        return text
+    return rewrite(text, lambda name: f'{scope}{LOCAL_MARK}{name[1:]}'
+                   if name.startswith('.') and len(name) > 1 else name)
+
+
+def split_args(text):
+    """A macro call's arguments: the commas outside quotes divide them."""
+    parts, start, i, n = [], 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in '\'"':
+            i += 1
+            while i < n and text[i] != c:
+                i += 2 if text[i] == '\\' else 1
+        elif c == ',':
+            parts.append(text[start:i].strip())
+            start = i + 1
+        i += 1
+    parts.append(text[start:].strip())
+    return parts if any(parts) else []
+
+
+class Macro:
+    """A run of cards under a name, with holes for the call's arguments:
+
+        JZ      MACRO   TARGET          ; go there if ACR is zero
+                SAZ
+                JMP     $+2
+                JMP     TARGET
+                ENDM
+        CALL    MACRO   ROUTINE         ; a subroutine in another page
+                SMB     ROUTINE
+                JSX     ROUTINE
+                ENDM
+        MSG     MACRO   TEXT            ; a text and the two byte addresses
+                WORD    .T*2,.T*2+LEN(TEXT) ; that say where it is
+        .T      STR     TEXT
+                ENDM
+
+    A card whose mnemonic is the name is replaced by the body, each
+    parameter's name replaced by the call's argument wherever it stands as
+    a name -- in a label, a mnemonic or an operand, never inside quotes.
+    A missing argument is nothing. The call's label is the first word
+    generated. A body may call other macros, and a `.LABEL` in it is its
+    own at every call; one the call passes in is the caller's. A macro is
+    defined before it is used, by cards the deck reads before the call.
+    """
+    __slots__ = ('name', 'params', 'body', 'loc')
+
+    def __init__(self, name, params, loc):
+        self.name = name
+        self.params = params
+        self.body = []
+        self.loc = loc
+
+
+MACRO_DEPTH = 32
+
+
+def expand(statements, errors):
+    """The deck with its macro definitions taken out, its macro calls
+    replaced by what they generate, and every local label given its
+    deck-wide name: what the two passes assemble."""
+    macros = {}
+    out = []
+    numbers = itertools.count(1)
+    scope = [TOP_SCOPE]         # the caller's: the last label without a dot
+    defining = None
+
+    def card(loc, label, op, arg, text, within, depth, via, exps):
+        if label and label.startswith('.') and len(label) > 1:
+            label = f'{within}{LOCAL_MARK}{label[1:]}'
+        elif label and depth == 0 and op != 'EQU':
+            scope[0] = within = label
+        if op not in macros:
+            out.append((loc, label, op, localize(arg, within), text))
+            return
+        macro = macros[op]
+        if depth >= MACRO_DEPTH:
+            raise AsmError(loc, f'{macro.name} is {MACRO_DEPTH} macros deep: one of them calls itself')
+        args = [localize(a, within) for a in split_args(arg or '')]
+        if len(args) > len(macro.params):
+            raise AsmError(loc, f'{macro.name} takes {len(macro.params)} '
+                                f'argument{"" if len(macro.params) == 1 else "s"}, not {len(args)}')
+        given = dict(zip(macro.params, args + [''] * (len(macro.params) - len(args))))
+        number = next(numbers)
+        inner = f'{MACRO_SCOPE}{number}'
+        # The call itself: nothing but its label, which is the first word.
+        out.append((loc, label, None, None, text))
+        called = f'{macro.name} at {loc.path} line {loc.line}' if isinstance(loc, Loc) else macro.name
+        for bloc, blabel, bop, barg, _ in macro.body:
+            fill = lambda name: given.get(name, name)   # noqa: E731
+            blabel = rewrite(blabel, fill) if blabel else blabel
+            bop = rewrite(bop, fill).upper() if bop else bop
+            barg = rewrite(barg, fill) if barg else barg
+            # the listing's line: the card as filled in, a local label
+            # the call passed in spelled as the call spelled it
+            shown_as = LOCALIZED.sub('.', f'+{blabel or "":<15}{bop or "":<8}{barg or ""}'.rstrip())
+            where = Loc(bloc.path, bloc.line, loc.seq if isinstance(loc, Loc) else bloc.seq,
+                        via or called, exps + (number,))
+            try:
+                card(where, blabel or None, bop or None, barg or None, shown_as,
+                     inner, depth + 1, via or called, exps + (number,))
+            except AsmError as e:
+                errors.append(e)
+
+    for loc, label, op, arg, text in statements:
+        try:
+            if defining is not None:
+                if op == 'ENDM':
+                    macros[defining.name] = defining
+                    defining = None
+                elif op == 'MACRO':
+                    raise AsmError(loc, f'MACRO inside {defining.name}: one definition at a time')
+                else:
+                    defining.body.append((loc, label, op, arg, text))
+                out.append((loc, None, None, None, text))
+                continue
+            if op == 'MACRO':
+                name = (label or '').upper()
+                if not name:
+                    raise AsmError(loc, 'MACRO needs a name in the label field')
+                if (name in MEMREF or name in GEN_NONE or name in GEN_LEVEL or name in GEN_PAGE
+                        or name in GEN_LITERAL or name in GEN_DIO or name in GEN_SKIP
+                        or name in GEN_SHIFT or name in GEN_ALIAS or name in GEN_TWOWORD
+                        or name in DIRECTIVES or name in SUBR_MACROS or name in ('EXCH', SELECT_BASE)):
+                    raise AsmError(loc, f'{name} is the assembler\'s already')
+                params = split_args(arg or '')
+                bad = [q for q in params if not NAMES.fullmatch(q)]
+                if bad or len(set(params)) != len(params):
+                    raise AsmError(loc, f'{name}: its parameters are names, each once')
+                defining = Macro(name, params, loc)
+                out.append((loc, None, None, None, text))
+                continue
+            if op == 'ENDM':
+                raise AsmError(loc, 'ENDM with no MACRO above it')
+            card(loc, label, op, arg, text, scope[0], 0, None, ())
+        except AsmError as e:
+            errors.append(e)
+            out.append((loc, None, None, None, text))
+    if defining is not None:
+        errors.append(AsmError(defining.loc, f'{defining.name} has no ENDM'))
+    return out
 
 
 class AsmErrorList(AsmError):
@@ -389,6 +629,7 @@ class Expr:
           | (?P<hex>0[xX][0-9A-Fa-f]+)
           | (?P<char>'(?:\\.|[^'])(?:\\.|[^'])?')
           | (?P<num>\d+)
+          | (?P<len>LEN\("(?:\\.|[^"\\])*"\))
           | (?P<name>[A-Za-z_$][A-Za-z0-9_$.]*)
           | (?P<op>[-+*()])
         )
@@ -476,10 +717,13 @@ class Expr:
             return char_literal(self.lineno, tok[1:-1]), 0
         if tok[0].isdigit():
             return int(tok, 10), 0
+        if tok.startswith('LEN("'):
+            # how many bytes a string is, for the address one past its last
+            return len(unescape(tok[5:-2], self.lineno)), 0
         if tok == '$':
             return self.here, self.here_count
         if tok not in self.symbols:
-            raise UndefinedSymbol(self.lineno, f'undefined symbol {tok!r}')
+            raise UndefinedSymbol(self.lineno, f'undefined symbol {shown(tok)}')
         if Expr.seen is not None:
             Expr.seen.add(tok)
         return self.symbols[tok], self.counts.get(tok, 0)
@@ -615,13 +859,16 @@ def operand_list(arg):
     """Split a comma-separated operand list, ignoring commas inside quotes.
 
     `D ','` is one operand, not two empty ones -- a comma is a perfectly good
-    character constant.
+    character constant -- and so is the comma in `LEN("A, B")`.
     """
-    parts, depth, start = [], False, 0
+    parts, quote, start = [], None, 0
     for i, c in enumerate(arg):
-        if c == "'":
-            depth = not depth
-        elif c == ',' and not depth:
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in '\'"':
+            quote = c
+        elif c == ',':
             parts.append(arg[start:i])
             start = i + 1
     parts.append(arg[start:])
@@ -643,7 +890,7 @@ def sizeof(lineno, op, arg):
     if op == 'BYTE':
         # two bytes to the word, rounded up
         return (len(operand_list(arg)) + 1) // 2
-    if op == 'TEXT':
+    if op in ('TEXT', 'STR'):
         return None  # needs the decoded string; handled by the caller
     if op == 'RES':
         return None
@@ -658,7 +905,7 @@ def sizeof(lineno, op, arg):
 
 def string_body(lineno, arg):
     if arg is None or not arg.startswith('"') or not arg.endswith('"') or len(arg) < 2:
-        raise AsmError(lineno, 'TEXT needs a double-quoted string')
+        raise AsmError(lineno, 'TEXT and STR need a double-quoted string')
     return unescape(arg[1:-1], lineno)
 
 
@@ -931,15 +1178,18 @@ def _assemble(paths, origin=0, relocatable=False):
     # evaluating it correctly, which a single forward pass cannot do. So
     # collect the location-independent equates first, and let a guard fall back
     # on them. Everything else still resolves in order.
+    # Errors from every stage, reported together at the end: on a long file
+    # the first bad card should not hide the rest.
+    errors = []
+    # Macros and local labels are settled before anything is placed: from
+    # here on the deck is plain cards under deck-wide names.
+    statements = expand(statements, errors)
     config = prescan_equates(statements)
 
     # Pass 1: place every statement and collect the labels.
     symbols = {}
     placed = []
     here = origin
-    # Errors from both passes, reported together at the end: on a long file
-    # the first bad card should not hide the rest.
-    errors = []
     # Stack of "are we assembling?" flags, one per open TRUE/FALS.
     cond = []
     # EQUs whose operand named something not yet defined; settled after the pass.
@@ -1049,7 +1299,7 @@ def _assemble(paths, origin=0, relocatable=False):
                 continue
             if label:
                 if label in symbols:
-                    raise AsmError(lineno, f'{label!r} is defined twice')
+                    raise AsmError(lineno, f'{shown(label)} is defined twice')
                 if label.startswith(LITERAL_PREFIX):
                     raise AsmError(lineno, f'{label!r}: names beginning '
                                            f'{LITERAL_PREFIX} are the literal pools\'')
@@ -1087,8 +1337,11 @@ def _assemble(paths, origin=0, relocatable=False):
                     raise AsmError(
                         lineno,
                         f'TEXT is {len(body)} bytes; a word is two bytes, so pad it '
-                        f'to an even length rather than let the assembler guess')
+                        f'to an even length rather than let the assembler guess, or '
+                        f'say STR and have a zero byte')
                 here += len(body) // 2
+            elif op == 'STR':
+                here += (len(string_body(lineno, arg)) + 1) // 2
             elif op == 'RES':
                 here += Expr(arg or '', symbols, here, lineno).value()
             else:
@@ -1129,6 +1382,14 @@ def _assemble(paths, origin=0, relocatable=False):
             break
         deferred = [item[:4] for item in rest]
 
+    # Where each macro expansion's words begin and end, outermost included.
+    spans = {}
+    for i, (lineno, addr, _, _, _) in enumerate(placed):
+        if isinstance(lineno, Loc) and lineno.exps:
+            after = placed[i + 1][1] if i + 1 < len(placed) else here
+            for number in lineno.exps:
+                spans.setdefault(number, [addr, after])[1] = after
+
     # Pass 2: emit.
     core = {}
     kinds = {}
@@ -1164,14 +1425,21 @@ def _assemble(paths, origin=0, relocatable=False):
                      + (f' under {op2}' if op2 in SKIPPERS and op1 in ('JMP', 'EXIT', 'HLT') else '')
                      + ', which can run on into it')
 
-    def lint(lineno, op, arg, words, wkinds, info):
+    def lint(lineno, addr, op, arg, words, wkinds, info):
         """The mistakes this machine makes easy, looked for in what is about
         to be emitted. Each is something the hardware does exactly as
         written and nobody means."""
         prev = before[1][0]
         if prev in SKIPPERS:
             # A skip passes over one word.
-            if op in PAGE_SELECTS:
+            exps = lineno.exps if isinstance(lineno, Loc) else ()
+            start, end = spans[exps[0]] if exps else (addr, addr)
+            if exps and addr == start and end - start > 1:
+                # the first word of a macro call that is more than one
+                name = lineno.via.split(' at ')[0]
+                warn(lineno, f'{name} is {end - start} words here and {prev} skips '
+                             f'only the first')
+            elif op in PAGE_SELECTS:
                 warn(lineno, f'{prev} skips this {op} and not the reference after it, '
                              f'which then runs without its page')
             elif len(words) > 1 and op not in DATA_OPS:
@@ -1219,8 +1487,12 @@ def _assemble(paths, origin=0, relocatable=False):
                     w, k = data(part, addr + len(words), lineno, part.strip())
                     words.append(w)
                     wkinds.append(k)
-            elif op == 'TEXT':
+            elif op in ('TEXT', 'STR'):
+                # STR is TEXT that may be an odd number of bytes: the low
+                # half of its last word is then zero, and whoever reads it
+                # knows the length some other way (LEN).
                 body = string_body(lineno, arg)
+                body += b'\0' * (len(body) % 2)
                 words = [(body[i] << 8) | body[i + 1] for i in range(0, len(body), 2)]
                 wkinds = ['A'] * len(words)
             elif op == 'EXCH':
@@ -1315,7 +1587,7 @@ def _assemble(paths, origin=0, relocatable=False):
                 core[addr + i] = w
                 kinds[addr + i] = k
             if words and pooled is None:
-                lint(lineno, op, arg, words, wkinds, info)
+                lint(lineno, addr, op, arg, words, wkinds, info)
         except AsmError as e:
             errors.append(e)
             words = []
@@ -1361,11 +1633,13 @@ def _assemble(paths, origin=0, relocatable=False):
     Expr.seen, seen = None, Expr.seen
     for name in literals:
         symbols.pop(name, None)
+    for name in [name for name in symbols if LOCAL_MARK in name]:
+        del symbols[name]
     # A cell nothing names is a word of core doing nothing: a label on
     # data that no expression in the deck ever looked up.
     for name, lineno in cells.items():
         if name not in seen and not errors:
-            warn(lineno, f'{name} is never referred to')
+            warn(lineno, f'{shown(name).strip(chr(39)) if LOCAL_MARK not in name else shown(name)} is never referred to')
 
     def order(e):
         where = getattr(e, 'lineno', 0)

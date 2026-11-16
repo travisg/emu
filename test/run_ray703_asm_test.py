@@ -6,7 +6,8 @@
 # Use of this source code is governed by a MIT-style
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
-"""tools/asm703.py held to itself: its literals and its warnings.
+"""tools/asm703.py held to itself: its literals, its macros and local
+labels, and its warnings.
 
 The images the tree builds say the assembler still assembles what it did;
 this says what the parts no image exercises do. Each case is a small deck
@@ -16,9 +17,10 @@ A literal is checked the strong way: a deck written with literals has to
 come out word for word, and in a module relocation code for relocation
 code, as the same deck written with the cells laid down by hand where the
 pool goes. The rest are the rules -- which literals share a cell, where a
-pool may be and what happens with none, what may not take one -- and the
-warnings, each from a deck that has the mistake and not from its neighbour
-that does not.
+pool may be and what happens with none, what may not take one. Macros and
+local labels get the same treatment: the deck written with them against
+the deck written out. Then the warnings, each from a deck that has the
+mistake and not from its neighbour that does not.
 """
 
 import os
@@ -221,6 +223,154 @@ HIGH    ADD     =1
         check(name, any(want in e for e in errors_of(r)), errors_of(r))
 
 
+MACROS = """
+JZ      MACRO   TARGET
+        SAZ
+        JMP     $+2
+        JMP     TARGET
+        ENDM
+JNZ     MACRO   TARGET
+        SAZ
+        JMP     TARGET
+        ENDM
+CALL    MACRO   ROUTINE
+        SMB     ROUTINE
+        JSX     ROUTINE
+        ENDM
+MSG     MACRO   TEXT
+        WORD    .T*2,.T*2+LEN(TEXT)
+.T      STR     TEXT
+        ENDM
+"""
+
+
+def macros():
+    # Two routines with the same local names, calls that pass a local in,
+    # a macro's own label at two calls, and a call with a label of its own.
+    same('macros and local labels', MACROS + """
+        ORG     X'40'
+FIRST   LDW     COUNT
+        JZ      .DONE
+.LOOP   SUB     =1
+        JNZ     .LOOP
+.DONE   HLT
+SECOND  LDW     COUNT
+.LOOP   ADD     =1
+        JZ      .DONE
+        JMP     .LOOP
+.DONE   CALL    FAR
+        HLT
+COUNT   WORD    3
+ONE     MSG     "ODD"
+TWO     MSG     "EVEN, 4\\r\\n"
+        LPOOL
+        ORG     X'1000'
+FAR     SUBR
+        EXIT    FAR
+        END     FIRST
+""", """
+        ORG     X'40'
+FIRST   LDW     COUNT
+        SAZ
+        JMP     $+2
+        JMP     DONE1
+LOOP1   SUB     K1
+        SAZ
+        JMP     LOOP1
+DONE1   HLT
+SECOND  LDW     COUNT
+LOOP2   ADD     K1
+        SAZ
+        JMP     $+2
+        JMP     DONE2
+        JMP     LOOP2
+DONE2   SMB     FAR
+        JSX     FAR
+        HLT
+COUNT   WORD    3
+ONE     WORD    T1*2,T1*2+3
+T1      BYTE    'O'-128,'D'-128,'D'-128
+TWO     WORD    T2*2,T2*2+9
+T2      BYTE    'E'-128,'V'-128,'E'-128,'N'-128,X'2C',X'20',X'34',X'0D',X'0A'
+K1      WORD    1
+        ORG     X'1000'
+FAR     SUBR
+        EXIT    FAR
+        END     FIRST
+""")
+
+    # One macro calling another, and an argument left out.
+    same('a macro in a macro', MACROS + """
+BOTH    MACRO   A,B
+        JZ      A
+        LDW     B
+        ENDM
+START   LDW     HERE
+        BOTH    START,HERE
+        HLT
+HERE    WORD    0
+        END     START
+""", """
+START   LDW     HERE
+        SAZ
+        JMP     $+2
+        JMP     START
+        LDW     HERE
+        HLT
+HERE    WORD    0
+        END     START
+""")
+
+    r = build(MACROS + """
+START   LDW     HERE
+.L      JZ      .L
+        HLT
+HERE    WORD    0
+SAY     MSG     "HI"
+        END     START
+""")
+    if isinstance(r, asm703.AsmErrorList):
+        check('a deck of calls and local labels', False, errors_of(r))
+    else:
+        check('no local label in the symbol table',
+              sorted(r['symbols']) == ['HERE', 'SAY', 'START'], sorted(r['symbols']))
+        check('a call is listed, and what it made under it',
+              any(text.startswith('+') and 'JMP' in text and '.L' in text for _, _, text in r['listing'])
+              and any('JZ      .L' in text and not ws for _, ws, text in r['listing']), r['listing'])
+        check("a call's label is its first word", r['symbols']['SAY'] == r['symbols']['HERE'] + 1, r['symbols'])
+
+    for name, deck, want in (
+            ('a local label out of its scope',
+             'START   HLT\n.A      HLT\nNEXT    JMP     .A\n        END     START\n',
+             "undefined symbol '.A' under NEXT"),
+            ('a local label twice in a scope',
+             'START   HLT\n.A      HLT\n.A      HLT\n        END     START\n',
+             "'.A' under START is defined twice"),
+            ('too many arguments', MACROS + 'START   JZ      START,START\n        END     START\n',
+             'JZ takes 1 argument, not 2'),
+            ('ENDM alone', 'START   HLT\n        ENDM\n        END     START\n', 'ENDM with no MACRO'),
+            ('MACRO unclosed', 'M       MACRO\nSTART   HLT\n        END     START\n', 'M has no ENDM'),
+            ('a macro named for an instruction', 'LDW     MACRO\n        ENDM\nSTART   HLT\n        END     START\n',
+             "LDW is the assembler's already"),
+            ('a macro with no name', '        MACRO\n        ENDM\nSTART   HLT\n        END     START\n',
+             'MACRO needs a name'),
+            ('a macro calling itself', 'M       MACRO\n        M\n        ENDM\nSTART   M\n        END     START\n',
+             'one of them calls itself'),
+            ('an odd TEXT', 'START   HLT\n        TEXT    "ODD"\n        END     START\n', 'TEXT is 3 bytes')):
+        r = build(deck)
+        check(name, any(want in e for e in errors_of(r)), errors_of(r))
+
+    # An error in a macro says where the card is and where the call was.
+    r = build(MACROS + 'START   JZ      NOWHERE\n        END     START\n')
+    said = [str(e) for e in getattr(r, 'errors', [])]
+    check('an error under a call names the call', any('(in JZ at ' in s and "'NOWHERE'" in s for s in said), said)
+
+    # STR pads an odd string with a zero byte, and LEN is what was written.
+    r = build('START   LDW     =LEN("ODD")\n        HLT\nS       STR     "ODD"\n        END     START\n')
+    check('STR and LEN', not isinstance(r, asm703.AsmErrorList)
+          and [r['core'][a] for a in (2, 3, 4)] == [0x4f44, 0x4400, 3], getattr(r, 'errors', None) or words(r))
+
+
 def lint():
     def warned(name, deck, want, relocatable=False):
         r = build(deck, relocatable)
@@ -277,6 +427,12 @@ HERE    WORD    0
            module % "        SMB     X'30'\n        LDW     X'30'", None, relocatable=True)
     warned('a module: an absolute cell under the wrong page',
            module % "        SMB     X'30'\n        LDW     X'1030'", 'is in word page 2 and word page 0', relocatable=True)
+
+    # A skip in front of a macro call passes over one word of it.
+    warned('skip into a macro of three words', MACROS + frame % '        SEQ\n        JZ      START',
+           'JZ is 3 words here and SEQ skips only the first')
+    warned('skip into a macro of one word',
+           'ONE     MACRO\n        CLR\n        ENDM\n' + frame % '        SEQ\n        ONE', None)
 
     # A pool is data: nothing may run on into it.
     warned('a pool fallen into', """
@@ -335,6 +491,7 @@ def command_line():
 
 def main():
     literals()
+    macros()
     lint()
     command_line()
     if FAILED:
