@@ -22,6 +22,7 @@ pub mod cpu;
 pub mod debug;
 pub mod dev;
 pub mod emulator;
+pub mod launcher;
 pub mod rom;
 pub mod snapshot;
 pub mod system;

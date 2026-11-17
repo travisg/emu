@@ -63,23 +63,16 @@ struct Args {
     restore: Option<PathBuf>,
 }
 
-/// A rate as `-h` shows it: 1843200 is "1.8432 MHz".
-fn fmt_hz(hz: u64) -> String {
-    let (div, unit) = if hz >= 1_000_000 { (1e6, "MHz") } else if hz >= 1_000 { (1e3, "kHz") } else { (1.0, "Hz") };
-    let n = format!("{:.4}", hz as f64 / div);
-    format!("{} {unit}", n.trim_end_matches('0').trim_end_matches('.'))
-}
-
 /// The help text: `-h` prints it on stdout, a bad option on stderr.
 fn usage(argv0: &str) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     writeln!(out, "usage: {argv0} [-s system[-variant...]] [-r rom] [options]").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "systems (default 6809):").unwrap();
+    writeln!(out, "systems (default 6809, or the --launch menu when run bare on a terminal):").unwrap();
     for s in registry::SYSTEMS {
         writeln!(out, "  {:<12}{}", s.name, s.title).unwrap();
-        let clock = s.clock_hz.map(|hz| format!(" at {}", fmt_hz(hz))).unwrap_or_default();
+        let clock = s.clock_hz.map(|hz| format!(" at {}", registry::fmt_hz(hz))).unwrap_or_default();
         writeln!(out, "  {:<12}cpu {}{clock}, rom {}", "", s.cpu, s.default_rom).unwrap();
         for (token, what) in s.variants {
             writeln!(out, "  {:<12}{:<18}{what}", "", format!("{}-{token}", s.name)).unwrap();
@@ -107,6 +100,7 @@ fn usage(argv0: &str) -> String {
         ("--debug SOCKET", "debug port on a unix socket, for tools/emudbg.py"),
         ("--halt", "start halted; needs a panel or --debug to run"),
         ("--restore FILE", "start from a snapshot of the same system"),
+        ("-L, --launch", "pick the machine and what to load from a menu (bare emu on a terminal)"),
         ("-c, --cpu TYPE", "accepted and ignored: the system picks the cpu"),
         ("-h, --help", "this help"),
     ] {
@@ -120,8 +114,7 @@ fn usage(argv0: &str) -> String {
 
 /// Mirrors the C++ `getopt_long` handling, including `--cpu` being accepted
 /// and ignored (the cpu is chosen by the system).
-fn parse_args() -> Result<Args, ()> {
-    let argv: Vec<String> = std::env::args().collect();
+fn parse_args(argv: Vec<String>) -> Result<Args, ()> {
     let argv0 = argv.first().cloned().unwrap_or_else(|| "emu".to_string());
 
     // same default as main.cpp
@@ -282,8 +275,44 @@ fn parse_args() -> Result<Args, ()> {
     Ok(args)
 }
 
+/// `--launch` anywhere on the line, or no arguments at all on a terminal:
+/// run the picker, and stand what it chose in for the flag, ahead of the
+/// rest of the line, which so gets the last word on anything both name.
+/// With no arguments and no terminal -- a script, a pipe -- it is the 6809
+/// as ever. `Err` is the exit status to leave with.
+fn launch(mut argv: Vec<String>) -> Result<Vec<String>, ExitCode> {
+    use std::io::IsTerminal;
+    let bare = argv.len() == 1 && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    match argv.iter().position(|a| a == "--launch" || a == "-L") {
+        Some(at) => {
+            argv.remove(at);
+        }
+        None if bare => {}
+        None => return Ok(argv),
+    }
+    let extra = argv.split_off(1);
+    match emu::launcher::run(std::path::Path::new("."), &argv[0], extra) {
+        Ok(Some(chosen)) => {
+            // the line that starts the same thing again without the picker
+            let words: Vec<String> = chosen.iter().map(|a| emu::launcher::picker::quote(a)).collect();
+            println!("$ {} {}", argv[0], words.join(" "));
+            argv.extend(chosen);
+            Ok(argv)
+        }
+        Ok(None) => Err(ExitCode::SUCCESS),
+        Err(e) => {
+            eprintln!("--launch: {e}");
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
 fn main() -> ExitCode {
-    let Ok(args) = parse_args() else {
+    let argv = match launch(std::env::args().collect()) {
+        Ok(argv) => argv,
+        Err(code) => return code,
+    };
+    let Ok(args) = parse_args(argv) else {
         return ExitCode::FAILURE;
     };
 

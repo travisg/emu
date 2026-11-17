@@ -10,7 +10,8 @@
 //!
 //! Generalizes the C++ `System::GetSupportedSystems`. Adding a machine means
 //! adding one entry here; per AGENTS.md, system and rom metadata must not be
-//! hardcoded anywhere else (the help text is generated from this table).
+//! hardcoded anywhere else (the help text and the `--launch` menu are
+//! generated from this table).
 
 use crate::bus::Bus;
 use crate::console::serial::{self, SerialSpec};
@@ -103,6 +104,80 @@ pub struct SystemDescriptor {
     pub disks: Option<&'static str>,
     /// The subsystem tokens `-h` lists, each with what it does.
     pub variants: &'static [(&'static str, &'static str)],
+    /// What `--launch` offers for this machine.
+    pub launch: Launch,
+}
+
+/// The launcher's view of a machine: the ways to start it and where the
+/// files each one takes are looked for. `src/launcher` scans for them and
+/// knows nothing about any machine beyond this.
+pub struct Launch {
+    /// The machine as the launcher's list names it.
+    pub name: &'static str,
+    pub modes: &'static [LaunchMode],
+    /// Files every mode needs besides what it picks. A mode that picks no
+    /// rom needs `default_rom` as well, without its being listed here.
+    pub needs: &'static [&'static str],
+    /// Subsystem tokens that compose with every mode -- the windows --
+    /// offered as switches, each with what it does.
+    pub windows: &'static [(&'static str, &'static str)],
+}
+
+/// One way of starting a machine: a subsystem and what it is given.
+pub struct LaunchMode {
+    /// The subsystem token, "" for the plain machine.
+    pub variant: &'static str,
+    /// What one of this mode's files is, as the launcher lists it.
+    pub what: &'static str,
+    pub media: Media,
+    /// How to come by the files when there are none.
+    pub fetch: &'static str,
+}
+
+/// Which file a mode picks, and so which option carries it.
+pub enum Media {
+    /// Nothing to pick: the machine runs its `default_rom`.
+    Fixed,
+    /// The file goes to `-r`.
+    Rom(Files),
+    /// The file goes to `--disk`; the rom is the `default_rom`.
+    Disk(Files),
+}
+
+/// Where a mode's files are looked for: the plain files in `dirs` (relative
+/// to the directory the emulator runs from, as `default_rom` is) with one
+/// of `exts`, any case, `name_has` somewhere in the name, and a size `size`
+/// allows.
+pub struct Files {
+    pub dirs: &'static [&'static str],
+    pub exts: &'static [&'static str],
+    pub name_has: &'static str,
+    pub size: FileSize,
+}
+
+pub enum FileSize {
+    Any,
+    Exactly(u64),
+    AtLeast(u64),
+}
+
+impl FileSize {
+    pub fn allows(&self, len: u64) -> bool {
+        match *self {
+            FileSize::Any => true,
+            FileSize::Exactly(n) => len == n,
+            FileSize::AtLeast(n) => len >= n,
+        }
+    }
+}
+
+const FETCH_ROMS: &str = "tools/fetch-roms.py";
+
+/// A rate as `-h` and the launcher show it: 1843200 is "1.8432 MHz".
+pub fn fmt_hz(hz: u64) -> String {
+    let (div, unit) = if hz >= 1_000_000 { (1e6, "MHz") } else if hz >= 1_000 { (1e3, "kHz") } else { (1.0, "Hz") };
+    let n = format!("{:.4}", hz as f64 / div);
+    format!("{} {unit}", n.trim_end_matches('0').trim_end_matches('.'))
 }
 
 fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
@@ -344,6 +419,17 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         serial_port: None,
         disks: None,
         variants: &[],
+        launch: Launch {
+            name: "System09",
+            modes: &[LaunchMode {
+                variant: "",
+                what: "rom",
+                media: Media::Rom(Files { dirs: &["roms/6809"], exts: &["hex", "ihx"], name_has: "", size: FileSize::Any }),
+                fetch: FETCH_ROMS,
+            }],
+            needs: &[],
+            windows: &[],
+        },
     },
     SystemDescriptor {
         name: "altair680",
@@ -357,6 +443,17 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         serial_port: None,
         disks: None,
         variants: &[],
+        launch: Launch {
+            name: "MITS Altair 680",
+            modes: &[LaunchMode {
+                variant: "",
+                what: "monitor rom",
+                media: Media::Rom(Files { dirs: &["roms/mits680b"], exts: &["bin"], name_has: "", size: FileSize::Any }),
+                fetch: FETCH_ROMS,
+            }],
+            needs: &[],
+            windows: &[],
+        },
     },
     SystemDescriptor {
         name: "altair8800",
@@ -373,6 +470,39 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ("image", "-r is a memory image, run from address 0"),
             ("panel", "the front panel in a window; starts stopped"),
         ],
+        // A tape is for the loader its BASIC's size keys, which nothing in
+        // the file says, so each loader lists the tapes named for it.
+        launch: Launch {
+            name: "MITS Altair 8800",
+            modes: &[
+                LaunchMode {
+                    variant: "",
+                    what: "8K BASIC tape",
+                    media: Media::Rom(Files { dirs: &["roms/altair8800"], exts: &["tap"], name_has: "8k", size: FileSize::Any }),
+                    fetch: FETCH_ROMS,
+                },
+                LaunchMode {
+                    variant: "4k",
+                    what: "4K BASIC tape",
+                    media: Media::Rom(Files { dirs: &["roms/altair8800"], exts: &["tap"], name_has: "4k", size: FileSize::Any }),
+                    fetch: FETCH_ROMS,
+                },
+                LaunchMode {
+                    variant: "ext",
+                    what: "Extended BASIC tape",
+                    media: Media::Rom(Files { dirs: &["roms/altair8800"], exts: &["tap"], name_has: "ext", size: FileSize::Any }),
+                    fetch: "a tape of your own, in roms/altair8800",
+                },
+                LaunchMode {
+                    variant: "image",
+                    what: "memory image",
+                    media: Media::Rom(Files { dirs: &["roms/altair8800"], exts: &["bin"], name_has: "", size: FileSize::Any }),
+                    fetch: "an image of your own, in roms/altair8800",
+                },
+            ],
+            needs: &[],
+            windows: &[("panel", "front panel window; starts stopped")],
+        },
     },
     SystemDescriptor {
         name: "kaypro",
@@ -385,6 +515,22 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         serial_port: Some(kaypro::SERIAL_PORT),
         disks: Some("drive A, default disks/mbasic-games.img"),
         variants: &[],
+        launch: Launch {
+            name: "Kaypro II",
+            modes: &[LaunchMode {
+                variant: "",
+                what: "floppy in drive A",
+                media: Media::Disk(Files {
+                    dirs: &["disks"],
+                    exts: &["img"],
+                    name_has: "",
+                    size: FileSize::Exactly(crate::dev::wd1793::IMAGE_SIZE),
+                }),
+                fetch: FETCH_ROMS,
+            }],
+            needs: &[kaypro::VIDEO_ROM],
+            windows: &[],
+        },
     },
     SystemDescriptor {
         name: "ray703",
@@ -401,6 +547,36 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ("panel", "front panel and disc rack window; starts halted"),
             ("tty", "the teletype in a window"),
         ],
+        launch: Launch {
+            name: "Raytheon 703",
+            modes: &[
+                LaunchMode {
+                    variant: "",
+                    what: "core image",
+                    media: Media::Rom(Files { dirs: &["roms/703", "rex/build"], exts: &["bin"], name_has: "", size: FileSize::Any }),
+                    fetch: "make -C test ray703",
+                },
+                LaunchMode {
+                    variant: "ptb",
+                    what: "paper tape via PTB",
+                    media: Media::Rom(Files { dirs: &["roms/703"], exts: &["tape"], name_has: "", size: FileSize::Any }),
+                    fetch: "make -C test ray703",
+                },
+                LaunchMode {
+                    variant: "load",
+                    what: "boot disc via LOAD",
+                    media: Media::Rom(Files {
+                        dirs: &["disks", "rex/build"],
+                        exts: &["img"],
+                        name_has: "",
+                        size: FileSize::Exactly(crate::dev::disc74601::IMAGE_BYTES as u64),
+                    }),
+                    fetch: "make -C rex bootdisc",
+                },
+            ],
+            needs: &[],
+            windows: &[("panel", "front panel and disc rack; starts halted"), ("tty", "teletype in a window")],
+        },
     },
     SystemDescriptor {
         name: "rc2014",
@@ -415,6 +591,22 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         serial_port: Some(rc2014::SERIAL_PORT),
         disks: Some("the cpm card, default disks/rc2014-cf.img"),
         variants: &[("cpm", "RC2014 Pro: CP/M on a compact flash card")],
+        // Any card of a megabyte or more: a card has no fixed size, and that
+        // keeps the floppy and platter images in disks/ out of the list.
+        launch: Launch {
+            name: "RC2014",
+            modes: &[
+                LaunchMode { variant: "", what: "32K BASIC", media: Media::Fixed, fetch: FETCH_ROMS },
+                LaunchMode {
+                    variant: "cpm",
+                    what: "CP/M card",
+                    media: Media::Disk(Files { dirs: &["disks"], exts: &["img"], name_has: "", size: FileSize::AtLeast(1 << 20) }),
+                    fetch: FETCH_ROMS,
+                },
+            ],
+            needs: &[],
+            windows: &[],
+        },
     },
 ];
 
@@ -496,6 +688,38 @@ mod tests {
 
     /// Build a ray703 machine for one subsystem string. Uses the demo image
     /// only as bytes to load, via a temp file, so no ROM symlink is needed.
+    #[test]
+    fn every_launch_mode_is_a_listed_variant_the_factory_takes() {
+        let dir = std::env::temp_dir().join(format!("emu-registry-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom = dir.join("rom.bin");
+        std::fs::write(&rom, [0u8; 256]).unwrap();
+        let listed = |s: &SystemDescriptor, token: &str| token.is_empty() || s.variants.iter().any(|(t, _)| *t == token);
+        for s in SYSTEMS {
+            assert!(!s.launch.modes.is_empty(), "{} offers nothing to launch", s.name);
+            for (window, _) in s.launch.windows {
+                assert!(listed(s, window), "{}: window {window} is not in -h", s.name);
+            }
+            for mode in s.launch.modes {
+                assert!(listed(s, mode.variant), "{}: mode {:?} is not in -h", s.name, mode.variant);
+                // each mode alone and with every window, as the launcher composes them
+                let mut subs = vec![mode.variant.to_string()];
+                let windows: Vec<&str> = s.launch.windows.iter().map(|(w, _)| *w).collect();
+                if !windows.is_empty() {
+                    subs.push([mode.variant].iter().chain(&windows).filter(|t| !t.is_empty()).copied().collect::<Vec<_>>().join("-"));
+                }
+                for sub in subs {
+                    let (_tx, rx) = std::sync::mpsc::channel();
+                    let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+                    if let Err(e) = (s.factory)(&rom, console, &sub, &MachineOpts::default()) {
+                        assert!(!e.to_string().contains("unknown"), "{}-{sub}: {e}", s.name);
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn build_703(sub: &str) -> io::Result<Machine> {
         let dir = std::env::temp_dir().join(format!("emu-registry-{sub}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -67,10 +67,26 @@ Show the help: every system with its default ROM and variants, then the options:
 ./target/debug/emu -h
 ```
 
+Or let it show you what there is to run:
+
+```bash
+./target/debug/emu              # on a terminal, with no arguments: the launcher
+./target/debug/emu -L --fast-io # the launcher, with options to go after its choice (also --launch)
+```
+
+The launcher lists the machines on the left and, for the one under the cursor, every ROM, tape,
+core image and disk image found for it under `roms/`, `disks/` and `rex/build/`, with the window
+and speed switches below. Up and down move, right or Tab goes from the machines to their files,
+space toggles a switch, Enter runs, q quits. What it runs is an ordinary command line, shown at
+the bottom and printed as it starts, so the same thing can be run again without it. Anything else
+on the line is passed on (`emu -L --debug /tmp/emu.sock`). Run with no arguments and no terminal (a
+script, a pipe), `emu` is the 6809 as it always was. A machine with nothing to run says what
+is missing and how to get it — usually `tools/fetch-roms.py` or a `make` target.
+
 Run a system:
 
 ```bash
-./target/debug/emu                          # the default system (6809)
+./target/debug/emu -s 6809                  # the default system, which bare emu runs off a terminal
 ./target/debug/emu -s altair680
 ./target/debug/emu -s altair8800               # loads 8K BASIC off paper tape, then MEMORY SIZE?
 ./target/debug/emu -s altair8800-panel         # ...with the front panel: press RUN
@@ -214,6 +230,7 @@ other 703 scripts need `script(1)` and python3. `AGENTS.md` covers them all.
 - `src/console/`: the terminal and SDL2 frontends — the Kaypro screen, the 703's front panel and
   teletype-paper windows, the Altair 8800's front panel — and the channel/handles that connect them
   to the CPU thread.
+- `src/launcher/`: `--launch`, the terminal menu of what there is to run.
 - `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
 - `tests/`: the one integration test. `test/`: the end-to-end regression scripts and the guest
   programs they drive, by machine — `test/6809/` and `test/703/` (the latter including a Tiny
