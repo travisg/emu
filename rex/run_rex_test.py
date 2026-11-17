@@ -273,7 +273,7 @@ def session(emu):
         symbols.load(REX_LST)
         emu.writew(symbols.value('FDSAVE') + 2, [CLR])
     if CONTROL == 'noguard':
-        # Q.GET is MSK / STX / STW / CMW KCONSQ / SEQ / JMP QGIN: without
+        # Q.GET is MSK / STX / STW / CMW KCONSQ / SEQ / JMP .IN: without
         # the skip every caller is let in
         symbols = Symbols()
         symbols.load(REX_LST)
@@ -612,7 +612,7 @@ def disc_session(emu, image):
     symbols = Symbols()
     symbols.load(REX_LST)
     if CONTROL == 'nolock':
-        # KECLM is JSX IOTRY / SAZ / JMP KEWAIT: without the jump a task
+        # KECLM is JSX IOTRY / SAZ / JMP .WAIT: without the jump a task
         # that finds the disc taken carries on into the body
         emu.writew(symbols.value('KECLM') + 2, [NOP])
     s = Session(emu)

@@ -54,21 +54,21 @@ SWBMAX          EQU     23              ; blocks one sector's list will hold
 
 ; ---------------------------------------------------------------- the task
 SWAPR           JSX     SWINIT
-SWLOOP          MSK
+.LOOP           MSK
                 JSX     SWWORK
-                JNZ     SWL1            ; anything to do?
+                JNZ     .L1             ; anything to do?
                 LDX     SKSELF          ; no: until somebody wakes it
                 LDW     SKWAIT
                 STW     *T.STA
                 CALL    SWTCH
-                JMP     SWLOOP
-SWL1            UNM
+                JMP     .LOOP
+.L1             UNM
                 JSX     SWCLM
-                JNZ     SWL2            ; the disc?
-                JMP     SWNAP
-SWL2            JSX     SWMEM
+                JNZ     .L2             ; the disc?
+                JMP     .NAP
+.L2             JSX     SWMEM
                 LDW     SWBOR
-                JNZ     SWNAP           ; on a borrowed disc, that was all
+                JNZ     .NAP            ; on a borrowed disc, that was all
                 JSX     SWBRNG
                 LDW     SKM1
                 SMB     IOLOCK
@@ -76,44 +76,44 @@ SWL2            JSX     SWMEM
 ; What is left is waiting for something -- a task's second in core to
 ; run out, the disc to come free -- so a few ticks pass before the next
 ; look.
-SWNAP           MSK
+.NAP            MSK
                 LDX     SKSELF
                 LDW     SK3
                 STW     *T.DLY
                 LDW     SKSLP
                 STW     *T.STA
                 CALL    SWTCH
-                JMP     SWLOOP
+                JMP     .LOOP
 
 ; Where SWAP.SY is, once.  No disc, no directory or no such file leaves
 ; SWSECS zero, and there is no swapping.
 SWINIT          SUBR
-SWIL            MSK
+.IL             MSK
                 CALL    IOTRY
-                JNZ     SWIW
+                JNZ     .IW
                 UNM
                 LDW     SKNAM
                 CALL    FSFND
-                JNZ     SWI1
-                JMP     SWIX
-SWI1            JMI     SWIX            ; an error is minus
+                JNZ     .I1
+                JMP     .IX
+.I1             JMI     .IX             ; an error is minus
                 CAX
                 LDW     *DE.SEC
                 STW     SWBASE
                 LDW     *DE.CNT
                 SMB     SWSECS
                 STW     SWSECS
-SWIX            LDW     SKM1
+.IX             LDW     SKM1
                 SMB     IOLOCK
                 STW     IOLOCK
                 EXIT    SWINIT
-SWIW            LDX     SKSELF
+.IW             LDX     SKSELF
                 LDW     SK1
                 STW     *T.DLY
                 LDW     SKSLP
                 STW     *T.STA
                 CALL    SWTCH
-                JMP     SWIL
+                JMP     .IL
 
 ; Is there anything to do?  A task asking for core, or one that can run
 ; with its blocks on the disc.  The caller holds the mask.
@@ -121,24 +121,24 @@ SWWORK          SUBR
                 LDX     SKSHEL
                 LDW     *T.MW
                 CMW     SK1
-                JEQ     SWWYES
+                JEQ     .YES
                 LDW     SKNARB
                 STW     SWP
                 LDW     SKNARN
                 STW     SWC
-SWWL            LDX     SWP
+.L              LDX     SWP
                 LDW     *T.STA
                 CMW     SKFREE
-                JEQ     SWWNX
+                JEQ     .NX
                 LDW     *T.MW
                 CMW     SK1
-                JEQ     SWWYES
+                JEQ     .YES
                 JSX     SWWANT
-                JNZ     SWWYES
-SWWNX           JSX     SWSTEP
-                JNZ     SWWL
+                JNZ     .YES
+.NX             JSX     SWSTEP
+                JNZ     .L
                 EXIT    SWWORK          ; zero
-SWWYES          LDW     SK1
+.YES            LDW     SK1
                 EXIT    SWWORK
 
 ; Does the node SWP want bringing in?  Runnable, and on the disc -- not
@@ -146,13 +146,13 @@ SWWYES          LDW     SK1
 SWWANT          SUBR
                 LDX     SWP
                 LDW     *T.STA
-                JNZ     SWWNO
+                JNZ     .NO
                 LDW     *T.SWP
-                JNZ     SWWA1
-SWWNO           CLR
+                JNZ     .A1
+.NO             CLR
                 EXIT    SWWANT
-SWWA1           CMW     SKM1
-                JEQ     SWWNO
+.A1             CMW     SKM1
+                JEQ     .NO
                 LDW     SK1
                 EXIT    SWWANT
 
@@ -174,22 +174,22 @@ SWCLM           SUBR
                 STW     SWBOR
                 SMB     IOLOCK
                 LDW     IOLOCK
-                JPL     SWC1
+                JPL     .C1
                 LDW     SKSELF
                 SMB     IOLOCK
                 STW     IOLOCK
-SWCYES          UNM
+.CYES           UNM
                 LDW     SK1
                 EXIT    SWCLM
-SWC1            STW     SWHOLD
+.C1             STW     SWHOLD
                 CAX
                 LDW     *T.MW
                 CMW     SK1
-                JNE     SWCNO
+                JNE     .CNO
                 LDW     SK1
                 STW     SWBOR
-                JMP     SWCYES
-SWCNO           UNM
+                JMP     .CYES
+.CNO            UNM
                 CLR
                 EXIT    SWCLM
 
@@ -205,50 +205,50 @@ SWMEM           SUBR
                 STW     SWP
                 LDW     SKNARN
                 STW     SWC
-SWML            LDX     SWP
+.L              LDX     SWP
                 LDW     *T.STA
                 CMW     SKFREE
                 SEQ
                 JSX     SWMEM1
                 JSX     SWSTEP
-                JNZ     SWML
+                JNZ     .L
                 EXIT    SWMEM
 
 SWMEM1          SUBR
                 LDX     SWP
                 LDW     *T.MW
                 CMW     SK1
-                JNE     SWM1X           ; asking?
+                JNE     .X              ; asking?
                 LDW     SWBOR
-                JNZ     SWM1B
-                JMP     SWM1G
-SWM1B           LDW     SWP
+                JNZ     .B
+                JMP     .G
+.B              LDW     SWP
                 CMW     SWHOLD
-                JNE     SWM1X
-SWM1G           LDW     SWP
+                JNE     .X
+.G              LDW     SWP
                 STW     SWASK
                 JSX     SWVICT
-                JNZ     SWM1V
+                JNZ     .V
                 LDW     SWYNG           ; nobody.  For good, or only until
-                JNZ     SWM1X           ; one that is running has had its
+                JNZ     .X              ; one that is running has had its
                                         ; time?  Then the asker goes on
                 LDW     SK2             ; waiting, and is looked at again
-                JMP     SWM1T           ; on the next pass
-SWM1V           JSX     SWOUT
-                JNZ     SWM1N           ; gone?
+                JMP     .T              ; on the next pass
+.V              JSX     SWOUT
+                JNZ     .N              ; gone?
                 LDW     SK3             ; try again
-                JMP     SWM1T
-SWM1N           LDW     SK2
-SWM1T           MSK
+                JMP     .T
+.N              LDW     SK2
+.T              MSK
                 LDX     SWASK
                 STW     *T.MW
                 LDW     *T.STA
                 CMW     SKWAIT
-                JNE     SWM1U           ; out of its wait, and only that
+                JNE     .U              ; out of its wait, and only that
                 CLR
                 STW     *T.STA
-SWM1U           UNM
-SWM1X           EXIT    SWMEM1
+.U              UNM
+.X              EXIT    SWMEM1
 
 ; ---------------------------------------------------------------- who goes
 ; A task to put out, other than the asker in SWASK: one that cannot run
@@ -263,32 +263,32 @@ SWVICT          SUBR
                 STW     SWQ
                 LDW     SKNARN
                 STW     SWQC
-SWVL            LDW     SWQ
+.L              LDW     SWQ
                 CMW     SWASK
-                JEQ     SWVNX
+                JEQ     .NX
                 JSX     SWELIG
-                JNZ     SWVE
-                JMP     SWVNX
-SWVE            LDX     SWQ
+                JNZ     .E
+                JMP     .NX
+.E              LDX     SWQ
                 LDW     *T.STA
-                JNZ     SWVHIT          ; it cannot run: this one
+                JNZ     .HIT            ; it cannot run: this one
                 JSX     SWAGED
-                JNZ     SWVOLD
+                JNZ     .OLD
                 LDW     SK1             ; it can, and has not had its time
                 STW     SWYNG           ; yet: nobody for now, but not for good
-                JMP     SWVNX
-SWVOLD          LDW     SWQ             ; it can, and has had its time: kept
+                JMP     .NX
+.OLD            LDW     SWQ             ; it can, and has had its time: kept
                 STW     SWV2            ; in case there is nobody better
-SWVNX           LDW     SWQ
+.NX             LDW     SWQ
                 ADD     SKTLEN
                 STW     SWQ
                 LDW     SWQC
                 SUB     SK1
                 STW     SWQC
-                JNZ     SWVL
+                JNZ     .L
                 LDW     SWV2
                 EXIT    SWVICT
-SWVHIT          LDW     SWQ
+.HIT            LDW     SWQ
                 EXIT    SWVICT
 
 ; May the arena node SWQ be put out at all?  In use, its blocks in core,
@@ -297,18 +297,18 @@ SWELIG          SUBR
                 LDX     SWQ
                 LDW     *T.STA
                 CMW     SKFREE
-                JEQ     SWENO
+                JEQ     .NO
                 LDW     *T.SWP
-                JNZ     SWENO
+                JNZ     .NO
                 LDW     *T.MW
-                JNZ     SWENO
+                JNZ     .NO
                 LDW     SWQ
                 SMB     IOLOCK
                 CMW     IOLOCK
-                JEQ     SWENO
+                JEQ     .NO
                 LDW     SK1
                 EXIT    SWELIG
-SWENO           CLR
+.NO             CLR
                 EXIT    SWELIG
 
 ; Has the node SWQ been in core long enough?  Not in the second it
@@ -318,13 +318,13 @@ SWAGED          SUBR
                 SMB     SECS
                 LDW     SECS
                 SUB     *T.RES
-                JNZ     SWAG1
+                JNZ     .G1
                 EXIT    SWAGED          ; zero: the same second
-SWAG1           CMW     SK1
-                JEQ     SWAGNO
+.G1             CMW     SK1
+                JEQ     .GNO
                 LDW     SK1
                 EXIT    SWAGED
-SWAGNO          CLR
+.GNO            CLR
                 EXIT    SWAGED
 
 ; ---------------------------------------------------------------- out
@@ -345,16 +345,16 @@ SWOUT           SUBR
                 ORI     SK8000
                 STW     SWTAG
                 LDW     SKPOOB
-SWOWL           STW     SWB
+.WL             STW     SWB
                 CMW     SKPOOE
-                JGE     SWOWD
+                JGE     .WD
                 CAX
                 LDW     *1
                 CMW     SWTAG
-                JNE     SWOWN
+                JNE     .WN
                 LDW     SWOK
                 CMW     SKBMAX
-                JGE     SWOBAD          ; more blocks than the list holds
+                JGE     .BAD            ; more blocks than the list holds
                 SLL     1
                 ADD     SKHDO
                 ADD     SK1
@@ -373,20 +373,20 @@ SWOWL           STW     SWB
                 LDW     SWOK
                 ADD     SK1
                 STW     SWOK
-SWOWN           LDX     SWB
+.WN             LDX     SWB
                 LDW     *0
                 ADD     SWB
                 ADD     SK2
-                JMP     SWOWL
-SWOWD           LDW     SWOK
-                JNZ     SWOW1           ; a task with no blocks has nothing
+                JMP     .WL
+.WD             LDW     SWOK
+                JNZ     .W1             ; a task with no blocks has nothing
                                         ; to put out
-                JMP     SWOBAD
-SWOW1           STW     SWHDO
+                JMP     .BAD
+.W1             STW     SWHDO
                 LDW     SWOSEC          ; an extent: the list's sector too
                 ADD     SK1
                 JSX     SWXALC
-                JMI     SWOBAD
+                JMI     .BAD
                 STW     SWOST
                 UNM
                 ADD     SWBASE          ; the list
@@ -397,26 +397,26 @@ SWOW1           STW     SWHDO
                 STW     SWLEN
                 LDW     SK1
                 JSX     SWXFER
-                JNZ     SWOERR
+                JNZ     .ERR
                 CLR
                 STW     SWI
-SWOBL           LDW     SWI             ; and each block from where it lies
+.BL             LDW     SWI             ; and each block from where it lies
                 CMW     SWOK
-                JGE     SWOFR
+                JGE     .FR
                 JSX     SWITEM
                 LDW     SK1
                 JSX     SWXFER
-                JNZ     SWOERR
+                JNZ     .ERR
                 LDW     SWI
                 ADD     SK1
                 STW     SWI
-                JMP     SWOBL
-SWOFR           MSK
+                JMP     .BL
+.FR             MSK
                 CLR
                 STW     SWI
-SWOFL           LDW     SWI             ; written: the core is free
+.FL             LDW     SWI             ; written: the core is free
                 CMW     SWOK
-                JGE     SWOFD
+                JGE     .FD
                 JSX     SWITEM
                 LDW     SWADR
                 ADD     SK2
@@ -424,8 +424,8 @@ SWOFL           LDW     SWI             ; written: the core is free
                 LDW     SWI
                 ADD     SK1
                 STW     SWI
-                JMP     SWOFL
-SWOFD           LDX     SWT
+                JMP     .FL
+.FD             LDX     SWT
                 LDW     SWOST
                 ADD     SK1
                 STW     *T.SWP
@@ -435,10 +435,10 @@ SWOFD           LDX     SWT
                 UNM
                 CLR
                 EXIT    SWOUT
-SWOERR          MSK                     ; the disc said no: nothing has been
+.ERR            MSK                     ; the disc said no: nothing has been
                 LDW     SWT             ; freed, so the task is simply still
                 JSX     SWXFR0          ; here
-SWOBAD          LDX     SWT
+.BAD            LDX     SWT
                 CLR
                 STW     *T.SWP
                 UNM
@@ -450,16 +450,16 @@ SWOBAD          LDX     SWT
 ; keeps count of, so the blocks are asked for in order from the first.
 SWITEM          SUBR
                 LDW     SWI
-                JNZ     SWIT1
+                JNZ     .T1
                 LDW     SWOST           ; the first: past the list's sector
                 ADD     SWBASE
                 ADD     SK1
                 STW     SWSEC
-                JMP     SWIT2
-SWIT1           JSX     SWSECN          ; past the one before
+                JMP     .T2
+.T1             JSX     SWSECN          ; past the one before
                 ADD     SWSEC
                 STW     SWSEC
-SWIT2           LDW     SWI
+.T2             LDW     SWI
                 SLL     1
                 ADD     SWLIST
                 ADD     SK1
@@ -504,15 +504,15 @@ SWBRNG          SUBR
                 STW     SWP
                 LDW     SKNARN
                 STW     SWC
-SWBL            LDX     SWP
+.L              LDX     SWP
                 LDW     *T.STA
                 CMW     SKFREE
-                JEQ     SWBNX
+                JEQ     .NX
                 JSX     SWWANT
                 SAZ
                 JSX     SWIN
-SWBNX           JSX     SWSTEP
-                JNZ     SWBL
+.NX             JSX     SWSTEP
+                JNZ     .L
                 EXIT    SWBRNG
 
 ; Bring the task SWP back.  Its list is read; then, under the mask, each
@@ -539,12 +539,12 @@ SWIN            SUBR
                 JNZ     SWINX
                 LDW     SK8
                 STW     SWTRY
-SWICUT          MSK
+.CUT            MSK
                 CLR
                 STW     SWJ
-SWICL           LDW     SWJ
+.CL             LDW     SWJ
                 CMW     SWHDI
-                JGE     SWIRD
+                JGE     .RD
                 SLL     1
                 ADD     SKHDI
                 ADD     SK1
@@ -562,19 +562,19 @@ SWICL           LDW     SWJ
                 STW     SWIHE
                 LDW     SWIH
                 CALL    ALLOCAT
-                JNZ     SWICN
-                JMP     SWIBLK
-SWICN           LDW     SWJ
+                JNZ     .CN
+                JMP     .BLK
+.CN             LDW     SWJ
                 ADD     SK1
                 STW     SWJ
-                JMP     SWICL
+                JMP     .CL
 
 ; Something is where block SWJ goes.  Give back what has been cut, find
 ; the owner of what is in the way, and put it out if that is allowed.
-SWIBLK          LDW     SWJ
-                JNZ     SWIU1
-                JMP     SWIU2
-SWIU1           SUB     SK1
+.BLK            LDW     SWJ
+                JNZ     .U1
+                JMP     .U2
+.U1             SUB     SK1
                 STW     SWJ
                 SLL     1
                 ADD     SKHDI
@@ -583,8 +583,8 @@ SWIU1           SUB     SK1
                 LDW     *0
                 ADD     SK2
                 CALL    FREEI
-                JMP     SWIBLK
-SWIU2           LDW     SWIH
+                JMP     .BLK
+.U2             LDW     SWIH
                 STW     SWOH
                 LDW     SWIHE
                 STW     SWOHE
@@ -592,19 +592,19 @@ SWIU2           LDW     SWIH
                 UNM
                 STW     SWQ
                 CMW     SKNARB
-                JGE     SWIO1           ; a task the shell loaded, or nobody's
+                JGE     .O1             ; a task the shell loaded, or nobody's
                                         ; to put out?
                 JMP     SWINX
-SWIO1           JSX     SWELIG
-                JNZ     SWIO2
+.O1             JSX     SWELIG
+                JNZ     .O2
                 JMP     SWINX
-SWIO2           LDX     SWQ
+.O2             LDX     SWQ
                 LDW     *T.STA
-                JNZ     SWIO3           ; it could run: has it had its time?
+                JNZ     .O3             ; it could run: has it had its time?
                 JSX     SWAGED
-                JNZ     SWIO3
+                JNZ     .O3
                 JMP     SWINX
-SWIO3           LDW     SWLIST          ; SWOUT's list is not this one
+.O3             LDW     SWLIST          ; SWOUT's list is not this one
                 STW     SWLSAV
                 LDW     SKHDO
                 STW     SWLIST
@@ -618,12 +618,12 @@ SWIO3           LDW     SWLIST          ; SWOUT's list is not this one
                 LDW     SWTRY
                 SUB     SK1
                 STW     SWTRY
-                JNZ     SWICUT
+                JNZ     .CUT
                 JMP     SWINX
 
 ; Every block is cut.  Read each back; the extent is free; the task is
 ; here, as of this second.
-SWIRD           UNM
+.RD             UNM
                 LDW     SKHDI
                 STW     SWLIST
                 LDW     SWIST
@@ -632,7 +632,7 @@ SWIRD           UNM
                 STW     SWI
 SWIRL           LDW     SWI
                 CMW     SWHDI
-                JGE     SWIRDN
+                JGE     .DN
                 JSX     SWITEM
                 CLR
                 JSX     SWXFER
@@ -640,7 +640,7 @@ SWIRL           LDW     SWI
                 ADD     SK1
                 STW     SWI
                 JMP     SWIRL
-SWIRDN          LDW     SKHDO
+.DN             LDW     SKHDO
                 STW     SWLIST
                 MSK
                 LDW     SWT2
@@ -662,26 +662,26 @@ SWINX           EXIT    SWIN
 ; zero for the fence, or if nothing does.  The caller holds the mask.
 SWOWNR          SUBR
                 LDW     SKPOOB
-SWONL           STW     SWB
+.L              STW     SWB
                 CMW     SKPOOE
-                JGE     SWONO
+                JGE     .O
                 CMW     SWOHE
-                JGE     SWONO           ; a block that starts past them: none
+                JGE     .O              ; a block that starts past them: none
                 CAX
                 LDW     *0
                 ADD     SWB
                 ADD     SK2
                 STW     SWOE
                 CMW     SWOH
-                JLE     SWONN           ; ends at or before them: the next
+                JLE     .N              ; ends at or before them: the next
                 LDX     SWB
                 LDW     *1
-                JPL     SWONN           ; free: the next
+                JPL     .N              ; free: the next
                 AND     SK7FFF
                 EXIT    SWOWNR
-SWONN           LDW     SWOE
-                JMP     SWONL
-SWONO           CLR
+.N              LDW     SWOE
+                JMP     .L
+.O              CLR
                 EXIT    SWOWNR
 
 ; ---------------------------------------------------------------- extents
@@ -692,47 +692,47 @@ SWXALC          SUBR
                 STW     SWXL
                 CLR
                 STW     SWXS
-SWXA0           LDW     SKXTAB          ; does anything overlap [S, S+L)?
+.A0             LDW     SKXTAB          ; does anything overlap [S, S+L)?
                 STW     SWXP
                 LDW     SKXN
                 STW     SWXC
-SWXA1           LDX     SWXP
+.A1             LDX     SWXP
                 LDW     *0
-                JNZ     SWXA2
-                JMP     SWXA4
-SWXA2           LDW     *1              ; its first sector, and one past its last
+                JNZ     .A2
+                JMP     .A4
+.A2             LDW     *1              ; its first sector, and one past its last
                 STW     SWXB
                 ADD     *2
                 STW     SWXE
                 CMW     SWXS
-                JLE     SWXA4           ; it ends at or before S: clear of it
+                JLE     .A4             ; it ends at or before S: clear of it
                 LDW     SWXS
                 ADD     SWXL
                 CMW     SWXB
-                JLE     SWXA4           ; S+L at or before its start: clear
+                JLE     .A4             ; S+L at or before its start: clear
                 LDW     SWXE            ; no: try from where it ends
                 STW     SWXS
-                JMP     SWXA0
-SWXA4           LDW     SWXP
+                JMP     .A0
+.A4             LDW     SWXP
                 ADD     SK3
                 STW     SWXP
                 LDW     SWXC
                 SUB     SK1
                 STW     SWXC
-                JNZ     SWXA1
+                JNZ     .A1
                 LDW     SWXS
                 ADD     SWXL
                 SMB     SWSECS
                 CMW     SWSECS
-                JLE     SWXA5           ; inside the file?
-                JMP     SWXANO
-SWXA5           LDW     SKXTAB          ; a table entry nobody has
+                JLE     .A5             ; inside the file?
+                JMP     .ANO
+.A5             LDW     SKXTAB          ; a table entry nobody has
                 STW     SWXP
                 LDW     SKXN
                 STW     SWXC
-SWXA6           LDX     SWXP
+.A6             LDX     SWXP
                 LDW     *0
-                JNZ     SWXA7
+                JNZ     .A7
                 LDW     SWT
                 STW     *0
                 LDW     SWXS
@@ -741,14 +741,14 @@ SWXA6           LDX     SWXP
                 STW     *2
                 LDW     SWXS
                 EXIT    SWXALC
-SWXA7           LDW     SWXP
+.A7             LDW     SWXP
                 ADD     SK3
                 STW     SWXP
                 LDW     SWXC
                 SUB     SK1
                 STW     SWXC
-                JNZ     SWXA6
-SWXANO          LDW     SKM1
+                JNZ     .A6
+.ANO            LDW     SKM1
                 EXIT    SWXALC
 
 ; The extent of the task whose node is in ACR is free, if it has one.
@@ -761,19 +761,19 @@ SWXFRE          SUBR
                 STW     SWFP
                 LDW     SKXN
                 STW     SWFC
-SWXFL           LDX     SWFP
+.L              LDX     SWFP
                 LDW     *0
                 CMW     SWFN
-                JNE     SWXFN
+                JNE     .N
                 CLR
                 STW     *0
-SWXFN           LDW     SWFP
+.N              LDW     SWFP
                 ADD     SK3
                 STW     SWFP
                 LDW     SWFC
                 SUB     SK1
                 STW     SWFC
-                JNZ     SWXFL
+                JNZ     .L
                 EXIT    SWXFRE
 SWXFR0          SUBR
                 JSX     SWXFRE

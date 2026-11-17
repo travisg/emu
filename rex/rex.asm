@@ -622,7 +622,7 @@ START           MSK
                 LDW     KNARN           ; the free list, numbered, from the
                 STW     NACNT           ; top down so the first one handed
                 LDW     KNARL           ; out is the lowest
-STNAR           CAX
+.R              CAX
                 LDW     NFREH
                 STW     *T.NXT
                 CXA
@@ -636,12 +636,12 @@ STNAR           CAX
                 LDW     NACNT
                 SUB     K1
                 STW     NACNT
-                JNZ     STNAR1          ; the last of them?
-                JMP     STNAR2
-STNAR1          LDW     NFREH
+                JNZ     .R1             ; the last of them?
+                JMP     .R2
+.R1             LDW     NFREH
                 SUB     KTLEN
-                JMP     STNAR
-STNAR2          DOT     14,11           ; connect the keyboard; function 11
+                JMP     .R
+.R2             DOT     14,11           ; connect the keyboard; function 11
                                         ; is the one that echoes, which is
                                         ; the Model 33 printing what its own
                                         ; keyboard sent -- full duplex, and
@@ -672,43 +672,43 @@ SCHED           SMB     S2SAVA          ; the SMB lead: EXR still holds the
                 LDW     TICKS           ; uptime, for the shell to report
                 ADD     K1
                 CMW     K60
-                JGE     SCSEC           ; a whole second of them?
+                JGE     .SEC            ; a whole second of them?
                 STW     TICKS
-                JMP     SCTK0
-SCSEC           CLR
+                JMP     .TK0
+.SEC            CLR
                 STW     TICKS
                 LDW     SECS
                 ADD     K1
                 STW     SECS
-SCTK0           LDW     KRING           ; once round the ring
+.TK0            LDW     KRING           ; once round the ring
                 STW     SCIX
                 LDW     KNRING
                 STW     SCTRY
-SCTKL           LDX     SCIX
+.TKL            LDX     SCIX
                 LDW     *T.STA
                 CMW     KSLP
-                JNE     SCTKN           ; asleep?
+                JNE     .TKN            ; asleep?
                 LDW     *T.DLY
                 SUB     K1
                 STW     *T.DLY
-                JNZ     SCTKN           ; the last tick of the sleep?
+                JNZ     .TKN            ; the last tick of the sleep?
                 CLR
                 STW     *T.STA          ; wake it
-SCTKN           LDX     SCIX
+.TKN            LDX     SCIX
                 LDW     *T.NXT
                 STW     SCIX
                 LDW     SCTRY
                 SUB     K1
                 STW     SCTRY
-                JNZ     SCTKL           ; another node to visit?
-                JMP     SCDEF
+                JNZ     .TKL            ; another node to visit?
+                JMP     .DEF
 
-SCDEF           LDW     L2PC            ; where did the tick land?
+.DEF            LDW     L2PC            ; where did the tick land?
                 CMW     KISRB
-                JGE     SCHI            ; below ISRBEG: task code
-                JMP     SCSW
-SCHI            CMW     KISRE
-                JGE     SCSW            ; inside [ISRBEG,ISREND): service code
+                JGE     .HI             ; below ISRBEG: task code
+                JMP     .SW
+.HI             CMW     KISRE
+                JGE     .SW             ; inside [ISRBEG,ISREND): service code
                                         ; above it: task code
                 LDW     S2SAVA          ; defer -- restore untouched and let
                 LDX     S2SAVX          ; a later tick do the switch
@@ -717,7 +717,7 @@ SCHI            CMW     KISRE
 ; A task was running: park its frame, pick the next, resume it.  The
 ; compare indicators and any overflow this arithmetic sets are clobber
 ; without consequence -- INR 2 restores the whole status from word 10.
-SCSW            LDX     CURT            ; IXR = the current task's node
+.SW             LDX     CURT            ; IXR = the current task's node
                 LDW     S2SAVA
                 STW     *T.ACR
                 LDW     S2SAVX
@@ -753,9 +753,9 @@ SERV            SMB     S0SAVA          ; the SMB lead again
                 STW     S0SAVA
                 STX     S0SAVX
                 LDW     OWNER
-                JPL     STX0            ; no owner: a keystroke should wait
-                JMP     SRX
-STX0            LDW     OWNER           ; the owner's node
+                JPL     .TX0            ; no owner: a keystroke should wait
+                JMP     .RX
+.TX0            LDW     OWNER           ; the owner's node
                 CAX
                 CLR
                 STW     *T.MBX          ; the owner's "printed" signal
@@ -766,42 +766,42 @@ STX0            LDW     OWNER           ; the owner's node
 ; own mailbox again when it runs, and finds it empty either way.
                 LDW     *T.STA
                 CMW     KWAIT
-                JNE     STX1            ; waiting on the printer?
+                JNE     .TX1            ; waiting on the printer?
                 CLR
                 STW     *T.STA
                 LDW     K1
                 STW     RESCHD
-STX1            LDW     KM1
+.TX1            LDW     KM1
                 STW     OWNER
                 JSX     KICK            ; start the next waiting character
-SRX             DIN     14,15           ; collect the frame, and ask for
-                JNZ     SRX1            ; another; empty is the merge's
+.RX             DIN     14,15           ; collect the frame, and ask for
+                JNZ     .RX1            ; another; empty is the merge's
                                         ; other half, not an error
-                JMP     SEXIT
+                JMP     .EXIT
 
 ; Post the character to the console queue and have done with it.  The
 ; driver keeps no line: what a line is -- where it ends, what a rubout
 ; does to it, which case it is in -- is the shell's business, and this
 ; routine's is to get the character off the teletype.  Nothing is echoed
 ; here either; the Model 33 is armed to print its own keyboard.
-SRX1            STW     QITEM
+.RX1            STW     QITEM
                 CLB     X'83'           ; Ctrl-C is a flag, not a queued
-                JEQ     SRXBRK          ; character: nothing reads the queue
+                JEQ     .RXBRK          ; character: nothing reads the queue
                                         ; while a program holds the console,
                 LDW     KCONSQ          ; so an in-band break could never be
                 JSX     Q.PUT           ; seen.  Whoever consumes the flag
-                JMP     SEXIT           ; clears it.
-SRXBRK          LDW     BRKREQ
-                JNZ     SRXKIL          ; one already there that nobody took?
+                JMP     .EXIT           ; clears it.
+.RXBRK          LDW     BRKREQ
+                JNZ     .RXKIL          ; one already there that nobody took?
                 LDW     K1
                 STW     BRKREQ
-                JMP     SEXIT
-SRXKIL          LDW     K1              ; then this one is for the shell: the
+                JMP     .EXIT
+.RXKIL          LDW     K1              ; then this one is for the shell: the
                 STW     KILLRQ          ; program is not listening
                 LDX     KSHELL
                 LDW     *T.STA
                 CMW     KWAIT
-                JNE     SEXIT           ; only out of a wait, like any wake
+                JNE     .EXIT           ; only out of a wait, like any wake
                 CLR
                 STW     *T.STA
                 LDW     K1
@@ -822,20 +822,20 @@ SRXKIL          LDW     K1              ; then this one is for the shell: the
 ; block of the task it was switching to.  Masked from there on, so that
 ; the tick -- which outranks this level and would otherwise land in the
 ; middle of PICK -- is held until the UNM, where it defers.
-SEXIT           LDW     RESCHD
-                JNZ     SEXSW           ; anything newly runnable?
-                JMP     SEXPL
-SEXSW           CLR
+.EXIT           LDW     RESCHD
+                JNZ     .EXSW           ; anything newly runnable?
+                JMP     .EXPL
+.EXSW           CLR
                 STW     RESCHD
                 MSK
                 LDW     L0PC
                 CMW     KISRB
-                JGE     SEXHI
-                JMP     SEXDO
-SEXHI           CMW     KISRE
-                JGE     SEXDO
-                JMP     SEXPU           ; in the range: not a task's frame
-SEXDO           LDX     CURT
+                JGE     .EXHI
+                JMP     .EXDO
+.EXHI           CMW     KISRE
+                JGE     .EXDO
+                JMP     .EXPU           ; in the range: not a task's frame
+.EXDO           LDX     CURT
                 LDW     S0SAVA
                 STW     *T.ACR
                 LDW     S0SAVX
@@ -856,8 +856,8 @@ SEXDO           LDX     CURT
                 LDX     S0SAVX
                 UNM
                 INR     0
-SEXPU           UNM
-SEXPL           LDW     S0SAVA
+.EXPU           UNM
+.EXPL           LDW     S0SAVA
                 LDX     S0SAVX
                 INR     0
 
@@ -867,31 +867,31 @@ SEXPL           LDW     S0SAVA
 ; instruction (the disc exerciser's flag-before-DOT rule).
 KICK            SUBR
                 LDW     OWNER
-                JPL     KDONE           ; still printing? the completion
+                JPL     .DONE           ; still printing? the completion
                                         ; will call back here
                 LDW     KNRING
                 STW     KTRY
                 LDW     LASTS
-KSCN            CAX                     ; the next node round the ring
+.SCN            CAX                     ; the next node round the ring
                 LDW     *T.NXT
                 CAX
                 STW     KCAND
                 LDW     *T.MBX          ; that task's mailbox
-                JNZ     KHIT
+                JNZ     .HIT
                 LDW     KTRY            ; empty; any candidates left?
                 SUB     K1
                 STW     KTRY
-                JNZ     KNXT
-                JMP     KDONE           ; all empty: the printer stays idle
-KNXT            LDW     KCAND
-                JMP     KSCN
-KHIT            LDW     KCAND
+                JNZ     .NXT
+                JMP     .DONE           ; all empty: the printer stays idle
+.NXT            LDW     KCAND
+                JMP     .SCN
+.HIT            LDW     KCAND
                 STW     OWNER
                 STW     LASTS
                 CAX
                 LDW     *T.MBX
                 DOT     14,14           ; teletype, write the character
-KDONE           EXIT    KICK
+.DONE           EXIT    KICK
 
 ; Round robin over the ring, starting past the node running now, and
 ; leave the choice in CURT.  A task that is asleep, waiting or stopped is
@@ -906,30 +906,30 @@ PICK            SUBR
                 STW     SCTRY
                 LDX     CURT            ; start past the one running now --
                 LDW     *T.NXT          ; idle's own link reenters the ring
-PKSCN           CAX
+.SCN            CAX
                 STW     SCIX
                 LDW     *T.STA
-                JNZ     PKNRD           ; runnable?
+                JNZ     .NRD            ; runnable?
                 LDW     *T.SWP
-                JNZ     PKOUT           ; and its blocks in core?
-                JMP     PKPIK
-PKOUT           LDX     KSWAP           ; no: that is the swapper's to mend,
+                JNZ     .OUT            ; and its blocks in core?
+                JMP     .PIK
+.OUT            LDX     KSWAP           ; no: that is the swapper's to mend,
                 LDW     *T.STA          ; so it is woken -- only out of its
                 CMW     KWAIT           ; wait -- and the scan goes on
-                JNE     PKNRD
+                JNE     .NRD
                 CLR
                 STW     *T.STA
-PKNRD           LDW     SCTRY
+.NRD            LDW     SCTRY
                 SUB     K1
                 STW     SCTRY
-                JNZ     PKNX2           ; any candidate left to look at?
+                JNZ     .NX2            ; any candidate left to look at?
                 LDW     KIDLE           ; nobody can run: go idle
                 STW     SCIX
-                JMP     PKPIK
-PKNX2           LDX     SCIX
+                JMP     .PIK
+.NX2            LDX     SCIX
                 LDW     *T.NXT
-                JMP     PKSCN
-PKPIK           LDW     SCIX
+                JMP     .SCN
+.PIK            LDW     SCIX
                 STW     CURT
                 EXIT    PICK
 
@@ -992,7 +992,7 @@ Q.PUT           SUBR
                 CAX
                 LDW     *Q.CNT
                 CMW     *Q.CAP
-                JEQ     QPX             ; full?
+                JEQ     .X              ; full?
                 LDW     *Q.BUF
                 ADD     *Q.TAIL
                 CAX
@@ -1009,25 +1009,25 @@ Q.PUT           SUBR
                 ADD     K1
                 STW     *Q.CNT
                 LDW     *Q.WTR          ; anybody asleep on it?
-                JPL     QPWK
-                JMP     QPX
+                JPL     .WK
+                JMP     .X
 ; Wake it only if it is waiting -- the same guard SERV's printer wake
 ; makes, for the same reason: a keystroke must not restart a task the
 ; shell has stopped between registering as the waiter and this put.  The
 ; registration is consumed either way; a stopped task re-registers when
 ; it next runs, because Q.GET looks again on every wake.
-QPWK            CAX                     ; the waiter's node
+.WK             CAX                     ; the waiter's node
                 LDW     *T.STA
                 CMW     KWAIT
-                JNE     QPW2            ; waiting on the queue?
+                JNE     .W2             ; waiting on the queue?
                 CLR
                 STW     *T.STA          ; wake it...
                 LDW     K1              ; ...and ask the service routine to
                 STW     RESCHD          ; return as whoever can run now
-QPW2            LDX     QPD             ; forget the waiter -- a queue holds
+.W2             LDX     QPD             ; forget the waiter -- a queue holds
                 LDW     KM1             ; one, which is all a single reader
                 STW     *Q.WTR          ; ever needs
-QPX             EXIT    Q.PUT
+.X              EXIT    Q.PUT
 
 ; ------------------------------------------------------- level 1 service
 ; The disc.  A completion: collect the unit's status, mark the transfer
@@ -1045,30 +1045,30 @@ DSERV           SMB     S1SAVA          ; the SMB lead
                 CLR
                 STW     DBUSY
                 LDW     DWTR
-                JPL     DSWK            ; anybody's transfer?
-                JMP     DEXIT
-DSWK            CAX
+                JPL     .SWK            ; anybody's transfer?
+                JMP     .EXIT
+.SWK            CAX
                 LDW     *T.STA
                 CMW     KWAIT
-                JNE     DEXIT           ; waiting on it?
+                JNE     .EXIT           ; waiting on it?
                 CLR
                 STW     *T.STA
                 LDW     K1
                 STW     RESCHD
-DEXIT           LDW     RESCHD
-                JNZ     DEXSW
-                JMP     DEXPL
-DEXSW           CLR
+.EXIT           LDW     RESCHD
+                JNZ     .EXSW
+                JMP     .EXPL
+.EXSW           CLR
                 STW     RESCHD
                 MSK
                 LDW     L1PC
                 CMW     KISRB
-                JGE     DEXHI
-                JMP     DEXDO
-DEXHI           CMW     KISRE
-                JGE     DEXDO
-                JMP     DEXPU           ; in the range: not a task's frame
-DEXDO           LDX     CURT
+                JGE     .EXHI
+                JMP     .EXDO
+.EXHI           CMW     KISRE
+                JGE     .EXDO
+                JMP     .EXPU           ; in the range: not a task's frame
+.EXDO           LDX     CURT
                 LDW     S1SAVA
                 STW     *T.ACR
                 LDW     S1SAVX
@@ -1089,8 +1089,8 @@ DEXDO           LDX     CURT
                 LDX     S1SAVX
                 UNM
                 INR     1
-DEXPU           UNM
-DEXPL           LDW     S1SAVA
+.EXPU           UNM
+.EXPL           LDW     S1SAVA
                 LDX     S1SAVX
                 INR     1
 
@@ -1214,12 +1214,12 @@ IDTCB           WORD SRUN, SHTCB,0,  0,  IDLE,  X'80', 0,  0,  'ID',0
 ; running task's, anything else and it is somebody's already.
 IOTRY           SUBR
                 LDW     IOLOCK
-                JPL     IOTBSY          ; free?
+                JPL     .BSY            ; free?
                 LDW     CURT
                 STW     IOLOCK
                 CLR
                 EXIT    IOTRY
-IOTBSY          LDW     IOWAITS
+.BSY            LDW     IOWAITS
                 ADD     K1
                 STW     IOWAITS
                 LDW     K1
@@ -1241,7 +1241,7 @@ KENTER          LDX     CURT
                 LDW     KEARG
                 STW     *T.KAR
 KECLM           JSX     IOTRY
-                JNZ     KEWAIT          ; ours?
+                JNZ     .WAIT           ; ours?
                 LDX     CURT
                 LDW     *T.KDS
                 STW     KEBDY
@@ -1260,7 +1260,7 @@ KECLM           JSX     IOTRY
                 LDX     KELNK
                 UNM
                 JSX     *0              ; and home
-KEWAIT          LDX     CURT            ; taken: sleep a tick and try again
+.WAIT           LDX     CURT            ; taken: sleep a tick and try again
                 LDW     K1
                 STW     *T.DLY
                 LDW     KSLP
@@ -1382,7 +1382,7 @@ DWR1            SUBR
 DXFER           SUBR
                 MSK
                 DIN     1,0
-                JMI     DXNRD           ; not ready?  say so
+                JMI     .NRD            ; not ready?  say so
                 LDW     CURT
                 STW     DWTR
                 LDW     K1
@@ -1398,29 +1398,29 @@ DXFER           SUBR
                 ORI     DXTS
                 DOT     1,2             ; track in bits 0-5, sector in 7-15 (5-9.5.3)
                 LDW     DXOP
-                JNZ     DXWR
+                JNZ     .WR
                 LDW     DXCNT
                 DOT     1,6             ; unit 0, the count, read (5-9.5.4)
-                JMP     DXWT
-DXWR            LDW     DXCNT
+                JMP     .WT
+.WR             LDW     DXCNT
                 DOT     1,4             ; ...write
-DXWT            LDW     DBUSY
-                JNZ     DXBLK           ; over?
-                JMP     DXDN
-DXBLK           LDX     CURT
+.WT             LDW     DBUSY
+                JNZ     .BLK            ; over?
+                JMP     .DN
+.BLK            LDX     CURT
                 LDW     KWAIT
                 STW     *T.STA
                 JSX     SWTCH           ; until DSERV says so
                 MSK
-                JMP     DXWT
-DXDN            LDW     DSTAT
+                JMP     .WT
+.DN             LDW     DSTAT
                 STW     DXRES
                 LDW     KM1
                 STW     DWTR
                 UNM
                 LDW     DXRES
                 EXIT    DXFER
-DXNRD           UNM
+.NRD            UNM
                 EXIT    DXFER
 
 ; What the machine runs when every task is asleep.  A branch to self is a
@@ -1448,28 +1448,28 @@ Q.GET           MSK
                 STX     QGLNK
                 STW     QGD
                 CMW     KCONSQ
-                JNE     QGIN            ; the console's queue?
+                JNE     .IN             ; the console's queue?
                 LDW     CURT
                 CMW     KSHELL
-                JEQ     QGIN            ; the shell reads it by right,
+                JEQ     .IN             ; the shell reads it by right,
                 CAX
                 LDW     *T.CON
-                JNZ     QGIN            ; and so does the task RUN gave it to;
+                JNZ     .IN             ; and so does the task RUN gave it to;
                 LDW     KM1             ; anybody else is told no, at once
                 LDX     QGLNK
                 UNM
                 JSX     *0
-QGIN            LDX     CURT
+.IN             LDX     CURT
                 LDW     QGD
                 STW     *T.KAR
                 LDW     QGLNK
                 STW     *T.KLK
-QGL             LDX     CURT
+.L              LDX     CURT
                 LDW     *T.KAR
                 STW     QGD
                 CAX
                 LDW     *Q.CNT
-                JNZ     QGT             ; anything in it?
+                JNZ     .T              ; anything in it?
                 LDW     CURT            ; no: wait on it
                 STW     *Q.WTR
                 CAX
@@ -1477,8 +1477,8 @@ QGL             LDX     CURT
                 STW     *T.STA
                 JSX     SWTCH           ; gone until Q.PUT wakes this task
                 MSK
-                JMP     QGL             ; awake: look again
-QGT             LDW     *Q.BUF
+                JMP     .L              ; awake: look again
+.T              LDW     *Q.BUF
                 ADD     *Q.HEAD
                 CAX
                 LDW     *0
@@ -1557,14 +1557,14 @@ ALBEG           LDW     ALSIZ           ; an even number of words, always:
                 AND     KFFFE           ; word, which is what lets one that
                 STW     ALSIZ           ; was swapped out be cut out of the
                 LDW     ALMSK           ; free list again exactly where it
-                JNZ     ALBW            ; was (ALLOCAT).  And one that must
+                JNZ     .W              ; was (ALLOCAT).  And one that must
                                         ; lie in a window cannot be bigger
-                JMP     ALBGO           ; than the window
-ALBW            ADD     K1
+                JMP     .GO             ; than the window
+.W              ADD     K1
                 CMW     ALSIZ
-                JGE     ALBGO
+                JGE     .GO
                 JMP     ALFAIL
-ALBGO           LDW     ALHIQ
+.GO             LDW     ALHIQ
                 STW     ALHI
                 JNZ     ALBH
 ALLOW           CLR
@@ -1579,104 +1579,104 @@ ALBH            LDW     KFENCE
 ALGO            CLR
                 STW     ALPRV           ; the free block before F; zero: the head
                 LDW     FREHD
-ALSCN           STW     ALF             ; F, a free block's header
-                JNZ     ALTRY0          ; the end of the list: nothing fits
-                JMP     ALNONE
-ALTRY0          CMW     ALCEI
-                JGE     ALNONE          ; at the ceiling: the list is in
+.SCN            STW     ALF             ; F, a free block's header
+                JNZ     .TRY0           ; the end of the list: nothing fits
+                JMP     .NONE
+.TRY0           CMW     ALCEI
+                JGE     .NONE           ; at the ceiling: the list is in
                                         ; address order, so nothing fits
                 CMW     ALFLO
-                JGE     ALTRY           ; below the floor: not this one
-                JMP     ALNXT
-ALTRY           CAX
+                JGE     .TRY            ; below the floor: not this one
+                JMP     .NXT
+.TRY            CAX
                 LDW     *0
                 STW     ALS             ; S, its payload
                 LDW     ALF
                 ADD     K2
                 STW     ALP             ; P, the candidate payload: F+2
                 LDW     ALMSK
-                JNZ     ALCON           ; any containment asked for?
-                JMP     ALFIT
+                JNZ     .CON            ; any containment asked for?
+                JMP     .FIT
 
 ; Containment.  E is the first word of the window after P's; a payload
 ; that would cross it moves up to E -- or to E+1 when E is F+3, since the
 ; header must sit at F+2 or above to leave the leading fragment room for
 ; its own header (a fragment may hold zero words, but not minus one).
 ; Having moved, it must still lie inside the window it moved into.
-ALCON           LDW     ALP
+.CON            LDW     ALP
                 ORI     ALMSK
                 ADD     K1
                 STW     ALE
                 LDW     ALP
                 ADD     ALSIZ
                 CMW     ALE
-                JLE     ALFIT           ; P+size > E: it would straddle
+                JLE     .FIT            ; P+size > E: it would straddle
                                         ; no: P stands
                 LDW     ALE
                 SUB     ALF
                 CMW     K3
-                JEQ     ALBP1           ; E == F+3?
+                JEQ     .BP1            ; E == F+3?
                 LDW     ALE
                 STW     ALP
-                JMP     ALCK2
-ALBP1           LDW     ALE
+                JMP     .CK2
+.BP1            LDW     ALE
                 ADD     K1
                 STW     ALP
-ALCK2           LDW     ALE             ; W, the window after E's
+.CK2            LDW     ALE             ; W, the window after E's
                 ADD     ALMSK
                 ADD     K1
                 STW     ALW
                 LDW     ALP
                 ADD     ALSIZ
                 CMW     ALW
-                JLE     ALFIT           ; still over the edge?
-                JMP     ALNXT
+                JLE     .FIT            ; still over the edge?
+                JMP     .NXT
 
 ; Does [P, P+size) lie inside the block?  FE is the block's end, F+2+S.
 ; The test is on the room from P to FE against the size, not on where
 ; the block would end: with a size of several thousand words and P in
 ; the upper half of core, P+size passes X'7FFF' and is minus, and this
 ; machine's compares are signed.
-ALFIT           LDW     ALF
+.FIT            LDW     ALF
                 ADD     K2
                 ADD     ALS
                 STW     ALFE
                 SUB     ALP
                 CMW     ALSIZ
-                JGE     ALFITS          ; less room than is wanted?
-                JMP     ALNXT
-ALFITS          LDW     ALP
+                JGE     .FITS           ; less room than is wanted?
+                JMP     .NXT
+.FITS           LDW     ALP
                 ADD     ALSIZ
                 STW     ALEND
-                JMP     ALTAKE
-ALNXT           LDW     ALF             ; on to the next free block
+                JMP     .TAKE
+.NXT            LDW     ALF             ; on to the next free block
                 STW     ALPRV
                 CAX
                 LDW     *1
-                JMP     ALSCN
+                JMP     .SCN
 
 ; Take it.  H is the new header.  A leading fragment keeps F on the list
 ; with a shorter size and becomes the predecessor of whatever follows.  A
 ; tail of three words or more becomes a free block of its own at the end
 ; of the allocation; a shorter one is simply given to the allocation, since
 ; two words of header with nothing behind them serve nobody.
-ALTAKE          LDW     ALP
+.TAKE           LDW     ALP
                 SUB     K2
                 STW     ALH
                 CMW     ALF
-                JNE     ALLEAD          ; a leading fragment?
-                JMP     ALTAIL
-ALLEAD          LDW     ALH
+                JNE     .LEAD           ; a leading fragment?
+                JMP     .TAIL
+.LEAD           LDW     ALH
                 SUB     ALF
                 SUB     K2
                 LDX     ALF
                 STW     *0              ; [F] = H-F-2, its next as it was
                 LDW     ALF
                 STW     ALPRV
-ALTAIL          LDW     ALFE
+.TAIL           LDW     ALFE
                 SUB     ALEND
                 CMW     K3
-                JGE     ALSPLT          ; a tail worth keeping?
+                JGE     .SPLT           ; a tail worth keeping?
                 LDW     ALFE            ; no: the allocation runs to the end
                 SUB     ALH
                 SUB     K2
@@ -1684,8 +1684,8 @@ ALTAIL          LDW     ALFE
                 LDX     ALF
                 LDW     *1
                 STW     ALNX            ; and the list goes on past F
-                JMP     ALLNK
-ALSPLT          LDX     ALEND           ; yes: [END] = FE-END-2, next = F's
+                JMP     .LNK
+.SPLT           LDX     ALEND           ; yes: [END] = FE-END-2, next = F's
                 LDW     ALFE
                 SUB     ALEND
                 SUB     K2
@@ -1696,15 +1696,15 @@ ALSPLT          LDX     ALEND           ; yes: [END] = FE-END-2, next = F's
                 STW     *1
                 LDW     ALEND
                 STW     ALNX
-ALLNK           LDW     ALPRV           ; PRV's successor, or the head, is NX
-                JNZ     ALLNK1
+.LNK            LDW     ALPRV           ; PRV's successor, or the head, is NX
+                JNZ     .LNK1
                 LDW     ALNX
                 STW     FREHD
-                JMP     ALHDR
-ALLNK1          CAX
+                JMP     .HDR
+.LNK1           CAX
                 LDW     ALNX
                 STW     *1
-ALHDR           LDX     ALH             ; the header: size, and the owner
+.HDR            LDX     ALH             ; the header: size, and the owner
                 LDW     ALSIZ
                 STW     *0
                 LDW     CURT
@@ -1715,7 +1715,7 @@ ALHDR           LDX     ALH             ; the header: size, and the owner
                 STW     *T.MW
                 LDW     ALP
                 JMP     ALOUT
-ALNONE          LDW     ALHI
+.NONE           LDW     ALHI
                 JNZ     ALAGN           ; a second try to make, below the fence?
                 LDW     SWSECS
                 JNZ     ALWAIT          ; nothing fits.  Is there a swap file?
@@ -1754,10 +1754,10 @@ ALWAIT          LDX     CURT
                 LDX     KSWAP
                 LDW     *T.STA
                 CMW     KWAIT
-                JNE     ALW1            ; the swapper, out of its wait
+                JNE     .W1             ; the swapper, out of its wait
                 CLR
                 STW     *T.STA
-ALW1            LDX     CURT
+.W1             LDX     CURT
                 LDW     KWAIT
                 STW     *T.STA
                 JSX     SWTCH
@@ -1789,61 +1789,61 @@ ALLOCAT         SUBR
                 CLR
                 STW     ALPRV
                 LDW     FREHD
-ATSC            STW     ALF
-                JNZ     AT1
-                JMP     ATNO
-AT1             CMW     ATH
-                JLE     AT2             ; a free block that starts past H:
+.TSC            STW     ALF
+                JNZ     .T1
+                JMP     .TNO
+.T1             CMW     ATH
+                JLE     .T2             ; a free block that starts past H:
                                         ; the list is in address order, so
-                JMP     ATNO            ; H is in none
-AT2             CAX
+                JMP     .TNO            ; H is in none
+.T2             CAX
                 LDW     *0
                 ADD     ALF
                 ADD     K2
                 STW     ALFE
                 CMW     ATH
-                JLE     ATNX            ; ends at or before H: the next one
+                JLE     .TNX            ; ends at or before H: the next one
                 LDW     ALFE
                 CMW     ATE
-                JGE     ATFIT           ; ends before H+n: not all free
-                JMP     ATNO
-ATNX            LDW     ALF
+                JGE     .TFIT           ; ends before H+n: not all free
+                JMP     .TNO
+.TNX            LDW     ALF
                 STW     ALPRV
                 CAX
                 LDW     *1
-                JMP     ATSC
-ATFIT           LDX     ALF
+                JMP     .TSC
+.TFIT           LDX     ALF
                 LDW     *1
                 STW     ALNX
                 LDW     ALFE            ; what is left above it stays free
                 SUB     ATE
-                JNZ     ATTL
-                JMP     ATLD
-ATTL            SUB     K2
+                JNZ     .TTL
+                JMP     .TLD
+.TTL            SUB     K2
                 LDX     ATE
                 STW     *0
                 LDW     ALNX
                 STW     *1
                 LDW     ATE
                 STW     ALNX
-ATLD            LDW     ATH             ; and so does what is left below
+.TLD            LDW     ATH             ; and so does what is left below
                 SUB     ALF
-                JNZ     ATLF
+                JNZ     .TLF
                 LDW     ALPRV           ; nothing below: F leaves the list
-                JNZ     ATU1
+                JNZ     .TU1
                 LDW     ALNX
                 STW     FREHD
-                JMP     ATHDR
-ATU1            CAX
+                JMP     .THDR
+.TU1            CAX
                 LDW     ALNX
                 STW     *1
-                JMP     ATHDR
-ATLF            SUB     K2
+                JMP     .THDR
+.TLF            SUB     K2
                 LDX     ALF
                 STW     *0
                 LDW     ALNX
                 STW     *1
-ATHDR           LDX     ATH
+.THDR           LDX     ATH
                 LDW     ATN
                 SUB     K2
                 STW     *0
@@ -1851,7 +1851,7 @@ ATHDR           LDX     ATH
                 STW     *1
                 LDW     K1
                 EXIT    ALLOCAT
-ATNO            CLR
+.TNO            CLR
                 EXIT    ALLOCAT
 
 ; Give a block back.  FREEI does the work with the mask held by its
@@ -1876,36 +1876,36 @@ FREEI           SUBR
                 CLR
                 STW     FRPRV           ; the free block below it; zero: none
                 LDW     FREHD
-FRSCN           STW     FRNX            ; NX, the first free block above it, or zero
-                JNZ     FRSC1
-                JMP     FRLNK
-FRSC1           CMW     FRH
-                JLE     FRSC2           ; NX > H: found the place
-                JMP     FRLNK
-FRSC2           STW     FRPRV
+.SCN            STW     FRNX            ; NX, the first free block above it, or zero
+                JNZ     .SC1
+                JMP     .LNK
+.SC1            CMW     FRH
+                JLE     .SC2            ; NX > H: found the place
+                JMP     .LNK
+.SC2            STW     FRPRV
                 CAX
                 LDW     *1
-                JMP     FRSCN
-FRLNK           LDX     FRH             ; PRV -> H -> NX
+                JMP     .SCN
+.LNK            LDX     FRH             ; PRV -> H -> NX
                 LDW     FRNX
                 STW     *1
                 LDW     FRPRV
-                JNZ     FRLK1
+                JNZ     .LK1
                 LDW     FRH
                 STW     FREHD
-                JMP     FRJN
-FRLK1           CAX
+                JMP     .JN
+.LK1            CAX
                 LDW     FRH
                 STW     *1
-FRJN            LDW     FRNX            ; does H run up to NX?
-                JNZ     FRJN1
-                JMP     FRJP
-FRJN1           LDX     FRH
+.JN             LDW     FRNX            ; does H run up to NX?
+                JNZ     .JN1
+                JMP     .JP
+.JN1            LDX     FRH
                 LDW     *0
                 ADD     FRH
                 ADD     K2
                 CMW     FRNX
-                JNE     FRJP
+                JNE     .JP
                 LDX     FRNX            ; [H] += [NX]+2, and NX's next is H's
                 LDW     *0
                 ADD     K2
@@ -1916,15 +1916,15 @@ FRJN1           LDX     FRH
                 LDW     *1
                 LDX     FRH
                 STW     *1
-FRJP            LDW     FRPRV           ; does PRV run up to H?
-                JNZ     FRJP1
-                JMP     FRDN
-FRJP1           CAX
+.JP             LDW     FRPRV           ; does PRV run up to H?
+                JNZ     .JP1
+                JMP     .DN
+.JP1            CAX
                 LDW     *0
                 ADD     FRPRV
                 ADD     K2
                 CMW     FRH
-                JNE     FRDN
+                JNE     .DN
                 LDX     FRH             ; [PRV] += [H]+2, and H's next is PRV's
                 LDW     *0
                 ADD     K2
@@ -1935,7 +1935,7 @@ FRJP1           CAX
                 LDW     *1
                 LDX     FRPRV
                 STW     *1
-FRDN            EXIT    FREEI
+.DN             EXIT    FREEI
 
 ; The allocator's cells and constants.
 FREHD           WORD    0               ; the first free block
@@ -2025,26 +2025,26 @@ SPAWN           SUBR
 TEXIT           MSK
                 LDX     CURT
                 LDW     *T.MBX
-                JNZ     TXWT            ; a character still printing?
-                JMP     TXGO
-TXWT            LDW     KWAIT           ; wait for it, and start over
+                JNZ     .WT             ; a character still printing?
+                JMP     .GO
+.WT             LDW     KWAIT           ; wait for it, and start over
                 STW     *T.STA
                 JSX     SWTCH
                 JMP     TEXIT
-TXGO            LDW     CURT
+.GO             LDW     CURT
                 STW     XDEAD
                 LDW     *T.CON
-                JNZ     TXCON           ; the console's?
-                JMP     TXRING
-TXCON           CLR
+                JNZ     .CON            ; the console's?
+                JMP     .RING
+.CON            CLR
                 STW     CONBSY
                 LDX     KSHELL
                 LDW     *T.STA
                 CMW     KWAIT
-                JNE     TXRING          ; waiting on the hand-back?
+                JNE     .RING           ; waiting on the hand-back?
                 CLR
                 STW     *T.STA
-TXRING          JSX     REAP
+.RING           JSX     REAP
                 JMP     SWRES           ; on to whoever can run
 
 ; The task XDEAD names is over, and everything it had goes: the node off
@@ -2057,11 +2057,11 @@ TXRING          JSX     REAP
 ; one the shell is ending (KILLT) alike.
 REAP            SUBR
                 LDW     XDEAD           ; the predecessor: whose link names it
-RPPL            STW     XPRED
+.PL             STW     XPRED
                 CAX
                 LDW     *T.NXT
                 CMW     XDEAD
-                JNE     RPPL
+                JNE     .PL
                 LDX     XDEAD           ; unlink
                 LDW     *T.NXT
                 LDX     XPRED
@@ -2071,42 +2071,42 @@ RPPL            STW     XPRED
                 STW     KNRING
                 LDW     LASTS
                 CMW     XDEAD
-                JNE     RPCUR
+                JNE     .CUR
                 LDW     XPRED
                 STW     LASTS
-RPCUR           LDW     CURT
+.CUR            LDW     CURT
                 CMW     XDEAD
-                JNE     RPQ
+                JNE     .Q
                 LDW     XPRED
                 STW     CURT
-RPQ             LDW     QCONS+Q.WTR
+.Q              LDW     QCONS+Q.WTR
                 CMW     XDEAD
-                JNE     RPCH
+                JNE     .CH
                 LDW     KM1
                 STW     QCONS+Q.WTR
-RPCH            LDW     XDEAD           ; its channels
+.CH             LDW     XDEAD           ; its channels
                 CALL    FCREL
                 LDW     XDEAD           ; and its place in the swap file, if
                 CALL    SWXFRE          ; its blocks are there and not here
                 LDW     KPOOLB          ; the sweep, block by block
-RPSWP           STW     XB
+.SWP            STW     XB
                 CMW     KPOOLE
-                JGE     RPNOD           ; the end of the pool?
+                JGE     .NOD            ; the end of the pool?
                 CAX
                 LDW     *1
-                JPL     RPSNX           ; allocated?
+                JPL     .SNX            ; allocated?
                 AND     K7FFF
                 CMW     XDEAD
-                JNE     RPSNX           ; its own?
+                JNE     .SNX            ; its own?
                 LDW     XB
                 ADD     K2
                 JSX     FREEI
-RPSNX           LDX     XB
+.SNX            LDX     XB
                 LDW     *0
                 ADD     XB
                 ADD     K2
-                JMP     RPSWP
-RPNOD           LDX     XDEAD           ; the node last, to the arena
+                JMP     .SWP
+.NOD            LDX     XDEAD           ; the node last, to the arena
                 LDW     KSFREE
                 STW     *T.STA
                 LDW     XDEAD
@@ -2121,11 +2121,11 @@ KILLT           SUBR
                 STW     XDEAD
                 CAX
                 LDW     *T.CON
-                JNZ     KLCON           ; the console's?  it comes back
-                JMP     KLREAP
-KLCON           CLR
+                JNZ     .CON            ; the console's?  it comes back
+                JMP     .REAP
+.CON            CLR
                 STW     CONBSY
-KLREAP          JSX     REAP
+.REAP           JSX     REAP
                 EXIT    KILLT
 
 ; A node from the arena, or zero when every one is in use; and a node
@@ -2133,9 +2133,9 @@ KLREAP          JSX     REAP
 ; good, and comes out with nothing else of its last task left in it.
 NALLOC          SUBR
                 LDW     NFREH
-                JNZ     NAL1
+                JNZ     .L1
                 EXIT    NALLOC
-NAL1            CAX
+.L1             CAX
                 LDW     *T.NXT
                 STW     NFREH
                 CLR
@@ -2195,10 +2195,10 @@ SHLOOP          CLR                     ; a kill aimed at nobody is forgotten
                 CLR
                 LDB     *0
                 CMW     SHKAT
-                JEQ     SHAT            ; @NAME: commands from a file
+                JEQ     .AT             ; @NAME: commands from a file
                 JSX     SHTOK           ; the command word: its second half,
                 LDW     STOK1           ; since a short word fills only that
-                JNZ     SHDSP           ; an empty line is not an error
+                JNZ     .DSP            ; an empty line is not an error
                 JMP     SHLOOP
 
 ; Walk the command table: two words of name, then the handler to jump to,
@@ -2206,30 +2206,30 @@ SHLOOP          CLR                     ; a kill aimed at nobody is forgotten
 ; Only the first four characters are matched, which is how the period
 ; interpreters did it -- START and STAT differ inside four, and a longer
 ; word that starts the same is simply taken as the command.
-SHDSP           LDW     SHKTAB
+.DSP            LDW     SHKTAB
                 STW     SHTP
-SHDL            LDX     SHTP
+.DL             LDX     SHTP
                 LDW     *2
-                JNZ     SHDCM           ; the end of the table?
-                JMP     SHDNF
-SHDCM           LDW     *0
+                JNZ     .DCM            ; the end of the table?
+                JMP     .DNF
+.DCM            LDW     *0
                 CMW     STOK0
-                JNE     SHDNX
+                JNE     .DNX
                 LDX     SHTP
                 LDW     *1
                 CMW     STOK1
-                JNE     SHDNX
+                JNE     .DNX
                 LDX     SHTP
                 LDW     *2              ; matched: the handler's address
                 CAX
                 JMP     *0
-SHDNX           LDW     SHTP
+.DNX            LDW     SHTP
                 ADD     SHK3
                 STW     SHTP
-                JMP     SHDL
+                JMP     .DL
 ; Not a command: then it is a program -- the word as a name, type RX,
 ; run as RUN would run it -- and WHAT only if the disc has no such file.
-SHDNF           LDW     SHKLBB
+.DNF            LDW     SHKLBB
                 STW     SHCUR
                 LDW     SHK1
                 STW     LDCON
@@ -2240,16 +2240,16 @@ SHDNF           LDW     SHKLBB
                 JMP     SHLD1
 
 ; @NAME: the shell's lines come from NAME.CM until it runs out.
-SHAT            LDW     SHCUR
+.AT             LDW     SHCUR
                 ADD     SHK1
                 STW     SHCUR
                 LDW     SHKCM
                 STW     SHDTY
                 JSX     SHNAME
                 JSX     SHCMOP
-                JMI     SHATNO          ; no such file, or no channel
+                JMI     .ATNO           ; no such file, or no channel
                 JMP     SHLOOP
-SHATNO          LDW     SHMNOF
+.ATNO           LDW     SHMNOF
                 JSX     SHMSG
                 JMP     SHLOOP
 
@@ -2261,16 +2261,16 @@ SHCMOP          SUBR
                 STW     SHFN+4          ; to read
                 LDW     SHKFN
                 CALL    K.OPEN
-                JMI     SHCMOX
+                JMI     .X
                 STW     SHCMCH
-SHCMOX          EXIT    SHCMOP
+.X              EXIT    SHCMOP
 
 ; Close the command file, if one is open.
 SHCMCL          SUBR
                 LDW     SHCMCH
-                JNZ     SHCMC1
+                JNZ     .C1
                 EXIT    SHCMCL
-SHCMC1          CALL    K.CLOSE
+.C1             CALL    K.CLOSE
                 CLR
                 STW     SHCMCH
                 EXIT    SHCMCL
@@ -2286,25 +2286,25 @@ SHHELP          LDW     SHMHL1
                 LDW     SHMHL3
                 JSX     SHMSG
                 JSX     SHDLD
-                JPL     SHHP0
+                JPL     .P0
                 JMP     SHLOOP
-SHHP0           CLR
+.P0             CLR
                 STW     SHTI            ; names on the line so far
                 LDW     SHKFDE
                 STW     LDCP
-SHHPL           LDW     LDCP
+.PL             LDW     LDCP
                 CMW     SHKFDX
-                JGE     SHHPX           ; inside the table?
+                JGE     .PX             ; inside the table?
                 CAX
                 LDW     *DE.FLG
                 AND     SHK0FF
-                JNZ     SHHP1           ; an unused entry ends it
-                JMP     SHHPX
-SHHP1           CMW     SHKDKF
-                JNE     SHHPN           ; a file...
+                JNZ     .P1             ; an unused entry ends it
+                JMP     .PX
+.P1             CMW     SHKDKF
+                JNE     .PN             ; a file...
                 LDW     *DE.TYP
                 CMW     SHKRX
-                JNE     SHHPN           ; ...and a program?
+                JNE     .PN             ; ...and a program?
                 LDW     SHKSP
                 JSX     SHPUTC
                 JSX     SHPNAM
@@ -2312,19 +2312,19 @@ SHHP1           CMW     SHKDKF
                 ADD     SHK1
                 STW     SHTI
                 CMW     SHK8
-                JGE     SHHPW           ; room on the line for another?
-                JMP     SHHPN
-SHHPW           JSX     SHNL
+                JGE     .PW             ; room on the line for another?
+                JMP     .PN
+.PW             JSX     SHNL
                 CLR
                 STW     SHTI
-SHHPN           LDW     LDCP
+.PN             LDW     LDCP
                 ADD     SHK8
                 STW     LDCP
-                JMP     SHHPL
-SHHPX           LDW     SHTI
-                JNZ     SHHPE           ; a line part made?
+                JMP     .PL
+.PX             LDW     SHTI
+                JNZ     .PE             ; a line part made?
                 JMP     SHLOOP
-SHHPE           JSX     SHNL
+.PE             JSX     SHNL
                 JMP     SHLOOP
 
 ; Seconds since the executive came up. SECS is the scheduler's, counted
@@ -2352,9 +2352,9 @@ SHPUP           SUBR
 SHSTAT          JSX     SHPUP
                 SMB     SWSECS
                 LDW     SWSECS
-                JNZ     SHSTSW          ; a swap file: then how busy it has been
-                JMP     SHST0
-SHSTSW          LDW     SHMSWP
+                JNZ     .TSW            ; a swap file: then how busy it has been
+                JMP     .T0
+.TSW            LDW     SHMSWP
                 JSX     SHMSG
                 SMB     SWOUTS
                 LDW     SWOUTS
@@ -2366,34 +2366,34 @@ SHSTSW          LDW     SHMSWP
                 JSX     SHDEC
                 LDW     SHMSWI
                 JSX     SHMSG
-SHST0           LDW     SHKSHN
+.T0             LDW     SHKSHN
                 STW     SHTO
                 LDW     SHK2
                 STW     SHTI
-SHST1           JSX     SHSTLN
+.T1             JSX     SHSTLN
                 LDW     SHTO
                 ADD     SHKTLN
                 STW     SHTO
                 LDW     SHTI
                 SUB     SHK1
                 STW     SHTI
-                JNZ     SHST1
+                JNZ     .T1
                 LDW     SHKNAB
                 STW     SHTO
                 LDW     SHKNAN
                 STW     SHTI
-SHST2           LDX     SHTO
+.T2             LDX     SHTO
                 LDW     *T.STA
                 CMW     SHKFRE
-                JEQ     SHST3           ; in use?
+                JEQ     .T3             ; in use?
                 JSX     SHSTLN
-SHST3           LDW     SHTO
+.T3             LDW     SHTO
                 ADD     SHKTLN
                 STW     SHTO
                 LDW     SHTI
                 SUB     SHK1
                 STW     SHTI
-                JNZ     SHST2
+                JNZ     .T2
                 LDW     SHKIDL
                 STW     SHTO
                 JSX     SHSTLN
@@ -2426,17 +2426,17 @@ SHSTLN          SUBR
                 JSX     SHPW2
                 LDW     SHSS
                 CMW     SHKSLP          ; asleep? then say for how long
-                JNE     SHSTN
+                JNE     .N
                 LDX     SHTO
                 LDW     *T.DLY
                 JSX     SHDEC
-SHSTN           LDX     SHTO
+.N              LDX     SHTO
                 LDW     *T.SWP
-                JNZ     SHSTO
-                JMP     SHSTE
-SHSTO           LDW     SHMOUT
+                JNZ     .O
+                JMP     .E
+.O              LDW     SHMOUT
                 JSX     SHMSG
-SHSTE           JSX     SHNL
+.E              JSX     SHNL
                 EXIT    SHSTLN
 
 ; STOP n and START n differ only in the state they store, into the task
@@ -2451,26 +2451,26 @@ SHSTOP          LDW     SHKOFF
 SHSTRT          CLR
                 STW     SHNST
 SHSSET          JSX     SHJOB
-                JNZ     SHSJ1
+                JNZ     .J1
                 JMP     SHLOOP
-SHSJ1           CAX
+.J1             CAX
                 LDW     *T.CON
-                JNZ     SHSOBD
+                JNZ     .OBD
                 JSX     SHIOC
                 LDX     SHKN
                 LDW     SHNST
                 STW     *T.STA
                 JSX     SHIOR
                 JMP     SHLOOP
-SHSOBD          LDW     SHMNOT
+.OBD            LDW     SHMNOT
                 JSX     SHMSG
                 JMP     SHLOOP
 
 ; KILL n: the task with that job number is over, whatever it was doing.
 SHKILL          JSX     SHJOB
-                JNZ     SHKL1
+                JNZ     .L1
                 JMP     SHLOOP
-SHKL1           JSX     SHKDO
+.L1             JSX     SHKDO
                 JMP     SHLOOP
 
 ; The job number at SHCUR as a task the shell loaded: its node, left in
@@ -2479,14 +2479,14 @@ SHJOB           SUBR
                 JSX     SHSKB
                 CLR
                 STW     SHNV
-SHJBL           LDX     SHCUR
+.L              LDX     SHCUR
                 CLR
                 LDB     *0
                 SUB     SHKZER
                 STW     SHW2
-                JMI     SHJBD           ; below '0'
+                JMI     .D              ; below '0'
                 CMW     SHK10
-                JGE     SHJBD           ; above '9'
+                JGE     .D              ; above '9'
                 LDW     SHNV            ; times ten, and the digit
                 SLL     3
                 ADD     SHNV
@@ -2496,27 +2496,27 @@ SHJBL           LDX     SHCUR
                 LDW     SHCUR
                 ADD     SHK1
                 STW     SHCUR
-                JMP     SHJBL
-SHJBD           LDW     SHKNAB          ; the arena node with that number
+                JMP     .L
+.D              LDW     SHKNAB          ; the arena node with that number
                 STW     SHKN
                 LDW     SHKNAN
                 STW     SHTI
-SHJBF           LDX     SHKN
+.F              LDX     SHKN
                 LDW     *T.ID
                 CMW     SHNV
-                JNE     SHJBN
+                JNE     .N
                 LDW     *T.STA
                 CMW     SHKFRE
-                JEQ     SHJBN           ; and in use
+                JEQ     .N              ; and in use
                 LDW     SHKN
                 EXIT    SHJOB
-SHJBN           LDW     SHKN
+.N              LDW     SHKN
                 ADD     SHKTLN
                 STW     SHKN
                 LDW     SHTI
                 SUB     SHK1
                 STW     SHTI
-                JNZ     SHJBF
+                JNZ     .F
                 LDW     SHMNOT
                 JSX     SHMSG
                 CLR
@@ -2529,41 +2529,41 @@ SHJBN           LDW     SHKN
 ; a node that is gone.
 SHKDO           SUBR
                 JSX     SHIOC
-SHKDL           MSK
+.L              MSK
                 LDX     SHKN
                 LDW     SHKOFF
                 STW     *T.STA
                 SMB     OWNER
                 LDW     OWNER
                 CMW     SHKN
-                JEQ     SHKDW
+                JEQ     .W
                 LDW     SHKN
                 CALL    KILLT
                 UNM
                 JSX     SHIOR
                 EXIT    SHKDO
-SHKDW           LDW     SHK1
+.W              LDW     SHK1
                 SMB     SH.DLY
                 STW     SH.DLY
                 LDW     SHKSLP
                 SMB     SH.STA
                 STW     SH.STA
                 CALL    SWTCH
-                JMP     SHKDL
+                JMP     .L
 
 ; Print the rest of the line back.
 SHECHO          JSX     SHSKB
-SHECL           LDX     SHCUR
+.L              LDX     SHCUR
                 CLR
                 LDB     *0
-                JNZ     SHECN           ; the terminator?
-                JMP     SHECD
-SHECN           JSX     SHPUTC
+                JNZ     .N              ; the terminator?
+                JMP     .D
+.N              JSX     SHPUTC
                 LDW     SHCUR
                 ADD     SHK1
                 STW     SHCUR
-                JMP     SHECL
-SHECD           JSX     SHNL
+                JMP     .L
+.D              JSX     SHNL
                 JMP     SHLOOP
 
 ; Wait for the console to come back: masked look, SWAI, SWTCH, look
@@ -2573,22 +2573,22 @@ SHECD           JSX     SHNL
 SHBWT           MSK
                 SMB     CONBSY
                 LDW     CONBSY
-                JNZ     SHBWB           ; handed back yet?
-                JMP     SHBWD
-SHBWB           SMB     KILLRQ
+                JNZ     .B              ; handed back yet?
+                JMP     .D
+.B              SMB     KILLRQ
                 LDW     KILLRQ
-                JNZ     SHBWK           ; a second Ctrl-C nobody took?
+                JNZ     .K              ; a second Ctrl-C nobody took?
                 LDW     SHKWAI
                 SMB     SH.STA
                 STW     SH.STA
                 CALL    SWTCH
                 JMP     SHBWT
-SHBWD           UNM
+.D              UNM
                 JMP     SHLOOP
 
 ; Two Ctrl-Cs and the program took neither: it is not listening, and the
 ; task that has the console is ended from here.
-SHBWK           CLR
+.K              CLR
                 SMB     KILLRQ
                 STW     KILLRQ
                 UNM
@@ -2596,21 +2596,21 @@ SHBWK           CLR
                 STW     SHKN
                 LDW     SHKNAN
                 STW     SHTI
-SHBWF           LDX     SHKN
+.F              LDX     SHKN
                 LDW     *T.STA
                 CMW     SHKFRE
-                JEQ     SHBWN
+                JEQ     .N
                 LDW     *T.CON
-                JNZ     SHBWG
-SHBWN           LDW     SHKN
+                JNZ     .G
+.N              LDW     SHKN
                 ADD     SHKTLN
                 STW     SHKN
                 LDW     SHTI
                 SUB     SHK1
                 STW     SHTI
-                JNZ     SHBWF
+                JNZ     .F
                 JMP     SHBWT           ; it went of its own accord
-SHBWG           JSX     SHKDO
+.G              JSX     SHKDO
                 LDW     SHMKIL
                 JSX     SHMSG
                 JMP     SHLOOP
@@ -2636,14 +2636,14 @@ SHLD1           JSX     SHIOC           ; the disc, for the whole load
                 STW     SHW2
                 JSX     SHIOR
                 LDW     SHW2
-                JNZ     SHLD2           ; a node, or an error already named?
+                JNZ     .D2             ; a node, or an error already named?
                 JMP     SHLOOP
-SHLD2           LDW     LDCON
-                JNZ     SHLDRN
+.D2             LDW     LDCON
+                JNZ     .DRN
                 LDW     LDNODE
                 CALL    SPAWN
                 JMP     SHLOOP
-SHLDRN          MSK
+.DRN            MSK
                 CLR
                 SMB     BRKREQ
                 STW     BRKREQ
@@ -2676,9 +2676,9 @@ SHLDRN          MSK
 ; RELOADB's does.  The caller has claimed the disc.
 LDMOD           SUBR
                 LDW     SHFN            ; a name at all?
-                JNZ     LDM1
+                JNZ     .M1
                 JMP     LDNOF
-LDM1            CLR
+.M1             CLR
                 STW     LDBLK
                 STW     LDNODE
                 STW     LDBASE
@@ -2686,9 +2686,9 @@ LDM1            CLR
                 STW     LDLIM
                 LDW     SHKFN
                 CALL    FSFND
-                JNZ     LDM2            ; no such file?
+                JNZ     .M2             ; no such file?
                 JMP     LDNOF
-LDM2            JMI     LDEDE           ; an error is minus
+.M2             JMI     LDEDE           ; an error is minus
                 CAX
                 LDW     *DE.SEC         ; where it starts...
                 STW     LDSEC
@@ -2700,9 +2700,9 @@ LDM2            JMI     LDEDE           ; an error is minus
 LDFND           MSK                     ; a node from the arena
                 CALL    NALLOC
                 UNM
-                JNZ     LDF1
+                JNZ     .F1
                 JMP     LDEMX
-LDF1            STW     LDNODE
+.F1             STW     LDNODE
                 LDW     SHKDBL          ; on the checksum byte: the first
                 STW     LDBP            ; GETBYTE reads the first record
 
@@ -2711,52 +2711,52 @@ LDF1            STW     LDNODE
 LDPROC          JSX     LDGETB
                 STW     LDCODE
                 CMW     SHK80
-                JGE     LDRPT           ; below X'80': a control code
-                JMP     LDCTL
-LDRPT           SRL     4               ; the class: 8n..Cn
+                JGE     .RPT            ; below X'80': a control code
+                JMP     .CTL
+.RPT            SRL     4               ; the class: 8n..Cn
                 SUB     SHK8
                 CMW     SHK4
-                JLE     LDR1
+                JLE     .R1
                 JMP     LDELC
-LDR1            STW     LDCLS
+.R1             STW     LDCLS
                 LDW     LDCODE
                 AND     SHK0F
                 STW     LDREP           ; n: n+1 words follow
-LDRGO           JSX     LDGETW
+.RGO            JSX     LDGETW
                 STW     LDW1
                 LDW     LDCLS
-                JNZ     LDRC1
+                JNZ     .RC1
                 LDW     LDW1            ; RELW11
                 JSX     LDRL11
-                JMP     LDRST
-LDRC1           CMW     SHK1
-                JEQ     LDRW15
+                JMP     .RST
+.RC1            CMW     SHK1
+                JEQ     .RW15
                 CMW     SHK2
-                JEQ     LDRB16
+                JEQ     .RB16
                 CMW     SHK3
-                JEQ     LDRB11
+                JEQ     .RB11
                 LDW     LDW1            ; ABSO
-                JMP     LDRST
-LDRW15          LDW     LDW1
+                JMP     .RST
+.RW15           LDW     LDW1
                 ADD     LDBASE
-                JMP     LDRST
-LDRB16          LDW     LDW1            ; a byte address: the base twice
+                JMP     .RST
+.RB16           LDW     LDW1            ; a byte address: the base twice
                 ADD     LDBASE
                 ADD     LDBASE
-                JMP     LDRST
-LDRB11          LDW     LDW1            ; RELO11 twice, for the same reason
+                JMP     .RST
+.RB11           LDW     LDW1            ; RELO11 twice, for the same reason
                 JSX     LDRL11
                 JSX     LDRL11
-LDRST           JSX     LDSTOR
+.RST            JSX     LDSTOR
                 LDW     LDREP
-                JNZ     LDRMO           ; the last of the run?
+                JNZ     .RMO            ; the last of the run?
                 JMP     LDPROC
-LDRMO           SUB     SHK1
+.RMO            SUB     SHK1
                 STW     LDREP
-                JMP     LDRGO
+                JMP     .RGO
 
 ; The control codes, through a table of where each goes.
-LDCTL           LDW     LDCODE
+.CTL            LDW     LDCODE
                 CMW     SHK0C
                 JGE     LDELC           ; past the table?
                 ADD     SHKCTB
@@ -2780,25 +2780,25 @@ LDSMB           JSX     LDGETW          ; SMB: the instruction, from the
                 JMP     LDPROC
 LDILOC          JSX     LDGETW          ; ILOC: that many zeros
                 STW     LDCNT
-LDIL1           LDW     LDCNT
-                JNZ     LDIL2
+.L1             LDW     LDCNT
+                JNZ     .L2
                 JMP     LDPROC
-LDIL2           SUB     SHK1
+.L2             SUB     SHK1
                 STW     LDCNT
                 CLR
                 JSX     LDSTOR
-                JMP     LDIL1
+                JMP     .L1
 LDSIZW          LDW     SHKALW          ; SIZE: the block, from the allocator
                 JMP     LDSIZ           ; entry the code names -- or the one
 LDSIZB          LDW     SHKALB          ; after it in the table, its twin
 LDSIZ           STW     LDALE           ; for a module that may load high
                 LDW     LDHIGH
-                JNZ     LDSIZH
-                JMP     LDSIZG
-LDSIZH          LDW     LDALE
+                JNZ     .SIZH
+                JMP     .SIZG
+.SIZH           LDW     LDALE
                 ADD     SHK1
                 STW     LDALE
-LDSIZG          LDX     LDALE
+.SIZG           LDX     LDALE
                 LDW     *0
                 STW     LDALE
                 LDW     LDBASE
@@ -2807,9 +2807,9 @@ LDSIZG          LDX     LDALE
                 STW     LDSIZE
                 LDX     LDALE
                 JSX     *0
-                JNZ     LDS1
+                JNZ     .S1
                 JMP     LDEMX
-LDS1            STW     LDBLK
+.S1             STW     LDBLK
                 STW     LDBASE
                 STW     LDPTR
                 ADD     LDSIZE
@@ -2819,12 +2819,12 @@ LDEND           JSX     LDGETW          ; END: the entry, relocated
                 ADD     LDBASE
                 STW     LDEXEC
                 LDW     LDBLK
-                JNZ     LDDONE          ; without a SIZE first?
+                JNZ     .DONE           ; without a SIZE first?
                 JMP     LDELC
 
 ; Loaded: fill the node, and tag the block as the new task's own, so
 ; that its exit finds it.
-LDDONE          LDX     LDNODE
+.DONE           LDX     LDNODE
                 LDW     LDEXEC
                 STW     *T.PCR
                 LDW     SHFN            ; the name's first two characters
@@ -2846,25 +2846,25 @@ LDDONE          LDX     LDNODE
                 JSX     SHSKB
                 LDW     SHCUR
                 STW     LDTP
-LDTL            LDX     LDTP
+.TL             LDX     LDTP
                 CLR
                 LDB     *0
-                JNZ     LDTN
-                JMP     LDTE
-LDTN            LDW     LDTP
+                JNZ     .TN
+                JMP     .TE
+.TN             LDW     LDTP
                 ADD     SHK1
                 STW     LDTP
-                JMP     LDTL
-LDTE            LDW     LDTP
+                JMP     .TL
+.TE             LDW     LDTP
                 SUB     SHCUR
-                JNZ     LDTA            ; anything?
-                JMP     LDTX
-LDTA            ADD     SHK2            ; its bytes and the zero, in words
+                JNZ     .TA             ; anything?
+                JMP     .TX
+.TA             ADD     SHK2            ; its bytes and the zero, in words
                 SRL     1
                 CALL    ALLOC
-                JNZ     LDTB
+                JNZ     .TB
                 JMP     LDEMX
-LDTB            STW     LDARG
+.TB             STW     LDARG
                 SUB     SHK1
                 CAX
                 LDW     LDTAG
@@ -2872,7 +2872,7 @@ LDTB            STW     LDARG
                 LDW     LDARG
                 SLL     1
                 STW     LDTP
-LDTC            LDX     SHCUR
+.TC             LDX     SHCUR
                 CLR
                 LDB     *0
                 STW     LDW1
@@ -2885,18 +2885,18 @@ LDTC            LDX     SHCUR
                 ADD     SHK1
                 STW     LDTP
                 LDW     LDW1
-                JNZ     LDTC            ; the zero went across too
+                JNZ     .TC             ; the zero went across too
                 LDX     LDNODE
                 LDW     LDARG
                 STW     *T.ARG
-LDTX            LDW     LDNODE
+.TX             LDW     LDNODE
                 EXIT    LDMOD
 
 LDNOF           LDW     SHIMPL          ; a word that was neither a command
-                JNZ     LDNOFW          ; nor a program
+                JNZ     .W              ; nor a program
                 LDW     SHMNOF
                 JMP     LDERR
-LDNOFW          LDW     SHMWHT
+.W              LDW     SHMWHT
                 JMP     LDERR
 LDEDE           LDW     SHMEDE
                 JMP     LDERR
@@ -2907,16 +2907,16 @@ LDELC           LDW     SHMELC
 LDEMX           LDW     SHMEMX
 LDERR           JSX     SHMSG           ; name it, and give back what was taken
                 LDW     LDBLK
-                JNZ     LDER1
-                JMP     LDER2
-LDER1           CALL    FREE
-LDER2           LDW     LDNODE
-                JNZ     LDER3
-                JMP     LDER4
-LDER3           MSK
+                JNZ     .R1
+                JMP     .R2
+.R1             CALL    FREE
+.R2             LDW     LDNODE
+                JNZ     .R3
+                JMP     .R4
+.R3             MSK
                 CALL    NFREE
                 UNM
-LDER4           CLR
+.R4             CLR
                 EXIT    LDMOD
 
 ; RELO11: the base added into the M field, the opcode and index bit kept.
@@ -2934,9 +2934,9 @@ LDRL11          SUBR
 LDSTOR          SUBR
                 STW     LDW3
                 LDW     LDBASE
-                JNZ     LDST1           ; text before the SIZE?
+                JNZ     .T1             ; text before the SIZE?
                 JMP     LDELC
-LDST1           LDW     LDPTR
+.T1             LDW     LDPTR
                 CMW     LDLIM
                 JGE     LDEMX           ; room?
                 CAX
@@ -2977,9 +2977,9 @@ LDGETB          SUBR
 ; before it.  Leaves the pointer on the first byte of text.
 LDGCRD          SUBR
                 LDW     LDNSEC
-                JNZ     LDGC1           ; the file ran out first
+                JNZ     .GC1            ; the file ran out first
                 JMP     LDELC
-LDGC1           SUB     SHK1
+.GC1            SUB     SHK1
                 STW     LDNSEC
                 LDW     SHKLDB
                 SMB     DXBUF
@@ -2998,9 +2998,9 @@ LDGC1           SUB     SHK1
                 LDW     SHKDBB
                 ADD     SHK1
                 STW     LDBP
-LDCKL           LDW     LDBP
+.CKL            LDW     LDBP
                 CMW     SHKDBL
-                JGE     LDCKT
+                JGE     .CKT
                 CAX
                 CLR
                 LDB     *0
@@ -3009,8 +3009,8 @@ LDCKL           LDW     LDBP
                 LDW     LDBP
                 ADD     SHK1
                 STW     LDBP
-                JMP     LDCKL
-LDCKT           LDW     LDSUM
+                JMP     .CKL
+.CKT            LDW     LDSUM
                 SRL     8
                 ADD     LDSUM
                 AND     SHK0FF
@@ -3031,19 +3031,19 @@ LDCKT           LDW     LDSUM
 ; loader and the directory's readers, which read the disc from the
 ; shell's task.
 SHIOC           SUBR
-SHIOCL          MSK
+.L              MSK
                 CALL    IOTRY
-                JNZ     SHIOCW          ; ours?
+                JNZ     .W              ; ours?
                 UNM
                 EXIT    SHIOC
-SHIOCW          LDW     SHK1
+.W              LDW     SHK1
                 SMB     SH.DLY
                 STW     SH.DLY
                 LDW     SHKSLP
                 SMB     SH.STA
                 STW     SH.STA
                 CALL    SWTCH
-                JMP     SHIOCL
+                JMP     .L
 SHIOR           SUBR
                 LDW     SHKM1
                 SMB     IOLOCK
@@ -3057,26 +3057,26 @@ SHIOR           SUBR
 ; not hold every other task off the disc -- and a file made or deleted
 ; meanwhile may show in it twice or not at all.
 SHDIR           JSX     SHDLD
-                JPL     SHDR0           ; an error is minus
+                JPL     .R0             ; an error is minus
                 CMW     SHKNDR
-                JNE     SHDRE
+                JNE     .RE
                 LDW     SHMNDR
                 JSX     SHMSG
                 JMP     SHLOOP
-SHDR0           CLR
+.R0             CLR
                 STW     SHMTOT
                 LDW     SHKFDE
                 STW     LDCP
-SHDRL           LDW     LDCP
+.RL             LDW     LDCP
                 CMW     SHKFDX
-                JGE     SHDRT           ; inside the table?
+                JGE     .RT             ; inside the table?
                 CAX
                 LDW     *DE.FLG
                 AND     SHK0FF
-                JNZ     SHDR1           ; an unused entry ends it
-                JMP     SHDRT
-SHDR1           CMW     SHKDKF
-                JNE     SHDRH           ; a file?
+                JNZ     .R1             ; an unused entry ends it
+                JMP     .RT
+.R1             CMW     SHKDKF
+                JNE     .RH             ; a file?
                 JSX     SHPNAM
                 LDW     SHKDOT
                 JSX     SHPUTC
@@ -3089,20 +3089,20 @@ SHDR1           CMW     SHKDKF
                 LDW     *DE.CNT
                 JSX     SHDEC
                 JSX     SHNL
-                JMP     SHDRN
-SHDRH           LDW     *DE.CNT         ; a hole, or what is being written
+                JMP     .RN
+.RH             LDW     *DE.CNT         ; a hole, or what is being written
                 ADD     SHMTOT
                 STW     SHMTOT
-SHDRN           LDW     LDCP
+.RN             LDW     LDCP
                 ADD     SHK8
                 STW     LDCP
-                JMP     SHDRL
-SHDRT           LDW     SHMTOT
+                JMP     .RL
+.RT             LDW     SHMTOT
                 JSX     SHDEC
                 LDW     SHMSFR
                 JSX     SHMSG
                 JMP     SHLOOP
-SHDRE           LDW     SHMNRD
+.RE             LDW     SHMNRD
                 JSX     SHMSG
                 JMP     SHLOOP
 
@@ -3140,21 +3140,21 @@ SHMEM           MSK
                 STW     SHMHI
                 SMB     FREHD
                 LDW     FREHD
-SHMEML          JNZ     SHMEM1          ; the end of the list?
-                JMP     SHMEMD
-SHMEM1          CAX
+.ML             JNZ     .M1             ; the end of the list?
+                JMP     .MD
+.M1             CAX
                 CMW     SHKPLH
-                JGE     SHMEMH          ; above the fence?
+                JGE     .MH             ; above the fence?
                 LDW     *0
                 ADD     SHMTOT
                 STW     SHMTOT
-                JMP     SHMEMN
-SHMEMH          LDW     *0
+                JMP     .MN
+.MH             LDW     *0
                 ADD     SHMHI
                 STW     SHMHI
-SHMEMN          LDW     *1
-                JMP     SHMEML
-SHMEMD          UNM
+.MN             LDW     *1
+                JMP     .ML
+.MD             UNM
                 LDW     SHMFRE
                 JSX     SHMSG
                 LDW     SHMTOT
@@ -3183,13 +3183,13 @@ SHHDR           MSK
 SHHD0           LDX     SHTO
                 LDW     *T.STA
                 CMW     SHKFRE
-                JEQ     SHHD2           ; in use?
+                JEQ     .D2             ; in use?
                 LDW     SHKOFF
                 STW     *T.STA
                 LDW     *T.MBX
                 ORI     SHW2
                 STW     SHW2
-SHHD2           LDW     SHTO
+.D2             LDW     SHTO
                 ADD     SHKTLN
                 STW     SHTO
                 LDW     SHTI
@@ -3204,12 +3204,12 @@ SHHD2           LDW     SHTO
                 JPL     SHHDR           ; and the printer idle?
                 LDW     SHMDWN
                 JSX     SHMSG
-SHHDW           SMB     SH.MBX          ; and now its own last character
+.DW             SMB     SH.MBX          ; and now its own last character
                 LDW     SH.MBX
-                JNZ     SHHDW
+                JNZ     .DW
                 SMB     OWNER
                 LDW     OWNER
-                JPL     SHHDW
+                JPL     .DW
                 MSK
                 DOT     2,0             ; disconnect the line clock
                 HLT
@@ -3217,16 +3217,16 @@ SHHDW           SMB     SH.MBX          ; and now its own last character
 ; ---------------------------------------------------------------- parsing
 ; Step SHCUR over blanks.
 SHSKB           SUBR
-SHSKL           LDX     SHCUR
+.L              LDX     SHCUR
                 CLR
                 LDB     *0
                 CMW     SHKSP
-                JNE     SHSKD           ; a blank?
+                JNE     .D              ; a blank?
                 LDW     SHCUR
                 ADD     SHK1
                 STW     SHCUR
-                JMP     SHSKL
-SHSKD           EXIT    SHSKB
+                JMP     .L
+.D              EXIT    SHSKB
 
 ; The word at SHCUR, its first four characters packed into STOK0:STOK1 and
 ; the rest of it stepped over.
@@ -3237,19 +3237,19 @@ SHTOK           SUBR
                 JSX     SHSKB
                 LDW     SHK4
                 STW     STKN
-SHTKL           LDX     SHCUR
+.KL             LDX     SHCUR
                 CLR
                 LDB     *0
-                JNZ     SHTK1           ; the terminator ends it
-                JMP     SHTKD
-SHTK1           CMW     SHKSP           ; and so does a blank
-                JNE     SHTK2
-                JMP     SHTKD
-SHTK2           STW     SHW2
+                JNZ     .K1             ; the terminator ends it
+                JMP     .KD
+.K1             CMW     SHKSP           ; and so does a blank
+                JNE     .K2
+                JMP     .KD
+.K2             STW     SHW2
                 LDW     STKN            ; room for another character?
-                JNZ     SHTK3
-                JMP     SHTKS
-SHTK3           LDW     STOK0           ; shift the pair up one character
+                JNZ     .K3
+                JMP     .KS
+.K3             LDW     STOK0           ; shift the pair up one character
                 LDX     STOK1
                 SLLD    8
                 STW     STOK0
@@ -3259,11 +3259,11 @@ SHTK3           LDW     STOK0           ; shift the pair up one character
                 LDW     STKN
                 SUB     SHK1
                 STW     STKN
-SHTKS           LDW     SHCUR
+.KS             LDW     SHCUR
                 ADD     SHK1
                 STW     SHCUR
-                JMP     SHTKL
-SHTKD           EXIT    SHTOK
+                JMP     .KL
+.KD             EXIT    SHTOK
 
 ; The file name at SHCUR into SHFN, as the directory holds one: up to
 ; six characters, left-justified in three words and zero-filled, then
@@ -3282,20 +3282,20 @@ SHNAME          SUBR
                 STW     SHNP
                 LDW     SHK6
                 STW     SHNN
-SHNL1           LDX     SHCUR
+.NL1            LDX     SHCUR
                 CLR
                 LDB     *0
-                JNZ     SHN1            ; the terminator ends it
-                JMP     SHNX
-SHN1            CMW     SHKSP           ; and so does a blank
-                JEQ     SHNX
+                JNZ     .N1             ; the terminator ends it
+                JMP     .NX
+.N1             CMW     SHKSP           ; and so does a blank
+                JEQ     .NX
                 CMW     SHKDOT          ; a dot starts the type
-                JEQ     SHNDOT
+                JEQ     .NDOT
                 STW     SHW2
                 LDW     SHNN            ; room for another character?
-                JNZ     SHN2
-                JMP     SHN3
-SHN2            SUB     SHK1
+                JNZ     .N2
+                JMP     .N3
+.N2             SUB     SHK1
                 STW     SHNN
                 LDX     SHNP
                 LDW     SHW2
@@ -3303,18 +3303,18 @@ SHN2            SUB     SHK1
                 LDW     SHNP
                 ADD     SHK1
                 STW     SHNP
-SHN3            LDW     SHCUR
+.N3             LDW     SHCUR
                 ADD     SHK1
                 STW     SHCUR
-                JMP     SHNL1
-SHNDOT          CLR
+                JMP     .NL1
+.NDOT           CLR
                 STW     SHFN+3
                 LDW     SHKFTB
                 STW     SHNP
                 LDW     SHK2
                 STW     SHNN
-                JMP     SHN3
-SHNX            EXIT    SHNAME
+                JMP     .N3
+.NX             EXIT    SHNAME
 
 ; ---------------------------------------------------------------- output
 ; One character from ACR: deposit in the shell's mailbox, kick the
@@ -3329,17 +3329,17 @@ SHPUTC          SUBR
                 STW     SH.MBX
                 CALL    KICK
                 UNM
-SHPWT           MSK
+.T              MSK
                 SMB     SH.MBX
                 LDW     SH.MBX
-                JNZ     SHPWB           ; printed yet?
-                JMP     SHPWD
-SHPWB           LDW     SHKWAI
+                JNZ     .B              ; printed yet?
+                JMP     .D
+.B              LDW     SHKWAI
                 SMB     SH.STA
                 STW     SH.STA
                 CALL    SWTCH
-                JMP     SHPWT
-SHPWD           UNM
+                JMP     .T
+.D              UNM
                 EXIT    SHPUTC
 
 ; The two characters packed in ACR, high half first.
@@ -3363,9 +3363,9 @@ SHMSG           SUBR
                 EXIT    SHMSG
 
 SHPRT           SUBR
-SHPRL           LDW     SHSP
+.L              LDW     SHSP
                 CMW     SHSE
-                JEQ     SHPRD
+                JEQ     .D
                 CAX
                 CLR                     ; LDB replaces only the low half (2-1)
                 LDB     *0
@@ -3373,8 +3373,8 @@ SHPRL           LDW     SHSP
                 LDW     SHSP
                 ADD     SHK1
                 STW     SHSP
-                JMP     SHPRL
-SHPRD           EXIT    SHPRT
+                JMP     .L
+.D              EXIT    SHPRT
 
 SHNL            SUBR
                 LDW     SHKCR
@@ -3391,7 +3391,7 @@ SHDEC           SUBR
                 STW     SHV
                 LDW     SHKDBE
                 STW     SHDP
-SHDL2           LDW     SHV
+.L2             LDW     SHV
                 SRL     15
                 CAX
                 LDW     SHV
@@ -3405,7 +3405,7 @@ SHDL2           LDW     SHV
                 SUB     SHK1
                 STW     SHDP
                 LDW     SHV
-                JNZ     SHDL2           ; nothing left of it?
+                JNZ     .L2             ; nothing left of it?
                 LDW     SHDP
                 ADD     SHK1
                 STW     SHSP
@@ -3431,11 +3431,11 @@ SHGETL          SUBR
                 STW     SHFIL
                 CLR
                 STW     SHLFF
-SHGL            LDW     SHCMCH
-                JNZ     SHGLF           ; a command file open?
+.L              LDW     SHCMCH
+                JNZ     .LF             ; a command file open?
                 LDW     SHKCQ
                 CALL    Q.GET
-                JMP     SHGLC
+                JMP     .LC
 
 ; From the file: a character through its channel, given bit 7 in case
 ; the file came from a host that leaves it off.  A carriage return ends
@@ -3444,73 +3444,73 @@ SHGL            LDW     SHCMCH
 ; both, reads as one line.  The end of the file, or Ctrl-C, closes it
 ; and the keyboard has the shell again -- after the last line, if that
 ; had no ending of its own.
-SHGLF           SMB     BRKREQ
+.LF             SMB     BRKREQ
                 LDW     BRKREQ
-                JNZ     SHGLFX
+                JNZ     .LFX
                 LDW     SHCMCH
                 CALL    K.GETC
-                JMI     SHGLFX
+                JMI     .LFX
                 ORI     SHK80
                 STW     SHCH
                 LDW     SHK1
                 STW     SHLFF
                 LDW     SHCH
                 CLB     X'8A'
-                JNE     SHGLC
+                JNE     .LC
                 LDW     SHFIL
                 CMW     SHKLBB
-                JNE     SHGLE
-                JMP     SHGL
-SHGLFX          JSX     SHCMCL
+                JNE     .LE
+                JMP     .L
+.LFX            JSX     SHCMCL
                 CLR
                 SMB     BRKREQ
                 STW     BRKREQ
                 LDW     SHFIL
                 CMW     SHKLBB
-                JNE     SHGLE
-                JMP     SHGL
+                JNE     .LE
+                JMP     .L
 
-SHGLC           STW     SHCH
+.LC             STW     SHCH
                 CLB     X'8D'           ; carriage return ends the line
-                JEQ     SHGLE
+                JEQ     .LE
                 CLB     X'8A'           ; and so does a line feed, so a
-                JEQ     SHGLE           ; script piped in with newline
+                JEQ     .LE             ; script piped in with newline
                                         ; endings reads like a typed Return
                 CLB     X'FF'           ; rubout
-                JEQ     SHGLR
+                JEQ     .LR
                 CLB     X'E1'           ; below 'a'?
-                JGE     SHGLU
-                JMP     SHGLS
-SHGLU           CLB     X'FA'           ; above 'z'?
+                JGE     .LU
+                JMP     .LS
+.LU             CLB     X'FA'           ; above 'z'?
                 SGR
                 AND     SHKUPM          ; in range: clear bit 5
-SHGLS           STW     SHCH
+.LS             STW     SHCH
                 LDW     SHFIL
                 CMW     SHKLBE          ; room for one more?
-                JEQ     SHGL            ; no: drop it
+                JEQ     .L              ; no: drop it
                 CAX
                 LDW     SHCH
                 STB     *0
                 LDW     SHFIL
                 ADD     SHK1
                 STW     SHFIL
-                JMP     SHGL
-SHGLR           LDW     SHFIL
+                JMP     .L
+.LR             LDW     SHFIL
                 CMW     SHKLBB          ; anything to back up over?
-                JNE     SHGLR1
-                JMP     SHGL
-SHGLR1          SUB     SHK1
+                JNE     .LR1
+                JMP     .L
+.LR1            SUB     SHK1
                 STW     SHFIL
-                JMP     SHGL
-SHGLE           LDW     SHFIL           ; terminate it; SHKLBE leaves room
+                JMP     .L
+.LE             LDW     SHFIL           ; terminate it; SHKLBE leaves room
                 CAX
                 CLR
                 STB     *0
                 LDW     SHLFF
-                JNZ     SHGLP           ; from a file: nothing has printed
+                JNZ     .LP             ; from a file: nothing has printed
                                         ; it, so print it as the keyboard's
                 EXIT    SHGETL          ; echo would have
-SHGLP           LDW     SHKLBB
+.LP             LDW     SHKLBB
                 STW     SHSP
                 LDW     SHFIL
                 STW     SHSE
