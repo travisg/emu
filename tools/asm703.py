@@ -10,8 +10,8 @@
 
 The 703 predates anything this tree could reuse, and its own assembler (SYM II)
 exists only as scans, so the guests need something to build them. There is
-no linking: a deck is assembled whole. It produces two things, and a third
-for the decks that come after:
+no linking: a deck is assembled whole, less the parts of a library it does
+not use. It produces two things, and a third for the decks that come after:
 
   - an absolute core image (`-o`): a flat binary of big-endian words starting
     at word 0, which is what `emu -s ray703` loads into core;
@@ -88,7 +88,7 @@ Operand prefixes, both from the PTB bootstrap listing:
 Numbers are decimal, `0x1F`, `X'1F'` or `'A'`; expressions take + - * and
 parentheses, and `$` is the address of the word being assembled.
 
-Four things here are this assembler's and no period listing's.
+Five things here are this assembler's and no period listing's.
 
 A literal is a constant written where it is used. The machine has no
 instruction that carries a word, so every constant is a cell somewhere and
@@ -137,6 +137,21 @@ call and then, marked `+`, what it generated. Two things exist for macros
 to use: STR, which is TEXT that may be an odd number of bytes, the last
 word's low half then zero; and LEN("..."), in any expression, the number
 of bytes in a string.
+
+A library is a file a deck carries for the routines it may want. A LIBR
+card begins a part of one and lists the names the part is there for:
+
+            LIBR    L.MSG
+    L.MSG   SUBR
+            ...
+            LIBR    L.PUTW,L.PWEND
+    L.PUTW  SUBR
+
+A part runs to the next LIBR card or the end of its file, and is assembled
+only if something that is assembled refers to one of its names -- the deck,
+or a part it has taken, so that L.MSG brings L.PUTW with it. A part left
+out is so many comments, and the listing shows its cards with no words
+beside them. See Part for the rules.
 
 And it warns. A warning is something the machine does exactly as written
 and nobody means; it goes to stderr, and --werror makes it an error:
@@ -216,7 +231,8 @@ GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFT
 # an if/else pair, they are two independent guards, so the X-RAY listing writes
 # out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
 DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'STR', 'RES', 'EQU',
-              'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'MACRO', 'ENDM', 'NTRY'}
+              'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'MACRO', 'ENDM', 'NTRY',
+              'LIBR'}
 
 # The instructions that only read their operand, and so may be given a
 # literal for one: `ADD =1` is a reference to a word holding 1, which the
@@ -377,7 +393,11 @@ LITERAL_PREFIX = '_$LIT.'
 
 
 class UndefinedSymbol(AsmError):
-    """Raised on its own so that EQU can retry a forward reference."""
+    """Raised on its own so that EQU can retry a forward reference, and
+    with the name, which may be one a library part is there to define."""
+    def __init__(self, lineno, name, note=''):
+        super().__init__(lineno, f'undefined symbol {shown(name)}{note}')
+        self.name = name
 
 
 # A label that begins with a dot is local: it belongs to the last label
@@ -622,6 +642,9 @@ def expand(statements, errors, skipping):
                 continue
             if op == 'ENDM':
                 raise AsmError(loc, 'ENDM with no MACRO above it')
+            if op == 'LIBR':
+                # a part's local labels belong to labels of the part
+                scope[0] = TOP_SCOPE
             yield from card(loc, label, op, arg, text, scope[0], 0, None, ())
         except AsmError as e:
             errors.append(e)
@@ -788,7 +811,7 @@ class Expr:
         if tok == '$':
             return self.here, self.here_count
         if tok not in self.symbols:
-            raise UndefinedSymbol(self.lineno, f'undefined symbol {shown(tok)}')
+            raise UndefinedSymbol(self.lineno, tok)
         if Expr.seen is not None:
             Expr.seen.add(tok)
         return self.symbols[tok], self.counts.get(tok, 0)
@@ -934,7 +957,7 @@ def sizeof(lineno, op, arg):
     """How many words a statement occupies."""
     if op is None:
         return 0
-    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'NTRY'):
+    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'NTRY', 'LIBR'):
         return 0    # a pool's words are counted where pass 1 lays it down
     if op in SUBR_MACROS or op == 'EXCH':
         return 2
@@ -1214,6 +1237,95 @@ def assemble_object(paths):
     return stream, r['listing'], r['symbols'], r['core'], r['size']
 
 
+class Part:
+    """A stretch of a library file: the cards under a LIBR card, down to
+    the next one or the end of the file.
+
+                LIBR    L.PUTW,L.PWEND
+        L.PUTW  SUBR
+                ...
+        L.PWEND WORD    0
+
+    A part is assembled only if something that is assembled refers to one
+    of the names on its card, and is otherwise so many comments: it puts
+    down no word and defines no label, EQU or macro. So a deck may carry
+    a whole library and be the size of what it uses, and a routine it
+    writes for itself under a library's name is the one it gets. A LIBR
+    card with no names closes the part above it and opens none.
+
+    LIBR is the 1968 loader's word: its text has a code for a library
+    name, read by the routine of that name (card 621), which the Basic
+    build of the loader takes and throws away.
+    """
+    __slots__ = ('loc', 'names', 'cards')
+
+    def __init__(self, loc, names):
+        self.loc = loc
+        self.names = names
+        self.cards = []         # where its cards are in the deck
+
+
+def library_parts(statements):
+    """The parts a deck's LIBR cards divide it into, and what is wrong
+    with the cards themselves.
+
+    The cards are taken as the files have them, before any macro or guard
+    is looked at, since a part has to be chosen before it can be
+    assembled: so a LIBR card stands outside every MACRO and TRUE, and a
+    part closes whatever it opens.
+    """
+    parts, errors = [], []
+    part = None                 # the one being read, if any
+    depth, macro = 0, False     # the guards open, and a definition
+    listed = set()
+
+    def inside():
+        return f'is inside a {"MACRO" if macro else "TRUE or FALS"}: a part is whole ' \
+               f'cards of its file, and closes what it opens'
+
+    def ended():
+        nonlocal depth, macro
+        if part is not None and (depth or macro):
+            errors.append(AsmError(part.loc, f'the end of this part {inside()}'))
+        depth, macro = 0, False
+
+    path = None
+    for i, (loc, label, op, arg, _) in enumerate(statements):
+        here = loc.path if isinstance(loc, Loc) else None
+        if here != path:
+            ended()
+            part, path = None, here
+        if op == 'LIBR' and (depth or macro):
+            errors.append(AsmError(loc, f'LIBR {inside()}'))
+        elif op == 'LIBR':
+            part = None
+            names = [n.strip() for n in operand_list(arg or '')] if arg else []
+            if label:
+                errors.append(AsmError(loc, 'LIBR takes no label: the names are its operand'))
+            for name in names:
+                if not NAMES.fullmatch(name):
+                    errors.append(AsmError(loc, f'LIBR takes names, and {name!r} is not one'))
+                elif name in listed:
+                    errors.append(AsmError(loc, f'{name} is on two LIBR cards'))
+                listed.add(name)
+            if names:
+                part = Part(loc, names)
+                parts.append(part)
+            continue
+        if op == 'MACRO':
+            macro = True
+        elif op == 'ENDM':
+            macro = False
+        elif op in ('TRUE', 'FALS') and not macro:
+            depth += 1
+        elif op == 'ENDC' and not macro:
+            depth = max(depth - 1, 0)
+        if part is not None:
+            part.cards.append(i)
+    ended()
+    return parts, errors
+
+
 def _assemble(paths, origin=0, relocatable=False):
     if isinstance(paths, str):
         paths = [paths]
@@ -1226,6 +1338,51 @@ def _assemble(paths, origin=0, relocatable=False):
                                f'; ==== {path}'))
         statements.extend(parse(path, seq))
 
+    parts, errors = library_parts(statements)
+    if not parts:
+        return _assemble_deck(statements, origin, relocatable, errors)
+
+    # Which parts a deck needs is what it leaves undefined without them,
+    # and a part may need another: so assemble, take the parts that
+    # define what was missing, and again until nothing a part lists is --
+    # the 1968 loader's passes over its library tape.
+    taken = set()
+    while True:
+        deck = list(statements)
+        for n, part in enumerate(parts):
+            if n not in taken:
+                for i in part.cards:
+                    deck[i] = (deck[i][0], None, None, None, deck[i][4])
+        try:
+            return _assemble_deck(deck, origin, relocatable, list(errors))
+        except AsmErrorList as e:
+            missing = {err.name for err in e.errors if isinstance(err, UndefinedSymbol)}
+            more = {n for n, part in enumerate(parts)
+                    if n not in taken and missing.intersection(part.names)}
+            if more:
+                taken |= more
+                continue
+            # A name that is a label of a part and not on its card is
+            # worth more than "undefined".
+            inside = {}
+            for n, part in enumerate(parts):
+                if n not in taken:
+                    for i in part.cards:
+                        inside.setdefault(statements[i][1], part)
+            said = []
+            for err in e.errors:
+                part = inside.get(err.name) if isinstance(err, UndefinedSymbol) else None
+                if part is not None:
+                    err = UndefinedSymbol(err.lineno, err.name,
+                                          f': {part.loc.path} has it under LIBR '
+                                          f'{",".join(part.names)}, which does not list it')
+                said.append(err)
+            raise AsmErrorList(said, e.listing, e.symbols, e.warnings) from None
+
+
+def _assemble_deck(statements, origin, relocatable, errors):
+    """The two passes over a deck already read, its unwanted library parts
+    blanked; `errors` is what reading it found."""
     # The configuration equates a TRUE/FALS guard names do not have to come
     # before it. X-RAY states its whole system description on its fifth page
     # and never needs this, but the relocating loader tests `LOADER=STANDARD`
@@ -1233,9 +1390,8 @@ def _assemble(paths, origin=0, relocatable=False):
     # evaluating it correctly, which a single forward pass cannot do. So
     # collect the location-independent equates first, and let a guard fall back
     # on them. Everything else still resolves in order.
-    # Errors from every stage, reported together at the end: on a long file
-    # the first bad card should not hide the rest.
-    errors = []
+    # Errors from every stage are reported together at the end: on a long
+    # file the first bad card should not hide the rest.
     # The cards as written: what a macro would generate is not known this
     # early, since which macro a name means can itself hang on a guard.
     config = prescan_equates(statements)
@@ -1360,6 +1516,14 @@ def _assemble(paths, origin=0, relocatable=False):
                         lineno,
                         f'END here leaves {", ".join(sorted(tail))} unassembled'))
                 break
+            if op == 'LIBR':
+                # the deck was divided at these before it was read; one a
+                # macro makes divides nothing
+                if isinstance(lineno, Loc) and lineno.exps:
+                    raise AsmError(lineno, 'LIBR from a macro: the parts of a file '
+                                           'are settled before its macros are')
+                placed.append((lineno, here, None, arg, text))
+                continue
             if op == 'EQU':
                 if not label:
                     raise AsmError(lineno, 'EQU needs a label')

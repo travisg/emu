@@ -220,7 +220,7 @@ ray703-boot-test: ray703-boot
 ray703-dis-test:
 	./run_ray703_dis_test.py
 
-# The assembler's literals, macros, warnings and entries, on decks the
-# test writes itself.
+# The assembler's literals, macros, warnings, entries and libraries, on
+# decks the test writes itself.
 ray703-asm-test:
 	./run_ray703_asm_test.py

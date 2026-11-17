@@ -7,7 +7,8 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 """tools/asm703.py held to itself: its literals, its macros and local
-labels, its warnings, and the entries it writes for another deck.
+labels, its warnings, the entries it writes for another deck, and the
+library parts it takes or leaves.
 
 The images the tree builds say the assembler still assembles what it did;
 this says what the parts no image exercises do. Each case is a small deck
@@ -22,7 +23,8 @@ local labels get the same treatment: the deck written with them against
 the deck written out. Then the warnings, each from a deck that has the
 mistake and not from its neighbour that does not. And the entries: a deck
 that begins with what --exports wrote has to come out as the same deck
-with the numbers written in.
+with the numbers written in. And a library: a deck over one has to come
+out as the deck with only the parts it uses written into it.
 """
 
 import os
@@ -809,6 +811,171 @@ def entries():
           and [n for n, *_ in r['entries'][0][1]] == ['T.X'], errors_of(r))
 
 
+# A library of five parts. SHOW needs PUT, which needs the cell LAST;
+# SHOW comes first, so the part it needs is one further down. TWICE
+# nothing below uses, and its macro, its EQU and its literal go with it.
+LIBRARY = """
+        LIBR    SHOW
+SHOW    SUBR
+        LDW     =WIDE
+.LOOP   JSX     PUT
+        SUB     =1
+        SAZ
+        JMP     .LOOP
+        EXIT    SHOW
+WIDE    EQU     3
+
+        LIBR    TWICE,HALF
+DOUBLE  MACRO
+        ADD     =77
+        ENDM
+HALF    EQU     X'4000'
+TWICE   SUBR
+        DOUBLE
+.LOOP   JMP     .LOOP
+        EXIT    TWICE
+SPARE   WORD    0
+
+        LIBR    PUT
+PUT     SUBR
+        STW     LAST
+        EXIT    PUT
+
+        LIBR    LAST
+LAST    WORD    0
+
+        LIBR    NEVER
+NEVER   WORD    LAST
+"""
+
+LIBRARY_USED = """
+SHOW    SUBR
+        LDW     =WIDE
+.LOOP   JSX     PUT
+        SUB     =1
+        SAZ
+        JMP     .LOOP
+        EXIT    SHOW
+WIDE    EQU     3
+PUT     SUBR
+        STW     LAST
+        EXIT    PUT
+LAST    WORD    0
+"""
+
+LIBRARY_MAIN = """
+START   JSX     SHOW
+        HLT
+        END     START
+"""
+
+
+def library():
+    """LIBR: the parts of a library a deck refers to, and no others."""
+    def deck(*texts, relocatable=False):
+        """Assemble several files as one deck."""
+        paths = []
+        for text in texts:
+            with tempfile.NamedTemporaryFile('w', suffix='.asm', delete=False) as f:
+                f.write(text)
+            paths.append(f.name)
+        try:
+            return asm703._assemble(paths, relocatable=relocatable)
+        except asm703.AsmErrorList as e:
+            return e
+        finally:
+            for path in paths:
+                os.unlink(path)
+
+    for relocatable in (False, True):
+        mode = ' (a module)' if relocatable else ''
+        a = deck(LIBRARY, LIBRARY_MAIN, relocatable=relocatable)
+        b = deck(LIBRARY_USED, LIBRARY_MAIN, relocatable=relocatable)
+        if isinstance(a, asm703.AsmErrorList) or isinstance(b, asm703.AsmErrorList):
+            check('a deck over a library assembles' + mode, False, (errors_of(a), errors_of(b)))
+            return
+        check('a deck over a library is the deck with the parts it uses' + mode,
+              words(a) == words(b) and a['kinds'] == b['kinds'],
+              ' '.join('%04X' % w for w in words(a)))
+        check('a part\'s names are the deck\'s only if it is taken' + mode,
+              {'SHOW', 'PUT', 'LAST', 'WIDE'} <= set(a['symbols'])
+              and not {'TWICE', 'HALF', 'SPARE', 'NEVER'} & set(a['symbols']), sorted(a['symbols']))
+        check('a part that is taken warns like any cards, and one that is not is silent' + mode,
+              not warnings_of(a), warnings_of(a))
+    bare = [text for addr, ws, text in a['listing'] if not ws]
+    check('the listing has a part that was left as its cards, with no words',
+          any('TWICE   SUBR' in text for text in bare) and any('NEVER   WORD' in text for text in bare)
+          and not any('PUT     SUBR' in text for text in bare), bare)
+
+    # What is taken is assembled like any cards: TWICE's cell SPARE is one
+    # nothing refers to, once something refers to TWICE.
+    r = deck(LIBRARY, 'START   JSX     TWICE\n        HLT\n        END     START\n')
+    check('a taken part\'s idle cell is warned of',
+          not errors_of(r) and warnings_of(r) == ['SPARE is never referred to'],
+          (errors_of(r), warnings_of(r)))
+    check('a taken part\'s macro and EQU are the deck\'s',
+          not errors_of(r) and r['symbols'].get('HALF') == 0x4000 and 77 in words(r), errors_of(r))
+
+    # A routine the deck writes under a library's name is the one it gets:
+    # nothing is missing, so the part is never asked for.
+    own = 'PUT     SUBR\n        HLT\n        EXIT    PUT\n'
+    a = deck(LIBRARY, own + 'START   JSX     PUT\n        HLT\n        END     START\n')
+    b = deck(own + 'START   JSX     PUT\n        HLT\n        END     START\n')
+    check('a deck\'s own routine stands in for the library\'s',
+          not errors_of(a) and not errors_of(b) and words(a) == words(b), (errors_of(a), errors_of(b)))
+
+    # In one file: a LIBR card with no names closes the part above it.
+    same('a bare LIBR closes a part', """
+        LIBR    ONE
+ONE     WORD    1
+        LIBR    TWO
+TWO     WORD    2
+        LIBR
+START   LDW     TWO
+        HLT
+        END     START
+""", """
+TWO     WORD    2
+START   LDW     TWO
+        HLT
+        END     START
+""")
+
+    def refused(name, text, want, count=1):
+        got = errors_of(build(text))
+        check(name, len(got) == count and want in got[0], got)
+
+    tail = '        LIBR\nGO      HLT\n        END     GO\n'
+    refused('a label of a part its card does not list',
+            '        LIBR    A\nA       HLT\nB       HLT\n        LIBR\nGO      JMP     B\n        END     GO\n',
+            "undefined symbol 'B': ")
+    got = errors_of(build('        LIBR    A\nA       HLT\nB       HLT\n        LIBR\n'
+                          'GO      JMP     B\n        END     GO\n'))
+    check('...and the error says which card', got and got[0].endswith('has it under LIBR A, which does not list it'), got)
+    refused('a name nothing defines, parts or no', '        LIBR    A\nA       HLT\n        LIBR\n'
+            'GO      JMP     NOPE\n        END     GO\n', "undefined symbol 'NOPE'")
+    refused('a name on a card whose part does not define it', '        LIBR    A\nB       HLT\n        LIBR\n'
+            'GO      JMP     A\n        END     GO\n', "undefined symbol 'A'")
+    refused('a name on two cards', '        LIBR    A\nA       HLT\n        LIBR    B,A\nB       HLT\n' + tail,
+            'A is on two LIBR cards')
+    refused('a LIBR card with a label', 'X       LIBR    A\nA       HLT\n' + tail, 'LIBR takes no label')
+    refused('a LIBR card of something not a name', '        LIBR    A+1\nA       HLT\n' + tail, "'A+1' is not one")
+    refused('a local label on a LIBR card', '        LIBR    .A\nA       HLT\n' + tail, "'.A' is not one")
+    refused('a LIBR card under a guard', 'C       EQU     1\n        TRUE    C=1\n        LIBR    A\nA       HLT\n'
+            '        ENDC\n' + tail, 'LIBR is inside a TRUE or FALS')
+    refused('a part that leaves a guard open', 'C       EQU     1\nGO      HLT\n        LIBR    A\n'
+            '        TRUE    C=1\nA       HLT\n', 'the end of this part is inside a TRUE or FALS')
+    refused('a LIBR card in a macro', 'M       MACRO\n        LIBR    A\n        ENDM\nA       HLT\n' + tail,
+            'LIBR is inside a MACRO')
+    refused('a LIBR card a macro makes', 'M       MACRO   OP\n        OP      A\n        ENDM\nA       HLT\n'
+            'GO      HLT\n        M       LIBR\n        END     GO\n', 'LIBR from a macro')
+    # A part's local labels are under its own labels: the first card of
+    # one is under none, whatever stands above the LIBR card.
+    refused('a local label does not reach across a LIBR card',
+            'GO      JMP     .IN\n        LIBR    A\n.IN     HLT\nA       JMP     GO\n        LIBR\n'
+            '        WORD    A\n        END     GO\n', "undefined symbol '.IN' under GO")
+
+
 def main():
     literals()
     forward_literals()
@@ -816,6 +983,7 @@ def main():
     lint()
     command_line()
     entries()
+    library()
     if FAILED:
         print('FAIL: asm703 test (%d: %s)' % (len(FAILED), ', '.join(FAILED)))
         return 1
