@@ -1,6 +1,7 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; The macros a REX deck is written with: the file after rexapi.asm.
+; The macros a REX deck is written with: a module's file after rexapi.asm,
+; and the kernel's first.
 ;
 ; The 703 branches by skipping.  A skip passes over one word when its
 ; condition holds, so "go there if it does not" is the skip and a jump,

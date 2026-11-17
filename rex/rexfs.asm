@@ -1,6 +1,6 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; REX's filesystem -- the second file of the kernel's deck, after rex.asm.
+; REX's filesystem -- the file of the kernel's deck after rex.asm.
 ;
 ; Files are contiguous runs of sectors on disc unit 0 under a directory
 ; in sectors 1-8, which tools/fs703.py describes word for word and writes
@@ -66,20 +66,16 @@ CHN             EQU     4               ; channels
 ; What it finds being written it makes a hole.
 FDLOAD          SUBR
                 LDW     FDVLD
-                SAZ
-                JMP     FDLOK
+                JNZ     FDLOK
                 CLR
                 JSX     FDXFR
-                SAZ
-                JMP     FDLDE
+                JNZ     FDLDE
                 LDW     FDBUF
                 CMW     FKMAG0
-                SEQ
-                JMP     FDLND
+                JNE     FDLND
                 LDW     FDBUF+1
                 CMW     FKMAG1
-                SEQ
-                JMP     FDLND
+                JNE     FDLND
                 LDW     FK1
                 STW     FDVLD
                 JSX     FDNORM
@@ -95,8 +91,7 @@ FDLND           LDW     FKENDR
 FDSAVE          SUBR
                 LDW     FK1
                 JSX     FDXFR
-                SAZ
-                JMP     FDSBAD
+                JNZ     FDSBAD
                 EXIT    FDSAVE
 FDSBAD          CLR
                 STW     FDVLD
@@ -116,8 +111,7 @@ FDXFR           SUBR
                 LDW     FKDBUF
                 SMB     DXBUF
                 STW     DXBUF
-                SMB     DXFER
-                JSX     DXFER
+                CALL    DXFER
                 EXIT    FDXFR
 
 ; The file whose four words of name and type FNPTR addresses: its entry,
@@ -126,17 +120,14 @@ FDFIND          SUBR
                 LDW     FKENT
 FDFL            STW     FDE
                 CMW     FKEND
-                SLS                     ; inside the table?
-                JMP     FDFNO
+                JGE     FDFNO           ; inside the table?
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
-                SAZ                     ; an unused entry ends it
-                JMP     FDF1
+                JNZ     FDF1            ; an unused entry ends it
                 JMP     FDFNO
 FDF1            CMW     FKFILE
-                SEQ
-                JMP     FDFNX
+                JNE     FDFNX
                 LDW     *0
                 STW     FDN0
                 LDW     *1
@@ -148,20 +139,16 @@ FDF1            CMW     FKFILE
                 LDX     FNPTR
                 LDW     *0
                 CMW     FDN0
-                SEQ
-                JMP     FDFNX
+                JNE     FDFNX
                 LDW     *1
                 CMW     FDN1
-                SEQ
-                JMP     FDFNX
+                JNE     FDFNX
                 LDW     *2
                 CMW     FDN2
-                SEQ
-                JMP     FDFNX
+                JNE     FDFNX
                 LDW     *3
                 CMW     FDN3
-                SEQ
-                JMP     FDFNX
+                JNE     FDFNX
                 LDW     FDE
                 EXIT    FDFIND
 FDFNX           LDW     FDE
@@ -176,21 +163,17 @@ FDNORM          SUBR
                 LDW     FKENT
 FDNL            STW     FDE
                 CMW     FKEND
-                SLS
-                JMP     FDNDN
+                JGE     FDNDN
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
-                SAZ
-                JMP     FDN1A
+                JNZ     FDN1A
                 JMP     FDNDN
 FDN1A           CMW     FKTENT
-                SEQ
-                JMP     FDNNX
+                JNE     FDNNX
                 LDW     *DE.SEC
                 JSX     FCWHO           ; a channel writing from there?
-                SAZ
-                JMP     FDNNX
+                JNZ     FDNNX
                 LDW     FDE
                 JSX     FDHOLE
 FDNNX           LDW     FDE
@@ -219,20 +202,16 @@ FDMERG          SUBR
                 LDW     FKENT
 FDML            STW     FDM
                 CMW     FKEND
-                SLS
-                JMP     FDMDN
+                JGE     FDMDN
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
-                SAZ
-                JMP     FDM1
+                JNZ     FDM1
                 JMP     FDMDN
 FDM1            CMW     FKHOLE
-                SEQ
-                JMP     FDMNX
+                JNE     FDMNX
                 LDW     *DE.CNT
-                SAZ                     ; a hole of nothing?
-                JMP     FDM2
+                JNZ     FDM2            ; a hole of nothing?
                 LDW     FDM
                 JSX     FDDEL
                 LDW     FDM
@@ -241,14 +220,12 @@ FDM2            LDW     FDM             ; the one after it
                 ADD     FK8
                 STW     FDM2P
                 CMW     FKEND
-                SLS
-                JMP     FDMNX
+                JGE     FDMNX
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
                 CMW     FKHOLE
-                SEQ
-                JMP     FDMNX
+                JNE     FDMNX
                 LDW     *DE.CNT
                 LDX     FDM
                 ADD     *DE.CNT
@@ -269,8 +246,7 @@ FDDEL           SUBR
 FDDL            LDW     FDD
                 ADD     FK8
                 CMW     FKEND
-                SLS                     ; anything left to bring up?
-                JMP     FDDZ
+                JGE     FDDZ            ; anything left to bring up?
                 CAX
                 LDW     *0
                 LDX     FDD
@@ -281,8 +257,7 @@ FDDL            LDW     FDD
                 JMP     FDDL
 FDDZ            LDW     FDD
                 CMW     FKEND
-                SLS
-                JMP     FDDX
+                JGE     FDDX
                 CAX
                 CLR
                 STW     *0
@@ -302,8 +277,7 @@ FDINS           SUBR
                 STW     FDD             ; from the last word that survives
 FDIL            LDW     FDD
                 CMW     FDI
-                SLS                     ; below the opening: done
-                JMP     FDI1
+                JGE     FDI1            ; below the opening: done
                 JMP     FDIZ
 FDI1            LDX     FDD
                 LDW     *0
@@ -331,13 +305,11 @@ FDROOM          SUBR
                 LDW     FKENT
 FDRL            STW     FDE
                 CMW     FKEND
-                SLS
-                JMP     FDRDN
+                JGE     FDRDN
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
-                SAZ
-                JMP     FDRNX
+                JNZ     FDRNX
                 LDW     FDR
                 ADD     FK1
                 STW     FDR
@@ -353,21 +325,17 @@ FDTENT          SUBR
                 LDW     FKENT
 FDTL            STW     FDE
                 CMW     FKEND
-                SLS
-                JMP     FDTNO
+                JGE     FDTNO
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
-                SAZ
-                JMP     FDT1
+                JNZ     FDT1
                 JMP     FDTNO
 FDT1            CMW     FKTENT
-                SEQ
-                JMP     FDTNX
+                JNE     FDTNX
                 LDW     *DE.SEC
                 CMW     FDT
-                SEQ
-                JMP     FDTNX
+                JNE     FDTNX
                 LDW     FDE
                 EXIT    FDTENT
 FDTNX           LDW     FDE
@@ -383,8 +351,7 @@ FCHK            SUBR
                 SUB     FK1
                 STW     FCT
                 AND     FKNCHN
-                SAZ                     ; 1 to 4?
-                JMP     FCKNO
+                JNZ     FCKNO           ; 1 to 4?
                 LDW     FCT
                 ADD     FKCHA
                 CAX
@@ -394,8 +361,7 @@ FCHK            SUBR
                 LDW     *C.OWN
                 SMB     CURT
                 CMW     CURT
-                SEQ
-                JMP     FCKNO
+                JNE     FCKNO
                 LDW     FCH
                 EXIT    FCHK
 FCKNO           CLR
@@ -417,20 +383,17 @@ FCWL            LDX     FCWP
                 LDW     *0
                 CAX
                 LDW     *C.OWN
-                SAZ
-                JMP     FCW1
+                JNZ     FCW1
                 JMP     FCWNX
 FCW1            LDW     *C.MOD
                 CMW     FK2
-                SEQ
-                JMP     FCWNX
+                JNE     FCWNX
                 LDW     FCWN
                 ADD     FK1
                 STW     FCWN
                 LDW     *C.STA
                 CMW     FCT
-                SEQ
-                JMP     FCWNX
+                JNE     FCWNX
                 LDW     FK1
                 STW     FCWF
 FCWNX           LDW     FCWP
@@ -439,8 +402,7 @@ FCWNX           LDW     FCWP
                 LDW     FCWC
                 SUB     FK1
                 STW     FCWC
-                SAZ
-                JMP     FCWL
+                JNZ     FCWL
                 LDW     FCWF
                 EXIT    FCWHO
 
@@ -461,8 +423,7 @@ FCCL            LDX     FCP
                 LDW     FCT
                 SUB     FK1
                 STW     FCT
-                SAZ
-                JMP     FCCL
+                JNZ     FCCL
                 EXIT    FCCLR
 
 ; Write the buffer of the channel in FCH to its sector and move on to the
@@ -474,10 +435,8 @@ FCFLSH          SUBR
                 STW     DXBUF
                 LDX     FCH
                 LDW     *C.SEC
-                SMB     DWR1
-                JSX     DWR1
-                SAZ
-                JMP     FCFBAD
+                CALL    DWR1
+                JNZ     FCFBAD
                 LDX     FCH
                 LDW     *C.SEC
                 ADD     FK1
@@ -513,8 +472,7 @@ FCRL            LDX     FCRP
                 CAX
                 LDW     *C.OWN
                 CMW     FCRN
-                SEQ
-                JMP     FCRNX
+                JNE     FCRNX
                 CLR
                 STW     *C.OWN
                 STW     *C.MOD
@@ -524,8 +482,7 @@ FCRNX           LDW     FCRP
                 LDW     FCRC
                 SUB     FK1
                 STW     FCRC
-                SAZ
-                JMP     FCRL
+                JNZ     FCRL
                 EXIT    FCREL
 
 ; ---------------------------------------------------------------- the calls
@@ -539,8 +496,7 @@ FCRNX           LDW     FCRP
 FSFND           SUBR
                 STW     FNPTR
                 JSX     FDLOAD
-                SAZ
-                JMP     FSFX
+                JNZ     FSFX
                 JSX     FDFIND
 FSFX            EXIT    FSFND
 
@@ -548,11 +504,9 @@ FSFX            EXIT    FSFND
 FBLOOK          SUBR
                 STW     FNPTR
                 JSX     FDLOAD
-                SAZ
-                JMP     FBLX
+                JNZ     FBLX
                 JSX     FDFIND
-                SAZ
-                JMP     FBL1
+                JNZ     FBL1
                 LDW     FKENOF
 FBLX            EXIT    FBLOOK
 FBL1            CAX
@@ -581,8 +535,7 @@ FBOPEN          SUBR
                 STW     FNPTR
                 CAX
                 LDW     *0
-                SAZ                     ; a name of nothing is no file's
-                JMP     FBON
+                JNZ     FBON            ; a name of nothing is no file's
                 LDW     FKENOF
                 EXIT    FBOPEN
 FBON            LDW     FKCHA           ; a channel nobody has
@@ -594,8 +547,7 @@ FBOCL           LDX     FOP
                 STW     FCH
                 CAX
                 LDW     *C.OWN
-                SAZ
-                JMP     FBOCN
+                JNZ     FBOCN
                 JMP     FBOGOT
 FBOCN           LDW     FOP
                 ADD     FK1
@@ -603,24 +555,20 @@ FBOCN           LDW     FOP
                 LDW     FOC
                 SUB     FK1
                 STW     FOC
-                SAZ
-                JMP     FBOCL
+                JNZ     FBOCL
                 LDW     FKECHN
                 EXIT    FBOPEN
 FBOGOT          LDW     FK5             ; its number, 1 to 4
                 SUB     FOC
                 STW     FON
                 JSX     FDLOAD
-                SAZ
-                JMP     FBOX
+                JNZ     FBOX
                 LDX     FNPTR
                 LDW     *4
-                SAZ                     ; to read?
-                JMP     FBOCR
+                JNZ     FBOCR           ; to read?
 
                 JSX     FDFIND
-                SAZ
-                JMP     FBOR1
+                JNZ     FBOR1
                 LDW     FKENOF
 FBOX            EXIT    FBOPEN
 FBOR1           CAX
@@ -652,14 +600,12 @@ FBOR1           CAX
 ; unused entries more than there are files being written.  Closing it
 ; drops an older file of the name, so the name may not be a system file's.
 FBOCR           JSX     FDFIND
-                SAZ                     ; an older one?
-                JMP     FBOC1
+                JNZ     FBOC1           ; an older one?
                 JMP     FBOC2
 FBOC1           CAX
                 LDW     *DE.FLG
                 AND     FKSYS
-                SAZ
-                JMP     FBOPR
+                JNZ     FBOPR
 FBOC2           JSX     FDNORM
                 LDW     FKM1
                 JSX     FCWHO
@@ -668,29 +614,24 @@ FBOC2           JSX     FDNORM
                 STW     FDN0
                 JSX     FDROOM
                 CMW     FDN0
-                SGR
-                JMP     FBODF
+                JLE     FBODF
                 CLR
                 STW     FOB             ; the best hole so far, and its size
                 STW     FOBN
                 LDW     FKENT
 FBOHL           STW     FDE
                 CMW     FKEND
-                SLS
-                JMP     FBOHD
+                JGE     FBOHD
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
-                SAZ
-                JMP     FBOH1
+                JNZ     FBOH1
                 JMP     FBOHD
 FBOH1           CMW     FKHOLE
-                SEQ
-                JMP     FBOHN
+                JNE     FBOHN
                 LDW     *DE.CNT
                 CMW     FOBN
-                SGR                     ; bigger than the best?
-                JMP     FBOHN
+                JLE     FBOHN           ; bigger than the best?
                 STW     FOBN
                 LDW     FDE
                 STW     FOB
@@ -698,14 +639,12 @@ FBOHN           LDW     FDE
                 ADD     FK8
                 JMP     FBOHL
 FBOHD           LDW     FOB
-                SAZ
-                JMP     FBOH2
+                JNZ     FBOH2
                 LDW     FKEFUL
                 EXIT    FBOPEN
 FBOH2           LDW     FOBN
                 SRL     1
-                SAZ                     ; a hole of one sector goes whole
-                JMP     FBOHV
+                JNZ     FBOHV           ; a hole of one sector goes whole
                 JMP     FBOH3
 FBOHV           STW     FDN0            ; the file's half; the rest follows
                 LDX     FOB             ; it as a hole of its own
@@ -772,8 +711,7 @@ FBOH3           LDX     FNPTR
                 LDW     CURT
                 STW     *C.OWN
                 JSX     FDSAVE
-                SAZ
-                JMP     FBOSV
+                JNZ     FBOSV
                 LDW     FON
                 EXIT    FBOPEN
 FBOSV           STW     FDN0
@@ -794,41 +732,34 @@ FBOOK           LDX     FCH
 ; K.GETC
 FBGETC          SUBR
                 JSX     FCHK
-                SAZ
-                JMP     FBG1
+                JNZ     FBG1
 FBGBAD          LDW     FKECHN
                 EXIT    FBGETC
 FBG1            CAX
                 LDW     *C.MOD
                 CMW     FK1
-                SEQ
-                JMP     FBGBAD
+                JNE     FBGBAD
 FBG2            LDX     FCH
                 LDW     *C.POS
                 CMW     *C.LIM
-                SEQ                     ; the buffer used up?
-                JMP     FBGHAV
+                JNE     FBGHAV          ; the buffer used up?
                 LDW     *C.SEC
                 CMW     *C.END
-                SNE                     ; and the file with it?
-                JMP     FBGEOF
+                JEQ     FBGEOF          ; and the file with it?
                 LDW     FCH
                 ADD     FKCBUF
                 SMB     DXBUF
                 STW     DXBUF
                 LDX     FCH
                 LDW     *C.SEC
-                SMB     DRD1
-                JSX     DRD1
-                SAZ
-                JMP     FBGDE
+                CALL    DRD1
+                JNZ     FBGDE
                 LDX     FCH
                 LDW     *C.SEC
                 ADD     FK1
                 STW     *C.SEC
                 CMW     *C.END
-                SEQ                     ; that was the last sector?
-                JMP     FBGFUL
+                JNE     FBGFUL          ; that was the last sector?
                 LDW     *C.LST
                 JMP     FBGLIM
 FBGFUL          LDW     FK94
@@ -857,30 +788,24 @@ FBPUTC          SUBR
                 STW     FPC
                 SRL     8
                 JSX     FCHK
-                SAZ
-                JMP     FBP1
+                JNZ     FBP1
 FBPBAD          LDW     FKECHN
                 EXIT    FBPUTC
 FBP1            CAX
                 LDW     *C.MOD
                 CMW     FK2
-                SEQ
-                JMP     FBPBAD
+                JNE     FBPBAD
                 LDW     *C.ERR
-                SAZ                     ; refused one already?  the same again
-                JMP     FBPX
+                JNZ     FBPX            ; refused one already?  the same again
                 LDW     *C.POS
                 CMW     FK94
-                SEQ                     ; a full sector waiting to go?
-                JMP     FBPST
+                JNE     FBPST           ; a full sector waiting to go?
                 JSX     FCFLSH
-                SAZ
-                JMP     FBPERR
+                JNZ     FBPERR
 FBPST           LDX     FCH
                 LDW     *C.SEC
                 CMW     *C.END
-                SNE                     ; the hole all used?
-                JMP     FBPFUL
+                JEQ     FBPFUL          ; the hole all used?
                 LDW     *C.POS
                 STW     FDN0
                 ADD     FK1
@@ -902,45 +827,37 @@ FBPERR          LDX     FCH             ; kept, for the characters after this
 ; K.CLOSE
 FBCLOS          SUBR
                 JSX     FCHK
-                SAZ
-                JMP     FBC1
+                JNZ     FBC1
                 LDW     FKECHN
                 EXIT    FBCLOS
 FBC1            CAX
                 LDW     *C.MOD
                 CMW     FK2
-                SEQ                     ; a reader just lets go
-                JMP     FBCRD
+                JNE     FBCRD           ; a reader just lets go
                 LDW     *C.ERR
-                SAZ                     ; a character refused?
-                JMP     FBCBAD
+                JNZ     FBCBAD          ; a character refused?
                 LDW     *C.POS
-                SAZ                     ; part of a sector in the buffer?
-                JMP     FBCW
+                JNZ     FBCW            ; part of a sector in the buffer?
                 LDW     *C.SEC          ; no: the last sector written was a
                 SUB     *C.STA          ; full one, if there was one at all
-                SAZ
-                JMP     FBCN1
+                JNZ     FBCN1
                 JMP     FBCN2
 FBCN1           LDW     FK94
 FBCN2           STW     FCL
                 JMP     FBCD
 FBCW            STW     FCL
                 JSX     FCFLSH
-                SAZ
-                JMP     FBCERR
+                JNZ     FBCERR
 FBCD            LDX     FCH
                 LDW     *C.SEC
                 SUB     *C.STA
                 STW     FCN             ; sectors written
                 JSX     FDLOAD
-                SAZ
-                JMP     FBCERR
+                JNZ     FBCERR
                 LDX     FCH
                 LDW     *C.STA
                 JSX     FDTENT
-                SAZ
-                JMP     FBCE1
+                JNZ     FBCE1
                 LDW     FKEDSC
                 JMP     FBCERR
 FBCE1           STW     FCE
@@ -959,8 +876,7 @@ FBCE1           STW     FCE
                 LDW     FKFILE
                 STW     *DE.FLG
                 LDW     FCR
-                SAZ
-                JMP     FBCR1
+                JNZ     FBCR1
                 JMP     FBCM
 FBCR1           LDW     *DE.SEC
                 ADD     FCN
@@ -991,12 +907,10 @@ FBCRD           JSX     FCFREE
 FBCBAD          STW     FCL
                 JSX     FCFREE
                 JSX     FDLOAD
-                SAZ
-                JMP     FBCBX
+                JNZ     FBCBX
                 JSX     FDNORM
                 JSX     FDSAVE
-                SAZ
-                JMP     FBCBX
+                JNZ     FBCBX
                 LDW     FCL
 FBCBX           EXIT    FBCLOS
 
@@ -1004,19 +918,16 @@ FBCBX           EXIT    FBCLOS
 FBDELE          SUBR
                 STW     FNPTR
                 JSX     FDLOAD
-                SAZ
-                JMP     FBDX
+                JNZ     FBDX
                 JSX     FDFIND
-                SAZ
-                JMP     FBD1
+                JNZ     FBD1
                 LDW     FKENOF
 FBDX            EXIT    FBDELE
 FBD1            STW     FCE
                 CAX
                 LDW     *DE.FLG
                 AND     FKSYS
-                SAZ
-                JMP     FBDPR
+                JNZ     FBDPR
                 LDW     FCE
                 JSX     FDHOLE
                 JSX     FDMERG
@@ -1031,24 +942,20 @@ FBRENA          SUBR
                 ADD     FK4
                 STW     FNPTR
                 JSX     FDLOAD
-                SAZ
-                JMP     FBRX
+                JNZ     FBRX
                 JSX     FDFIND
-                SAZ                     ; the new name in use?
-                JMP     FBREX
+                JNZ     FBREX           ; the new name in use?
                 LDW     FRP
                 STW     FNPTR
                 JSX     FDFIND
-                SAZ
-                JMP     FBR1
+                JNZ     FBR1
                 LDW     FKENOF
 FBRX            EXIT    FBRENA
 FBR1            STW     FCE
                 CAX
                 LDW     *DE.FLG
                 AND     FKSYS
-                SAZ
-                JMP     FBRPR
+                JNZ     FBRPR
                 LDX     FRP
                 LDW     *4
                 STW     FDN0
@@ -1084,8 +991,7 @@ FBRPR           LDW     FKEPRT
 ; smaller than it.
 FBSQSH          SUBR
                 JSX     FDLOAD
-                SAZ
-                JMP     FBSX
+                JNZ     FBSX
                 LDW     FKCHA
                 STW     FCWP
                 LDW     FK4
@@ -1094,31 +1000,26 @@ FBSC            LDX     FCWP
                 LDW     *0
                 CAX
                 LDW     *C.OWN
-                SAZ
-                JMP     FBSBSY
+                JNZ     FBSBSY
                 LDW     FCWP
                 ADD     FK1
                 STW     FCWP
                 LDW     FCWC
                 SUB     FK1
                 STW     FCWC
-                SAZ
-                JMP     FBSC
+                JNZ     FBSC
                 JSX     FDNORM
                 LDW     FKENT
 FBSL            STW     FSH             ; a hole, perhaps
                 CMW     FKEND
-                SLS
-                JMP     FBSDN
+                JGE     FBSDN
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
-                SAZ
-                JMP     FBS1
+                JNZ     FBS1
                 JMP     FBSDN
 FBS1            CMW     FKHOLE
-                SEQ
-                JMP     FBSNX
+                JNE     FBSNX
                 LDW     *DE.SEC
                 STW     FSD
                 STW     FSHS
@@ -1128,40 +1029,32 @@ FBS1            CMW     FKHOLE
                 ADD     FK8
                 STW     FSF
                 CMW     FKEND
-                SLS
-                JMP     FBSDN
+                JGE     FBSDN
                 CAX
                 LDW     *DE.FLG
                 AND     FK0FF
                 CMW     FKFILE
-                SEQ
-                JMP     FBSNX
+                JNE     FBSNX
                 LDW     *DE.FLG
                 AND     FKSYS
-                SAZ
-                JMP     FBSNX
+                JNZ     FBSNX
                 LDW     *DE.SEC
                 STW     FSS
                 LDW     *DE.CNT
                 STW     FSN
                 STW     FSFN
 FBSM            LDW     FSN             ; the sectors, lowest first, so the
-                SAZ                     ; move may overlap itself
-                JMP     FBSM1
+                JNZ     FBSM1           ; move may overlap itself
                 JMP     FBSMD
 FBSM1           LDW     FKSBUF
                 SMB     DXBUF
                 STW     DXBUF
                 LDW     FSS
-                SMB     DRD1
-                JSX     DRD1
-                SAZ
-                JMP     FBSERR
+                CALL    DRD1
+                JNZ     FBSERR
                 LDW     FSD
-                SMB     DWR1
-                JSX     DWR1
-                SAZ
-                JMP     FBSERR
+                CALL    DWR1
+                JNZ     FBSERR
                 LDW     FSS
                 ADD     FK1
                 STW     FSS
@@ -1187,8 +1080,7 @@ FBSE            LDX     FSF
                 LDW     FSN
                 SUB     FK1
                 STW     FSN
-                SAZ
-                JMP     FBSE
+                JNZ     FBSE
                 LDW     FSH             ; (both cursors are a slot on: FSH is
                 SUB     FK8             ; the hole's new slot, the file's is
                 CAX                     ; the one before it)
@@ -1204,8 +1096,7 @@ FBSE            LDX     FSF
                 STW     *DE.CNT
                 JSX     FDMERG
                 JSX     FDSAVE
-                SAZ
-                JMP     FBSX
+                JNZ     FBSX
                 LDW     FSH             ; on from the hole, which may have
                 JMP     FBSL            ; another file behind it
 FBSNX           LDW     FSH

@@ -23,7 +23,7 @@ all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules disc
 # writes rexapi.asm, the kernel's vector, cells and node layout as EQUs,
 # which is all a module knows of it: the names rex.asm's NTRY cards list,
 # at the values they have in this build.
-KERNEL := rex.asm rexfs.asm rexswap.asm
+KERNEL := rexmac.asm rex.asm rexfs.asm rexswap.asm
 API    := $(BUILD)/rexapi.asm
 
 $(BUILD)/rex.bin: $(KERNEL) $(ASM703)
