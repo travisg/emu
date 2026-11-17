@@ -241,6 +241,46 @@ def forward_literals():
     same('forward literals that differ inside a string are two cells',
          FORWARD % ('=TABLE+LEN("A B")', '=TABLE+LEN("AB")', ''),
          FORWARD % ('L1', 'L2', 'L1      WORD    TABLE+3\nL2      WORD    TABLE+2\n'))
+    # What a literal names may be defined below it: by the pool it is
+    # known, and its cell is its value's.
+    same('a literal met before its value is known shares that value\'s cell', """
+START   LDW     =FIVE
+        ADD     =5
+        SUB     =TABLE
+        LDX     =TABLE+ZERO
+        HLT
+TABLE   WORD    0
+FIVE    EQU     5
+ZERO    EQU     0
+        END     START
+""", """
+START   LDW     L1
+        ADD     L1
+        SUB     L2
+        LDX     L2
+        HLT
+TABLE   WORD    0
+L1      WORD    5
+L2      WORD    TABLE
+        END     START
+""")
+    same('one defined below its pool is a cell to each spelling', """
+START   LDW     =LATE
+        ADD     =LATE
+        SUB     =LATE+0
+        HLT
+        LPOOL
+LATE    EQU     5
+        END     START
+""", """
+START   LDW     L1
+        ADD     L1
+        SUB     L2
+        HLT
+L1      WORD    5
+L2      WORD    5
+        END     START
+""")
     same('forward literals that differ in spacing are one',
          FORWARD % ('=TABLE+1', '= TABLE + 1', ''),
          FORWARD % ('L1', 'L1', 'L1      WORD    TABLE+1\n'))

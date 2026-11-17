@@ -353,11 +353,11 @@ class Literal:
     not run into it.
 
     Two literals are one cell when they are the same word: the same value
-    and the same relocation, where that is known as the literal is met --
-    `=1`, `=X'1'` and `=ONE` after `ONE EQU 1` share. One that names a
-    symbol defined further down the deck is known only by its spelling, and
-    shares with others spelled the same. `$` has no place in one: the cell
-    is not where the instruction is.
+    and the same relocation, as far as that is known where their pool is
+    laid down -- `=1`, `=X'1'` and `=ONE` share, wherever above the pool
+    `ONE EQU 1` stands. One that names a symbol defined below its pool is
+    known only by its spelling, and shares with others spelled the same.
+    `$` has no place in one: the cell is not where the instruction is.
     """
     __slots__ = ('name', 'body', 'lineno')
 
@@ -1294,13 +1294,25 @@ def _assemble(paths, origin=0, relocatable=False):
         return pending[key].name
 
     def pool():
-        """Lay the waiting literals down from `here` on."""
+        """Lay the waiting literals down from `here` on: the cells, each
+        once. A literal that was met before what it names was defined is
+        looked at again here, and takes the cell of its value if there is
+        one."""
         nonlocal here
-        laid = list(pending.values())
-        for lit in laid:
-            symbols[lit.name] = here
+        laid, cell = [], {}
+        for key, lit in pending.items():
+            if key[:1] == ('spelled',):
+                try:
+                    value, cnt = Expr(lit.body, symbols, None, lit.lineno, counts).reloc()
+                    key = (value & 0xffff if cnt == 0 else value, cnt)
+                except UndefinedSymbol:
+                    pass
+            if key not in cell:
+                cell[key] = here
+                laid.append(lit)
+                here += 1
+            symbols[lit.name] = cell[key]
             counts[lit.name] = 1
-            here += 1
         pending.clear()
         return laid
 
