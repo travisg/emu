@@ -70,7 +70,10 @@ DISC_IMG="$WORK/disks/ray703-disc0.img"
 EMU_PID=$!
 exec 3>"$FIFO"
 
-wait_for '703 DISC EXERCISER' && wait_for 'DISC TEST PASS' || true
+# The halt is waited for too: closing the fifo on the guest's last line can
+# reach the emulator before the guest's HLT does, and it would leave by the
+# keyboard's door without ever saying it halted.
+wait_for '703 DISC EXERCISER' && wait_for 'DISC TEST PASS' && wait_for 'stopping, Halted' || true
 
 exec 3>&-
 wait "$EMU_PID" || true

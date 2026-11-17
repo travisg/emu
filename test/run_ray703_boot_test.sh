@@ -68,7 +68,9 @@ script -qfec "$EMU_BIN -s ray703-load -r $DISC_IMG --no-throttle" "$LOG_FILE" < 
 EMU_PID=$!
 exec 3>"$FIFO"
 
-wait_for '703 BOOT' || true
+# The halt is waited for as well as the banner: closing the fifo on the
+# banner can reach the emulator before the guest's HLT does.
+wait_for '703 BOOT' && wait_for 'stopping, Halted' || true
 
 exec 3>&-
 wait "$EMU_PID" || true
