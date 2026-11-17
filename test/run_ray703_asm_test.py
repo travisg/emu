@@ -689,13 +689,15 @@ K.PUT           JMP     PUT
 ; and so is this, of the kernel only
 
 ; A node.
-                NTRY    T.STA,T.LEN,T.TWO,E.NOF
+                NTRY    T.STA,T.LEN,T.TWO,E.NOF,T.BACK,A.LONG.NAME.OF.20
 CELL            TEXT    "A;"            ; a text
 T.STA           EQU     0               ; state
 T.OWN           EQU     1               ; the kernel's own
 T.LEN           EQU     18
 T.TWO           EQU     T.LEN*2
 E.NOF           EQU     X'FFFF'
+T.BACK          EQU     0-1
+A.LONG.NAME.OF.20 EQU   T.LEN+2
 GET             HLT
 PUT             HLT
                 END
@@ -710,6 +712,8 @@ USER = """START   SMB     K.GET
         LDW     *T.LEN-1
         ADD     =T.TWO
         CMW     =E.NOF
+        LDW     *T.BACK+1
+        LDW     *A.LONG.NAME.OF.20
         HLT
         END     START
 """
@@ -720,6 +724,8 @@ USER_BY_HAND = """START   SMB     X'10'
         LDW     *17
         ADD     =36
         CMW     =X'FFFF'
+        LDW     *0
+        LDW     *20
         HLT
         END     START
 """
@@ -750,7 +756,8 @@ def entries():
         names = [line.split()[0] for line in text.split('\n')
                  if line and not line[0].isspace() and not line.startswith(';')]
         check('the entries are the names listed, in the cards\' order',
-              names == ['K.GET', 'K.PUT', 'CELL', 'T.STA', 'T.LEN', 'T.TWO', 'E.NOF'], names)
+              names == ['K.GET', 'K.PUT', 'CELL', 'T.STA', 'T.LEN', 'T.TWO', 'E.NOF', 'T.BACK',
+                        'A.LONG.NAME.OF.20'], names)
         for want, what in (
                 ("K.GET           EQU     X'0010'         ; ACR = a queue -> the next word\n"
                  "                                        ; or minus one\n"
@@ -761,7 +768,9 @@ def entries():
                 ("CELL            EQU     X'0012'         ; a text\n\n; A node.\nT.STA           EQU     0  ",
                  'a second NTRY card runs on, and a semicolon in a string begins no comment'),
                 ("T.LEN           EQU     18\nT.TWO           EQU     X'0024'\nE.NOF           EQU     X'FFFF'\n",
-                 'a number is said as the card says it, and an expression as its value')):
+                 'a number is said as the card says it, and an expression as its value'),
+                ("T.BACK          EQU     -1\nA.LONG.NAME.OF.20 EQU     X'0014'\n",
+                 'a value below zero is said as it is, and a long name stands clear of its EQU')):
             check(what, want in text, text)
         check('a comment in column 1 that is not over an NTRY card stays behind',
               'kernel only' not in text and 'only the kernel' not in text and 'a kernel' not in text, text)

@@ -1914,12 +1914,14 @@ def write_exports(path, sources, entries):
             out.append('')
             out.extend(src[over:loc.line - 1])
         for name, value, at, arg in names:
-            said = f"X'{value & 0xffff:04X}'"
+            # The value whole: a consumer does arithmetic on it, and minus
+            # one is not X'FFFF' until it is a word in core.
+            said = f"X'{value:04X}'" if value >= 0 else str(value)
             if arg and NUMBER.fullmatch(arg.strip()):
                 said = arg.strip()
             src = lines(at)
             comment = comment_of(src[at.line - 1]) if src else None
-            card = f'{name:<16}EQU     {said}'
+            card = f'{name:<15} EQU     {said}'
             out.append(f'{card:<40}; {comment}' if comment else card)
             under = at.line if src else 0
             while src and under < len(src) and src[under][:1].isspace() \
@@ -2020,7 +2022,6 @@ def main():
     if args.listing:
         write_listing(args.listing, listing, symbols, r['scoped'])
 
-    # Last, so that it is never older than the image a makefile lists it behind.
     if args.exports:
         if not r['entries']:
             print(f'{deck}: no NTRY card, so nothing to write to {args.exports}', file=sys.stderr)

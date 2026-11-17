@@ -19,21 +19,24 @@ BUILD     := build
 all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules disc
 
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
-# the filesystem and the swapper at the top of core. Assembling it also
-# writes rexapi.asm, the kernel's vector, cells and node layout as EQUs,
-# which is all a module knows of it: the names rex.asm's NTRY cards list,
-# at the values they have in this build.
+# the filesystem and the swapper at the top of core.
 KERNEL := rexmac.asm rex.asm rexfs.asm rexswap.asm
-API    := $(BUILD)/rexapi.asm
 
 $(BUILD)/rex.bin: $(KERNEL) $(ASM703)
 	@mkdir -p $(BUILD)
-	$(ASM) $(KERNEL) -o $@ -l $(BUILD)/rex.lst --exports $(API)
+	$(ASM) $(KERNEL) -o $@ -l $(BUILD)/rex.lst
 
-# Written by the rule above, after the image. A change to the kernel
-# rewrites it, so every module is assembled again against the kernel it
-# will run under.
-$(API): $(BUILD)/rex.bin ;
+# The kernel's vector, cells and node layout as EQUs, which is all a
+# module knows of it: the names rex.asm's NTRY cards list, at the values
+# the same deck gives them. A rule of its own, so that the file is made
+# whenever it is missing or behind the kernel's sources, and a change to
+# the kernel assembles every module again against the kernel it will run
+# under.
+API := $(BUILD)/rexapi.asm
+
+$(API): $(KERNEL) $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM) $(KERNEL) --exports $@
 
 # The boot sector the disc controller's LOAD button reads: one sector, 47
 # words, which mkdisc703.py holds it to.
