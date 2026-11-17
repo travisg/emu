@@ -55,7 +55,7 @@ UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
 
 modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
          $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj \
-         $(BUILD)/blip.obj
+         $(BUILD)/blip.obj $(BUILD)/far.obj
 
 $(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm $(API) rexmac.asm rexlib.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -72,6 +72,13 @@ $(BUILD)/blip.obj: $(API) rexmac.asm rexlib.asm blip.asm $(ASM703)
 $(BUILD)/hog.obj: $(API) rexmac.asm rexlib.asm hog.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM) $(API) rexmac.asm rexlib.asm hog.asm --object $@ -l $(BUILD)/hog.lst
+
+# A module of two segments, which the loader gives a page each.
+FAR := $(API) rexmac.asm rexlib.asm far.asm
+
+$(BUILD)/far.obj: $(FAR) $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM) $(FAR) --object $@ -l $(BUILD)/far.lst
 
 $(BUILD)/hello.obj: $(API) hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -102,10 +109,13 @@ $(BUILD)/basic.obj: $(API) brex.asm $(BCORE) $(ASM703)
 # the second, below word X'4000' and above it, where a byte address has
 # its top bit set; BASIC fills its page to the last word,
 # so its two are the only ones it has, the page's first word and second.
+# Far has a base for each of its segments: neighbouring pages, and the
+# second segment below the first with the fence between them.
 HELLO_BASES := 0x1080 0x1C40 0x4080 0x5C40
 BASIC_BASES := 0x1000 0x1001
+FAR_BASES   := 0x1000,0x1800 0x4100,0x1040
 
-reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
+reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/far.obj
 	@for base in $(HELLO_BASES); do \
 	    $(ASM) --org $$base $(API) hello.asm -m $(BUILD)/hello-$$base.map || exit 1; \
 	    $(RELOAD703) $(BUILD)/hello.obj --base $$base --check $(BUILD)/hello-$$base.map || exit 1; \
@@ -113,6 +123,10 @@ reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj
 	@for base in $(BASIC_BASES); do \
 	    $(ASM) --org $$base $(API) brex.asm $(BCORE) -m $(BUILD)/basic-$$base.map || exit 1; \
 	    $(RELOAD703) $(BUILD)/basic.obj --base $$base --check $(BUILD)/basic-$$base.map || exit 1; \
+	done
+	@for base in $(FAR_BASES); do \
+	    $(ASM) --org $$base $(FAR) -m $(BUILD)/far-$$base.map || exit 1; \
+	    $(RELOAD703) $(BUILD)/far.obj --base $$base --check $(BUILD)/far-$$base.map || exit 1; \
 	done
 
 # The platter on unit 0, with the modules on it -- every one but BASIC

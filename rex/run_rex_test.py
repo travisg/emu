@@ -100,6 +100,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nolatch  a channel forgetting that it refused a character, so the
            close makes a file of what did go in
   sysopen  a file opened for writing under a system file's name
+  noseg    the loader deaf to the code that says a word holds an address
+           in another segment of the module, so it adds the wrong base
 """
 
 import contextlib
@@ -128,7 +130,7 @@ DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
 FST_OBJ = os.path.join(BUILD, 'fst.obj')
 MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
     (name, os.path.join(BUILD, name.lower() + '.obj'))
-    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG', 'BLIP'))
+    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG', 'BLIP', 'FAR'))
 # Every module but BASIC goes on the platter marked as loadable above
 # word X'4000', where the kernel then puts it.
 LOW_ONLY = ('BASIC',)
@@ -278,6 +280,12 @@ def session(emu):
         symbols = Symbols()
         symbols.load(REX_LST)
         emu.writew(symbols.value('Q.GET') + 4, [NOP])
+    if CONTROL == 'noseg':
+        # LDSEGR is JSX LDGETW / JSX LDSEGB / STW LDBASE: without the
+        # store the base stays the segment's own
+        symbols = Symbols()
+        symbols.load(REX_LST)
+        emu.writew(symbols.value('LDSEGR') + 2, [NOP])
     emu.run()
     s.wait(b'REX 703 UP')
 
@@ -325,6 +333,11 @@ def session(emu):
     s.say('DIR')
     s.say('RUN HELLO')
     s.wait(b'HELLO FROM WORD')
+    s.say('MEM')
+    # A module of two segments, which cannot share a page: each calls
+    # into the other, and says whether it got there.
+    s.say('RUN FAR')
+    s.wait(re.compile(rb'FAR (OK|BAD \d+)'))
     s.say('MEM')
     s.say('LOAD HELLO')
     mark = s.say('STAT', quiet=False)
@@ -937,6 +950,7 @@ def verdict(paper, programs):
         # it is taken from STAT's ring and the pool instead (session).
         ('hello ran under RUN', line(rb'^HELLO FROM WORD \d')),
         ('hello loaded high every time', len(hellos) >= 4 and all(n >= POOLH for n in hellos)),
+        ('a module of two segments', line(rb'^FAR OK$')),
         ('no such file', line(rb'^NO SUCH FILE')),
         ('the file calls, twice', count(rb'^FST OK$') == 2),
         ('directory: the file left', line(rb'^T2\.TX 1$')),
@@ -966,7 +980,7 @@ def make_platter(workdir, log, swap=False, boot=False):
     if CONTROL == 'blank':
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
-                     'nolatch', 'sysopen'):
+                     'nolatch', 'sysopen', 'noseg'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),

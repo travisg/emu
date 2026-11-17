@@ -360,7 +360,8 @@
 ; The REX kernel interface, for what loads under it.
 ;
 ; A module is assembled from word 0 and placed by the loader wherever the
-; allocator finds room, so it can know nothing of the kernel's layout
+; allocator finds room -- each of its segments, if it has several, in a
+; block of its own -- so it can know nothing of the kernel's layout
 ; except what is here: a jump vector at fixed words, the cells the kernel
 ; exports, the shape of a task node and the values that go in it.
 ;
@@ -2630,8 +2631,10 @@ SHLD1           JSX     SHIOC           ; the disc, for the whole load
 ; stored as they are, or with the base added into the 11-bit M field,
 ; the whole word, or twice for a byte address; a page selection is built
 ; here from the final address; END names the entry, which gets the base
-; too.  Returns the node, with its entry, name and console flag filled
-; in and the block tagged as the task's own, ready for SPAWN -- or
+; too.  A module of several segments has a SIZE code and a block for each,
+; up to LDKSEG of them, and two codes to say whose text is being stored
+; and whose base added.  Returns the node, with its entry, name and console flag filled
+; in and each block tagged as the task's own, ready for SPAWN -- or
 ; zero, an error having been named: no such file, the disc's status or
 ; no directory on it (DE), a record failing its checksum (CK), a code
 ; this loader does not take or text out of order (LC), no room (MX).  An
@@ -2642,7 +2645,7 @@ LDMOD           SUBR
                 JNZ     .M1
                 JMP     LDNOF
 .M1             CLR
-                STW     LDBLK
+                STW     LDNSG
                 STW     LDNODE
                 STW     LDBASE
                 STW     LDPTR
@@ -2729,6 +2732,7 @@ LDPROC          JSX     LDGETB
                 JMP     *0
 LDCTAB          WORD    LDPROC,LDNAME,LDELC,LDSMB,LDILOC,LDELC
                 WORD    LDEND,LDELC,LDNAME,LDSIZW,LDSIZW,LDSIZB
+                WORD    LDSEGS,LDSEGR
 
 LDNAME          JSX     LDGETW          ; a name: four words, not wanted
                 JSX     LDGETW
@@ -2764,29 +2768,67 @@ LDSIZ           STW     LDALE           ; for a module that may load high
 .SIZG           LDX     LDALE
                 LDW     *0
                 STW     LDALE
-                LDW     LDBASE
-                JNZ     LDELC           ; a second SIZE?
+                LDW     LDNSG           ; one more than the table holds?
+                CMW     =LDKSEG
+                JGE     LDELC
                 JSX     LDGETW
                 STW     LDSIZE
                 LDX     LDALE
                 JSX     *0
                 JNZ     .S1
                 JMP     LDEMX
-.S1             STW     LDBLK
+.S1             STW     LDW1            ; the segment's block into the table,
+                LDW     LDNSG           ; and its size LDKSEG further on
+                ADD     =LDSGB
+                CAX
+                LDW     LDW1
+                STW     *0
+                LDW     LDSIZE
+                STW     *LDKSEG
+                LDW     LDNSG
+                ADD     =1
+                STW     LDNSG
+                SUB     =1
+                JNZ     LDPROC          ; the first is where the text begins
+                JMP     LDSEGG
+
+; The two codes a module of several segments has.  0C: the text from
+; here on is this segment's, stored from its first word and relocated by
+; its base.  0D: the words from here on hold addresses in this segment,
+; and take its base instead.
+LDSEGS          JSX     LDGETW
+LDSEGG          JSX     LDSEGB
                 STW     LDBASE
                 STW     LDPTR
-                ADD     LDSIZE
+                LDX     LDW1
+                ADD     *LDKSEG
                 STW     LDLIM
                 JMP     LDPROC
+LDSEGR          JSX     LDGETW
+                JSX     LDSEGB
+                STW     LDBASE
+                JMP     LDPROC
+
+; The block of the segment ACR numbers, LDW1 left addressing its place
+; in the table.
+LDSEGB          SUBR
+                JMI     LDELC           ; one the text gave a SIZE for?
+                CMW     LDNSG
+                JGE     LDELC
+                ADD     =LDSGB
+                STW     LDW1
+                CAX
+                LDW     *0
+                EXIT    LDSEGB
 LDEND           JSX     LDGETW          ; END: the entry, relocated
                 ADD     LDBASE
                 STW     LDEXEC
-                LDW     LDBLK
+                LDW     LDNSG
                 JNZ     .DONE           ; without a SIZE first?
                 JMP     LDELC
 
-; Loaded: fill the node, and tag the block as the new task's own, so
-; that its exit finds it.
+; Loaded: fill the node, and tag each segment's block as the new task's
+; own, so that its exit finds them.
 .DONE           LDX     LDNODE
                 LDW     LDEXEC
                 STW     *T.PCR
@@ -2797,11 +2839,20 @@ LDEND           JSX     LDGETW          ; END: the entry, relocated
                 LDW     LDNODE
                 ORI     =X'8000'
                 STW     LDTAG
-                LDW     LDBLK
+                LDW     LDNSG
+                STW     LDW1
+.TG             LDW     LDW1            ; the last segment first
+                ADD     =LDSGB-1
+                CAX
+                LDW     *0
                 SUB     =1
                 CAX
                 LDW     LDTAG
                 STW     *0
+                LDW     LDW1
+                SUB     =1
+                STW     LDW1
+                JNZ     .TG
 
 ; The command tail: what is left of the line past the name, blanks
 ; skipped, in a block of the task's own with a zero after it.  T.ARG
@@ -2868,11 +2919,17 @@ LDECK           LDW     =SHECK
 LDELC           LDW     =SHELC
                 JMP     LDERR
 LDEMX           LDW     =SHEMX
-LDERR           JSX     SHMSG           ; name it, and give back what was taken
-                LDW     LDBLK
+LDERR           JSX     SHMSG           ; name it, and give back what was taken:
+.R0             LDW     LDNSG           ; each segment that got a block
                 JNZ     .R1
                 JMP     .R2
-.R1             CALL    FREE
+.R1             SUB     =1
+                STW     LDNSG
+                ADD     =LDSGB
+                CAX
+                LDW     *0
+                CALL    FREE
+                JMP     .R0
 .R2             LDW     LDNODE
                 JNZ     .R3
                 JMP     .R4
@@ -3516,7 +3573,9 @@ SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
 SHMTOT          WORD    0               ; MEM's running totals, below the
 SHMHI           WORD    0               ; fence and above it
 LDCON           WORD    0               ; the loader's: RUN (1) or LOAD (0)
-LDBLK           WORD    0               ; the module's block, and its node
+LDKSEG          EQU     4               ; the segments a module may have
+LDNSG           WORD    0               ; how many segments have a block,
+LDSGB           RES     LDKSEG+LDKSEG   ; each one's block and, LDKSEG on, its size
 LDNODE          WORD    0
 LDBASE          WORD    0               ; the relocation base: the block
 LDPTR           WORD    0               ; where the next word goes, and the limit
@@ -3548,7 +3607,7 @@ SHDB            RES     3               ; six digits, filled backwards
                 LPOOL                   ; what this page's code writes as literals
 
 SHKIN0          EQU     'IN'            ; INIT, as SHNAME leaves a name
-SHK0C           EQU     12              ; the control codes, 0..B
+SHK0C           EQU     14              ; the control codes, 0..D
 SHKRX           EQU     'RX'            ; a module's type
 SHKFNB          EQU     SHFN*2          ; the name's first byte...
 SHKFTB          EQU     SHFN*2+6        ; ...and its type's

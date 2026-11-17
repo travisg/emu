@@ -21,6 +21,7 @@ tests it.
     nap.asm            a test module: never ends, for the shell to end
     blip.asm           a test module: prints a character and sleeps, over and over
     hog.asm            a test module: holds a block of core and watches it
+    far.asm            a test module: two segments, each calling into the other
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
@@ -283,14 +284,15 @@ rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
 `=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin`, `=nosys`,
-`=nopark`, `=nolatch` and `=sysopen` are its negative controls -- a platter
-with nothing on it, one
+`=nopark`, `=nolatch`, `=sysopen` and `=noseg` are its negative controls --
+a platter with nothing on it, one
 without the hello module, a kernel with its wait for the disc patched out,
 one that never writes the directory back, one that lets any task read the
 console, one that cuts a returning task's blocks out of the free list but
 never reads them back, a boot sector never told where the kernel is, a
 `HALT` that stops no task, a channel that forgets it refused a character,
-and a file opened for writing under a system file's name -- which must all
+a file opened for writing under a system file's name, and a loader that
+adds a segment's own base to an address in another -- which must all
 FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
@@ -410,6 +412,16 @@ whole; and an absolute address -- a kernel entry, an exported cell -- is
 reached only through a page selection in front of it, since the module's
 own page is not known until it is placed.
 
+A module of more than a page is several segments, a `SEG` card in the
+source between one and the next -- up to four. Each is a page's worth at
+most, assembled from a word 0 of its own, and the loader gives each a block
+of its own wherever one fits, so one segment reaches into another as it
+reaches the kernel: through a page selection in front of the reference
+(`CALL` for a routine), or through an address in a cell. The assembler
+refuses a reference that crosses without one. The object text says each
+segment's size first, and two codes past the 1968 loader's own say whose
+text follows and whose base a word takes.
+
 `build/rexapi.asm` is the whole of what a module may know about the kernel: a
 jump vector at words X'10'-X'1F' and X'28'-X'3F', exported cells at
 X'20'-X'23', the shape of a task node and of a directory entry, the state
@@ -428,7 +440,9 @@ format carries. `make -C rex reloc-check` assembles it absolute at two
 bases, one in each half of a word page, and holds the reference loader's
 placement of the object (`../tools/reload703.py`) to those images word for
 word -- the check that the assembler's records and the loader's semantics
-agree, with no emulator in the loop.
+agree, with no emulator in the loop. `far.asm` gets the same with a base
+for each of its two segments, and the scripted session runs it: each half
+is over half a page, so the loader cannot put both in one.
 
 Modules are files of type `RX` on disc unit 0 (`../tools/mkdisc703.py
 --add`, which `make -C rex disc` runs for the platter the emulator mounts
