@@ -7,8 +7,8 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
 """tools/asm703.py held to itself: its literals, its macros and local
-labels, its warnings, the entries it writes for another deck, and the
-library parts it takes or leaves.
+labels, its warnings, the entries it writes for another deck, the library
+parts it takes or leaves, and a module's segments.
 
 The images the tree builds say the assembler still assembles what it did;
 this says what the parts no image exercises do. Each case is a small deck
@@ -24,7 +24,9 @@ the deck written out. Then the warnings, each from a deck that has the
 mistake and not from its neighbour that does not. And the entries: a deck
 that begins with what --exports wrote has to come out as the same deck
 with the numbers written in. And a library: a deck over one has to come
-out as the deck with only the parts it uses written into it.
+out as the deck with only the parts it uses written into it. And a module
+of several segments: placed by the reference loader, it has to be the
+same deck assembled at the addresses its segments were placed at.
 """
 
 import os
@@ -37,6 +39,7 @@ TOOLS = os.path.join(os.path.dirname(HERE), 'tools')
 sys.path.insert(0, TOOLS)
 
 import asm703  # noqa: E402
+import reload703  # noqa: E402
 
 FAILED = []
 
@@ -976,6 +979,125 @@ START   LDW     TWO
             '        WORD    A\n        END     GO\n', "undefined symbol '.IN' under GO")
 
 
+# A module of two segments with every kind of word that crosses from one
+# to the other: a call and a cell behind page selections, a word and a
+# byte address in data, literals, the two-word instructions' operand, `$`,
+# and the entry in the second.
+SEGMENTS = """
+FIRST   SUBR
+        ADD     =1
+        SMB     CELL2
+        ADD     CELL2
+        LDX     =TEXT2*2
+        LDB     *0
+        EXIT    FIRST
+CELL1   WORD    7
+TABLE1  WORD    SECOND,TEXT2*2,CELL1,$
+        SEG
+SECOND  LDW     =5
+        SMB     FIRST
+        JSX     FIRST
+        SMB     CELL1
+        STW     CELL1
+        MPY     CELL2
+        MPY     CELL1
+        DIV     =3
+        LDX     =TABLE1
+        LDW     TABLE2
+        HLT
+CELL2   WORD    3
+TEXT2   TEXT    "AB"
+TABLE2  WORD    FIRST,SECOND,CELL1*2,$,TEXT2-CELL2
+        END     SECOND
+"""
+
+
+def segments():
+    """SEG: a module in several streams, each placed by itself."""
+    def placed(name, deck, bases):
+        obj = build(deck, relocatable=True)
+        absolute = build(deck, origin=bases)
+        for r in (obj, absolute):
+            if isinstance(r, asm703.AsmErrorList):
+                check(name, False, errors_of(r))
+                return None
+        core, entry, sizes, byte_pages = reload703.load(asm703.object_stream(obj), bases)
+        check(name, core == absolute['core'],
+              sorted((hex(a), hex(core.get(a, -1)), hex(absolute['core'].get(a, -1)))
+                     for a in set(core) | set(absolute['core']) if core.get(a) != absolute['core'].get(a)))
+        check(name + ' (no warnings)', not warnings_of(obj), warnings_of(obj))
+        return obj, entry, sizes, byte_pages
+
+    for bases in ([0x1100, 0x4200], [0x4780, 0x1040], [0x1000, 0x1010]):
+        got = placed('a module of two segments, placed at %s' % ', '.join('%#x' % b for b in bases),
+                     SEGMENTS, bases)
+        if got is None:
+            return
+        obj, entry, sizes, byte_pages = got
+        check('...and entered in its second segment', entry == bases[1], hex(entry))
+    check('each segment has its size, its literals with it', sizes == [16, 24], sizes)
+    check('a module of two segments says so', len(obj['segments']) == 2 and obj['size'] == 40, obj['segments'])
+
+    # One segment makes a direct byte reference into itself, and is the
+    # one that wants a byte page.
+    got = placed('a direct byte reference in one segment', """
+ONE     LDW     =1
+        HLT
+        SEG
+TWO     LDB     BYTES
+        SMB     ONE
+        JMP     ONE
+BYTES   TEXT    "AB"
+        END     ONE
+""", [0x1100, 0x4200])
+    if got is not None:
+        check('...asks a byte page of that segment alone', got[3] == [False, True], got[3])
+
+    # A module of one segment is the text it always was: neither of the
+    # codes that name a segment is in it.
+    one = build('GO      LDW     =GO\n        HLT\n        END     GO\n', relocatable=True)
+    codes = []
+    reload703.load(asm703.object_stream(one), [0x1000], trace=codes)
+    check('a module of one segment names none', not {0x0c, 0x0d} & {code for code, _ in codes}, codes)
+
+    def refused(name, deck, want, relocatable=True, origin=0):
+        got = errors_of(build(deck, relocatable, origin))
+        check(name, len(got) == 1 and want in got[0], got)
+
+    def warned(name, deck, want):
+        r = build(deck, relocatable=True)
+        got = warnings_of(r)
+        check(name, not errors_of(r) and len(got) == 1 and want in got[0], (errors_of(r), got))
+
+    two = 'ONE     HLT\nCELL    WORD    1\n        SEG\nTWO     %s\n        HLT\nMINE    WORD    CELL\n        END     ONE\n'
+    refused('a reference into another segment with no page selected', two % 'LDW     CELL',
+            'CELL is in another segment of the module')
+    refused('...which is a number once the two are placed', 'ONE     HLT\nCELL    WORD    1\n        SEG\n'
+            'TWO     LDW     CELL\n        HLT\n', 'is in word page', relocatable=False, origin=[0x1000, 0x1800])
+    refused('the distance between two segments', two % 'LDW     =MINE-CELL',
+            'puts locations of two segments together')
+    refused('a SEG card with a label', 'ONE     HLT\nX       SEG\nTWO     HLT\n        END     ONE\n',
+            'SEG takes no label')
+    refused('a segment with nothing in it', 'ONE     HLT\n        SEG\n        END     ONE\n',
+            'segment 1 of the module is empty')
+    refused('a segment over a page', 'ONE     HLT\n        SEG\nTWO     HLT\n        RES     2048\n'
+            '        END     ONE\n', 'segment 1 of the module is 2049 words')
+    refused('a SEG card in a deck with one base', 'ONE     HLT\n        SEG\nTWO     HLT\n',
+            'each wants a base', relocatable=False)
+    warned('a selection of the wrong segment', 'ONE     HLT\nCELL    WORD    1\n        SEG\n'
+           'TWO     SMB     MINE\n        LDW     CELL\n        HLT\nMINE    WORD    CELL\n        END     ONE\n',
+           "LDW CELL is read under the selection of the module's own page")
+    warned('a selection of another segment over a reference to this one', 'ONE     HLT\nCELL    WORD    1\n'
+           '        SEG\nTWO     SMB     CELL\n        LDW     MINE\n        HLT\nMINE    WORD    CELL\n'
+           '        END     ONE\n', "LDW MINE is read under the selection of another segment's page")
+    warned('an EXIT from another segment than its subroutine', 'ONE     SUBR\n        HLT\n        SEG\n'
+           'TWO     JSX     $+1\n        EXIT    ONE\n        END     TWO\n',
+           'EXIT ONE reads its return slot in a page that is not')
+    r = build('ONE     SUBR\n        HLT\n        SEG\nTWO     SMB     ONE\n        EXIT    ONE\n'
+              '        END     TWO\n', relocatable=True)
+    check('...unless its page is selected', not errors_of(r) and not warnings_of(r), (errors_of(r), warnings_of(r)))
+
+
 def main():
     literals()
     forward_literals()
@@ -984,6 +1106,7 @@ def main():
     command_line()
     entries()
     library()
+    segments()
     if FAILED:
         print('FAIL: asm703 test (%d: %s)' % (len(FAILED), ', '.join(FAILED)))
         return 1

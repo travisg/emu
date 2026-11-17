@@ -20,6 +20,14 @@ same base here, and every word must agree.
     reload703.py module.obj --base 0x1080 --map placed.map
     reload703.py module.obj --dump
 
+A module may be several segments, each placed by itself: the text then
+opens with a SIZE code for each, and takes a base for each here, commas
+between (`--base 0x1080,0x4100`). Two codes past the 1968 loader's twelve
+say which segment is meant: 0C, that the text from here on is that
+segment's, to be stored from its first word and relocated by its base; and
+0D, that the words from here on are relocated by that segment's base
+instead -- they hold addresses in it. A module of one segment has neither.
+
 The records: a zero marker, ninety-two bytes of text and a checksum which is
 the byte sum folded, (sum >> 8) + sum. The marker and the checksum are the
 record's framing and never reach the code stream -- GETCARD leaves the byte
@@ -70,9 +78,12 @@ def relo11(word, base):
     return (word & 0xf800) | ((word + base) & 0x07ff)
 
 
-def load(data, base, trace=None):
-    """Place the module at `base`: returns (core, entry, size, byte_page)
-    with `core` a dict of word address to word."""
+def load(data, bases, trace=None):
+    """Place the module with its segments at `bases`: returns (core, entry,
+    sizes, byte_pages) with `core` a dict of word address to word and one
+    size and one byte-page flag to a segment."""
+    if isinstance(bases, int):
+        bases = [bases]
     bytes_ = stream(data)
 
     def getbyte():
@@ -86,18 +97,28 @@ def load(data, base, trace=None):
         return (hi << 8) | getbyte()
 
     core = {}
+    sizes = []
+    byte_pages = []
     pointer = None
     limit = None
-    byte_page = False
+    base = None                 # what is added to a location: BASE
 
     def store(word):
         nonlocal pointer
         if pointer is None:
             raise LoadError('text before the SIZE code')
         if pointer >= limit:
-            raise LoadError(f'the text overruns the {limit - base} words the SIZE code declared')
+            raise LoadError('the text overruns the words its SIZE code declared')
+        if pointer in core:
+            raise LoadError(f'word {pointer:#x} is stored twice')
         core[pointer] = word & 0xffff
         pointer += 1
+
+    def segment():
+        seg = getword()
+        if seg >= len(sizes):
+            raise LoadError(f'segment {seg} has no SIZE code')
+        return seg
 
     while True:
         code = getbyte()
@@ -141,22 +162,40 @@ def load(data, base, trace=None):
             entry = getword() + base
             break
         if code in (0x09, 0x0a, 0x0b):
-            if pointer is not None:
-                raise LoadError('a second SIZE code')
+            # SIZE, cards 886-902: the storage, and the relocation base. One
+            # to a segment, all of them before any text; the first segment
+            # is the one the text begins in.
+            if core:
+                raise LoadError('a SIZE code after text')
+            if len(sizes) == len(bases):
+                raise LoadError(f'the module has more than {len(bases)} '
+                                f'segment{"s" if len(bases) != 1 else ""}: --base wants '
+                                f'an address for each')
             size = getword()
-            byte_page = code == 0x0b
-            window = BYTE_PAGE if byte_page else WORD_PAGE
-            if base // window != (base + size - 1) // window:
+            at = bases[len(sizes)]
+            window = BYTE_PAGE if code == 0x0b else WORD_PAGE
+            if at // window != (at + size - 1) // window:
                 raise LoadError(
-                    f'{size} words at {base:#x} straddle a {window}-word page; '
+                    f'{size} words at {at:#x} straddle a {window}-word page; '
                     f'the module must be contained in one')
-            pointer, limit = base, base + size
+            sizes.append(size)
+            byte_pages.append(code == 0x0b)
+            if pointer is None:
+                pointer, limit, base = at, at + size, at
+            continue
+        if code == 0x0c:
+            seg = segment()
+            base = pointer = bases[seg]
+            limit = pointer + sizes[seg]
+            continue
+        if code == 0x0d:
+            base = bases[segment()]
             continue
         raise LoadError(f'loader code {code:#04x} is not one this loader takes (LC)')
 
     if pointer is None:
         raise LoadError('no SIZE code')
-    return core, entry, limit - base, byte_page
+    return core, entry, sizes, byte_pages
 
 
 def dump(data):
@@ -186,6 +225,10 @@ def dump(data):
             return
         elif code in (0x09, 0x0a, 0x0b):
             print(f'{"SIZEB" if code == 0x0b else "SIZEW"} {getword()}')
+        elif code == 0x0c:
+            print(f'SEG   {getword()}')
+        elif code == 0x0d:
+            print(f'RELOC {getword()}')
         else:
             print(f'??    {code:02X}')
             return
@@ -203,7 +246,8 @@ def read_map(path):
 def main():
     ap = argparse.ArgumentParser(description='reference loader for 703 relocatable object text')
     ap.add_argument('object', help='the module, as asm703.py --object writes it')
-    ap.add_argument('--base', default='0', help='word address to place the module at')
+    ap.add_argument('--base', default='0', help='word address to place the module at, or '
+                                                'one for each of its segments, commas between')
     ap.add_argument('--map', help='write the placed module as "addr word" lines')
     ap.add_argument('--check', metavar='MAP',
                     help='compare the placed module against an "addr word" map, '
@@ -213,15 +257,21 @@ def main():
 
     with open(args.object, 'rb') as f:
         data = f.read()
-    base = int(args.base, 0)
+    bases = [int(base, 0) for base in args.base.split(',')]
     try:
         if args.dump:
             dump(data)
             return 0
-        core, entry, size, byte_page = load(data, base)
+        core, entry, sizes, byte_pages = load(data, bases)
     except LoadError as e:
         print(f'{args.object}: {e}', file=sys.stderr)
         return 1
+    if len(sizes) < len(bases):
+        print(f'{args.object}: the module has {len(sizes)} segment{"s" if len(sizes) != 1 else ""}, '
+              f'and --base gave {len(bases)} addresses', file=sys.stderr)
+        return 1
+    where = ' and '.join(f'{base:#x}' for base in bases)
+    words = ' + '.join(str(size) for size in sizes)
 
     if args.map:
         with open(args.map, 'w', encoding='utf-8') as f:
@@ -241,12 +291,12 @@ def main():
             else:
                 continue
             bad += 1
-        print(f'{args.object} at {base:#x}: {size} words, entry {entry:#x}, '
+        print(f'{args.object} at {where}: {words} words, entry {entry:#x}, '
               f'{len(core)} compared, {bad} mismatch{"es" if bad != 1 else ""}')
         return 1 if bad else 0
 
-    print(f'{args.object} at {base:#x}: {size} words, entry {entry:#x}'
-          f'{", byte page" if byte_page else ""}')
+    print(f'{args.object} at {where}: {words} words, entry {entry:#x}'
+          f'{", byte page" if any(byte_pages) else ""}')
     return 0
 
 

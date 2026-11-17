@@ -32,6 +32,10 @@ not use. It produces two things, and a third for the decks that come after:
         0A  the module's size in words, first of all; 0B the same for a
             module that byte-addresses directly and so must sit inside
             one 1024-word byte page rather than one 2048-word page
+        0C  the text from here on is this segment's, to be stored from its
+            first word and relocated by its base: one word, its number
+        0D  the words from here on hold addresses in this segment, and
+            are relocated by its base instead: one word, its number
 
     The text is cut into records of a zero marker, ninety-two bytes and a
     checksum -- the byte sum folded, (sum >> 8) + sum -- which is one
@@ -42,6 +46,27 @@ not use. It produces two things, and a third for the decks that come after:
     until it is loaded, and a module must fit one page, since its M fields
     are page offsets. tools/reload703.py is the reference loader for this
     text, and rex/ has the one that runs on the machine.
+
+    A module of more than a page is written as segments, a SEG card
+    between one and the next:
+
+            ...                     ; up to a page of it
+            SEG
+    FAR     SUBR                    ; and up to a page more
+
+    Each segment is assembled from a word 0 of its own, the text opens
+    with a size code for each, and the loader gives each a block where it
+    finds one -- so what one segment knows of another is that it is in
+    some other page. A reference from one into the other is written as a
+    reference to another page is: behind a page selection (SMB, or a
+    macro that writes one), or through an address in a cell or a literal,
+    or as the operand of MPY or DIV, which is a whole address. The
+    distance from one to the other is not a number. The literals waiting
+    at a SEG card are laid down in front of it, as in front of an END.
+    The last two codes are this assembler's, past the 1968 loader's
+    twelve, and a module of one segment has neither; `--org` takes a
+    base for each segment, commas between, to assemble such a source
+    absolute.
   - an entry deck (`--exports`): the names the deck's NTRY cards list, as
     EQUs at the values they have here, for another deck to begin with.
     That is how what loads under an executive knows its vector and its
@@ -232,7 +257,7 @@ GEN_SHIFT.update({name: 0x0a00 | (i << 4) for i, name in enumerate(LOGICAL_SHIFT
 # out both halves of a choice as `TRUE c ... ENDC` followed by `FALS c ... ENDC`.
 DIRECTIVES = {'ORG', 'ORIG', 'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'STR', 'RES', 'EQU',
               'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'MACRO', 'ENDM', 'NTRY',
-              'LIBR'}
+              'LIBR', 'SEG'}
 
 # The instructions that only read their operand, and so may be given a
 # literal for one: `ADD =1` is a reference to a word holding 1, which the
@@ -314,6 +339,31 @@ CHAR_HIGH_BIT = 0x80
 # Every identifier in an expression, used to decide whether an EQU inherits its
 # operand's location-ness.
 NAMES = re.compile(r'[A-Za-z][A-Za-z0-9_.]*')
+
+# A module may be several segments, each a stream of words from its own
+# word 0 that the loader places by itself (see the SEG card). While the
+# deck is assembled segment k's word n stands at (k << SEG_SHIFT) + n, so
+# that every word of the module has an address of its own, and a location
+# in segment k counts SEG_UNIT ** k towards an expression's relocation --
+# one, for the first segment and for every deck that is not a module --
+# so that the count says which segment's base the loader is to add.
+SEG_SHIFT = 16
+SEG_UNIT = 1 << 20
+
+
+def locate(lineno, cnt, what):
+    """A relocation count as (times over, segment): (0, None) for a number,
+    (1, k) for a word address in segment k, (2, k) for a byte address."""
+    if cnt == 0:
+        return 0, None
+    seg = 0
+    while cnt % SEG_UNIT == 0:
+        cnt //= SEG_UNIT
+        seg += 1
+    if not -SEG_UNIT // 2 < cnt < SEG_UNIT // 2:
+        raise AsmError(lineno, f'{what} puts locations of two segments together, and how '
+                               f'far apart those are only the loader knows')
+    return cnt, seg
 
 
 class Loc:
@@ -710,6 +760,9 @@ class Expr:
     # Every symbol an expression has looked up, while an assembly is
     # collecting them: what was never looked up was never used.
     seen = None
+    # Whether a module is being assembled: `$` is then a location of the
+    # segment it is in.
+    segmented = False
 
     TOKEN = re.compile(r"""
         \s*(?:
@@ -723,7 +776,7 @@ class Expr:
         )
     """, re.VERBOSE)
 
-    def __init__(self, text, symbols, here, lineno, counts=None, here_count=1):
+    def __init__(self, text, symbols, here, lineno, counts=None, here_count=None):
         self.tokens = []
         pos = 0
         while pos < len(text):
@@ -739,6 +792,8 @@ class Expr:
         self.symbols = symbols
         self.counts = counts if counts is not None else {}
         self.here = here
+        if here_count is None:
+            here_count = SEG_UNIT ** (here >> SEG_SHIFT) if Expr.segmented and here else 1
         self.here_count = here_count
         self.lineno = lineno
 
@@ -957,7 +1012,7 @@ def sizeof(lineno, op, arg):
     """How many words a statement occupies."""
     if op is None:
         return 0
-    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'NTRY', 'LIBR'):
+    if op in ('EQU', 'ORG', 'ORIG', 'TRUE', 'FALS', 'ENDC', 'END', 'LPOOL', 'NTRY', 'LIBR', 'SEG'):
         return 0    # a pool's words are counted where pass 1 lays it down
     if op in SUBR_MACROS or op == 'EXCH':
         return 2
@@ -1025,9 +1080,15 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
             counts=None, relocatable=False, info=None):
     """encode(), always returning `(word, kind)`. `info`, a dict, is told
     the page a direct operand of an absolute build is in -- a word page for
-    a word reference, a byte page for a byte reference."""
+    a word reference, a byte page for a byte reference -- and the segment
+    of a module that a location is in."""
     if counts is None:
         counts = {}
+    if info is None:
+        info = {}
+    # the segment this word is in, and what a location there counts
+    own = here >> SEG_SHIFT if relocatable else 0
+    one = SEG_UNIT ** own
 
     def reloc(text):
         return Expr(text, symbols, here, lineno, counts).reloc()
@@ -1067,9 +1128,12 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
                        for name, v in symbols.items()}
             dcounts = {name: c * 2 for name, c in counts.items()}
             addr, cnt = Expr(text, doubled, here * 2, lineno, dcounts,
-                             here_count=2).reloc()
+                             here_count=2 * one).reloc()
         else:
             addr, cnt = reloc(text)
+        n, seg = locate(lineno, cnt, text.strip()) if relocatable else (cnt, None)
+        if seg is not None:
+            info['seg'] = seg
         # An indexed operand's M is a bare base or displacement under IXR, not
         # a paged address, so it keeps the old rules: byte bases wrap within
         # the eleven-bit field -- the relocating loader writes `STB * BUF3+...`
@@ -1096,8 +1160,8 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
         if indexed:
             if op in BYTE_REF:
                 addr &= 0x7ff
-            if relocatable and cnt:
-                if op in BYTE_REF and cnt == 2:
+            if relocatable and n:
+                if op in BYTE_REF and n == 2:
                     kind = 'B11I'
                 else:
                     raise AsmError(
@@ -1113,9 +1177,8 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
             if addr < 0:
                 raise AsmError(lineno, f'{unit} address {addr} is negative')
             if relocatable:
-                if cnt == 0:
-                    if info is not None:
-                        info['page'] = addr >> 11
+                if n == 0:
+                    info['page'] = addr >> 11
                     if not prev_selects_page:
                         raise AsmError(
                             lineno,
@@ -1123,18 +1186,24 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
                             f'selected; a module runs in whatever page the loader '
                             f'puts it, so put SMB in front, or go through the '
                             f'index register')
-                elif cnt == (2 if op in BYTE_REF else 1):
+                elif n == (2 if op in BYTE_REF else 1):
                     kind = 'B11' if op in BYTE_REF else 'W11'
+                    if seg != own and not prev_selects_page:
+                        raise AsmError(
+                            lineno,
+                            f'{text.strip()} is in another segment of the module, which '
+                            f'the loader puts in a page of its own, and no page is '
+                            f'selected: put SMB in front, or go through the index '
+                            f'register')
                 else:
                     raise AsmError(
                         lineno,
-                        f'{unit} address {text.strip()!r} relocates {cnt} times '
+                        f'{unit} address {text.strip()!r} relocates {n} times '
                         f'over; a direct operand is one location or none')
             else:
                 ipage = here >> 10 if op in BYTE_REF else here >> 11
                 tpage = addr >> 11
-                if info is not None:
-                    info['page'] = tpage
+                info['page'] = tpage
                 if tpage != ipage and not prev_selects_page:
                     raise AsmError(
                         lineno,
@@ -1167,10 +1236,12 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
         # sixteen pages and SMU the upper sixteen.
         target, cnt = reloc(arg)
         if relocatable and cnt:
-            if cnt != 1:
+            n, seg = locate(lineno, cnt, arg.strip())
+            if n != 1:
                 raise AsmError(lineno, f'SMB {arg.strip()!r} is not one location')
             # The page is not known until the loader places the module; the
             # object carries the address and the loader builds the word.
+            info['seg'] = seg
             return target & 0x7fff, 'SMB'
         page = (target >> 10) & 0x1f
         if page < 16:
@@ -1201,16 +1272,18 @@ def encode2(lineno, op, arg, symbols, here, prev_selects_page=False,
 
 
 def data_kind(lineno, cnt, relocatable, what):
-    """The kind of a data word from its relocation count."""
-    if cnt == 0:
-        return 'A'
-    if cnt == 1:
-        return 'W15'
-    if cnt == 2:
-        return 'B16'
+    """The kind of a data word from its relocation count, and the segment
+    of the address it holds, if it holds one."""
     if not relocatable:
-        return 'A'
-    raise AsmError(lineno, f'{what} relocates {cnt} times over; a data word holds '
+        return {0: 'A', 1: 'W15', 2: 'B16'}.get(cnt, 'A'), None
+    n, seg = locate(lineno, cnt, what)
+    if n == 0:
+        return 'A', None
+    if n == 1:
+        return 'W15', seg
+    if n == 2:
+        return 'B16', seg
+    raise AsmError(lineno, f'{what} relocates {n} times over; a data word holds '
                            f'a number, a word address or a byte address')
 
 
@@ -1233,8 +1306,7 @@ def assemble_object(paths):
     address the loader will build the instruction from.
     """
     r = _assemble(paths, origin=0, relocatable=True)
-    stream = object_stream(r['core'], r['kinds'], r['size'], r['entry'], r['sizeb'])
-    return stream, r['listing'], r['symbols'], r['core'], r['size']
+    return object_stream(r), r['listing'], r['symbols'], r['core'], r['size']
 
 
 class Part:
@@ -1399,7 +1471,16 @@ def _assemble_deck(statements, origin, relocatable, errors):
     # Pass 1: place every statement and collect the labels.
     symbols = {}
     placed = []
-    here = origin
+    # Where each segment of a module source goes when it is assembled
+    # absolute: one address, or one to a segment.
+    bases = [origin] if isinstance(origin, int) else list(origin)
+    here = bases[0]
+    segment = 0
+    Expr.segmented = relocatable
+
+    def one():
+        """What a location here counts: see SEG_UNIT."""
+        return SEG_UNIT ** (here >> SEG_SHIFT) if relocatable else 1
     # Stack of "are we assembling?" flags, one per open TRUE/FALS.
     cond = []
     # EQUs whose operand named something not yet defined; settled after the pass.
@@ -1471,7 +1552,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
                 laid.append(lit)
                 here += 1
             symbols[lit.name] = cell[key]
-            counts[lit.name] = 1
+            counts[lit.name] = one()
         pending.clear()
         return laid
 
@@ -1516,6 +1597,26 @@ def _assemble_deck(statements, origin, relocatable, errors):
                         lineno,
                         f'END here leaves {", ".join(sorted(tail))} unassembled'))
                 break
+            if op == 'SEG':
+                # The next segment of a module: whatever literals are
+                # waiting close this one, as they would close the deck.
+                if label or arg:
+                    raise AsmError(lineno, 'SEG takes no label and no operand')
+                if pending:
+                    at = here
+                    placed.append((lineno, at, 'LPOOL', pool(), None))
+                segment += 1
+                left[len(placed)] = here
+                if relocatable:
+                    here = segment << SEG_SHIFT
+                elif segment < len(bases):
+                    here = bases[segment]
+                else:
+                    raise AsmError(lineno, 'SEG begins a segment of a module: assembled '
+                                           'absolute, each wants a base, and --org gave '
+                                           f'{len(bases)}')
+                placed.append((lineno, here, op, arg, text))
+                continue
             if op == 'LIBR':
                 # the deck was divided at these before it was read; one a
                 # macro makes divides nothing
@@ -1550,7 +1651,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
                 # SUBR lays down a return slot and then the STX that fills it; the
                 # name belongs to the STX, so that callers jump to code.
                 symbols[label] = here + 1 if op == 'SUBR' else here
-                counts[label] = 1
+                counts[label] = one()
                 defined[label] = (lineno, None)
                 if op in DATA_OPS:
                     cells[label] = lineno
@@ -1567,7 +1668,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
                 # A module is one contiguous stream from word 0, placed by the
                 # loader; the one ORG it may carry is the no-op that names where
                 # it already is (bcore.asm's `ORG B.CORE`).
-                if relocatable and (target, cnt) != (here, 1):
+                if relocatable and (target, cnt) != (here, one()):
                     raise AsmError(
                         lineno,
                         f'{op} {arg.strip()!r} in a module: the loader decides where '
@@ -1639,10 +1740,13 @@ def _assemble_deck(statements, origin, relocatable, errors):
     # Pass 2: emit.
     core = {}
     kinds = {}
+    # For a word of a module that holds a location: the segment it is in.
+    targets = {}
     listing = []
-    entry = None
-    # The page selection in force, as (byte page, whether it is a
-    # location's -- which in a module is all that is known of it), or None.
+    entry = entry_seg = None
+    # The page selection in force, as (byte page, the segment of the module
+    # it is a location in -- which in a module is all that is known of such
+    # a one -- or None for an address), or None.
     # SML/SMU/SMB make one and the next memory reference uses it up: the
     # hardware reloads the extension register after a memory reference and
     # after nothing else, so the generics between the two leave it standing,
@@ -1658,7 +1762,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
 
     def data(part, at, lineno, what):
         v, c = Expr(part, symbols, at, lineno, counts).reloc()
-        return v & 0xffff, data_kind(lineno, c, relocatable, what)
+        return (v & 0xffff, *data_kind(lineno, c, relocatable, what))
 
     # The lint's view of what has been emitted: the last two statements
     # that put words down, as (mnemonic, words).
@@ -1678,7 +1782,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
                      + (f' under {op2}' if op2 in SKIPPERS and op1 in ('JMP', 'EXIT', 'HLT') else '')
                      + ', which can run on into it')
 
-    def lint(lineno, addr, op, arg, words, wkinds, info):
+    def lint(lineno, addr, op, arg, words, wkinds, wsegs, info):
         """The mistakes this machine makes easy, looked for in what is about
         to be emitted. Each is something the hardware does exactly as
         written and nobody means."""
@@ -1700,10 +1804,12 @@ def _assemble_deck(statements, origin, relocatable, errors):
         if selection is not None and op in MEMREF and not arg.strip().startswith('*'):
             # A page selection governs this reference whatever it names, so
             # what it names had better be in the page selected.
-            page, located = selection
-            if relocatable and located != (wkinds[0] != 'A'):
-                # all a module knows of its own page is that it is its own
-                where = 'the module\'s own page' if located else f'byte page {page}'
+            page, sseg = selection
+            if relocatable and sseg != (wsegs[0] if wkinds[0] != 'A' else None):
+                # all a module knows of a page of its own is whose it is
+                where = (f'byte page {page}' if sseg is None
+                         else 'the module\'s own page' if sseg == addr >> SEG_SHIFT
+                         else 'another segment\'s page')
                 warn(lineno, f'{op} {arg.strip()} is read under the selection of '
                              f'{where}, which is not where it is')
             elif 'page' in info:
@@ -1716,15 +1822,19 @@ def _assemble_deck(statements, origin, relocatable, errors):
     for lineno, addr, op, arg, text in placed:
         words = []
         wkinds = []
+        # for each word that holds a location of a module, its segment
+        wsegs = []
+        own = addr >> SEG_SHIFT if relocatable else None
         pooled = None
         info = {}
         try:
             if op == 'LPOOL':
                 pooled = arg
                 for i, lit in enumerate(pooled):
-                    w, k = data(lit.body, addr + i, lit.lineno, '=' + lit.body)
+                    w, k, g = data(lit.body, addr + i, lit.lineno, '=' + lit.body)
                     words.append(w)
                     wkinds.append(k)
+                    wsegs.append(g)
                 if pooled:
                     falls_into(lineno, 'a literal pool')
                     pools.append((addr, len(pooled)))
@@ -1738,9 +1848,10 @@ def _assemble_deck(statements, origin, relocatable, errors):
                     f'put an LPOOL after it in its own page')
             elif op in ('WORD', 'DATA', 'D'):
                 for part in operand_list(arg):
-                    w, k = data(part, addr + len(words), lineno, part.strip())
+                    w, k, g = data(part, addr + len(words), lineno, part.strip())
                     words.append(w)
                     wkinds.append(k)
+                    wsegs.append(g)
             elif op in ('TEXT', 'STR'):
                 # STR is TEXT that may be an odd number of bytes: the low
                 # half of its last word is then zero, and whoever reads it
@@ -1755,6 +1866,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
             elif op == 'SUBR':
                 words = [0x0000, (MEMREF['STX'] << 12) | (addr & 0x07ff)]
                 wkinds = ['A', 'W11']
+                wsegs = [None, own]
             elif op == 'EXIT':
                 # `EXIT sym` returns through the subroutine's slot; `EXIT sym,n`
                 # returns n words further on, which is how a subroutine takes an
@@ -1770,12 +1882,19 @@ def _assemble_deck(statements, origin, relocatable, errors):
                 wkinds = ['W11', 'A']
                 # The LDX is a direct reference to the return slot, so the
                 # slot has to be in the page it is read under: this one, or
-                # the one a selection in front names. A module is one page.
+                # the one a selection in front names. In a module that is
+                # the segment.
                 slot = entry_addr - 1
-                under = addr >> 11 if selection is None else selection[0] >> 1
-                if not relocatable and slot >> 11 != under:
-                    warn(lineno, f'EXIT {parts[0].strip()} reads its return slot in word page '
-                                 f'{under}, and the slot is in word page {slot >> 11}')
+                if relocatable:
+                    wsegs = [slot >> SEG_SHIFT, None]
+                    if wsegs[0] != (own if selection is None else selection[1]):
+                        warn(lineno, f'EXIT {parts[0].strip()} reads its return slot in a '
+                                     f'page that is not the slot\'s segment\'s')
+                else:
+                    under = addr >> 11 if selection is None else selection[0] >> 1
+                    if slot >> 11 != under:
+                        warn(lineno, f'EXIT {parts[0].strip()} reads its return slot in word page '
+                                     f'{under}, and the slot is in word page {slot >> 11}')
             elif op == 'BYTE':
                 # Two bytes to a word, high half first, as everywhere else on this
                 # machine. An odd count leaves the low half zero.
@@ -1792,9 +1911,10 @@ def _assemble_deck(statements, origin, relocatable, errors):
                 parts = operand_list(arg)
                 w, k = encode2(lineno, op, parts[0], symbols, addr, selection is not None,
                                counts, relocatable, info)
-                words, wkinds = [w], [k]
+                words, wkinds, wsegs = [w], [k], [info.get('seg')]
                 for i, part in enumerate(parts[1:], 1):
-                    w, k = data(part, addr + i, lineno, part.strip())
+                    w, k, g = data(part, addr + i, lineno, part.strip())
+                    wsegs.append(g)
                     # The last argument carries bit 0 -- this machine's most
                     # significant -- to mark the end of the list. That is the
                     # assembler's doing, not the programmer's: `JSX STAT,LOADFIOT`
@@ -1819,13 +1939,17 @@ def _assemble_deck(statements, origin, relocatable, errors):
                         f'{op} has no indexed form; its second word is a flat '
                         f'15-bit address that already reaches all of core')
                 operand, cnt = Expr(arg, symbols, addr + 1, lineno, counts).reloc()
+                n, g = locate(lineno, cnt, arg.strip()) if relocatable else (cnt, None)
+                if relocatable and n not in (0, 1):
+                    raise AsmError(lineno, f'{op} operand {arg.strip()!r} is not one location')
+                if g is not None:
+                    operand &= (1 << SEG_SHIFT) - 1
                 if not 0 <= operand <= 0x7fff:
                     raise AsmError(
                         lineno, f'{op} operand {operand:#x} is not a 15-bit word address')
-                if relocatable and cnt not in (0, 1):
-                    raise AsmError(lineno, f'{op} operand {arg.strip()!r} is not one location')
                 words = [GEN_TWOWORD[op], operand]
-                wkinds = ['A', 'W15' if cnt == 1 else 'A']
+                wkinds = ['A', 'W15' if n == 1 else 'A']
+                wsegs = [None, g]
             elif op == 'END':
                 if relocatable:
                     # The entry is the one address the loader hands the
@@ -1833,8 +1957,10 @@ def _assemble_deck(statements, origin, relocatable, errors):
                     if not arg:
                         raise AsmError(lineno, 'a module\'s END must name its entry')
                     entry, cnt = Expr(arg, symbols, addr, lineno, counts).reloc()
-                    if cnt != 1:
+                    n, entry_seg = locate(lineno, cnt, arg.strip())
+                    if n != 1:
                         raise AsmError(lineno, f'entry {arg.strip()!r} is not a location in the module')
+                    entry &= (1 << SEG_SHIFT) - 1
                 words = []
             elif op == 'NTRY':
                 names = [n.strip() for n in operand_list(arg or '')]
@@ -1854,12 +1980,17 @@ def _assemble_deck(statements, origin, relocatable, errors):
                             f'until the loader places it: an entry here is a constant')
                 entries.append((lineno, names))
                 words = []
+            elif op == 'SEG':
+                # nothing runs from one segment on into the next
+                words = []
+                selection = None
+                before = [(None, 0), (None, 0)]
             elif op in ('ORG', 'ORIG', 'EQU', 'TRUE', 'FALS', 'ENDC', None):
                 words = []
             else:
                 w, k = encode2(lineno, op, arg, symbols, addr, selection is not None,
                                counts, relocatable, info)
-                words, wkinds = [w], [k]
+                words, wkinds, wsegs = [w], [k], [info.get('seg')]
                 if op == 'JMP' and not arg.strip().startswith(('*', '/')):
                     jumps.append((Expr(arg, symbols, addr, lineno, counts).value(),
                                   lineno, arg.strip()))
@@ -1869,18 +2000,20 @@ def _assemble_deck(statements, origin, relocatable, errors):
                     raise AsmError(lineno, f'word {addr + i:#x} is assembled twice')
                 core[addr + i] = w
                 kinds[addr + i] = k
+                if relocatable and k not in ('A', 'ILOC'):
+                    targets[addr + i] = wsegs[i] if i < len(wsegs) and wsegs[i] is not None else own
             if words and pooled is None:
-                lint(lineno, addr, op, arg, words, wkinds, info)
+                lint(lineno, addr, op, arg, words, wkinds, wsegs, info)
         except AsmError as e:
             errors.append(e)
             words = []
         if words:
             before = [before[1], (op, len(words))]
             if op == SELECT_BASE:
-                target, cnt = Expr(arg, symbols, addr, lineno, counts).reloc()
-                selection = ((target >> 10) & 0x1f, bool(cnt))
+                target = Expr(arg, symbols, addr, lineno, counts).value()
+                selection = ((target >> 10) & 0x1f, info.get('seg'))
             elif op in PAGE_SELECTS:
-                selection = ((words[0] & 0xf) | (0x10 if op == 'SMU' else 0), False)
+                selection = ((words[0] & 0xf) | (0x10 if op == 'SMU' else 0), None)
             elif (pooled is not None or len(words) != 1 or op in MEMREF or op in SKIPPERS
                   or op in DATA_OPS or op in SELECTION_ENDS):
                 selection = None
@@ -1902,25 +2035,38 @@ def _assemble_deck(statements, origin, relocatable, errors):
                              f'literal pool at {start:#x}')
 
     size = max(core) + 1 if core else 0
-    sizeb = False
+    # A module's segments, each as (words, whether it wants a byte page).
+    segments = []
     if relocatable and not errors:
-        # Direct byte references reach only their own 1024-word byte page,
-        # so a module that makes any must be placed inside one; the size
-        # code tells the loader which containment it needs.
-        sizeb = any(k == 'B11' for k in kinds.values())
-        limit = 1024 if sizeb else 2048
         where = end_card[0] if end_card else 0
-        if size > limit:
-            errors.append(AsmError(
-                where,
-                f'the module is {size} words; a module must fit one {limit}-word '
-                f'page, since its M fields are page offsets'))
-        elif set(core) != set(range(size)):
-            errors.append(AsmError(where, 'a module is one contiguous stream from word 0'))
-        elif entry is None:
+        for k in range(segment + 1):
+            base = k << SEG_SHIFT
+            mine = [a for a in core if a >> SEG_SHIFT == k]
+            words = max(mine) + 1 - base if mine else 0
+            # Direct byte references reach only their own 1024-word byte
+            # page, so a segment that makes any into itself must be placed
+            # inside one; the size code tells the loader which containment
+            # it needs.
+            sizeb = any(kinds[a] == 'B11' and targets[a] == k for a in mine)
+            segments.append((words, sizeb))
+            limit = 1024 if sizeb else 2048
+            what = 'the module' if not segment else f'segment {k} of the module'
+            if words > limit:
+                errors.append(AsmError(
+                    where,
+                    f'{what} is {words} words; a {"segment" if segment else "module"} must '
+                    f'fit one {limit}-word page, since its M fields are page offsets'))
+            elif not mine:
+                errors.append(AsmError(where, f'{what} is empty'))
+            elif len(mine) != words:
+                errors.append(AsmError(where, 'a module is one contiguous stream from word 0'
+                                       if not segment else f'{what} is not one stream from its word 0'))
+        if entry is None and not errors:
             errors.append(AsmError(where, 'a module needs an END naming its entry'))
+        size = sum(words for words, _ in segments)
 
     Expr.seen, seen = None, Expr.seen
+    Expr.segmented = False
     for name in literals:
         symbols.pop(name, None)
     # A local label is nobody's to name, but a listing may say where it
@@ -1950,11 +2096,12 @@ def _assemble_deck(statements, origin, relocatable, errors):
         raise AsmError(0, 'nothing was assembled')
 
     image = bytearray()
-    for word in range(size):
+    for word in (sorted(core) if relocatable else range(size)):
         image += core.get(word, 0).to_bytes(2, 'big')
     return {'image': bytes(image), 'listing': listing, 'symbols': symbols,
             'core': core, 'kinds': kinds, 'size': size, 'entry': entry,
-            'sizeb': sizeb, 'warnings': warnings, 'scoped': scoped,
+            'entry_seg': entry_seg, 'segments': segments, 'targets': targets,
+            'sizeb': any(b for _, b in segments), 'warnings': warnings, 'scoped': scoped,
             'entries': [(lineno, [(name, symbols[name], *defined[name]) for name in names])
                         for lineno, names in entries]}
 
@@ -1964,34 +2111,60 @@ def _assemble_deck(statements, origin, relocatable, errors):
 RECORD_DATA = 92
 
 
-def object_stream(core, kinds, size, entry, sizeb):
-    """The loader text for a module at base 0, framed into records.
+def object_stream(r):
+    """The loader text for a module at base 0, framed into records, from
+    what _assemble() made of its deck.
 
     Repeatable codes carry runs of up to sixteen words of one kind; a page
     selection and a reserved run each take a control code and one word; the
     entry closes the stream. Everything after END is padding the loader
     never reads.
+
+    A module of several segments says each one's size first, and then the
+    text of each in turn behind a 0C code; a word that holds a location in
+    another segment than the one it is in stands behind a 0D code naming
+    that segment, and the next that does not behind another.
     """
-    out = bytearray([0x0b if sizeb else 0x0a]) + size.to_bytes(2, 'big')
-    addr = 0
-    while addr < size:
-        kind = kinds[addr]
-        run = addr
-        while run < size and kinds[run] == kind and run - addr < 16:
-            run += 1
-        if kind == 'ILOC':
-            while run < size and kinds[run] == 'ILOC':
+    core, kinds, targets = r['core'], r['kinds'], r['targets']
+    out = bytearray()
+    for words, sizeb in r['segments']:
+        out += bytes([0x0b if sizeb else 0x0a]) + words.to_bytes(2, 'big')
+    against = 0                 # the segment whose base the loader is adding
+
+    def relocate(seg):
+        nonlocal against, out
+        if seg != against:
+            out += bytes([0x0d]) + seg.to_bytes(2, 'big')
+            against = seg
+
+    for k, (size, _) in enumerate(r['segments']):
+        if k:
+            out += bytes([0x0c]) + k.to_bytes(2, 'big')
+            against = k
+        at = k << SEG_SHIFT
+        end = at + size
+        addr = at
+        while addr < end:
+            kind = kinds[addr]
+            relocate(targets.get(addr, against))
+            run = addr
+            while (run < end and kinds[run] == kind and run - addr < 16
+                   and targets.get(run, against) == against):
                 run += 1
-            out += bytes([0x04]) + (run - addr).to_bytes(2, 'big')
-        elif kind == 'SMB':
-            out += bytes([0x03]) + core[addr].to_bytes(2, 'big')
-            run = addr + 1
-        else:
-            out += bytes([0x80 | (KINDS[kind] << 4) | (run - addr - 1)])
-            for a in range(addr, run):
-                out += core[a].to_bytes(2, 'big')
-        addr = run
-    out += bytes([0x06]) + entry.to_bytes(2, 'big')
+            if kind == 'ILOC':
+                while run < end and kinds[run] == 'ILOC':
+                    run += 1
+                out += bytes([0x04]) + (run - addr).to_bytes(2, 'big')
+            elif kind == 'SMB':
+                out += bytes([0x03]) + core[addr].to_bytes(2, 'big')
+                run = addr + 1
+            else:
+                out += bytes([0x80 | (KINDS[kind] << 4) | (run - addr - 1)])
+                for a in range(addr, run):
+                    out += core[a].to_bytes(2, 'big')
+            addr = run
+    relocate(r['entry_seg'])
+    out += bytes([0x06]) + r['entry'].to_bytes(2, 'big')
 
     records = bytearray()
     for i in range(0, len(out), RECORD_DATA):
@@ -2028,7 +2201,8 @@ def write_listing(path, listing, symbols, scoped=None):
     with open(path, 'w', encoding='utf-8') as f:
         for addr, words, text in listing:
             if words:
-                f.write(f'{addr:04X}  {" ".join(f"{w:04X}" for w in words[:4]):<20}{text}\n')
+                # a module's segment is not in its address: each starts at 0
+                f.write(f'{addr & 0xffff:04X}  {" ".join(f"{w:04X}" for w in words[:4]):<20}{text}\n')
             else:
                 f.write(f'{"":4}  {"":<20}{text}\n')
         f.write('\nsymbols:\n')
@@ -2105,7 +2279,8 @@ def main():
                                      'the relocating loader\'s record format')
     ap.add_argument('--org', default='0',
                     help='where the location counter starts (default 0); an '
-                         'absolute build of a module source at a chosen base')
+                         'absolute build of a module source at a chosen base, '
+                         'or at one for each of its segments, commas between')
     ap.add_argument('-l', '--listing', help='write an address/word/source listing')
     ap.add_argument('-x', '--exports', help='write the names on the deck\'s NTRY cards '
                                             'as a deck of EQUs')
@@ -2131,12 +2306,12 @@ def main():
 
     deck = ' '.join(args.sources)
     try:
-        r = _assemble(args.sources, origin=int(args.org, 0), relocatable=bool(args.object))
+        r = _assemble(args.sources, origin=[int(base, 0) for base in args.org.split(',')],
+                      relocatable=bool(args.object))
         image, listing, symbols, core, size = (r['image'], r['listing'], r['symbols'],
                                                r['core'], r['size'])
         if args.object:
-            stream = object_stream(core, r['kinds'], size, r['entry'], r['sizeb'])
-            image = b''.join(core[a].to_bytes(2, 'big') for a in range(size))
+            stream = object_stream(r)
         for w in r['warnings']:
             print(w, file=sys.stderr)
         if args.werror and r['warnings']:
@@ -2194,7 +2369,9 @@ def main():
 
     if args.object:
         records = len(stream) // (RECORD_DATA + 2)
-        print(f'{deck}: {size} words, {records} records -> {args.object}')
+        parts = len(r['segments'])
+        print(f'{deck}: {size} words{f" in {parts} segments" if parts > 1 else ""}, '
+              f'{records} records -> {args.object}')
     elif args.output:
         print(f'{deck}: {len(image) // 2} words -> {args.output}')
     return 0
