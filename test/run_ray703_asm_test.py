@@ -1052,6 +1052,20 @@ BYTES   TEXT    "AB"
 """, [0x1100, 0x4200])
     if got is not None:
         check('...asks a byte page of that segment alone', got[3] == [False, True], got[3])
+    # A selection says no more than which segment, so the segment a direct
+    # byte reference is made into is the one that has to be in one byte
+    # page, wherever the reference is made from.
+    got = placed('a direct byte reference into another segment', """
+ONE     SMB     BYTES
+        LDB     BYTES+1
+        HLT
+        SEG
+TWO     HLT
+BYTES   TEXT    "ABCD"
+        END     ONE
+""", [0x1100, 0x4200])
+    if got is not None:
+        check('...asks a byte page of the segment it reaches', got[3] == [False, True], got[3])
 
     # A module of one segment is the text it always was: neither of the
     # codes that name a segment is in it.
@@ -1059,6 +1073,25 @@ BYTES   TEXT    "AB"
     codes = []
     reload703.load(asm703.object_stream(one), [0x1000], trace=codes)
     check('a module of one segment names none', not {0x0c, 0x0d} & {code for code, _ in codes}, codes)
+
+    # Text the reference loader is given out of order is refused in its
+    # own words, whatever the code that came too early.
+    def record(text):
+        body = bytes([0]) + bytes(text).ljust(asm703.RECORD_DATA, b'\0')
+        return body + bytes([((sum(body) >> 8) + sum(body)) & 0xff])
+
+    for what, text, want in (('an END', [0x06, 0, 0], 'no SIZE code'),
+                             ('a word', [0x80, 0x80, 0x00], 'text before the SIZE code'),
+                             ('a page selection', [0x03, 0, 0], 'text before the SIZE code'),
+                             ('a segment', [0x0c, 0, 0], 'segment 0 has no SIZE code')):
+        try:
+            reload703.load(record(text), [0x1000])
+            got = 'loaded'
+        except reload703.LoadError as e:
+            got = str(e)
+        except Exception as e:  # noqa: BLE001
+            got = repr(e)
+        check('%s in front of the SIZE code is refused' % what, want in got, got)
 
     def refused(name, deck, want, relocatable=True, origin=0):
         got = errors_of(build(deck, relocatable, origin))

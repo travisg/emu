@@ -101,7 +101,7 @@ def load(data, bases, trace=None):
     byte_pages = []
     pointer = None
     limit = None
-    base = None                 # what is added to a location: BASE
+    base = 0                    # what is added to a location: BASE
 
     def store(word):
         nonlocal pointer

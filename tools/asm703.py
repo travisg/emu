@@ -2043,11 +2043,13 @@ def _assemble_deck(statements, origin, relocatable, errors):
             base = k << SEG_SHIFT
             mine = [a for a in core if a >> SEG_SHIFT == k]
             words = max(mine) + 1 - base if mine else 0
-            # Direct byte references reach only their own 1024-word byte
-            # page, so a segment that makes any into itself must be placed
-            # inside one; the size code tells the loader which containment
-            # it needs.
-            sizeb = any(kinds[a] == 'B11' and targets[a] == k for a in mine)
+            # A direct byte reference reaches one 1024-word byte page: its
+            # own, or the one a selection in front names -- and all the
+            # assembler can hold that selection to is the segment. So a
+            # segment that any is made into, from itself or from another,
+            # must be placed inside one byte page; the size code tells the
+            # loader which containment it needs.
+            sizeb = any(kinds[a] == 'B11' and targets[a] == k for a in core)
             segments.append((words, sizeb))
             limit = 1024 if sizeb else 2048
             what = 'the module' if not segment else f'segment {k} of the module'
