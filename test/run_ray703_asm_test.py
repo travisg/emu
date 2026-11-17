@@ -383,6 +383,13 @@ SAY     MSG     "HI"
         r = build(deck)
         check(name, any(want in e for e in errors_of(r)), errors_of(r))
 
+    # A local label is in no symbol table, and the listing's has it under
+    # its routine's name; a macro's own is in neither.
+    r = build(MACROS + 'START   LDW     SAY\n.A      JMP     .A\nSAY     MSG     "HI"\n        END     START\n')
+    check('local labels for the listing', not isinstance(r, asm703.AsmErrorList)
+          and r['scoped'] == {'START.A': 1} and set(r['symbols']) == {'START', 'SAY'},
+          getattr(r, 'errors', None) or (r['scoped'], sorted(r['symbols'])))
+
     # An error in a macro says where the card is and where the call was.
     r = build(MACROS + 'START   JZ      NOWHERE\n        END     START\n')
     said = [str(e) for e in getattr(r, 'errors', [])]

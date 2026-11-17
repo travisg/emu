@@ -118,7 +118,9 @@ does not, so every routine may have its own `.LOOP` and `.DONE`:
             ...
             JMP     .LOOP
 
-and nothing outside the routine can name them, the symbol table included.
+and nothing outside the routine can name them. The listing's symbol table
+has them as ROUTINE.NAME -- TYPE.LOOP -- for whoever reads it to say where
+a branch goes.
 
 A macro is a run of cards under a name, with the call's arguments put in
 where its parameters stand (see Macro for the rules):
@@ -1734,7 +1736,14 @@ def _assemble(paths, origin=0, relocatable=False):
     Expr.seen, seen = None, Expr.seen
     for name in literals:
         symbols.pop(name, None)
+    # A local label is nobody's to name, but a listing may say where it
+    # is: under its routine's name, a dot between. A macro's own are left
+    # out, one to every call.
+    scoped = {}
     for name in [name for name in symbols if LOCAL_MARK in name]:
+        scope, _, local = name.partition(LOCAL_MARK)
+        if not scope.startswith((TOP_SCOPE, MACRO_SCOPE)):
+            scoped.setdefault(f'{scope}.{local}', symbols[name])
         del symbols[name]
     # A cell nothing names is a word of core doing nothing: a label on
     # data that no expression in the deck ever looked up.
@@ -1758,7 +1767,7 @@ def _assemble(paths, origin=0, relocatable=False):
         image += core.get(word, 0).to_bytes(2, 'big')
     return {'image': bytes(image), 'listing': listing, 'symbols': symbols,
             'core': core, 'kinds': kinds, 'size': size, 'entry': entry,
-            'sizeb': sizeb, 'warnings': warnings,
+            'sizeb': sizeb, 'warnings': warnings, 'scoped': scoped,
             'entries': [(lineno, [(name, symbols[name], *defined[name]) for name in names])
                         for lineno, names in entries]}
 
@@ -1823,7 +1832,12 @@ def punch_tape(image, origin):
     return bytes([0x00] * 8 + [0xff] * 12) + image[origin * 2:]
 
 
-def write_listing(path, listing, symbols):
+def write_listing(path, listing, symbols, scoped=None):
+    """The listing, and under it the symbol table: every name and its
+    value, a local label as ROUTINE.NAME -- which is what a debugger
+    reading the table shows a branch target as."""
+    table = dict(scoped or {})
+    table.update(symbols)
     with open(path, 'w', encoding='utf-8') as f:
         for addr, words, text in listing:
             if words:
@@ -1831,8 +1845,8 @@ def write_listing(path, listing, symbols):
             else:
                 f.write(f'{"":4}  {"":<20}{text}\n')
         f.write('\nsymbols:\n')
-        for name in sorted(symbols):
-            f.write(f'  {name:<10} {symbols[name] & 0xffff:04X}\n')
+        for name in sorted(table):
+            f.write(f'  {name:<10} {table[name] & 0xffff:04X}\n')
 
 
 # A number as a card writes one, which an entry deck can say again as written.
@@ -1981,7 +1995,7 @@ def main():
                 f.write(f'{addr:04X} {core[addr] & 0xffff:04X}\n')
 
     if args.listing:
-        write_listing(args.listing, listing, symbols)
+        write_listing(args.listing, listing, symbols, r['scoped'])
 
     # Last, so that it is never older than the image a makefile lists it behind.
     if args.exports:
