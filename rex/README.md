@@ -12,7 +12,7 @@ tests it.
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
     rexmac.asm         the macros a deck is written with: conditional jumps, CALL, MSG
-    rexlib.asm         the printer and the command line, for a module's deck
+    rexlib.asm         a library for a module's deck: the printer, the command line
     brex.asm           the wrapper that makes Tiny BASIC a module
     hello.asm          a module: prints where it landed, sleeps, exits
     util/              the utilities: TYPE, PUT, COPY, REN, DEL, DUMP, SQUISH
@@ -445,9 +445,12 @@ and the node's `T.ARG` holds its address. `RUN HELLO` prints the address the
 loader put it at. `rexmac.asm` is the macros a deck is written with --
 the conditional jumps that say which way a skip and a jump go, `CALL` for
 the kernel's vector, `MSG` for a text and its descriptor -- and
-`rexlib.asm` is a file a module's deck may put behind it and
+`rexlib.asm` is a library a module's deck may put behind it and
 `rexapi.asm`: the printer's routines, the command tail read as file names,
-and a file call's error said in words. Tiny BASIC is the real module: `brex.asm` over
+and a file call's error said in words, each a part under a `LIBR` card
+that is assembled into the module only if the module, or a part it has
+taken, names it -- so a module is its own code and what of the library it
+uses, and nothing is shared at run time. Tiny BASIC is the real module: `brex.asm` over
 `../test/703/bcore.asm` is `basic.obj`, and `RUN BASIC` (or `BASIC`) loads
 it, whereupon it takes its workspace -- line buffer, variables, stacks, the
 array and a heap, 2,192 words -- as one block from the pool, adds the

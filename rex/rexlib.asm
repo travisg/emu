@@ -3,13 +3,14 @@
 ; What most modules want and none should write twice: the printer, and
 ; the command line.
 ;
-; A deck that wants these puts this file behind rexapi.asm and rexmac.asm
-; and in front of its own, and they are assembled into the module like
-; any of its own routines -- nothing is shared at run time, and the words
-; count against the module's one page.  Each is an ordinary subroutine of
-; the module's task: one activation, static cells.  Nothing here compares
-; one byte address with another, so a module that uses it may load above
-; word X'4000'.
+; A library: a deck that wants these puts this file behind rexapi.asm and
+; rexmac.asm and in front of its own, and each part under a LIBR card is
+; assembled into the module only if the module, or a part it has taken,
+; names what the card lists.  Nothing is shared at run time, and the
+; words that are taken count against the module's one page.  Each routine
+; is an ordinary subroutine of the module's task: one activation, static
+; cells.  Nothing here compares one byte address with another, so a
+; module that uses it may load above word X'4000'.
 ;
 ;   L.PUTC   the character in ACR's low half, through the task's mailbox
 ;   L.PUTW   the bytes from ACR up to L.PWEND
@@ -19,7 +20,9 @@
 ;   L.DEC    ACR in decimal, unsigned
 ;   L.HEX    ACR as four hexadecimal digits
 ;   L.SLEEP  ACR ticks, a sixtieth of a second each
-;   L.ARGS   start reading the command tail (T.ARG) from its beginning
+;   L.ARGS   start reading the command tail (T.ARG) from its beginning:
+;            L.AP is then the byte address of its next character
+;   L.NADV   L.AP one character on
 ;   L.NAME   the next file name on it, into the four words ACR addresses,
 ;            as the directory holds one; a name with no type gets the one
 ;            in L.DTY, which is TX until a module stores another.  Zero
@@ -29,6 +32,10 @@
 ;            console's, so a task without the console is never told of one
 ;   L.EXIT   the task is over
 
+L.KCR           EQU     X'008D'         ; carriage return and line feed, as
+L.KLF           EQU     X'008A'         ; the teletype sends and takes them
+
+                LIBR    L.PUTC
 ; Deposit under MSK, kick the printer, then masked-look/SWAI/SWTCH until
 ; SERV clears the cell -- the shell's SHPUTC against this task's own node.
 L.PUTC          SUBR
@@ -52,6 +59,7 @@ L.PCWB          LDW     =SWAI           ; no: stand down until SERV says so
 L.PCWD          UNM
                 EXIT    L.PUTC
 
+                LIBR    L.PUTW,L.PWEND
 L.PUTW          SUBR
                 STW     L.PWP
 L.PWL           LDW     L.PWP
@@ -66,7 +74,10 @@ L.PWL           LDW     L.PWP
                 STW     L.PWP
                 JMP     L.PWL
 L.PWDN          EXIT    L.PUTW
+L.PWEND         WORD    0               ; L.PUTW's end of window
+L.PWP           WORD    0               ; ...and cursor
 
+                LIBR    L.MSG
 L.MSG           SUBR
                 CAX
                 LDW     *1
@@ -75,6 +86,7 @@ L.MSG           SUBR
                 JSX     L.PUTW
                 EXIT    L.MSG
 
+                LIBR    L.NL
 L.NL            SUBR
                 LDW     =L.KCR
                 JSX     L.PUTC
@@ -82,6 +94,7 @@ L.NL            SUBR
                 JSX     L.PUTC
                 EXIT    L.NL
 
+                LIBR    L.DEC
 ; The digits come out of the divide backwards, so they go into a buffer
 ; from its end and print forwards.  The 31-bit dividend is IXR:ACR with
 ; the sign duplicated into ACR's top bit, which the shift and the copy
@@ -112,7 +125,17 @@ L.DL            LDW     L.V
                 ADD     =1
                 JSX     L.PUTW
                 EXIT    L.DEC
+L.DB            RES     3               ; six digits, filled backwards
+L.KDBE          EQU     L.DB*2+5        ; the last byte of the digit buffer
 
+; The cells L.DEC, L.HEX and L.ERR work in, one activation of any of
+; them at a time.
+                LIBR    L.V
+L.V             WORD    0               ; the value in hand
+                LIBR    L.DP
+L.DP            WORD    0               ; the next digit's place, or its count
+
+                LIBR    L.SLEEP
 ; The delay and the state go into the node in one masked window;
 ; K.SWTCH returns when the scheduler next picks this task.
 L.SLEEP         SUBR
@@ -125,6 +148,7 @@ L.SLEEP         SUBR
                 CALL    K.SWTCH
                 EXIT    L.SLEEP
 
+                LIBR    L.HEX
 L.HEX           SUBR
                 STW     L.V
                 LDW     =4
@@ -144,7 +168,9 @@ L.HXL           LDW     L.V             ; the top digit, each time round
                 STW     L.DP
                 JNZ     L.HXL
                 EXIT    L.HEX
+L.K7            EQU     7               ; from '9'+1 to 'A'
 
+                LIBR    L.ARGS,L.AP
 L.ARGS          SUBR
                 SMB     CURT
                 LDX     CURT
@@ -154,7 +180,17 @@ L.ARGS          SUBR
 L.AR1           SLL     1
                 STW     L.AP
                 EXIT    L.ARGS
+L.AP            WORD    0               ; the command tail's cursor, a byte address
+L.NULW          WORD    0               ; a tail of nothing
 
+                LIBR    L.NADV
+L.NADV          SUBR
+                LDW     L.AP
+                ADD     =1
+                STW     L.AP
+                EXIT    L.NADV
+
+                LIBR    L.NAME,L.DTY
 ; The shell's SHNAME over the tail: up to six characters of name, two of
 ; type after a dot, each left-justified and zero-filled, the rest of an
 ; over-long word stepped over.
@@ -215,12 +251,13 @@ L.NDOT          LDX     L.NB
 L.NX            LDX     L.NB
                 LDW     *0
                 EXIT    L.NAME
-L.NADV          SUBR
-                LDW     L.AP
-                ADD     =1
-                STW     L.AP
-                EXIT    L.NADV
+L.NB            WORD    0               ; L.NAME's four words,
+L.NP            WORD    0               ; where its next character goes,
+L.NN            WORD    0               ; how many more it will take,
+L.NC            WORD    0               ; and the character in hand
+L.DTY           WORD    'TX'            ; the type a bare name is given
 
+                LIBR    L.ERR
 ; The E. values run down from minus one, so minus one less the value is
 ; an index into the table.
 L.ERR           SUBR
@@ -235,38 +272,7 @@ L.ERR           SUBR
                 JSX     L.MSG
                 JSX     L.NL
                 EXIT    L.ERR
-
-L.BRK           SUBR
-                SMB     CURT
-                LDX     CURT
-                LDW     *T.CON
-                JNZ     L.BRK1          ; the console's holder?
-                EXIT    L.BRK
-L.BRK1          SMB     BRKREQ
-                LDW     BRKREQ
-                EXIT    L.BRK
-
-L.EXIT          SMB     K.EXIT
-                JMP     K.EXIT
-
-L.PWEND         WORD    0               ; L.PUTW's end of window
-L.PWP           WORD    0               ; ...and cursor
-L.V             WORD    0               ; L.DEC's running value...
-L.DP            WORD    0               ; ...and where its next digit goes
-L.DB            RES     3               ; six digits, filled backwards
-L.AP            WORD    0               ; the command tail's cursor, a byte address
-L.NB            WORD    0               ; L.NAME's four words,
-L.NP            WORD    0               ; where its next character goes,
-L.NN            WORD    0               ; how many more it will take,
-L.NC            WORD    0               ; and the character in hand
-L.DTY           WORD    'TX'            ; the type a bare name is given
-L.NULW          WORD    0               ; a tail of nothing
-L.KCR           EQU     X'008D'         ; carriage return and line feed, as
-L.KLF           EQU     X'008A'         ; the teletype sends and takes them
-L.K7            EQU     7               ; from '9'+1 to 'A'
-L.KDBE          EQU     L.DB*2+5        ; the last byte of the digit buffer
 L.KNERR         EQU     8               ; how many E. values there are
-
 L.ETAB          WORD    L.E1T*2,L.E1E*2 ; E.NOF, and on down
                 WORD    L.E2T*2,L.E2E*2
                 WORD    L.E3T*2,L.E3E*2
@@ -291,3 +297,18 @@ L.E7T           TEXT    "SYSTEM FILE "
 L.E7E           EQU     $
 L.E8T           TEXT    "NAME IN USE "
 L.E8E           EQU     $
+
+                LIBR    L.BRK
+L.BRK           SUBR
+                SMB     CURT
+                LDX     CURT
+                LDW     *T.CON
+                JNZ     L.BRK1          ; the console's holder?
+                EXIT    L.BRK
+L.BRK1          SMB     BRKREQ
+                LDW     BRKREQ
+                EXIT    L.BRK
+
+                LIBR    L.EXIT
+L.EXIT          SMB     K.EXIT
+                JMP     K.EXIT

@@ -47,7 +47,8 @@ $(BUILD)/boot.bin: boot.asm $(ASM703)
 # --- modules --------------------------------------------------------------
 # What loads under REX: relocatable objects in the 1968 loader's record
 # format, each a deck that begins with the kernel's rexapi.asm.
-# The utilities, each a file in util/ behind rexlib.asm, and the test
+# The utilities, each a file in util/ behind rexlib.asm, a library: the
+# assembler takes the routines a deck names and leaves the rest. And the test
 # modules beside them.
 UTILS := type copy del ren squish dump put
 UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
@@ -81,7 +82,7 @@ $(BUILD)/dskt.obj: $(API) dskt.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM) $(API) dskt.asm --object $@ -l $(BUILD)/dskt.lst
 
-# The file calls' exerciser. rexlib.asm is the printer, for a module
+# The file calls' exerciser. rexlib.asm has the printer, for a module
 # that would rather not write it again.
 $(BUILD)/fst.obj: $(API) rexmac.asm rexlib.asm fst.asm $(ASM703)
 	@mkdir -p $(BUILD)
