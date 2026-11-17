@@ -149,6 +149,9 @@ and nobody means; it goes to stderr, and --werror makes it an error:
   - a direct reference behind a page selection, to something that is not
     in the page selected: the selection governs the next memory reference
     whatever it names, the generics between the two notwithstanding;
+  - an EXIT in another page than its subroutine's return slot, with no
+    selection of that page in front of it: the slot is read where the
+    EXIT runs;
   - a literal pool, or the cells before an END's, that execution can run
     on into or that a JMP names a word of;
   - a labelled cell that nothing in the deck refers to.
@@ -1601,6 +1604,14 @@ def _assemble(paths, origin=0, relocatable=False):
                 words = [(MEMREF['LDX'] << 12) | ((entry_addr - 1) & 0x07ff),
                          (MEMREF['JSX'] << 12) | 0x0800 | skip]
                 wkinds = ['W11', 'A']
+                # The LDX is a direct reference to the return slot, so the
+                # slot has to be in the page it is read under: this one, or
+                # the one a selection in front names. A module is one page.
+                slot = entry_addr - 1
+                under = addr >> 11 if selection is None else selection[0] >> 1
+                if not relocatable and slot >> 11 != under:
+                    warn(lineno, f'EXIT {parts[0].strip()} reads its return slot in word page '
+                                 f'{under}, and the slot is in word page {slot >> 11}')
             elif op == 'BYTE':
                 # Two bytes to a word, high half first, as everywhere else on this
                 # machine. An odd count leaves the low half zero.

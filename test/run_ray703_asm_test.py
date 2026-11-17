@@ -611,6 +611,24 @@ ON      HLT
     check('a skip ends a selection', any('would land in the wrong page' in e for e in errors_of(r)),
           errors_of(r) + warnings_of(r))
 
+    # An EXIT reads its return slot in the page it runs in.
+    far_exit = """
+START   JSX     SUB
+        HLT
+SUB     SUBR
+        SMB     ON
+        JMP     ON
+        ORG     X'1000'
+ON      NOP
+%s        EXIT    SUB
+        END     START
+"""
+    warned('an EXIT in another page than its slot', far_exit % '',
+           'EXIT SUB reads its return slot in word page 2, and the slot is in word page 0')
+    warned('an EXIT behind a selection of its slot\'s page', far_exit % '        SMB     SUB\n', None)
+    warned('an EXIT behind a selection of another page', far_exit % '        SMB     ON\n',
+           'EXIT SUB reads its return slot in word page 2')
+
     # A macro's words end where it ends, not where an ORG behind it goes.
     warned('a one-word macro under a skip, an ORG behind it', """
 ONE     MACRO
