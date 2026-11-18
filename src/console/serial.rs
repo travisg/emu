@@ -48,18 +48,25 @@ pub enum SerialSpec {
     Pty,
     /// A TCP listener on localhost at this port; 0 picks a free one.
     Tcp(u16),
+    /// A window of the emulator's own: a 703 teletype's paper, which the
+    /// 703's factory makes in place of a line to the host. [`open`]
+    /// refuses it -- no other port has a window to be.
+    Window,
 }
 
 impl SerialSpec {
-    /// `pty` or `tcp:PORT`.
+    /// `pty`, `tcp:PORT` or `window`.
     pub fn parse(s: &str) -> Result<Self, String> {
         if s == "pty" {
             return Ok(SerialSpec::Pty);
         }
+        if s == "window" {
+            return Ok(SerialSpec::Window);
+        }
         if let Some(port) = s.strip_prefix("tcp:") {
             return port.parse().map(SerialSpec::Tcp).map_err(|_| format!("'{port}' is not a port number"));
         }
-        Err(format!("'{s}' is not 'pty' or 'tcp:PORT'"))
+        Err(format!("'{s}' is not 'pty', 'tcp:PORT' or 'window'"))
     }
 }
 
@@ -73,6 +80,12 @@ pub fn open(spec: &SerialSpec) -> io::Result<(ConsoleEndpoint, String)> {
     let place = match spec {
         SerialSpec::Pty => open_pty(in_tx, out_rx)?,
         SerialSpec::Tcp(port) => open_tcp(*port, in_tx, out_rx)?,
+        SerialSpec::Window => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "a window is for a 703 teletype's line; this one wants pty or tcp:PORT",
+            ))
+        }
     };
     Ok((endpoint, place))
 }

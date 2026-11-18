@@ -70,7 +70,8 @@ time either way. The commands the shell has in it:
     BYE          end this shell; every other terminal's shell only
 
 **The other terminals.** Teletypes 1-3 sit beside the console, each given a
-host end by one `--serial` (`nc localhost 7031` for the line above). A key
+host end by one `--serial` (`nc localhost 7031` for the line above), or a
+teletype window of its own by `--serial window`. A key
 typed at one that has no shell brings it one: the console's shell loads
 `SHELL.RX` for it -- `shell.asm`, the console's own shell, assembled again
 as a module behind `shellmod.asm` -- and the key goes to that shell, so the

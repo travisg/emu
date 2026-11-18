@@ -884,9 +884,15 @@ pub enum Display {
     /// [`ray703::Ray703Frontend`]: SDL allows one context and one event
     /// pump per process, so however many windows the subsystem tokens ask
     /// for must share a frontend, and the composition lives in this variant
-    /// rather than in `main`. At least one part is `Some` -- a machine with
-    /// no window returns no `Display` at all.
-    Ray703 { title: &'static str, panel: Option<PanelDisplay>, tty: Option<TtyDisplay> },
+    /// rather than in `main`. There is at least one window -- a machine with
+    /// none returns no `Display` at all. `tty` is the console's teletype,
+    /// `terminals` the papers of the others `--serial window` gave one.
+    Ray703 {
+        title: &'static str,
+        panel: Option<PanelDisplay>,
+        tty: Option<TtyDisplay>,
+        terminals: Vec<TtyDisplay>,
+    },
     /// The Altair 8800's front panel, rendered by
     /// [`altair8800::Altair8800Frontend`] beside the terminal.
     Altair8800 { title: &'static str, panel: AltairPanelDisplay },
@@ -899,11 +905,14 @@ pub struct AltairPanelDisplay {
     pub control: PanelControl,
 }
 
-/// The teletype window's share of [`Display::Ray703`]: the paper the
-/// machine's serial output prints onto (the factory has already made it
-/// the `ConsoleEndpoint`'s sink).
+/// A teletype window's share of [`Display::Ray703`]: the paper the
+/// teletype prints onto (the factory has already made it the
+/// `ConsoleEndpoint`'s sink), and for a terminal other than the console its
+/// number and its own keyboard -- the console's is the channel `main`
+/// gives the frontend.
 pub struct TtyDisplay {
     pub paper: Paper,
+    pub line: Option<(usize, Sender<u8>)>,
 }
 
 /// The drive bay's share of [`Display::CharCell`]: the LEDs and the

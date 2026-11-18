@@ -32,7 +32,7 @@ use sdl2::keyboard::{Keycode, Mod};
 use sdl2::pixels::{Color, PixelFormatEnum};
 use sdl2::rect::Rect;
 use sdl2::render::{BlendMode, Canvas, Texture, TextureCreator};
-use sdl2::video::{Window, WindowContext};
+use sdl2::video::{Window, WindowContext, WindowPos};
 use std::sync::mpsc::Sender;
 
 /// Lines of paper above the platen.
@@ -67,17 +67,27 @@ pub(crate) struct TtyWindow {
 }
 
 impl TtyWindow {
+    /// `console_keys` is the console's keyboard channel, which the
+    /// console's teletype takes; another terminal's comes with its display.
     pub(crate) fn new(
         video: &sdl2::VideoSubsystem,
         title: &str,
         display: TtyDisplay,
-        tx: Sender<u8>,
+        console_keys: Sender<u8>,
     ) -> Result<Self, String> {
-        let window = video
-            .window(&format!("{title} Teletype"), WINDOW_W, WINDOW_H)
-            .position_centered()
-            .build()
-            .map_err(|e| e.to_string())?;
+        let (name, n, tx) = match display.line {
+            None => (format!("{title} Teletype"), 0, console_keys),
+            Some((n, keys)) => (format!("{title} Teletype {n}"), n, keys),
+        };
+        let mut window =
+            video.window(&name, WINDOW_W, WINDOW_H).position_centered().build().map_err(|e| e.to_string())?;
+        // each terminal's paper down and across from the last, so none
+        // lands squarely on another
+        if n > 0 {
+            let (x, y) = window.position();
+            let step = 32 * n as i32;
+            window.set_position(WindowPos::Positioned(x + step), WindowPos::Positioned(y + step));
+        }
         let canvas = window.into_canvas().accelerated().build().map_err(|e| e.to_string())?;
         Ok(TtyWindow {
             id: canvas.window().id(),

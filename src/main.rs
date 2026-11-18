@@ -97,6 +97,7 @@ fn usage(argv0: &str) -> String {
         ("--fast-io", "devices finish i/o at once, not at real speed"),
         ("--disk FILE", "mount FILE in place of the default disk (above)"),
         ("--serial pty|tcp:PORT", "a spare serial port (above) on a pty or localhost port; once per port"),
+        ("--serial window", "a 703 teletype's port in a teletype window of its own"),
         ("--debug SOCKET", "debug port on a unix socket, for tools/emudbg.py"),
         ("--halt", "start halted; needs a panel or --debug to run"),
         ("--restore FILE", "start from a snapshot of the same system"),

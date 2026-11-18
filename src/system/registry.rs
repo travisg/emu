@@ -335,18 +335,34 @@ fn build_ray703(
         // --no-throttle blasts the paper exactly as it blasts the terminal.
         let paper = crate::console::Paper::new();
         console.set_output(Box::new(paper.clone()));
-        tty_display = Some(crate::console::TtyDisplay { paper });
+        tty_display = Some(crate::console::TtyDisplay { paper, line: None });
     }
-    let display = (panel || tty).then_some(Display::Ray703 {
+
+    let mut bus = ray703::Ray703::new(rom, console, sub)?;
+    // Each --serial in turn is the next teletype's line: a window of its
+    // own -- the paper its sink, the window's keys its keyboard -- or a
+    // line to the host.
+    let mut terminals = Vec::new();
+    for (n, (spec, port)) in opts.serial.iter().zip(ray703::SERIAL_PORTS).enumerate() {
+        let line = if *spec == SerialSpec::Window {
+            let paper = crate::console::Paper::new();
+            let (keys, rx) = mpsc::channel();
+            terminals.push(crate::console::TtyDisplay { paper: paper.clone(), line: Some((n + 1, keys)) });
+            println!("serial: {port} is in a window");
+            ConsoleEndpoint::new(rx, Box::new(paper))
+        } else {
+            let (line, place) = serial::open(spec)?;
+            println!("serial: {port} is on {place}");
+            line
+        };
+        bus.attach_terminal(n + 1, line);
+    }
+    let display = (panel || tty || !terminals.is_empty()).then_some(Display::Ray703 {
         title: "Raytheon 703",
         panel: panel_display,
         tty: tty_display,
+        terminals,
     });
-
-    let mut bus = ray703::Ray703::new(rom, console, sub)?;
-    for (n, line) in open_serial(opts, &ray703::SERIAL_PORTS)?.into_iter().enumerate() {
-        bus.attach_terminal(n + 1, line);
-    }
     if opts.fast_io {
         bus.set_fast_io();
     }
@@ -830,6 +846,41 @@ mod tests {
         // DOT 14,E with 'A': the device's write function, straight to paper
         m.bus.io_write16(0xee, 0x8000 | b'A' as u16);
         tty.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+    }
+
+    /// `--serial window` is teletype 1's line: a paper of its own for what
+    /// device C prints, and the window's keys for its keyboard -- with no
+    /// console window, which stays on the terminal.
+    #[test]
+    fn a_window_line_is_teletype_1s_paper_and_keyboard() {
+        let dir = std::env::temp_dir().join(format!("emu-registry-window-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom = dir.join("image.bin");
+        std::fs::write(&rom, [0x10u8, 0x40]).unwrap(); // JMP 0x40
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+        let opts = MachineOpts { fast_io: true, serial: vec![SerialSpec::Window], ..Default::default() };
+        let mut m = build_ray703(&rom, console, "", &opts).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let Some(Display::Ray703 { panel: None, tty: None, terminals, .. }) = m.display else {
+            panic!("a display with teletype 1's window alone expected");
+        };
+        let [terminal] = &terminals[..] else { panic!("one terminal window expected") };
+        let Some((1, keys)) = &terminal.line else { panic!("teletype 1's window expected") };
+        m.bus.io_write16(0xce, 0x8000 | b'A' as u16); // DOT 12,E
+        terminal.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+        keys.send(b'K').unwrap();
+        m.bus.io_write16(0xcb, 0); // DOT 12,B: its keyboard
+        assert_eq!(m.bus.poll_interrupt_lines(0), 1);
+        assert_eq!(m.bus.io_read16(0xcf), 0x80 | b'K' as u16);
+        assert_eq!(m.bus.io_read16(0xef), 0, "nothing reached the console");
+    }
+
+    /// A port that is a line to the host has no window to be.
+    #[test]
+    fn only_a_703_teletype_takes_a_window() {
+        assert!(serial::open(&SerialSpec::Window).is_err());
+        assert_eq!(SerialSpec::parse("window"), Ok(SerialSpec::Window));
     }
 
     #[test]

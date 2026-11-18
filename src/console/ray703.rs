@@ -17,12 +17,13 @@
 //! or Ctrl-D into one -- shuts the whole machine down, as closing the
 //! Kaypro's one window does.
 //!
-//! Without a teletype window the teletype stays on the terminal: the
-//! ordinary raw-mode [`TerminalFrontend`] runs on a second thread, feeding
-//! the same keystroke channel, exactly as when the panel was its own
-//! frontend. With one, the window is the teletype and the terminal thread
-//! runs in idle mode -- raw, silent, only Ctrl-D/EOF still acted on -- so
-//! the documented exit path holds whichever windows are up.
+//! Without a window for the console's teletype it stays on the terminal:
+//! the ordinary raw-mode [`TerminalFrontend`] runs on a second thread,
+//! feeding the same keystroke channel, exactly as when the panel was its
+//! own frontend. With one, the window is the teletype and the terminal
+//! thread runs in idle mode -- raw, silent, only Ctrl-D/EOF still acted on
+//! -- so the documented exit path holds whichever windows are up. The other
+//! teletypes' windows have keyboards of their own and change nothing here.
 
 use super::{ConsoleFrontend, Display};
 use crate::console::panel703::PanelWindow;
@@ -43,24 +44,32 @@ pub struct Ray703Frontend {
     tx: Sender<u8>,
     sdl: sdl2::Sdl,
     panel: Option<PanelWindow>,
-    tty: Option<TtyWindow>,
+    /// Every teletype window, the console's first if it has one.
+    ttys: Vec<TtyWindow>,
+    /// The console's teletype is one of them, so the terminal is not.
+    console_tty: bool,
 }
 
 impl Ray703Frontend {
     pub fn new(tx: Sender<u8>, display: Display) -> Result<Self, String> {
-        let Display::Ray703 { title, panel, tty } = display else {
+        let Display::Ray703 { title, panel, tty, terminals } = display else {
             return Err("Ray703Frontend needs a 703 display".to_string());
         };
         let sdl = sdl2::init()?;
         let video = sdl.video()?;
         let panel = panel.map(|p| PanelWindow::new(&video, title, p)).transpose()?;
-        let tty = tty.map(|t| TtyWindow::new(&video, title, t, tx.clone())).transpose()?;
-        if tty.is_some() {
-            // printable keystrokes for the teletype arrive as text input;
+        let console_tty = tty.is_some();
+        let ttys = tty
+            .into_iter()
+            .chain(terminals)
+            .map(|t| TtyWindow::new(&video, title, t, tx.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if !ttys.is_empty() {
+            // printable keystrokes for a teletype arrive as text input;
             // the panel-only frontend keeps it off, as it always has
             video.text_input().start();
         }
-        Ok(Ray703Frontend { tx, sdl, panel, tty })
+        Ok(Ray703Frontend { tx, sdl, panel, ttys, console_tty })
     }
 
     fn event_loop(&mut self, shutdown: &Arc<AtomicBool>) {
@@ -72,19 +81,17 @@ impl Ray703Frontend {
             }
         };
 
-        // The teletype's font texture borrows its creator, so both live in
-        // this scope and the texture is passed into each render -- the same
-        // shape as SdlFrontend's atlas.
-        let tty_creator = self.tty.as_ref().map(|t| t.texture_creator());
-        let tty_font = match (&self.tty, &tty_creator) {
-            (Some(t), Some(c)) => match t.build_font(c) {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    eprintln!("Ray703Frontend: failed to build the teletype font: {e}");
-                    return;
-                }
-            },
-            _ => None,
+        // A teletype's font texture borrows its window's creator, so both
+        // live in this scope and the texture is passed into each render --
+        // the same shape as SdlFrontend's atlas. One of each to a window:
+        // a texture belongs to the renderer that made it.
+        let creators: Vec<_> = self.ttys.iter().map(|t| t.texture_creator()).collect();
+        let fonts = match self.ttys.iter().zip(&creators).map(|(t, c)| t.build_font(c)).collect::<Result<Vec<_>, _>>() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Ray703Frontend: failed to build the teletype font: {e}");
+                return;
+            }
         };
 
         println!("Ray703Frontend: entering event loop");
@@ -121,12 +128,12 @@ impl Ray703Frontend {
                         }
                     }
                     Event::MouseWheel { window_id, y, .. } => {
-                        if let Some(t) = self.tty.as_mut().filter(|t| t.window_id() == window_id) {
+                        if let Some(t) = self.ttys.iter_mut().find(|t| t.window_id() == window_id) {
                             t.wheel(y);
                         }
                     }
                     Event::TextInput { window_id, text, .. } => {
-                        if let Some(t) = self.tty.as_mut().filter(|t| t.window_id() == window_id) {
+                        if let Some(t) = self.ttys.iter_mut().find(|t| t.window_id() == window_id) {
                             t.text_input(&text);
                         }
                     }
@@ -134,9 +141,7 @@ impl Ray703Frontend {
                         if let Some(p) = self.panel.as_mut().filter(|p| p.window_id() == window_id)
                         {
                             p.key_down(key);
-                        } else if let Some(t) =
-                            self.tty.as_mut().filter(|t| t.window_id() == window_id)
-                        {
+                        } else if let Some(t) = self.ttys.iter_mut().find(|t| t.window_id() == window_id) {
                             t.key_down(key, keymod);
                         }
                     }
@@ -149,7 +154,7 @@ impl Ray703Frontend {
             if let Some(p) = &mut self.panel {
                 p.render();
             }
-            if let (Some(t), Some(f)) = (&mut self.tty, &tty_font) {
+            for (t, f) in self.ttys.iter_mut().zip(&fonts) {
                 t.render_if_needed(f);
             }
             std::thread::sleep(FRAME_DELAY);
@@ -164,7 +169,7 @@ impl ConsoleFrontend for Ray703Frontend {
         // still raw, still the Ctrl-D exit -- when the window is. Its
         // 100 ms poll notices the shutdown flag, and its RawMode guard
         // restores termios when its run() returns.
-        let mut terminal = if self.tty.is_some() {
+        let mut terminal = if self.console_tty {
             TerminalFrontend::new_idle()
         } else {
             TerminalFrontend::new(self.tx.clone())
