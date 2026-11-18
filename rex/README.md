@@ -9,6 +9,7 @@ tests it.
 
     rex.asm            the executive: scheduler, drivers, queues
     shell.asm          the shell, and the loader it runs modules with
+    shellmod.asm       the front of the shell's deck as SHELL.RX, every other terminal's
     boot.asm           the boot sector: reads the kernel in off the platter
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
@@ -40,6 +41,7 @@ anything here.
     cargo build                                                  # the emulator
     make -C rex disc                                             # rex.bin, the modules, and the platter
     ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io  # a usable shell
+    ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io --serial tcp:7031  # and a second terminal
     make -C rex bootdisc                                         # rex/build/rex.img, the whole system on a platter
     ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io   # ...booted with the LOAD button
     make -C rex test                                             # the scripted session
@@ -63,8 +65,22 @@ time either way. The commands the shell has in it:
     RUN  name    the same, given the console until it exits -- the only
                  way to start a module that reads the console
     @name        take the shell's lines from name.CM until it runs out
-    HALT         stop the loaded tasks, drain the printer and stop the
-                 machine
+    HALT         stop the loaded tasks, drain the printers and stop the
+                 machine; the console's shell only
+    BYE          end this shell; every other terminal's shell only
+
+**The other terminals.** Teletypes 1-3 sit beside the console, each given a
+host end by one `--serial` (`nc localhost 7031` for the line above). A key
+typed at one that has no shell brings it one: the console's shell loads
+`SHELL.RX` for it -- `shell.asm`, the console's own shell, assembled again
+as a module behind `shellmod.asm` -- and the key goes to that shell, so the
+first Return gets a banner naming the terminal and a prompt. Each shell
+runs the same commands; a task belongs to the terminal of the shell that
+started it, prints there, and is given that console by `RUN`, while `STAT`,
+`KILL`, `STOP` and `START` reach every task, with `STAT` marking another
+terminal's (`T1`). `BYE` ends a terminal's shell, and the next key there
+brings a new one. A shell is about 2,000 words of the pool below the fence,
+and an idle one waiting for a key is the swapper's first choice to put out.
 
 Any other word is a program: `BASIC` is `RUN BASIC`, and whatever follows
 the name on the line is the program's to read -- `BASIC PROG` loads and

@@ -1,15 +1,29 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; REX's shell -- the file of the kernel's deck after rex.asm, in page 1.
+; REX's shell, assembled twice.  In the kernel's deck, the file after
+; rex.asm, it is the console's shell in page 1: the kernel becomes it at
+; start-up, its node is SHTCB, and it reads INIT.CM.  Assembled as a
+; module of its own after shellmod.asm (SHMOD=1) it is SHELL.RX, which the
+; console's shell loads for each of the other terminals the first time a
+; key is typed there (SHGTY): a copy for each, since every routine here
+; has one link slot and keeps its work in cells of its own.  So nothing
+; here names the shell's node or its terminal but through SHME and SHTM,
+; which the module fills in from its node as it starts, and whatever it
+; reaches in the kernel it reaches as a module does, through the names
+; the kernel exports.  What only the console's shell does -- INIT.CM,
+; giving the other terminals their shells, HALT -- is under SHMOD=0, and
+; what only a terminal's does -- BYE -- under SHMOD=1.
 ;
 ; ---------------------------------------------------------------- the shell
-; Prints the banner and then reads a line and runs it, forever.  It is
-; the only task running when the machine comes up.  Everything it prints
-; goes through its own mailbox one character at a time like any other
-; task's, so a command's output and what a task behind the prompt prints
-; interleave on the printer exactly as two users' output did.
+; Prints the banner and then reads a line and runs it, forever.
+; Everything it prints goes through its own mailbox one character at a
+; time like any other task's, so a command's output and what a task
+; behind the prompt prints interleave on the printer exactly as two users'
+; output did.
+                TRUE    SHMOD=0
                 ORG     X'800'
 
+; The console's: the only task running when the machine comes up.
 SHELL           LDW     =SHBAN
                 JSX     SHMSG
                 LDW     =SHHNT
@@ -23,6 +37,25 @@ SHELL           LDW     =SHBAN
                 LDW     ='CM'
                 STW     SHFN+3
                 JSX     SHCMOP
+                ENDC
+
+                TRUE    SHMOD=1
+; A terminal's: its node and its terminal from the node the console's
+; shell spawned it in, then the banner, which says which terminal.
+SHELL           SMB     CURT
+                LDX     CURT
+                STX     SHME
+                LDW     *T.TTY
+                STW     SHTM
+                LDW     =SHBAN
+                JSX     SHMSG
+                LDX     SHTM
+                LDW     *TM.NO
+                JSX     SHDEC
+                JSX     SHNL
+                LDW     =SHHNT
+                JSX     SHMSG
+                ENDC
 
 SHLOOP          CLR                     ; a kill aimed at nobody is forgotten
                 LDX     SHTM
@@ -278,7 +311,18 @@ SHSTLN          SUBR
                 JMP     .E
 .O              LDW     =SHOUT
                 JSX     SHMSG
-.E              JSX     SHNL
+.E              LDX     SHTO
+                LDW     *T.TTY
+                CMW     =TMT
+                JEQ     .E2             ; another terminal's? then which
+                LDW     =SHTTY
+                JSX     SHMSG
+                LDX     SHTO
+                LDW     *T.TTY
+                CAX
+                LDW     *TM.NO
+                JSX     SHDEC
+.E2             JSX     SHNL
                 EXIT    SHSTLN
 
 ; STOP n and START n differ only in the state they store, into the task
@@ -316,7 +360,10 @@ SHKILL          JSX     SHJOB
                 JMP     SHLOOP
 
 ; The job number at SHCUR as a task the shell loaded: its node, left in
-; SHKN as well -- or zero, NO SUCH TASK having been said.
+; SHKN as well -- or zero, NO SUCH TASK having been said.  A terminal's
+; shell has a job number of its own, which is not one of its tasks':
+; stopping or ending itself in the middle of the command would leave the
+; disc claimed for good.
 SHJOB           SUBR
                 JSX     SHSKB
                 CLR
@@ -351,6 +398,8 @@ SHJOB           SUBR
                 CMW     =SFREE
                 JEQ     .N              ; and in use
                 LDW     SHKN
+                CMW     SHME
+                JEQ     .N              ; and not this shell itself
                 EXIT    SHJOB
 .N              LDW     SHKN
                 ADD     =T.LEN
@@ -386,12 +435,12 @@ SHKDO           SUBR
                 JSX     SHIOR
                 EXIT    SHKDO
 .W              LDW     =1
-                SMB     SH.DLY
-                STW     SH.DLY
+                LDX     SHME
+                STW     *T.DLY
                 LDW     =SSLP
-                SMB     SH.STA
-                STW     SH.STA
-                CALL    SWTCH
+                LDX     SHME
+                STW     *T.STA
+                CALL    K.SWTCH
                 JMP     .L
 
 ; Print the rest of the line back.
@@ -421,13 +470,23 @@ SHBWT           MSK
                 JMP     .D
 .B              LDW     *TM.KIL
                 JNZ     .K              ; a second Ctrl-C nobody took?
+                TRUE    SHMOD=0
+                SMB     GETTY
+                LDW     GETTY
+                JNZ     .Y              ; a terminal waiting for a shell?
+                ENDC
                 LDW     =SWAI
-                SMB     SH.STA
-                STW     SH.STA
-                CALL    SWTCH
+                LDX     SHME
+                STW     *T.STA
+                CALL    K.SWTCH
                 JMP     SHBWT
 .D              UNM
                 JMP     SHLOOP
+                TRUE    SHMOD=0
+.Y              UNM
+                JSX     SHGTY
+                JMP     SHBWT
+                ENDC
 
 ; Two Ctrl-Cs and the program took neither: it is not listening, and the
 ; task that has the console is ended from here.
@@ -499,6 +558,84 @@ SHLD1           JSX     SHIOC           ; the disc, for the whole load
                 LDW     LDNODE
                 CALL    SPAWN
                 JMP     SHBWT
+
+                TRUE    SHMOD=0
+; Give every terminal that has asked for one a shell.  SERV raises
+; GETTY, and the terminal's TM.REQ, when a key is typed at a terminal
+; that has none; this loads SHELL.RX as LOAD would load a module, gives
+; it the terminal, makes it the terminal's shell -- which is what lets it
+; read the terminal's queue -- and starts it.  The key that asked is in
+; that queue for it.  GETTY goes down first, so a request raised while
+; the terminals are being walked raises it again.
+SHGTY           SUBR
+                CLR
+                MSK
+                SMB     GETTY
+                STW     GETTY
+                UNM
+                LDW     =TMT+TM.LEN     ; the console has its shell
+.T              STW     SHGT
+                MSK
+                CAX
+                LDW     *TM.REQ
+                JNZ     .R              ; this one asked?
+                JMP     .N
+.R              CLR
+                STW     *TM.REQ
+                LDW     *TM.SH
+                JNZ     .N              ; and has no shell yet?
+                UNM
+                LDW     ='SH'           ; SHELL.RX
+                STW     SHFN
+                LDW     ='EL'
+                STW     SHFN+1
+                LDW     =X'CC00'
+                STW     SHFN+2
+                LDW     =SHKRX
+                STW     SHFN+3
+                CLR
+                STW     LDCON           ; given no console: it is the
+                STW     SHIMPL          ; terminal's shell instead
+                LDW     =SHKZB          ; and no command tail
+                STW     SHCUR
+                JSX     SHIOC
+                JSX     LDMOD
+                STW     SHW2
+                JSX     SHIOR
+                LDW     SHW2
+                JNZ     .S              ; loaded?  if not, the loader has
+                JMP     .X              ; said why
+.S              LDX     LDNODE
+                LDW     SHGT
+                STW     *T.TTY
+                MSK
+                LDX     SHGT
+                LDW     LDNODE
+                STW     *TM.SH
+                UNM
+                LDW     LDNODE
+                CALL    SPAWN
+                JMP     .X
+.N              UNM
+.X              LDW     SHGT
+                ADD     =TM.LEN
+                CMW     =TMTE
+                JEQ     .D              ; the last terminal?
+                JMP     .T
+.D              EXIT    SHGTY
+                ENDC
+
+                TRUE    SHMOD=1
+; BYE: this terminal's shell is over.  The terminal has none until a key
+; is typed at it again.
+SHBYE           SMB     K.EXIT
+                JMP     K.EXIT
+
+; HALT is the console's: stopping every task would stop this one too.
+SHNHLT          LDW     =SHNHM
+                JSX     SHMSG
+                JMP     SHLOOP
+                ENDC
 
 ; ---------------------------------------------------------------- the loader
 ; Load the module SHFN names: find it in the directory and run its
@@ -756,7 +893,7 @@ LDEND           JSX     LDGETW          ; END: the entry, relocated
                 JMP     .TX
 .TA             ADD     =2              ; its bytes and the zero, in words
                 SRL     1
-                CALL    ALLOC
+                CALL    K.ALLOC
                 JNZ     .TB
                 JMP     LDEMX
 .TB             STW     LDARG
@@ -809,7 +946,7 @@ LDERR           JSX     SHMSG           ; name it, and give back what was taken:
                 ADD     =LDSGB
                 CAX
                 LDW     *0
-                CALL    FREE
+                CALL    K.FREE
                 JMP     .R0
 .R2             LDW     LDNODE
                 JNZ     .R3
@@ -938,12 +1075,12 @@ SHIOC           SUBR
                 UNM
                 EXIT    SHIOC
 .W              LDW     =1
-                SMB     SH.DLY
-                STW     SH.DLY
+                LDX     SHME
+                STW     *T.DLY
                 LDW     =SSLP
-                SMB     SH.STA
-                STW     SH.STA
-                CALL    SWTCH
+                LDX     SHME
+                STW     *T.STA
+                CALL    K.SWTCH
                 JMP     .L
 SHIOR           SUBR
                 LDW     =X'FFFF'
@@ -1068,6 +1205,7 @@ SHMEM           MSK
                 JSX     SHMSG
                 JMP     SHLOOP
 
+                TRUE    SHMOD=0
 ; Shut the machine down.  The disc first, and kept: with it claimed here
 ; no task is inside a transfer.  Then every loaded task is stopped, so
 ; it deposits nothing more, and once their mailboxes are empty and the
@@ -1110,8 +1248,8 @@ SHHD0           LDX     SHTO
                 JNE     .OW
                 LDW     =SHDWN
                 JSX     SHMSG
-.DW             SMB     SH.MBX          ; and now its own last character
-                LDW     SH.MBX
+.DW             LDX     SHME            ; and now its own last character
+                LDW     *T.MBX
                 JNZ     .DW
                 LDX     SHTM
                 LDW     *TM.OWN
@@ -1119,6 +1257,7 @@ SHHD0           LDX     SHTO
                 MSK
                 DOT     2,0             ; disconnect the line clock
                 HLT
+                ENDC
 
 ; ---------------------------------------------------------------- parsing
 ; Step SHCUR over blanks.
@@ -1231,19 +1370,19 @@ SHNAME          SUBR
 SHPUTC          SUBR
                 AND     =X'00FF'
                 MSK
-                SMB     SH.MBX
-                STW     SH.MBX
-                CALL    KICKC
+                LDX     SHME
+                STW     *T.MBX
+                CALL    K.KICK
                 UNM
 .T              MSK
-                SMB     SH.MBX
-                LDW     SH.MBX
+                LDX     SHME
+                LDW     *T.MBX
                 JNZ     .B              ; printed yet?
                 JMP     .D
 .B              LDW     =SWAI
-                SMB     SH.STA
-                STW     SH.STA
-                CALL    SWTCH
+                LDX     SHME
+                STW     *T.STA
+                CALL    K.SWTCH
                 JMP     .T
 .D              UNM
                 EXIT    SHPUTC
@@ -1339,9 +1478,24 @@ SHGETL          SUBR
                 STW     SHLFF
 .L              LDW     SHCMCH
                 JNZ     .LF             ; a command file open?
-                LDW     =QCONS
-                CALL    Q.GET
+                TRUE    SHMOD=0
+                MSK                     ; a terminal waiting for a shell?
+                SMB     GETTY           ; Looked at in the same masked
+                LDW     GETTY           ; window as Q.GET's look at the
+                JNZ     .LG             ; queue, so that SERV either sees
+                ENDC                    ; this shell as the queue's waiter
+                LDW     =QCONS          ; and nudges it, or this sees GETTY
+                CALL    K.QGET
+                TRUE    SHMOD=0
+                CMW     =KNUDGE
+                JEQ     .LH             ; the nudge SERV gave the queue?
+                ENDC
                 JMP     .LC
+                TRUE    SHMOD=0
+.LG             UNM
+.LH             JSX     SHGTY
+                JMP     .L
+                ENDC
 
 ; From the file: a character through its channel, given bit 7 in case
 ; the file came from a host that leaves it off.  A carriage return ends
@@ -1425,11 +1579,14 @@ SHGETL          SUBR
                 EXIT    SHGETL
 
 ; ---------------------------------------------------------------- shell data
-SH.STA          EQU     SHTCB+T.STA     ; this task's own state word...
-SH.MBX          EQU     SHTCB+T.MBX     ; ...and its own mailbox
-SH.DLY          EQU     SHTCB+T.DLY     ; and its delay, for a sleep
 
+                TRUE    SHMOD=0
+SHGT            WORD    0               ; the terminal SHGTY is serving
+SHZW            WORD    0               ; a zero byte, for no command tail
+SHKZB           EQU     SHZW*2
+                ENDC
 SHTM            WORD    TMT             ; the shell's terminal
+SHME            WORD    SHTCB           ; and its own node
 SHCUR           WORD    0               ; the cursor into the line, a byte
 SHFIL           WORD    0               ; and where SHGETL is filling it
 SHCH            WORD    0               ; the character it is filing
@@ -1512,8 +1669,10 @@ SHALB           WORD    ALLOCB,ALLCHB   ; indexed JSX: each with its twin above
 ; node that went back to the arena while its line was being printed.
 SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT','GO','NE'
 
+                TRUE    SHMOD=1         ; the console's are in page 0 (rex.asm)
 LBUF            RES     32              ; the line the shell is reading
 LDBUF           RES     47              ; the loader's sector
+                ENDC
 
 ; The commands: four characters of name, packed as SHTOK packs a word --
 ; a short one lands in the second word, zero-filled above -- then where
@@ -1532,15 +1691,33 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'D','IR',SHDIR
                 WORD    'LO','AD',SHLOAD
                 WORD    'R','UN',SHRUN
+                TRUE    SHMOD=0
                 WORD    'HA','LT',SHHALT
+                ENDC
+                TRUE    SHMOD=1
+                WORD    'HA','LT',SHNHLT
+                WORD    'B','YE',SHBYE
+                ENDC
                 WORD    0,0,0
 
 
+                TRUE    SHMOD=0
 SHBAN           MSG     "REX 703 UP\r\n"
+                ENDC
+                TRUE    SHMOD=1
+SHBAN           MSG     "REX 703 TERMINAL "
+SHNHM           MSG     "HALT IS THE CONSOLE'S\r\n"
+                ENDC
+SHTTY           MSG     " T"
 SHHNT           MSG     "TYPE HELP FOR THE COMMANDS\r\n"
 SHPRM           MSG     "REX>  "
 SHWHT           MSG     "WHAT\r\n"
+                TRUE    SHMOD=0
 SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM DIR LOAD RUN HALT \r\n"
+                ENDC
+                TRUE    SHMOD=1
+SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM DIR LOAD RUN BYE \r\n"
+                ENDC
 SHHL2           MSG     "STOP, START AND KILL TAKE A JOB NUMBER. @NAME RUNS A FILE OF COMMANDS.\r\n"
 SHFRE           MSG     "FREE "
 SHNOF           MSG     "NO SUCH FILE\r\n"
@@ -1563,3 +1740,11 @@ SHDWN           MSG     "REX 703 DOWN\r\n"
 SHNOT           MSG     "NO SUCH TASK\r\n"
 SHKIL           MSG     "KILLED\r\n"
 SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. ON THE DISC:\r\n"
+
+                TRUE    SHMOD=0         ; the rest of page 1, which is where
+                RES     X'1000'-$       ; the console's shell must end: past
+                ENDC                    ; it is the pool
+
+                TRUE    SHMOD=1         ; SHELL.RX's deck ends here
+                END     SHELL
+                ENDC

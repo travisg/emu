@@ -32,14 +32,21 @@
 ;   RUN  name    the same, given the console until it exits
 ;   @name        the shell's lines from name.CM until it runs out; INIT.CM
 ;                is read this way when the machine comes up
-;   HALT         stop the loaded tasks, drain the printer and stop the
-;                machine
+;   HALT         stop the loaded tasks, drain the printers and stop the
+;                machine -- the console's shell only
+;   BYE          end this shell -- every other terminal's shell only
 ;
 ; and any other word is RUN of that name: TYPE, COPY, DEL and the rest are
 ; programs on the disc, not commands here.  What follows a program's name
 ; on the line is its command tail, which the loader leaves in a block of
 ; the task's own for it to read (T.ARG).  A second Ctrl-C, with the first
 ; still untaken by the program that has the console, ends that program.
+;
+; The console's shell is built in; every other terminal gets one when a
+; key is first typed at it -- shell.asm assembled again as SHELL.RX, which
+; the console's shell loads for it and makes that terminal's (SHGTY).  A
+; task belongs to the terminal of the shell that started it: it prints
+; there, and that is the console RUN gives it.
 ;
 ; The Model 33 echoes what is typed in hardware, so every keyboard is
 ; armed for it at start-up (DOT d,11) and nothing here echoes a character.
@@ -301,10 +308,11 @@
 ;              vector, then the exported cells
 ;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
 ;              KICK, PICK, SWTCH, Q.PUT and DSERV; then the kernel cells,
-;              the console queue, the nodes of the tasks that are here
+;              the console queue, the terminal table and the other
+;              terminals' queues, the nodes of the tasks that are here
 ;              from power-on, the disc -- IOTRY, KENTER, DXFER -- Q.GET,
-;              the idle task, the allocator, and the node arena's two
-;              doors
+;              the idle task, the allocator, the node arena's two doors,
+;              and the console's shell's line and loader sector
 ;   0800-      page 1: the shell (shell.asm, the next file of this deck)
 ;              -- banner, prompt, commands, line buffer -- and its
 ;              loader, with the sector it reads
@@ -837,6 +845,35 @@ SERV            SMB     S0SAVA          ; the SMB lead again
                 LDX     SVTM            ; so an in-band break could never be
                 LDW     *TM.Q           ; seen.  Whoever consumes the flag
                 JSX     Q.PUT           ; clears it.
+                LDX     SVTM
+                LDW     *TM.SH
+                JNZ     .NXT            ; and the terminal has no shell?
+
+; Then it asks the console's shell for one, and the key waits in the
+; queue for the shell it gets.  The shell is told the way anything that
+; waits is told: if it is the console queue's waiter -- at its prompt --
+; with a nudge in the queue, which only it can read then; if it is
+; waiting for a RUN to be over, by being woken; otherwise it is busy, and
+; looks at GETTY before it next waits for a key.
+                LDW     =1
+                STW     *TM.REQ
+                STW     GETTY
+                LDW     QCONS+Q.WTR
+                CMW     =SHTCB
+                JNE     .GW             ; at the prompt?
+                LDW     =KNUDGE
+                STW     QITEM
+                LDW     =QCONS
+                JSX     Q.PUT
+                JMP     .NXT
+.GW             LDX     =SHTCB
+                LDW     *T.STA
+                CMW     =SWAI
+                JNE     .NXT
+                CLR
+                STW     *T.STA
+                LDW     =1
+                STW     RESCHD
                 JMP     .NXT
 .RXBRK          LDX     SVTM
                 LDW     *TM.BRK
@@ -1236,7 +1273,7 @@ QCONSB          RES     QCONSN
 ; X-RAY's way with a device it learns at run time.  The other three
 ; terminals' queues are shallower than the console's: they are typed at
 ; by a person, not by a command file run ahead of the shell.
-                NTRY    TM.OWN,TM.BSY,TM.SH,TM.LEN,TMT,TMTE
+                NTRY    TM.OWN,TM.BSY,TM.BRK,TM.KIL,TM.SH,TM.REQ,TM.NO,TM.LEN,TMT,TMTE
 TM.DST          EQU     0               ; DIN d,0: status, 0100 an interrupt
 TM.DCL          EQU     1               ; DIN d,15: the frame, and ask for the next
 TM.DWR          EQU     2               ; DOT d,14: print
@@ -1253,29 +1290,36 @@ TM.BRK          EQU     8               ; Ctrl-C arrived; the console's holder
 TM.KIL          EQU     9               ; a second Ctrl-C came with the first
                                         ; still untaken: the shell's to act on
 TM.SH           EQU     10              ; the terminal's shell, or zero
-TM.LEN          EQU     11
+TM.REQ          EQU     11              ; a key came and it had none: the
+                                        ; console's shell is to give it one
+TM.NO           EQU     12              ; which terminal it is, 0 to 3
+TM.LEN          EQU     13
 TMQN            EQU     32              ; the other terminals' queue depth
 TMT             DIN     14,0            ; the console
                 DIN     14,15
                 DOT     14,14
                 DOT     14,11
-                WORD    X'FFFF',SHTCB,QCONS,0,0,0,SHTCB
+                WORD    X'FFFF',SHTCB,QCONS,0,0,0,SHTCB,0,0
                 DIN     12,0            ; teletype 1
                 DIN     12,15
                 DOT     12,14
                 DOT     12,11
-                WORD    X'FFFF',SHTCB,TMQ1,0,0,0,0
+                WORD    X'FFFF',SHTCB,TMQ1,0,0,0,0,0,1
                 DIN     11,0            ; teletype 2
                 DIN     11,15
                 DOT     11,14
                 DOT     11,11
-                WORD    X'FFFF',SHTCB,TMQ2,0,0,0,0
+                WORD    X'FFFF',SHTCB,TMQ2,0,0,0,0,0,2
                 DIN     10,0            ; teletype 3
                 DIN     10,15
                 DOT     10,14
                 DOT     10,11
-                WORD    X'FFFF',SHTCB,TMQ3,0,0,0,0
+                WORD    X'FFFF',SHTCB,TMQ3,0,0,0,0,0,3
 TMTE            EQU     $
+GETTY           WORD    0               ; a terminal has TM.REQ up
+KNUDGE          EQU     X'0100'         ; what SERV puts in the console's queue
+                                        ; to wake its shell for GETTY: not a
+                                        ; character, which is a byte
 TMQ1            WORD    0,0,0,TMQN,TMQ1B,X'FFFF'
 TMQ2            WORD    0,0,0,TMQN,TMQ2B,X'FFFF'
 TMQ3            WORD    0,0,0,TMQN,TMQ3B,X'FFFF'
@@ -2098,11 +2142,13 @@ KPOOLN          EQU     FENCE-POOLB-2   ; the pool's two parts, below the fence
 KPOOHN          EQU     POOLE-POOLH-2   ; and above it, as free blocks' payloads
 
 ; ---------------------------------------------------------------- tasks
-; SPAWN: ACR is a node of T.LEN words with T.PCR, T.NAM and T.CON filled
-; in.  The rest is set here -- the status is what SWTCH builds for any
-; resume, the entry's page and global -- and the node is linked into the
-; ring after the running task, so the next pick finds it first.
-SPAWN           SUBR
+; SPAWN: ACR is a node of T.LEN words with T.PCR, T.NAM, T.CON and T.TTY
+; filled in.  The rest is set here -- the status is what SWTCH builds for
+; any resume, the entry's page and global -- and the node is linked into
+; the ring after the running task, so the next pick finds it first.  Every
+; shell calls it, so masked from the first instruction.
+SPAWN           MSK
+                STX     SPRET
                 STW     SPNOD
                 CAX
                 CLR
@@ -2118,7 +2164,6 @@ SPAWN           SUBR
                 STW     *T.MST
                 LDW     SECS
                 STW     *T.RES
-                MSK
                 LDX     CURT
                 LDW     *T.NXT
                 LDX     SPNOD
@@ -2129,8 +2174,9 @@ SPAWN           SUBR
                 LDW     KNRING
                 ADD     =1
                 STW     KNRING
+                LDX     SPRET
                 UNM
-                EXIT    SPAWN
+                JSX     *0
 
 ; TEXIT: the running task is over, and takes everything with it.  Its
 ; last character is waited out, since a terminal's owner must never name a
@@ -2294,8 +2340,28 @@ NFREE           SUBR
                 EXIT    NFREE
 
 SPNOD           WORD    0               ; SPAWN's node
+SPRET           WORD    0               ; and its way back
 XDEAD           WORD    0               ; TEXIT's: the node going, its
 XPRED           WORD    0               ; predecessor on the ring, and the
 XB              WORD    0               ; sweep's cursor
 XTM             WORD    0               ; and its terminal
                 LPOOL                   ; what this page's code writes as literals
+
+; The console's shell's line and its loader's sector, which page 1 has no
+; room for.  The shell reaches both through byte and word addresses only,
+; so they may be anywhere below X'4000'; SHELL.RX keeps its own.
+LBUF            RES     32              ; the line the shell is reading
+LDBUF           RES     47              ; the loader's sector
+
+; What the shell reaches inside the kernel.  shell.asm is assembled twice,
+; once here as the console's shell and once as SHELL.RX, every other
+; terminal's, which knows the kernel only through rexapi.asm as any module
+; does -- so these go out too, though they are no module's business but
+; the shell's: they are the kernel's own routines, cells and layout, with
+; nothing in front of them to keep them where they are.
+                NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY
+                NTRY    SECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,FDENT,FDEND
+                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,FSFND,DRD1
+                NTRY    ALLOCW,ALLCHW,ALLOCB,ALLCHB
+
+SHMOD           EQU     0               ; shell.asm, next, as the console's shell

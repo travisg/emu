@@ -55,7 +55,7 @@ UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
 
 modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
          $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj \
-         $(BUILD)/blip.obj $(BUILD)/far.obj
+         $(BUILD)/blip.obj $(BUILD)/far.obj $(BUILD)/shell.obj
 
 $(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm $(API) rexmac.asm rexlib.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -79,6 +79,14 @@ FAR := $(API) rexmac.asm rexlib.asm far.asm
 $(BUILD)/far.obj: $(FAR) $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM) $(FAR) --object $@ -l $(BUILD)/far.lst
+
+# The shell of every terminal but the console's: the console's own shell,
+# assembled again as a module. It keeps byte addresses, so it loads low.
+SHELLMOD := $(API) rexmac.asm shellmod.asm shell.asm
+
+$(BUILD)/shell.obj: $(SHELLMOD) $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM) $(SHELLMOD) --object $@ -l $(BUILD)/shell.lst
 
 $(BUILD)/hello.obj: $(API) hello.asm $(ASM703)
 	@mkdir -p $(BUILD)
@@ -110,12 +118,14 @@ $(BUILD)/basic.obj: $(API) brex.asm $(BCORE) $(ASM703)
 # its top bit set; BASIC fills its page to the last word,
 # so its two are the only ones it has, the page's first word and second.
 # Far has a base for each of its segments: neighbouring pages, and the
-# second segment below the first with the fence between them.
+# second segment below the first with the fence between them. The shell
+# is placed at a page's first word and further in.
 HELLO_BASES := 0x1080 0x1C40 0x4080 0x5C40
 BASIC_BASES := 0x1000 0x1001
 FAR_BASES   := 0x1000,0x1800 0x4100,0x1040
+SHELL_BASES := 0x1000 0x1022
 
-reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/far.obj
+reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/far.obj $(BUILD)/shell.obj
 	@for base in $(HELLO_BASES); do \
 	    $(ASM) --org $$base $(API) hello.asm -m $(BUILD)/hello-$$base.map || exit 1; \
 	    $(RELOAD703) $(BUILD)/hello.obj --base $$base --check $(BUILD)/hello-$$base.map || exit 1; \
@@ -128,9 +138,13 @@ reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/far.obj
 	    $(ASM) --org $$base $(FAR) -m $(BUILD)/far-$$base.map || exit 1; \
 	    $(RELOAD703) $(BUILD)/far.obj --base $$base --check $(BUILD)/far-$$base.map || exit 1; \
 	done
+	@for base in $(SHELL_BASES); do \
+	    $(ASM) --org $$base $(SHELLMOD) -m $(BUILD)/shell-$$base.map || exit 1; \
+	    $(RELOAD703) $(BUILD)/shell.obj --base $$base --check $(BUILD)/shell-$$base.map || exit 1; \
+	done
 
 # The platter on unit 0, with the modules on it -- every one but BASIC
-# marked as loadable above word X'4000', which leaves the core below it
+# and the shell marked as loadable above word X'4000', which leaves the core below it
 # to what has to be there, and with a swap file: the emulator mounts
 # disks/ray703-disc0.img from the repo root, so after this the run line
 # in README.md has them. Made if absent; each module replaces its
@@ -142,7 +156,8 @@ SWAP_SECTORS := 1024
 disc: modules
 	@mkdir -p ../disks
 	$(MKDISC703) $(DISC) --swap $(SWAP_SECTORS) \
-	    --add BASIC $(BUILD)/basic.obj --add-high HELLO $(BUILD)/hello.obj \
+	    --add BASIC $(BUILD)/basic.obj --add SHELL $(BUILD)/shell.obj \
+	    --add-high HELLO $(BUILD)/hello.obj \
 	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
 
 # A platter that is the whole system: the boot sector, the kernel as
@@ -152,7 +167,8 @@ disc: modules
 bootdisc: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
 	$(MKDISC703) $(BUILD)/rex.img --force --boot $(BUILD)/boot.bin --sys $(BUILD)/rex.bin \
 	    --swap $(SWAP_SECTORS) \
-	    --add BASIC $(BUILD)/basic.obj --add-high HELLO $(BUILD)/hello.obj \
+	    --add BASIC $(BUILD)/basic.obj --add SHELL $(BUILD)/shell.obj \
+	    --add-high HELLO $(BUILD)/hello.obj \
 	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
 
 # The scripted session, on a platter it makes for itself in a scratch

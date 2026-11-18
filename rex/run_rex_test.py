@@ -85,6 +85,15 @@ then has to find both files untouched and the two sectors free again,
 and its own tools are held to the same rule about system files and to
 ASCII in a name.
 
+A sixth machine has a second teletype on a localhost socket (--serial
+tcp:0), which the harness types at and reads as it does the console. The
+first key there has to bring up a shell of that terminal's own, and the
+two shells run side by side: a BLIP behind each prompt prints on its own
+terminal's paper and never on the other's, STAT on the console shows the
+other terminal's shell and its task, a second Ctrl-C there ends only the
+program in front of it, and its BYE leaves the pool as it was before the
+terminal had a shell -- after which a key brings up another.
+
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
   nohello  a platter without the hello module
@@ -102,11 +111,18 @@ REX_CONTROL names a negative control, each of which must FAIL:
   sysopen  a file opened for writing under a system file's name
   noseg    the loader deaf to the code that says a word holds an address
            in another segment of the module, so it adds the wrong base
+  onlycon  the teletypes' service routine asking only the console's
+           status, as if it were the only one
+  onetty   the printer started on any task's character, whichever
+           terminal the task is on
+  nogetty  a key at a terminal with no shell asking for none
 """
 
 import contextlib
 import os
 import re
+import socket
+import threading
 import subprocess
 import sys
 import tempfile
@@ -130,14 +146,15 @@ DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
 FST_OBJ = os.path.join(BUILD, 'fst.obj')
 MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
     (name, os.path.join(BUILD, name.lower() + '.obj'))
-    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG', 'BLIP', 'FAR'))
-# Every module but BASIC goes on the platter marked as loadable above
-# word X'4000', where the kernel then puts it.
-LOW_ONLY = ('BASIC',)
+    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG', 'BLIP', 'FAR', 'SHELL'))
+# Every module but BASIC and the shell goes on the platter marked as
+# loadable above word X'4000', where the kernel then puts it.
+LOW_ONLY = ('BASIC', 'SHELL')
 
 # The pool and the node arena, as rex.asm lays them out.
 POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
 NARB, NARN, T_LEN, T_STA, T_NAM, SOFF, SFREE = 0x7e00, 24, 19, 0, 8, 2, 4
+T_ID, T_TTY = 10, 18
 
 
 def node_of(emu, name):
@@ -153,6 +170,20 @@ def node_of(emu, name):
     if len(nodes) != 1:
         raise AssertionError('%d tasks named %s' % (len(nodes), name))
     return nodes[0]
+
+
+def jobs_of(emu, name):
+    """The loaded tasks of this two-character name, as their job numbers
+    and their terminals' blocks (T.ID, T.TTY). For a machine that is
+    running: it is halted to look."""
+    emu.halt()
+    arena = []
+    for start in range(NARB, NARB + NARN * T_LEN, 6 * T_LEN):
+        arena += emu.memw(start, 6 * T_LEN)
+    emu.run()
+    packed = ((ord(name[0]) | 0x80) << 8) | (ord(name[1]) | 0x80)
+    return [(arena[i * T_LEN + T_ID], arena[i * T_LEN + T_TTY]) for i in range(NARN)
+            if arena[i * T_LEN + T_STA] != SFREE and arena[i * T_LEN + T_NAM] == packed]
 
 
 def blocks_of(emu, name):
@@ -255,6 +286,62 @@ class Session:
 
     def since(self, mark, end=None):
         return bytes(self.emu.output[mark:end])
+
+
+class Terminal:
+    """Another teletype, on the localhost socket --serial gave it: what it
+    prints, and keys typed at it, with the same waits the debug port's
+    console has, so that a Session can walk its paper too."""
+
+    def __init__(self, port, timeout=60):
+        self.sock = socket.create_connection(('127.0.0.1', port))
+        self.timeout = timeout
+        self.output = bytearray()
+        self._changed = threading.Condition()
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        while True:
+            try:
+                data = self.sock.recv(4096)
+            except OSError:
+                data = b''
+            with self._changed:
+                if not data:
+                    return
+                self.output += data
+                self._changed.notify_all()
+
+    def key(self, text):
+        self.sock.sendall(text.encode('latin-1'))
+
+    def wait_for_output(self, pattern, timeout=None, start=0):
+        if isinstance(pattern, bytes):
+            pattern = re.compile(re.escape(pattern))
+        deadline = time.monotonic() + (timeout if timeout is not None else self.timeout)
+        with self._changed:
+            while True:
+                m = pattern.search(bytes(self.output), start)
+                if m:
+                    return m
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError('no %r on the terminal (have %r)'
+                                       % (pattern.pattern, bytes(self.output[-200:])))
+                self._changed.wait(left)
+
+    def wait_quiet(self, idle=0.3, timeout=None):
+        deadline = time.monotonic() + (timeout if timeout is not None else self.timeout)
+        with self._changed:
+            while True:
+                n = len(self.output)
+                if not self._changed.wait(idle) and len(self.output) == n:
+                    return
+                if time.monotonic() > deadline:
+                    raise TimeoutError('the terminal never went quiet')
+
+    def close(self):
+        self.sock.close()
 
 
 def marks_ran(text):
@@ -981,7 +1068,7 @@ def make_platter(workdir, log, swap=False, boot=False):
     if CONTROL == 'blank':
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
-                     'nolatch', 'sysopen', 'noseg'):
+                     'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -998,6 +1085,182 @@ def make_platter(workdir, log, swap=False, boot=False):
     subprocess.run(cmd, check=True, stdout=log)
     log.flush()
     return image
+
+
+def listing_word(source, after):
+    """The address of the first word assembled from the first line of
+    build/rex.lst past the line holding `after` whose text holds `source`
+    -- for a control that patches a word no label names."""
+    lines = open(REX_LST, encoding='latin-1').read().splitlines()
+    start = next(i for i, l in enumerate(lines) if after in l)
+    at = next(i for i in range(start, len(lines)) if source in lines[i])
+    for line in lines[at:]:
+        m = re.match(r'([0-9A-F]{4})  [0-9A-F]{4}', line)
+        if m:
+            return int(m.group(1), 16)
+    raise AssertionError('no word for %r in %s' % (source, REX_LST))
+
+
+def terminal_port(log):
+    """Where the emulator just said teletype 1's line is: the last such line
+    in the log, the startup line of the machine that was just spawned."""
+    log.flush()
+    found = re.findall(rb'serial: teletype 1, DIO device C is on 127\.0\.0\.1:(\d+)',
+                       open(LOG_FILE, 'rb').read())
+    if not found:
+        raise AssertionError('the emulator never said where teletype 1 is')
+    return int(found[-1])
+
+
+def wait_without(paper, pattern, start, marks, timeout=120):
+    """`pattern` in what a paper printed from `start` on, with the
+    characters in `marks` -- a blip's -- taken out of it first."""
+    deadline = time.time() + timeout
+    while True:
+        text = bytes(paper.output[start:]).translate(None, marks)
+        m = pattern.search(text)
+        if m:
+            return m
+        if time.time() > deadline:
+            raise TimeoutError('no %r on the paper, marks aside (have %r)' % (pattern.pattern, text[-300:]))
+        time.sleep(0.1)
+
+
+def terminals_session(emu, t1):
+    """The console and teletype 1, a shell on each. While something prints
+    behind a prompt its marks land inside whatever else that paper prints,
+    so commands typed then go in without waiting for a prompt -- the shell
+    reads them from its queue when it is ready -- and what comes back is
+    read with the marks taken out."""
+    if CONTROL == 'onlycon':
+        # SERV's walk: CMW =TMTE / SNE / JMP .EXIT -- without the skip it
+        # leaves after the console
+        emu.writew(listing_word('the last terminal?', 'SERV            SMB'), [NOP])
+    if CONTROL == 'onetty':
+        # KICK's test of a node's terminal: CMW KTM / SEQ / JMP .NXT --
+        # without the jump every task's mailbox is the printer's
+        emu.writew(listing_word("this terminal's task?", 'KICK            SUBR') + 1, [NOP])
+    if CONTROL == 'nogetty':
+        emu.writew(listing_word('STW     *TM.REQ', 'SERV            SMB'), [NOP])
+    emu.run()
+    con, term = Session(emu), Session(t1)
+    con.wait(b'REX 703 UP')
+    emu.wait_quiet()
+    con.say('MEM')
+    free = con.wait(re.compile(rb'FREE (\d+) LOW')).group(1)
+
+    # the first key at teletype 1 brings it a shell, and the key itself
+    # reaches that shell: an empty line, and the prompt again
+    t1.key('\r')
+    term.wait(b'REX 703 TERMINAL 1\r\n')
+    term.wait(PROMPT)
+    symbols = Symbols()
+    symbols.load(REX_LST)
+    tm0 = symbols.value('TMT')
+    tm1 = tm0 + symbols.value('TM.LEN')
+    ((shell, tty),) = jobs_of(emu, 'SH')
+    if tty != tm1:
+        raise AssertionError("teletype 1's shell is on terminal block %04X, not %04X" % (tty, tm1))
+
+    # a BLIP behind each prompt, each printing on its own paper
+    con.say('LOAD BLIP #')
+    term.say('LOAD BLIP ~')
+    con_mark, t1_mark = len(emu.output), len(t1.output)
+    deadline = time.time() + 120
+    while (emu.output[con_mark:].count(b'#') < 3 or t1.output[t1_mark:].count(b'~') < 3):
+        if time.time() > deadline:
+            raise AssertionError('the blips did not both print: %r / %r'
+                                 % (bytes(emu.output[con_mark:]), bytes(t1.output[t1_mark:])))
+        time.sleep(0.2)
+    blips = dict((tty, job) for job, tty in jobs_of(emu, 'BL'))
+    if set(blips) != {tm0, tm1}:
+        raise AssertionError('the blips are on terminal blocks %r' % sorted(blips))
+    con_blip, t1_blip = blips[tm0], blips[tm1]
+    if b'~' in emu.output or b'#' in t1.output:
+        raise AssertionError("a terminal printed the other's blip: console %r, teletype 1 %r"
+                             % (bytes(emu.output), bytes(t1.output)))
+
+    # the console's STAT shows the other terminal's shell and its task
+    mark = len(emu.output)
+    emu.key('STAT\r')
+    stat = wait_without(emu, re.compile(rb'STAT\r\n(.*?)0 ID RUN', re.S), mark, b'#').group(1)
+    want = {b'%d SH' % shell, b'%d BL' % t1_blip}
+    have = set(re.findall(rb'(\d+ (?:SH|BL)) [^\r\n]* T1\r\n', stat))
+    if have != want:
+        raise AssertionError("STAT does not show teletype 1's shell and blip: %r" % stat)
+
+    # KILL on the console reaches either terminal's task
+    emu.key('KILL %d\r' % con_blip)
+    emu.key('KILL %d\r' % t1_blip)
+    emu.wait_quiet(timeout=120)
+    t1.wait_quiet()
+    con.at = len(emu.output)
+    term.at = len(t1.output)
+    emu.key('\r')
+    t1.key('\r')
+
+    # a program there that takes no break: the second Ctrl-C ends it, and
+    # only it -- the console's shell goes on answering
+    held_at = tm1 + symbols.value('TM.BSY')
+    term.say('RUN NAP')
+    deadline = time.time() + 120
+    while True:
+        emu.halt()
+        held = emu.memw(held_at, 1)[0]
+        emu.run()
+        if held:
+            break
+        if time.time() > deadline:
+            raise AssertionError('NAP never had teletype 1')
+        time.sleep(0.05)
+    t1.key('\x03')
+    time.sleep(0.5)
+    t1.key('\x03')
+    term.wait(b'KILLED\r\n')
+    con.say('ECHO STILL HERE')
+    con.wait(b'STILL HERE\r\n')
+
+    # both printers busy at once: a long dump behind the console's prompt
+    # and a file typed out on teletype 1, three times over, which has to
+    # come out there whole -- a printer that took the other terminal's
+    # characters would leave holes in it
+    con.say('LOAD DUMP BASIC.RX')
+    con_mark = len(emu.output)
+    emu.wait_for_output(b'\n0010 ', start=con_mark)
+    t1_mark = len(t1.output)
+    for _ in range(3):
+        term.say('TYPE MSG.TX')
+        term.wait(b'SECOND LINE\r\n')
+    typed = bytes(t1.output[t1_mark:])
+    if typed.count(b'FIRST LINE\r\nSECOND LINE\r\n') != 3:
+        raise AssertionError('MSG.TX did not come out whole on teletype 1: %r' % typed)
+    if b'LINE' in emu.output[con_mark:]:
+        raise AssertionError("teletype 1's file came out on the console: %r"
+                             % bytes(emu.output[con_mark:]))
+    if re.search(rb'\n[0-9A-F]{4} 003B', emu.output[con_mark:]):
+        raise AssertionError('the dump was over before the typing was')
+
+    # the dump ended, the terminal's shell let go: the pool is whole
+    ((dump, _),) = jobs_of(emu, 'DU')
+    emu.key('KILL %d\r' % dump)
+    emu.wait_quiet(timeout=120)
+    con.at = len(emu.output)
+    emu.key('\r')
+    term.say('BYE')
+    t1.wait_quiet()
+    con.say('STAT')
+    stat = con.wait(re.compile(rb'STAT\r\n(.*?)0 ID RUN', re.S)).group(1)
+    if b'T1' in stat or re.search(rb'^\d+ (?:BL|DU|NA) ', stat, re.M):
+        raise AssertionError('something is left after BYE: %r' % stat)
+    con.say('MEM')
+    after = con.wait(re.compile(rb'FREE (\d+) LOW')).group(1)
+    if after != free:
+        raise AssertionError('the pool is %s after BYE, %s before the shell' % (after.decode(), free.decode()))
+
+    # and a key at it again is a new shell
+    t1.key('\r')
+    term.wait(b'REX 703 TERMINAL 1\r\n')
+    term.wait(PROMPT)
 
 
 def finish(emu):
@@ -1078,6 +1341,25 @@ def main():
             full_session(emu, image)
             finish(emu)
             log.write(b'\n--- paper, the full platter ---\n' + bytes(emu.output))
+
+            # And a second terminal, on a socket. The teletypes at their
+            # own ten characters a second: a character printing holds its
+            # task's mailbox for a character's time, which is what gives a
+            # printer the chance to take another terminal's.
+            termdir = os.path.join(workdir, 'terminals')
+            os.makedirs(termdir)
+            make_platter(termdir, log)
+            with cwd(termdir):
+                emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--no-throttle',
+                                 '--serial', 'tcp:0'], log=log)
+            t1 = Terminal(terminal_port(log))
+            try:
+                terminals_session(emu, t1)
+            finally:
+                log.write(b'\n--- paper, the terminals session: teletype 1 ---\n' + bytes(t1.output))
+                t1.close()
+            finish(emu)
+            log.write(b'\n--- paper, the terminals session: the console ---\n' + bytes(emu.output))
         except Exception:
             log.write(b'\n--- harness failure ---\n')
             log.write(traceback.format_exc().encode())
