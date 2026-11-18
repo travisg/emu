@@ -20,7 +20,7 @@ all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules disc
 
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
 # the filesystem and the swapper at the top of core.
-KERNEL := rexmac.asm rex.asm rexfs.asm rexswap.asm
+KERNEL := rexmac.asm rex.asm shell.asm rexfs.asm rexswap.asm
 
 $(BUILD)/rex.bin: $(KERNEL) $(ASM703)
 	@mkdir -p $(BUILD)

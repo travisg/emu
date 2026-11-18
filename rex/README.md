@@ -7,7 +7,8 @@ transcription, and this directory is its own project: the executive, the
 glue that puts Tiny BASIC aboard it as a task, and the scripted session that
 tests it.
 
-    rex.asm            the executive: scheduler, drivers, queues, the shell
+    rex.asm            the executive: scheduler, drivers, queues
+    shell.asm          the shell, and the loader it runs modules with
     boot.asm           the boot sector: reads the kernel in off the platter
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
