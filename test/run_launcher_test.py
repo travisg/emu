@@ -132,12 +132,26 @@ def bracketed(emu_args):
 
 
 def settings(out):
-    """The two `stty -g` lines in a case's output."""
+    """The two `stty -g` lines in a case's output: GNU's colon-separated
+    hex, or the BSD stty's `gfmt1:` list of name=value."""
     lines = [line.strip() for line in out.decode('latin-1').replace('\r', '').split('\n')]
-    found = [line for line in lines if re.fullmatch(r'[0-9a-f]+(:[0-9a-f]+){30,}', line)]
+    found = [line for line in lines
+             if re.fullmatch(r'[0-9a-f]+(:[0-9a-f]+){30,}|gfmt1(:\w+=[0-9a-f]+){10,}', line)]
     if len(found) != 2:
         raise AssertionError('expected two stty -g lines, found %d' % len(found))
-    return found
+    return [without_pendin(line) for line in found]
+
+
+# lflag's PENDIN on a BSD tty: the driver sets it itself when canonical
+# mode comes back with typed input still queued, to say that input is to
+# be echoed again -- a mark of what was typed, not a setting anybody made.
+BSD_PENDIN = 0x20000000
+
+
+def without_pendin(line):
+    if not line.startswith('gfmt1:'):
+        return line
+    return re.sub(r'(?<=:lflag=)[0-9a-f]+', lambda m: '%x' % (int(m.group(0), 16) & ~BSD_PENDIN), line)
 
 
 def exit_status(out):
