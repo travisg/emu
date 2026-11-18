@@ -160,10 +160,16 @@ which silently holds off every level at or below it. **Input goes through a
 queue**: the service routine posts a character and wakes the waiter -- only
 out of its wait, so a keystroke cannot restart a stopped task -- the reader
 blocks in `Q.GET` rather than polling, and one waiter to a queue means one
-reader. And **the console has one reader at a time**, named by the `CONBSY`
-cell: `RUN` raises it in the masked window that clears the break flag,
-then waits on it -- reading no queue -- until the task's `K.EXIT` clears
-it and wakes the shell. That is also why **only a task `RUN` started may
+reader. **There are four terminals**, the console's teletype and teletypes
+1-3 beside it (DIO devices 12, 11 and 10, on the console's interrupt
+level): each has a block in the kernel's terminal table, the service
+routine asks each teletype's status word in turn to find which
+interrupted, and every task has its terminal (`T.TTY`), where what it
+prints goes and whose console it may be given. And **a console has one
+reader at a time**, named by its
+terminal's `TM.BSY` cell: `RUN` raises it in the masked window that clears
+the break flag, then waits on it -- reading no queue -- until the task's
+`K.EXIT` clears it and wakes the shell. That is also why **only a task `RUN` started may
 read the console**: `LOAD` grants nothing and leaves the shell in `Q.GET`,
 so a module that read the queue behind the prompt would put its own
 registration in the queue's one waiter slot on top of the shell's. A
@@ -171,9 +177,9 @@ module that needs the console tests its node's `T.CON` at entry and
 says so if it is clear, which is what `brex.asm` does when it has no
 program to run instead; `hello.asm` only prints, which is what `LOAD` is
 for. Ctrl-C never enters the queue at all: the service routine raises the
-kernel's `BRKREQ` instead, so a running program that reads nothing can
+terminal's break flag instead, so a running program that reads nothing can
 still be broken. **The break is the console's**: BASIC's check between
-statements goes through the wrapper, which answers for the kernel's flag
+statements goes through the wrapper, which asks the kernel (`K.BRKQ`)
 only while its task has the console, so a BASIC running behind the prompt
 neither stops for a Ctrl-C nor takes one that was meant for the program
 in front; `TYPE` and `DUMP` ask through `rexlib.asm`'s `L.BRK`, which

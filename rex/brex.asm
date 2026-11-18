@@ -22,11 +22,11 @@
 ;     Model 33 is armed for hardware echo, so nothing here echoes an
 ;     ordinary character; the rubout's backslash still prints, because
 ;     only the buffer can take a character back, not the paper.
-;   - the break flag is the kernel's BRKREQ: SERV sniffs Ctrl-C out of
-;     the input stream and raises it.  It is the flag of whoever has the
-;     console, so the core asks through T.BRKQ and T.BRKC, which answer
-;     for the kernel's cell when this task has the console and say "no
-;     break" when it has not.
+;   - the break flag is the kernel's, one to a terminal: SERV sniffs
+;     Ctrl-C out of the input stream and raises it.  It is the flag of
+;     whoever has the console, so the core asks through T.BRKQ and
+;     T.BRKC, which answer through K.BRKQ and K.BRKC when this task has
+;     the console and say "no break" when it has not.
 ;   - BYE is K.EXIT: the kernel hands the console back to the shell and
 ;     gives back the module, its node and the workspace, so the next RUN
 ;     BASIC starts afresh.
@@ -361,8 +361,8 @@ T.BRKQ          SUBR
                 LDW     BNOC
                 SAZ
                 JMP     BBQZ
-                SMB     BRKREQ
-                LDW     BRKREQ
+                SMB     K.BRKQ
+                JSX     K.BRKQ
 BBQX            EXIT    T.BRKQ
 BBQZ            CLR
                 JMP     BBQX
@@ -370,8 +370,8 @@ T.BRKC          SUBR
                 LDW     BNOC
                 SAZ                     ; ACR is zero where it is wanted
                 JMP     BBCX
-                SMB     BRKREQ
-                STW     BRKREQ
+                SMB     K.BRKC
+                JSX     K.BRKC
 BBCX            EXIT    T.BRKC
 
 ; ---------------------------------------------------------------- files

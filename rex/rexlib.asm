@@ -305,8 +305,8 @@ L.BRK           SUBR
                 LDW     *T.CON
                 JNZ     L.BRK1          ; the console's holder?
                 EXIT    L.BRK
-L.BRK1          SMB     BRKREQ
-                LDW     BRKREQ
+L.BRK1          SMB     K.BRKQ
+                JSX     K.BRKQ
                 EXIT    L.BRK
 
                 LIBR    L.EXIT

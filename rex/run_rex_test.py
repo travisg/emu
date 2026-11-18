@@ -137,7 +137,7 @@ LOW_ONLY = ('BASIC',)
 
 # The pool and the node arena, as rex.asm lays them out.
 POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
-NARB, NARN, T_LEN, T_STA, T_NAM, SOFF, SFREE = 0x7e00, 24, 18, 0, 8, 2, 4
+NARB, NARN, T_LEN, T_STA, T_NAM, SOFF, SFREE = 0x7e00, 24, 19, 0, 8, 2, 4
 
 
 def node_of(emu, name):
@@ -695,7 +695,8 @@ def disc_session(emu, image):
     deadline = time.time() + 120
     while True:
         emu.halt()
-        held = emu.memw(symbols.value('CONBSY'), 1)[0]
+        # the console's terminal block, TMT, and its TM.BSY
+        held = emu.memw(symbols.value('TMT') + symbols.value('TM.BSY'), 1)[0]
         emu.run()
         if held:
             break
