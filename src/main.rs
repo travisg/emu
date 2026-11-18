@@ -53,8 +53,8 @@ struct Args {
     fast_io: bool,
     /// `--disk PATH`: the disk image, in place of the fixed name under disks/.
     disk: Option<PathBuf>,
-    /// `--serial SPEC`: the host end of the machine's spare serial port.
-    serial: Option<SerialSpec>,
+    /// `--serial SPEC`, given once per spare serial port: their host ends.
+    serial: Vec<SerialSpec>,
     /// `--debug PATH`: listen on a Unix socket for a debugger.
     debug: Option<PathBuf>,
     /// `--halt`: start halted, waiting for RUN from the panel or the port.
@@ -80,7 +80,7 @@ fn usage(argv0: &str) -> String {
         if let Some(disks) = s.disks {
             writeln!(out, "  {:<12}{:<18}{disks}", "", "--disk").unwrap();
         }
-        if let Some(port) = s.serial_port {
+        for port in s.serial_ports {
             writeln!(out, "  {:<12}{:<18}{port}", "", "--serial").unwrap();
         }
     }
@@ -96,7 +96,7 @@ fn usage(argv0: &str) -> String {
         ("--no-throttle", "run flat out"),
         ("--fast-io", "devices finish i/o at once, not at real speed"),
         ("--disk FILE", "mount FILE in place of the default disk (above)"),
-        ("--serial pty|tcp:PORT", "spare serial port (above) on a pty or localhost port"),
+        ("--serial pty|tcp:PORT", "a spare serial port (above) on a pty or localhost port; once per port"),
         ("--debug SOCKET", "debug port on a unix socket, for tools/emudbg.py"),
         ("--halt", "start halted; needs a panel or --debug to run"),
         ("--restore FILE", "start from a snapshot of the same system"),
@@ -126,7 +126,7 @@ fn parse_args(argv: Vec<String>) -> Result<Args, ()> {
         throttle: ThrottleArg::Unset,
         fast_io: false,
         disk: None,
-        serial: None,
+        serial: Vec::new(),
         debug: None,
         halt: false,
         restore: None,
@@ -241,7 +241,7 @@ fn parse_args(argv: Vec<String>) -> Result<Args, ()> {
             "--serial" => {
                 let v = value(&mut i).ok_or(())?;
                 match SerialSpec::parse(&v) {
-                    Ok(spec) => args.serial = Some(spec),
+                    Ok(spec) => args.serial.push(spec),
                     Err(e) => {
                         eprintln!("--serial: {e}");
                         return Err(());
@@ -321,8 +321,11 @@ fn main() -> ExitCode {
         eprintln!("unknown system '{}', aborting", args.system);
         return ExitCode::FAILURE;
     };
-    if args.serial.is_some() && desc.serial_port.is_none() {
-        eprintln!("--serial: system '{}' has no spare serial port", desc.name);
+    if args.serial.len() > desc.serial_ports.len() {
+        match desc.serial_ports.len() {
+            0 => eprintln!("--serial: system '{}' has no spare serial port", desc.name),
+            n => eprintln!("--serial: system '{}' takes it at most {n} times, and it was given {}", desc.name, args.serial.len()),
+        }
         return ExitCode::FAILURE;
     }
 

@@ -13,9 +13,12 @@
 //! paper tape reader on the DIO channel, and a 74601 disc controller whose
 //! four drive bays mount whatever `ray703-disc{0..3}.img` files the current
 //! directory holds (the Kaypro floppy convention: a file that is not there is
-//! a drive that was never installed). Plus one device no Raytheon catalogue
+//! a drive that was never installed). Plus two things no Raytheon catalogue
 //! offered: the invented 60 Hz line clock (`dev/ray703.rs` says invented at
-//! length), silent until a program connects it.
+//! length), silent until a program connects it, and three more teletypes
+//! beside the console, on the console's level -- each an unplugged line
+//! until `--serial` gives it a host end, and present either way, so that a
+//! snapshot is the same machine whatever was plugged in.
 //!
 //! The 703 has no ROM at all. An operator keyed a bootstrap in from the front
 //! panel and fed the machine an absolute paper tape; there was nothing in core
@@ -38,7 +41,7 @@ use crate::bus::{Bus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
 use crate::dev::disc74601::{Disc74601, DEV_DISC};
 use crate::dev::memory::Memory;
-use crate::dev::ray703::{LineClock703, TapeReader703, Tty703, DEV_LINE_CLOCK, DEV_TAPE_READER, DEV_TTY};
+use crate::dev::ray703::{LineClock703, TapeReader703, Tty703, DEV_LINE_CLOCK, DEV_TAPE_READER, DEV_TERMINALS};
 use crate::rom;
 use std::io;
 use std::path::Path;
@@ -83,9 +86,20 @@ const PTB: [u16; 11] = [
 /// number and says so.
 const PTB_LOAD_ORIGIN: u16 = 0x0100;
 
+/// How many teletypes, the console included (`DEV_TERMINALS`).
+pub const TERMINALS: usize = DEV_TERMINALS.len();
+
+/// The extra terminals as `--serial` names them, one line each in turn.
+pub const SERIAL_PORTS: [&str; TERMINALS - 1] =
+    ["teletype 1, DIO device C", "teletype 2, DIO device B", "teletype 3, DIO device A"];
+
+/// The snapshot section of each teletype, the console's first.
+const TTY_SECTIONS: [&[u8; 4]; TERMINALS] = [b"TTY ", b"TTY1", b"TTY2", b"TTY3"];
+
 pub struct Ray703 {
     core: Memory,
-    tty: Tty703,
+    /// The console first, then the extra terminals in `DEV_TERMINALS` order.
+    ttys: [Tty703; TERMINALS],
     reader: TapeReader703,
     disc: Disc74601,
     line_clock: LineClock703,
@@ -94,9 +108,9 @@ pub struct Ray703 {
 impl Ray703 {
     pub fn new(rom_path: &Path, console: ConsoleEndpoint, subsystem: &str) -> io::Result<Self> {
         // The character devices signal level 0, which is what PTB and every
-        // driver listing assume. They cannot be confused for each other
-        // because a device stays silent until the program arms it, and a
-        // program only ever arms the one it is reading from.
+        // driver listing assume. A program that arms one at a time knows
+        // which interrupted by what it started; one that runs several at
+        // once asks each teletype's status word.
         //
         // The disc gets level 1. X-RAY leaves every channel number to the
         // per-installation system description ('DSKI EQU NUMBER, cards
@@ -111,7 +125,12 @@ impl Ray703 {
         // already means something there.
         let mut sys = Ray703 {
             core: Memory::new(CORE_BYTES),
-            tty: Tty703::new(console, 0),
+            ttys: [
+                Tty703::new(console, 0),
+                Tty703::new(unplugged(), 0),
+                Tty703::new(unplugged(), 0),
+                Tty703::new(unplugged(), 0),
+            ],
             reader: TapeReader703::new(0),
             disc: Disc74601::new(1),
             line_clock: LineClock703::new(2),
@@ -182,11 +201,18 @@ impl Ray703 {
     /// ten characters a second and half a revolution per transfer. The tape
     /// reader already free-runs.
     pub fn set_fast_io(&mut self) {
-        self.tty.set_fast_io();
+        for tty in &mut self.ttys {
+            tty.set_fast_io();
+        }
         self.disc.set_fast_io();
         // Not the line clock: a periodic interrupt with no period never
         // returns. That is what lets a test run --fast-io for an instant
         // teletype over unchanged scheduling slices.
+    }
+
+    /// Give extra terminal `n` (1 to `TERMINALS - 1`) its host end.
+    pub fn attach_terminal(&mut self, n: usize, line: ConsoleEndpoint) {
+        self.ttys[n].set_console(line);
     }
 
     /// Wire the panel window's disc rack lamps into the controller.
@@ -210,6 +236,13 @@ impl Ray703 {
     }
 }
 
+/// A terminal with nothing on its line: no keys ever arrive and what it
+/// prints goes nowhere.
+fn unplugged() -> ConsoleEndpoint {
+    let (_, rx) = std::sync::mpsc::channel();
+    ConsoleEndpoint::new(rx, Box::new(io::sink()))
+}
+
 impl Bus for Ray703 {
     fn read8(&mut self, addr: u32) -> u8 {
         self.core.read_byte(addr & 0xffff)
@@ -227,9 +260,11 @@ impl Bus for Ray703 {
 
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         use crate::snapshot::Snapshot;
-        let Ray703 { core, tty, reader, disc, line_clock } = self;
+        let Ray703 { core, ttys, reader, disc, line_clock } = self;
         w.section(b"CORE", |w| core.save(w));
-        w.section(b"TTY ", |w| tty.save(w));
+        for (tty, tag) in ttys.iter().zip(TTY_SECTIONS) {
+            w.section(tag, |w| tty.save(w));
+        }
         w.section(b"PTR ", |w| reader.save(w));
         w.section(b"CLK ", |w| line_clock.save(w));
         // the disc last: nothing after it can fail once its platters are on
@@ -240,7 +275,9 @@ impl Bus for Ray703 {
     fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
         use crate::snapshot::Snapshot;
         r.section(b"CORE", |r| self.core.load(r))?;
-        r.section(b"TTY ", |r| self.tty.load(r))?;
+        for (tty, tag) in self.ttys.iter_mut().zip(TTY_SECTIONS) {
+            r.section(tag, |r| tty.load(r))?;
+        }
         r.section(b"PTR ", |r| self.reader.load(r))?;
         r.section(b"CLK ", |r| self.line_clock.load(r))?;
         r.section(b"DISC", |r| self.disc.load(r))
@@ -259,8 +296,10 @@ impl Bus for Ray703 {
     /// would.
     fn io_read16(&mut self, port: u8) -> u16 {
         let (device, function) = (port >> 4, port & 0x0f);
+        if let Some(n) = DEV_TERMINALS.iter().position(|&d| d == device) {
+            return self.ttys[n].din(function);
+        }
         match device {
-            DEV_TTY => self.tty.din(function),
             DEV_TAPE_READER => self.reader.din(function),
             DEV_DISC => self.disc.din(function),
             _ => 0,
@@ -269,8 +308,10 @@ impl Bus for Ray703 {
 
     fn io_write16(&mut self, port: u8, val: u16) {
         let (device, function) = (port >> 4, port & 0x0f);
+        if let Some(n) = DEV_TERMINALS.iter().position(|&d| d == device) {
+            return self.ttys[n].dot(function, val);
+        }
         match device {
-            DEV_TTY => self.tty.dot(function, val),
             DEV_TAPE_READER => self.reader.dot(function, val),
             DEV_DISC => self.disc.dot(function, val),
             // no read arm anywhere for the clock: it has no readable
@@ -281,15 +322,15 @@ impl Bus for Ray703 {
     }
 
     /// Every device gets the same elapsed cycle count, which is how they
-    /// share one clock without sharing any state: the teletype spends it
+    /// share one clock without sharing any state: the teletypes spend it
     /// running its character at ten a second, the reader ignores it, the
     /// disc counts down its transfer in flight, and the line clock banks it
     /// toward the next tick. The disc alone is handed the core -- it is the
     /// machine's one DMA device, and this poll is the one place the memory
     /// and the devices meet.
     fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
-        self.tty.poll(elapsed_cycles)
-            | self.reader.poll(elapsed_cycles)
+        let ttys = self.ttys.iter_mut().fold(0, |lines, tty| lines | tty.poll(elapsed_cycles));
+        ttys | self.reader.poll(elapsed_cycles)
             | self.disc.poll(elapsed_cycles, &mut self.core)
             | self.line_clock.poll(elapsed_cycles)
     }
@@ -303,7 +344,9 @@ impl Bus for Ray703 {
     /// whether a device charges time at all, rather than what a second of it
     /// is worth in cycles.
     fn set_device_pacing_hz(&mut self, hz: u64) {
-        self.tty.set_pacing_hz(hz);
+        for tty in &mut self.ttys {
+            tty.set_pacing_hz(hz);
+        }
         self.disc.set_pacing_hz(hz);
         self.line_clock.set_pacing_hz(hz);
     }
@@ -398,6 +441,57 @@ mod tests {
         assert_eq!(sys.poll_interrupt_lines(0), 0, "no tape is mounted");
         // and an absent device reads back zero rather than panicking
         assert_eq!(sys.io_read16(0x1d), 0);
+    }
+
+    /// A plugged-in line whose keys are `input`, and what it prints.
+    fn line(input: &[u8]) -> (ConsoleEndpoint, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
+        struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Shared {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let (tx, rx) = mpsc::channel();
+        for &c in input {
+            tx.send(c).unwrap();
+        }
+        let printed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        (ConsoleEndpoint::new(rx, Box::new(Shared(printed.clone()))), printed)
+    }
+
+    /// Each teletype answers its own device code: what the program prints on
+    /// one comes out of that line alone, a key typed on one is that one's to
+    /// collect, and only its status word says it interrupted -- all four on
+    /// level 0, the console's.
+    #[test]
+    fn each_teletype_answers_its_own_device_code() {
+        let rom = scratch_file("terminals", &[0x01, 0x00]);
+        let mut sys = machine("", &rom).unwrap();
+        let mut printed = Vec::new();
+        for n in 1..TERMINALS {
+            let (endpoint, out) = line(if n == 2 { b"K" } else { b"" });
+            sys.attach_terminal(n, endpoint);
+            printed.push(out);
+        }
+        sys.set_fast_io();
+        let port = |dev: u8, function: u8| (dev << 4) | function;
+        // a character on teletype 1, and every keyboard armed
+        sys.io_write16(port(DEV_TERMINALS[1], 0xe), 0x80 | b'X' as u16);
+        for &dev in &DEV_TERMINALS {
+            sys.io_write16(port(dev, 0xb), 0);
+        }
+        assert_eq!(sys.poll_interrupt_lines(0), 1, "one level for all of them");
+        let status: Vec<u16> = DEV_TERMINALS.iter().map(|&d| sys.io_read16(port(d, 0x0))).collect();
+        assert_eq!(status, [0x8000, 0x8100, 0x8100, 0x8000], "teletype 1 printed, teletype 2 has a key");
+        assert_eq!(sys.io_read16(port(DEV_TERMINALS[2], 0xf)), 0x80 | b'K' as u16);
+        assert_eq!(sys.io_read16(port(DEV_TERMINALS[3], 0xf)), 0, "nothing typed there");
+        assert_eq!(*printed[0].lock().unwrap(), b"X", "teletype 1's paper");
+        assert_eq!(*printed[1].lock().unwrap(), b"K", "teletype 2 echoes its own keyboard");
+        assert!(printed[2].lock().unwrap().is_empty());
     }
 
     /// The invented line clock: DOT 2,1 connects it, the pulse arrives on

@@ -81,6 +81,13 @@ pub const DEV_TAPE_READER: u8 = 0xd;
 /// ...and the one code no Raytheon document assigns: the invented line
 /// clock's, picked from the unused space (the disc holds 1, disc74601.rs).
 pub const DEV_LINE_CLOCK: u8 = 0x2;
+/// The teletypes, the console first. The three after it are invented as the
+/// line clock is: no Raytheon document shows a 703 with a second teletype
+/// controller, but the controller is the console's, strapped to another
+/// device code and sharing its interrupt level, which is the shape the
+/// status word (706 UM Table 5-15) and X-RAY's shared-level loop were made
+/// for. The codes count down from the console's, past the tape reader's.
+pub const DEV_TERMINALS: [u8; 4] = [DEV_TTY, 0xc, 0xb, 0xa];
 
 /// Characters a second for the Model 33 on the console. The driver listing
 /// (392292, "Individual Devices") says it outright: "the standard Teletype
@@ -118,8 +125,16 @@ const FN_READ_KEYBOARD: u8 = 0xb;
 const FN_COLLECT: u8 = 0xd;
 const FN_COLLECT_KEYBOARD: u8 = 0xf;
 const FN_WRITE: u8 = 0xe;
+/// `DIN dev,0`, "Return Status to Accumulator" (706 UM Table 5-14).
+const FN_STATUS: u8 = 0x0;
 
-/// Console teletype, DIO device 14.
+/// The status word's two bits (706 UM Table 5-15), bit 0 the most
+/// significant as everywhere on this machine.
+const STATUS_SELECTED: u16 = 0x8000;
+const STATUS_IRQ: u16 = 0x0100;
+
+/// The ASR-33 teletype controller: the console's at DIO device 14, and the
+/// invented extra terminals' at the other `DEV_TERMINALS`.
 ///
 /// The 703's software world is eight-bit ASCII with the high bit *set* -- the
 /// driver documentation spells out CR as 8D, LF as 8A, blank as A0 and RUBOUT
@@ -172,13 +187,20 @@ pub struct Tty703 {
     /// that a pacing rate arriving afterwards cannot quietly put the teletype
     /// back to ten characters a second.
     fast_io: bool,
+    /// The status word's bit 7, "interrupt true and has not been serviced by
+    /// the transmission of a character": set by every pulse, cleared by the
+    /// next transfer or select. It is how one service routine finds which of
+    /// several teletypes on a shared level interrupted -- the level itself
+    /// carries no device number, and X-RAY's shared-level loop (`SLOOP`,
+    /// listing 390779 cards 764-771) asks each device's status in turn.
+    irq: bool,
 }
 
 impl crate::snapshot::Snapshot for Tty703 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
         let Tty703 {
             console: _session, level: _wiring, armed, echo, frame, tx_owed, tx_remaining, rx_credit,
-            char_cycles: _session_pacing, fast_io: _session_flag,
+            char_cycles: _session_pacing, fast_io: _session_flag, irq,
         } = self;
         w.bool(*armed);
         w.bool(*echo);
@@ -186,6 +208,7 @@ impl crate::snapshot::Snapshot for Tty703 {
         w.u32(*tx_owed);
         w.u32(*tx_remaining);
         w.u32(*rx_credit);
+        w.bool(*irq);
     }
 
     fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
@@ -195,6 +218,7 @@ impl crate::snapshot::Snapshot for Tty703 {
         self.tx_owed = r.u32()?;
         self.tx_remaining = r.u32()?;
         self.rx_credit = r.u32()?;
+        self.irq = r.bool()?;
         Ok(())
     }
 }
@@ -214,7 +238,14 @@ impl Tty703 {
             rx_credit: TTY_CHAR_CYCLES,
             char_cycles: TTY_CHAR_CYCLES,
             fast_io: false,
+            irq: false,
         }
+    }
+
+    /// Plug a line into the teletype: the host end of a terminal that was
+    /// built unplugged.
+    pub fn set_console(&mut self, console: ConsoleEndpoint) {
+        self.console = console;
     }
 
     /// Run at host speed instead of ten characters a second (`--fast-io`).
@@ -238,6 +269,9 @@ impl Tty703 {
     }
 
     pub fn dot(&mut self, function: u8, val: u16) {
+        // every DOT is a transfer or a select, which is what services the
+        // interrupt as far as the status word is concerned
+        self.irq = false;
         match function {
             FN_WRITE => {
                 // Strip the high bit the 703 conventionally carries. Bare
@@ -297,9 +331,17 @@ impl Tty703 {
             // the Model 33 is being read, so it sets the echo the same way the
             // arming DOTs do.
             FN_COLLECT | FN_COLLECT_KEYBOARD => {
+                self.irq = false;
                 self.armed = true;
                 self.echo = function == FN_COLLECT_KEYBOARD;
                 self.frame.take().unwrap_or(0) as u16
+            }
+            // Selected is a read armed or a character printing. Asking
+            // leaves the interrupt bit as it was: the status DIN is how a
+            // shared service routine looks before it transfers.
+            FN_STATUS => {
+                let selected = if self.armed || self.tx_owed > 0 { STATUS_SELECTED } else { 0 };
+                selected | if self.irq { STATUS_IRQ } else { 0 }
             }
             _ => 0,
         }
@@ -369,6 +411,9 @@ impl Tty703 {
                 self.frame = Some(c | 0x80);
                 lines |= 1 << self.level;
             }
+        }
+        if lines != 0 {
+            self.irq = true;
         }
         lines
     }
@@ -679,8 +724,60 @@ mod tests {
         let mut tty = tty_with_input(b"A");
         tty.dot(FN_READ, 0);
         tty.poll(TTY_CHAR_CYCLES);
-        assert_eq!(tty.din(0x0), 0);
+        assert_eq!(tty.din(FN_STATUS), STATUS_SELECTED | STATUS_IRQ, "status, not the frame");
+        assert_eq!(tty.din(0x3), 0);
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'A' as u16);
+    }
+
+    #[test]
+    fn status_says_selected_while_reading_or_printing() {
+        let mut tty = tty_with_input(b"");
+        assert_eq!(tty.din(FN_STATUS), 0, "nothing selected at power-on");
+        tty.dot(FN_READ_KEYBOARD, 0);
+        assert_eq!(tty.din(FN_STATUS), STATUS_SELECTED);
+        tty.dot(FN_DISCONNECT, 0);
+        assert_eq!(tty.din(FN_STATUS), 0);
+        tty.dot(FN_WRITE, b'A' as u16);
+        assert_eq!(tty.din(FN_STATUS), STATUS_SELECTED, "printing");
+        tty.poll(TTY_CHAR_CYCLES);
+        assert_eq!(tty.din(FN_STATUS), STATUS_IRQ, "printed, and the completion not yet serviced");
+    }
+
+    /// Bit 7 stays up until a transfer or a select services it, and asking
+    /// for status is neither -- so a routine on a shared level can ask each
+    /// device and then serve the ones that want it.
+    #[test]
+    fn the_interrupt_bit_holds_until_a_transfer_or_select() {
+        // a keystroke, serviced by collecting it
+        let mut tty = tty_with_input(b"A");
+        tty.dot(FN_READ_KEYBOARD, 0);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(tty.din(FN_STATUS) & STATUS_IRQ, STATUS_IRQ);
+        assert_eq!(tty.din(FN_STATUS) & STATUS_IRQ, STATUS_IRQ, "asking twice changes nothing");
+        assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0xc1);
+        assert_eq!(tty.din(FN_STATUS) & STATUS_IRQ, 0);
+        // a completion, serviced by the next character, a select or a disconnect
+        for service in [FN_WRITE, FN_READ_KEYBOARD, FN_READ, FN_DISCONNECT] {
+            let mut tty = tty_with_input(b"");
+            tty.dot(FN_WRITE, b'A' as u16);
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+            assert_eq!(tty.din(FN_STATUS) & STATUS_IRQ, STATUS_IRQ);
+            tty.dot(service, b'B' as u16);
+            assert_eq!(tty.din(FN_STATUS) & STATUS_IRQ, 0, "function {service:#x} services it");
+        }
+    }
+
+    /// A completion and a keystroke in one poll are one pulse and one bit;
+    /// collecting the keystroke services both, as one interrupt line would.
+    #[test]
+    fn a_merged_completion_and_keystroke_are_one_interrupt() {
+        let mut tty = tty_with_input(b"A");
+        tty.dot(FN_READ_KEYBOARD, 0);
+        tty.dot(FN_WRITE, b'X' as u16);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(tty.din(FN_STATUS), STATUS_SELECTED | STATUS_IRQ);
+        assert_eq!(tty.din(FN_COLLECT_KEYBOARD), 0xc1);
+        assert_eq!(tty.din(FN_STATUS), STATUS_SELECTED, "still reading; nothing owed");
     }
 
     /// A `DOT dev,0` is how a 703 driver puts a device down between records;

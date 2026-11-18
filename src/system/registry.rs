@@ -67,20 +67,24 @@ pub struct MachineOpts {
     /// the fixed name under `disks/`. The Kaypro's floppy takes it; the 703
     /// mounts four units by name and ignores it.
     pub disk: Option<PathBuf>,
-    /// `--serial SPEC`: the host end of the machine's spare serial port.
-    /// Only a machine whose descriptor names a `serial_port` is given one;
-    /// `main` refuses the option for the rest.
-    pub serial: Option<SerialSpec>,
+    /// `--serial SPEC`, once per spare serial port: the host ends, in the
+    /// order of the descriptor's `serial_ports`. `main` refuses more than a
+    /// machine has.
+    pub serial: Vec<SerialSpec>,
 }
 
-/// Open the `--serial` line, if asked for, and announce where it is.
-fn open_serial(opts: &MachineOpts, port: &str) -> io::Result<Option<ConsoleEndpoint>> {
-    let Some(spec) = &opts.serial else {
-        return Ok(None);
-    };
-    let (endpoint, place) = serial::open(spec)?;
-    println!("serial: {port} is on {place}");
-    Ok(Some(endpoint))
+/// Open the `--serial` lines asked for, in `ports` order, and announce
+/// where each one is.
+fn open_serial(opts: &MachineOpts, ports: &[&str]) -> io::Result<Vec<ConsoleEndpoint>> {
+    opts.serial
+        .iter()
+        .zip(ports)
+        .map(|(spec, port)| {
+            let (endpoint, place) = serial::open(spec)?;
+            println!("serial: {port} is on {place}");
+            Ok(endpoint)
+        })
+        .collect()
 }
 
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
@@ -97,9 +101,9 @@ pub struct SystemDescriptor {
     /// until the rate is verified *and* the core reports cycle counts --
     /// throttling a core that reports none is an announced no-op.
     pub clock_hz: Option<u64>,
-    /// The serial port `--serial` connects to the host, if the machine has
-    /// one spare: what `-h` and the startup line call it.
-    pub serial_port: Option<&'static str>,
+    /// The spare serial ports, each taking one `--serial` in turn: what `-h`
+    /// and the startup line call them.
+    pub serial_ports: &'static [&'static str],
     /// What `--disk` replaces, for `-h`, or why it has nothing to.
     pub disks: Option<&'static str>,
     /// The subsystem tokens `-h` lists, each with what it does.
@@ -199,7 +203,7 @@ fn build_altair8800(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &Mach
     let sub = tokens.join("-");
 
     let mut bus = altair8800::Altair8800::new(rom, console, &sub)?;
-    if let Some(line) = open_serial(opts, altair8800::SERIAL_PORT)? {
+    if let Some(line) = open_serial(opts, &[altair8800::SERIAL_PORT])?.pop() {
         bus.attach_serial(line);
     }
     let mut cpu = crate::cpu::i8080::Cpu8080::new();
@@ -235,7 +239,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
         let card = opts.disk.clone().unwrap_or_else(|| PathBuf::from(rc2014::DEFAULT_CF));
         bus.mount_compact_flash(&card);
     }
-    if let Some(line) = open_serial(opts, rc2014::SERIAL_PORT)? {
+    if let Some(line) = open_serial(opts, &[rc2014::SERIAL_PORT])?.pop() {
         bus.attach_serial(line);
     }
     Ok(Machine {
@@ -340,6 +344,9 @@ fn build_ray703(
     });
 
     let mut bus = ray703::Ray703::new(rom, console, sub)?;
+    for (n, line) in open_serial(opts, &ray703::SERIAL_PORTS)?.into_iter().enumerate() {
+        bus.attach_terminal(n + 1, line);
+    }
     if opts.fast_io {
         bus.set_fast_io();
     }
@@ -392,7 +399,7 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &Machine
     if opts.fast_io {
         bus.set_fast_io();
     }
-    if let Some(line) = open_serial(opts, kaypro::SERIAL_PORT)? {
+    if let Some(line) = open_serial(opts, &[kaypro::SERIAL_PORT])?.pop() {
         bus.attach_serial(line);
     }
     Ok(Machine {
@@ -416,7 +423,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // 7.3728 MHz crystal the 6809 divides by four, so the E clock the
         // datasheet's cycle counts tick at is 1.8432 MHz.
         clock_hz: Some(1_843_200),
-        serial_port: None,
+        serial_ports: &[],
         disks: None,
         variants: &[],
         launch: Launch {
@@ -440,7 +447,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // The 680 ran its 6800 at 500 kHz -- MITS shipped it slow to suit
         // the memory it came with.
         clock_hz: Some(500_000),
-        serial_port: None,
+        serial_ports: &[],
         disks: None,
         variants: &[],
         launch: Launch {
@@ -462,7 +469,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         default_rom: altair8800::DEFAULT_ROM,
         factory: build_altair8800,
         clock_hz: Some(altair8800::CLOCK_HZ),
-        serial_port: Some(altair8800::SERIAL_PORT),
+        serial_ports: &[altair8800::SERIAL_PORT],
         disks: None,
         variants: &[
             ("4k", "for 4K BASIC: -r roms/altair8800/basic4k40.tap"),
@@ -512,7 +519,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         factory: build_kaypro,
         // The stock Kaypro II Z80 rate (the 5 MHz machines came later).
         clock_hz: Some(kaypro::CLOCK_HZ),
-        serial_port: Some(kaypro::SERIAL_PORT),
+        serial_ports: &[kaypro::SERIAL_PORT],
         disks: Some("drive A, default disks/mbasic-games.img"),
         variants: &[],
         launch: Launch {
@@ -539,7 +546,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         default_rom: ray703::DEFAULT_ROM,
         factory: build_ray703,
         clock_hz: Some(crate::cpu::ray703::CLOCK_HZ),
-        serial_port: None,
+        serial_ports: &ray703::SERIAL_PORTS,
         disks: Some("unused; disks/ray703-disc0..3.img by name"),
         variants: &[
             ("ptb", "key in PTB; -r is the paper tape it reads"),
@@ -588,7 +595,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // clock divides down to 115200 baud, and the Z80 runs off the same
         // can.
         clock_hz: Some(rc2014::CLOCK_HZ),
-        serial_port: Some(rc2014::SERIAL_PORT),
+        serial_ports: &[rc2014::SERIAL_PORT],
         disks: Some("the cpm card, default disks/rc2014-cf.img"),
         variants: &[("cpm", "RC2014 Pro: CP/M on a compact flash card")],
         // Any card of a megabyte or more: a card has no fixed size, and that

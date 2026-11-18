@@ -110,7 +110,8 @@ still has a teletype printing ten characters a second.
 
 The Kaypro, the RC2014 and the Altair 8800 each have a serial port with nothing on it — the
 Kaypro's RS-232 connector, the RC2014's second SIO channel, the Altair's second 2SIO port — and `--serial pty` or `--serial tcp:PORT` plugs the
-host into it: a new pseudo-terminal for `screen` or a Kermit, or a localhost socket for `nc`. The
+host into it: a new pseudo-terminal for `screen` or a Kermit, or a localhost socket for `nc`. The 703
+has three more teletypes beside its console, and takes `--serial` once for each. The
 RC2014's monitor takes its console from whichever channel sees a space first, so it can be driven
 entirely over the socket.
 
