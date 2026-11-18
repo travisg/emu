@@ -35,7 +35,7 @@
 ; it arrived in and the next, which is what stops two tasks that want
 ; the same core from spending all their time changing places.
 ;
-; The disc is claimed like anybody's (IOLOCK), with one exception: the
+; The disc is claimed like anybody's (IOLOCK), with one exception: a
 ; shell's loader holds the disc for a whole load, and may be the task
 ; waiting for core.  A holder that is waiting for core is not using the
 ; disc, so the swapper uses it then without the claim -- for that one

@@ -92,7 +92,11 @@ two shells run side by side: a BLIP behind each prompt prints on its own
 terminal's paper and never on the other's, STAT on the console shows the
 other terminal's shell and its task, a second Ctrl-C there ends only the
 program in front of it, and its BYE leaves the pool as it was before the
-terminal had a shell -- after which a key brings up another.
+terminal had a shell -- after which a key brings up another. Then, with
+the console's shell waiting on a program it ran, teletype 2's first key
+has to bring up a shell there too; and with more hogs loaded than core
+holds, a terminal's shell that is waiting for a key has to be put out
+and come back in for one.
 
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
@@ -1101,14 +1105,14 @@ def listing_word(source, after):
     raise AssertionError('no word for %r in %s' % (source, REX_LST))
 
 
-def terminal_port(log):
-    """Where the emulator just said teletype 1's line is: the last such line
+def terminal_port(log, n):
+    """Where the emulator just said teletype n's line is: the last such line
     in the log, the startup line of the machine that was just spawned."""
     log.flush()
-    found = re.findall(rb'serial: teletype 1, DIO device C is on 127\.0\.0\.1:(\d+)',
+    found = re.findall(rb'serial: teletype %d, DIO device [A-F] is on 127\.0\.0\.1:(\d+)' % n,
                        open(LOG_FILE, 'rb').read())
     if not found:
-        raise AssertionError('the emulator never said where teletype 1 is')
+        raise AssertionError('the emulator never said where teletype %d is' % n)
     return int(found[-1])
 
 
@@ -1126,7 +1130,7 @@ def wait_without(paper, pattern, start, marks, timeout=120):
         time.sleep(0.1)
 
 
-def terminals_session(emu, t1):
+def terminals_session(emu, t1, t2):
     """The console and teletype 1, a shell on each. While something prints
     behind a prompt its marks land inside whatever else that paper prints,
     so commands typed then go in without waiting for a prompt -- the shell
@@ -1262,6 +1266,52 @@ def terminals_session(emu, t1):
     term.wait(b'REX 703 TERMINAL 1\r\n')
     term.wait(PROMPT)
 
+    # teletype 2 asks for its shell while the console's is waiting on a
+    # RUN, which is woken for it rather than nudged at its prompt
+    held_at = tm0 + symbols.value('TM.BSY')
+    con.say('RUN NAP')
+    deadline = time.time() + 120
+    while True:
+        emu.halt()
+        held = emu.memw(held_at, 1)[0]
+        emu.run()
+        if held:
+            break
+        if time.time() > deadline:
+            raise AssertionError('NAP never had the console')
+        time.sleep(0.05)
+    term2 = Session(t2)
+    t2.key('\r')
+    term2.wait(b'REX 703 TERMINAL 2\r\n')
+    term2.say('ECHO TWO')
+    term2.wait(b'TWO\r\n')
+    emu.key('\x03')
+    time.sleep(0.5)
+    emu.key('\x03')
+    con.wait(b'KILLED\r\n')
+    if b'TWO' in emu.output or b'TWO' in t1.output:
+        raise AssertionError("teletype 2's echo came out elsewhere")
+
+    # more hogs than core holds: a terminal's shell waiting for a key is
+    # one the swapper may put out, and a key at its terminal brings it in
+    emu.wait_quiet(timeout=120)
+    con.at = len(emu.output)
+    emu.key('LOAD HOG %d\r' % 6000 * 4)
+    out = None
+    deadline = time.monotonic() + 300
+    while out is None:
+        emu.wait_quiet(timeout=120)
+        mark = len(emu.output)
+        emu.key('STAT\r')
+        emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark, timeout=120)
+        out = re.search(rb'^\d+ SH \w+ +OUT T([12])\r', bytes(emu.output[mark:]), re.M)
+        if time.monotonic() > deadline:
+            raise AssertionError('no shell was put out: %r' % bytes(emu.output[mark:]))
+    paper = {b'1': (t1, term), b'2': (t2, term2)}[out.group(1)][1]
+    paper.say('ECHO BACK IN')
+    paper.wait(b'BACK IN\r\n')
+    stat_until_gone(emu, con, b'HO')
+
 
 def finish(emu):
     emu.kill()
@@ -1348,16 +1398,18 @@ def main():
             # printer the chance to take another terminal's.
             termdir = os.path.join(workdir, 'terminals')
             os.makedirs(termdir)
-            make_platter(termdir, log)
+            make_platter(termdir, log, swap=True)
             with cwd(termdir):
                 emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--no-throttle',
-                                 '--serial', 'tcp:0'], log=log)
-            t1 = Terminal(terminal_port(log))
+                                 '--serial', 'tcp:0', '--serial', 'tcp:0'], log=log)
+            t1, t2 = Terminal(terminal_port(log, 1)), Terminal(terminal_port(log, 2))
             try:
-                terminals_session(emu, t1)
+                terminals_session(emu, t1, t2)
             finally:
                 log.write(b'\n--- paper, the terminals session: teletype 1 ---\n' + bytes(t1.output))
+                log.write(b'\n--- paper, the terminals session: teletype 2 ---\n' + bytes(t2.output))
                 t1.close()
+                t2.close()
             finish(emu)
             log.write(b'\n--- paper, the terminals session: the console ---\n' + bytes(emu.output))
         except Exception:
