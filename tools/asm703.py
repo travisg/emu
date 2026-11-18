@@ -1690,7 +1690,10 @@ def _assemble_deck(statements, origin, relocatable, errors):
             elif op == 'STR':
                 here += (len(string_body(lineno, arg)) + 1) // 2
             elif op == 'RES':
-                here += Expr(arg or '', symbols, here, lineno).value()
+                n = Expr(arg or '', symbols, here, lineno).value()
+                if n < 0:
+                    raise AsmError(lineno, f'RES {n}: a count of words below zero')
+                here += n
             else:
                 here += sizeof(lineno, op, arg)
         except AsmError as e:

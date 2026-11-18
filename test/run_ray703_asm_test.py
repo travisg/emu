@@ -809,6 +809,9 @@ def entries():
             '        NTRY    .L\n        END     GO\n', 'is a local label')
     refused('a module\'s location is no entry', frame % '        NTRY    GO\n',
             'GO is a location in a module', relocatable=True)
+    refused('a reservation of fewer than no words',
+            '        ORG     10\nGO      JMP     GO\n        RES     5-$\n        END     GO\n',
+            'RES -6')
     r = build(frame % '        NTRY    T.X\n', relocatable=True)
     check('a module\'s constant is an entry', not errors_of(r) and not isinstance(r, asm703.AsmErrorList)
           and [n for n, *_ in r['entries'][0][1]] == ['T.X'], errors_of(r))
