@@ -25,13 +25,15 @@ unless `EMU_BIN` says otherwise. Each writes a log beside itself. The shell
 ones drive the emulator through a pty and grep the log for the guest's own
 report of success; the python ones talk to the emulator's debug port
 (`tools/emudbg.py`) instead and read the guest's output from there, so they
-need no pty and no `script(1)`.
+need no pty and no `script(1)` -- except the launcher's, whose subject is
+the terminal, and which opens a pty of its own with python's `pty`.
 
     make -C test altair680-irq-test  # the 6800's IRQ through the ACIA, written into RAM
     make -C test altair8800-irq-test # the 8080's EI; HLT woken by the 2SIO into RST 7
     make -C test altair8800-basic-test # 8K BASIC off its paper tape, and a program on it
     make -C test basic6809-test      # boots 6809 BASIC, runs 6809/lang_test.bas
     make -C test kaypro-zex-test     # the Z80 instruction exercisers under CP/M
+    make -C test launcher-test       # the --launch menu on a pty, into the 703 demo
     make -C test rc2014-basic-test   # factory BASIC, every keystroke an interrupt
     make -C test rc2014-cpm-test     # CP/M off the compact flash card, and a save
     make -C test rc2014-ctc-test     # IM 2 and the CTC, a program written into RAM

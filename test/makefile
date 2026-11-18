@@ -9,7 +9,7 @@ LINKFLAGS := -ni
 # C++ tree; objcopy does the same job for a contiguous image.
 OBJCOPY   := objcopy
 
-.PHONY: all clean altair680-irq-test altair8800-basic-test altair8800-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test snapshot-test
+.PHONY: all clean launcher-test altair680-irq-test altair8800-basic-test altair8800-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test snapshot-test
 
 # The 6809 sources, all built in place under 6809/. memtest is the only one
 # meant to run; the other two exist to be assembled. README.md says which is
@@ -42,6 +42,11 @@ clean:
 
 basic6809-test:
 	./run_basic6809_lang_test.py
+
+# The launcher on a pty: bare emu opens the menu, the choice runs, the
+# terminal comes back as it was. Its only guest is the 703 demo.
+launcher-test: ray703-demo
+	./run_launcher_test.py
 
 # The 6800's IRQ and the Altair 680's ACIA: the harness writes the program
 # into RAM under a monitor image it makes itself, so this needs nothing

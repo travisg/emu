@@ -44,6 +44,11 @@ jobs:
     - name: 703 end-to-end tests
       run: make -C test ray703-test ray703-basic-test ray703-disc-test ray703-boot-test
 
+    # The --launch menu on a pty of the harness's own, run in a scratch
+    # directory holding the 703 demo, so it needs nothing fetched either.
+    - name: Launcher test
+      run: make -C test launcher-test
+
     # The RC2014's CTC test writes its guest into RAM over the debug port
     # under a rom of zeros, so it needs no image either.
     - name: RC2014 CTC test
