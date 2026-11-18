@@ -1,0 +1,37 @@
+{
+  "name": "asm703",
+  "displayName": "Raytheon 703 assembly",
+  "description": "Syntax highlighting for the asm703.py dialect of Raytheon 703 assembly.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "asm703",
+        "aliases": [
+          "Raytheon 703 assembly",
+          "asm703"
+        ],
+        "filenamePatterns": [
+          "**/rex/**/*.asm",
+          "**/test/703/**/*.asm"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "asm703",
+        "scopeName": "source.asm703",
+        "path": "./syntaxes/asm703.tmLanguage.json"
+      }
+    ]
+  }
+}

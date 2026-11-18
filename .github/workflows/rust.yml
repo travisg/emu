@@ -38,6 +38,11 @@ jobs:
     - name: 703 assembler test
       run: make -C test ray703-asm-test
 
+    # The editor syntax files are generated from the assembler's tables;
+    # this fails when a mnemonic was added without regenerating them.
+    - name: 703 syntax files up to date
+      run: make -C tools/editor check
+
     - name: Build the 703 guest images
       run: make -C test ray703
 

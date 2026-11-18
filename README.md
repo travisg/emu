@@ -235,8 +235,8 @@ other 703 scripts need `script(1)` and python3. `AGENTS.md` covers them all.
 - `tests/`: the one integration test. `test/`: the end-to-end regression scripts and the guest
   programs they drive, by machine — `test/6809/` and `test/703/` (the latter including a Tiny
   BASIC and transcriptions of two 1968 program listings). See `test/README.md`.
-- `tools/`: development tools — the 703 assembler, the listing transcription workflow, and the
-  ROM fetcher.
+- `tools/`: development tools — the 703 assembler, the listing transcription workflow, the
+  ROM fetcher, and syntax highlighting for 703 assembly in vim and VS Code (`tools/editor/`).
 - `roms/`, `disks/`: where the images the machines boot and mount go. Untracked; see the README
   in each.
 - `AGENTS.md`: the full guide — build, run, test, architecture, and the deliberate quirks.
