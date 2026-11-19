@@ -87,6 +87,33 @@ Things worth knowing at the console:
 `test/703/listings/loader.bin` builds too, but it does not stand alone: it is written to
 call a resident X-RAY through the jump table at `44`/`46`. See item 2 below.
 
+## Raytheon's diagnostics
+
+    tools/fetch-roms.py                  # the tapes, into roms/703/diag
+    make -C test ray703-diag-test
+
+Ten of the 1970 diagnostic tapes the University of Stuttgart's computer
+museum read off its 704 run here, and the machine passes them: the eight
+instruction diagnostics, BRAINWASH IV for memory and the teletype test.
+One of them, the second instruction composite, is run with a word of the
+tape changed. `../run_ray703_diag_test.py` says which and why, how each
+tape is run, and what its SENSE switches were read to mean, since no
+operating instructions came with them.
+
+To watch one, make a core image of it and set the switches from the debug
+port -- `e` is switches 1, 2 and 3 up, which in the instruction diagnostics
+halts on an error, prints it, and prints each group's name as it passes:
+
+    tools/tape703.py roms/703/diag/390389C.bin -o /tmp/adder.core --start 80
+    ./target/debug/emu -s ray703 -r /tmp/adder.core --debug /tmp/emu.sock --halt
+    tools/emudbg.py /tmp/emu.sock -c 'set SS e' -c run     # from another terminal
+
+The teletype test (start at 40) prints the quick brown fox with switch 1 up,
+its typebox rippled with switch 0, and a line of whatever key is typed with
+switch 2. The primary instruction diagnostic, 390392C, first checks the
+switches themselves: all up and RUN to its first halt, all down and RUN to
+its second, then the options.
+
 ## Where things stand
 
 Both listings are transcribed in full and reconcile against their own trailers.
@@ -152,7 +179,11 @@ address and object columns rather than pattern-match them.
 ### 5. Emulator gaps
 
 - **A punch (DIO device `C`).** PEAT names `M.THSPT` for it, the same driver
-  the teletype uses, so no new guest-side work would be needed.
+  the teletype uses, so no new guest-side work would be needed. The address
+  is spoken for, though: the first of this machine's extra teletypes sits at
+  `C`. Raytheon's punch and reader test (390444B, with the museum's other
+  tapes) is a program for X-RAY that wants a punch, and a way to feed the
+  reader what was punched.
 - **The status DIN, `DIN dev,0`.** The driver's shared-interrupt path reads one
   and tests bit 7 for "IR OR NO", which pins that single bit and nothing else
   about the layout — so nothing was invented. Only assembled when

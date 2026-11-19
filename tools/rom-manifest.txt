@@ -7,7 +7,8 @@
 # URL, and verifies the hash either way.
 #
 # The 703 guests are not here -- they are built from source in this tree with
-# "make -C test ray703", which writes them to roms/703.
+# "make -C test ray703", which writes them to roms/703. Its diagnostic tapes,
+# which are Raytheon's, are.
 
 # 6809 (System09): Grant Searle's build of Microsoft Extended BASIC. His page
 # asks that its contents not be reproduced elsewhere, so this links to the zip
@@ -33,6 +34,22 @@ roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed23
 # takes the 4K one.
 roms/altair8800/basic8k40.tap   e610937291d20860ff12068e5bb41edecdd7473097e1344cf504046e120cbb6a  https://deramp.com/downloads/altair/software/papertape_cassette/8K%20BASIC%20Ver%204-0.tap
 roms/altair8800/basic4k40.tap   1a55167cc55d252a350b2f40a661559b2b09a423dabc7f4d36f4bdd81c5389ca  https://deramp.com/downloads/altair/software/papertape_cassette/4K%20BASIC%20Ver%204-0.tap
+
+# Raytheon 703: Raytheon's own 1970 diagnostics for the 700 series, as the
+# paper tapes the University of Stuttgart's computer museum read off its 704
+# (its labels.txt beside them has what is written on each). They are tapes,
+# not core images -- tools/tape703.py reads one -- and
+# test/run_ray703_diag_test.py runs them.
+roms/703/diag/390392C.bin       6ab98087e77008456f93bf62e36baef06e3fb7eecac0df0d3199df31d1d8fd38  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390392C.bin
+roms/703/diag/390389C.bin       638dad37850e3d304bd0687a62ac092f9fd737de69f12b91d6c3b43896b19e79  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390389C.bin
+roms/703/diag/390390C.bin       59cf55bf76335890fcbdaae1ed7908d1a2c0cfb9931d931cd9c74b0a0c02c770  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390390C.bin
+roms/703/diag/390391C.bin       9c4b4486ad54ab3d14b9eae5848b9e5b1b87c5ab03935bb8367be1c249fce8f7  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390391C.bin
+roms/703/diag/390388C.bin       a54b25fbdfd0345919e42671b0b69bbafcaaf58267579cb248d91d9d3b511ce8  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390388C.bin
+roms/703/diag/390387C.bin       b0bb8385804228723a0c2bdfd172e0ca58e100cf39a24f14da2571385db7b714  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390387C.bin
+roms/703/diag/390894B.bin       ce95757c9b9a0ad709ea0ac3f56992914e02df5722067023f294fb9fddd5d003  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390894B.bin
+roms/703/diag/390403C.bin       0e77d9e983284ac24a213e0da21145b8631d9d2c37a8e83daf70680ef39f072a  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390403C.bin
+roms/703/diag/390332B.bin       238faa450ca8539415437222f5eb3fb68c5768579ac4c6338693134f36315821  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390332B.bin
+roms/703/diag/390443B.bin       adb163c55d8a49b836794a072db7f838877d49d8fbf0f164f317075c86d650f9  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390443B.bin
 
 # Kaypro floppy: CP/M 2.2 with MBASIC and games.
 # The original source is a Kaypro II disk image, which has been converted to a raw floppy image.

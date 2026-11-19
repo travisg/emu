@@ -15,6 +15,7 @@ hashes to. The fetch script looks in `$EMU_ROM_ARCHIVE` (default
 entries that have a public home; anything it cannot find it names, to be put
 in place by hand.
 
-The 703 is the exception that needs no fetching: it has no period ROM at all,
-and every guest image under `703/` is assembled out of `test/703/` by
-`tools/asm703.py`.
+The 703 is the exception that needs no fetching to run: it has no period ROM
+at all, and every guest image under `703/` is assembled out of `test/703/` by
+`tools/asm703.py`. What is fetched for it is `703/diag/`, Raytheon's
+diagnostic paper tapes, which `make -C test ray703-diag-test` runs.

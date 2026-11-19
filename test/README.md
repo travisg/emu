@@ -44,18 +44,21 @@ the terminal, and which opens a pty of its own with python's `pty`.
     make -C test ray703-boot-test    # the disc controller's LOAD button
     make -C test ray703-dis-test     # the disassembler, against the 1968 listings
     make -C test ray703-asm-test     # the assembler's literals, macros, warnings, entries, libraries and segments
+    make -C test ray703-diag-test    # Raytheon's 1970 diagnostics, off their paper tapes
     make -C test snapshot-test       # save states, restored mid-flight
 
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
-The two Altair IRQ ones, the CTC one and the 703 ones need nothing outside
-the repo, and CI runs them; the 6809 one, the Altair 8800 BASIC one, the
+The two Altair IRQ ones, the CTC one and the 703 ones but the diagnostics
+need nothing outside the repo, and CI runs them; the 6809 one, the Altair 8800 BASIC one, the
 RC2014 BASIC, CP/M and exerciser ones and the Kaypro's need images from
 outside it and run locally. The snapshot one is both: CI runs its cases
 whose guests the tree builds, and `SNAPSHOT_MACHINES` adds the 6809,
 Altair 8800 tape, RC2014 and Kaypro ones, which need the images. REX's session is
-`make -C rex test`, under its own directory. The 6809 one
+`make -C rex test`, under its own directory. The 703 diagnostics are
+Raytheon's paper tapes, `roms/703/diag` from `tools/fetch-roms.py`, and run
+locally. The 6809 one
 boots Microsoft BASIC, so it needs `roms/6809/BASIC.HEX` in place
 (`tools/fetch-roms.py`) and runs only locally. The RC2014 BASIC one boots the
 factory rom's BASIC, `roms/rc2014/24886009.BIN` from the same script, and
