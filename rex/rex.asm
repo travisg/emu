@@ -1149,8 +1149,13 @@ Q.PUT           SUBR
 DSERV           SMB     S1SAVA          ; the SMB lead
                 STW     S1SAVA
                 STX     S1SAVX
-                DIN     1,0             ; unit 0's status (5-9.7): zero is clean
-                STW     DSTAT
+                LDW     DSUNI           ; the unit started: its status (5-9.7),
+                ADD     =DINT           ; whose DIN names it in the instruction,
+                CAX                     ; so the one for it is run from here
+                LDW     *0
+                STW     .DS
+.DS             WORD    0
+                STW     DSTAT           ; zero is clean
                 CLR
                 STW     DBUSY
                 LDW     DWTR
@@ -1236,13 +1241,19 @@ DBUSY           WORD    0               ; a transfer is in flight
 DWTR            WORD    X'FFFF'         ; the node whose transfer it is; -1 = none
 IOLOCK          WORD    X'FFFF'         ; the node that has the disc; -1 = free
 IOWAITS         WORD    0               ; times a task found it taken
-DXOP            WORD    0               ; DXFER's: zero to read, else write...
+DXUNI           WORD    0               ; DXFER's: the unit, set before every call...
+DXOP            WORD    0               ; ...zero to read, else write...
 DXSEC           WORD    0               ; ...the first sector's index...
 DXCNT           WORD    0               ; ...how many words...
 DXBUF           WORD    0               ; ...and the core they are, a word address
 DXARG           WORD    0               ; a task's transfer block
 DXTS            WORD    0               ; the sector as track and sector
 DXRES           WORD    0               ; and the transfer's answer
+DSUNI           WORD    0               ; the unit of the transfer in flight, for DSERV
+DINT            DIN     1,0             ; each unit's status, by unit: the unit
+                DIN     1,1             ; is the DIN's function code, so a
+                DIN     1,2             ; routine copies the one it wants in
+                DIN     1,3             ; front of itself and runs it
 KELNK           WORD    0               ; KENTER's scratch: good under the mask
 KEARG           WORD    0               ; and no further, like every cell a
 KEBDY           WORD    0               ; blocking routine shares
@@ -1514,9 +1525,11 @@ DWR1            SUBR
                 JSX     DXFER
                 EXIT    DWR1
 
-; Move DXCNT words between the disc, from sector DXSEC on, and core at
-; DXBUF -- to the disc if DXOP is set -- and return the controller's
-; status, zero for a clean transfer.  The caller holds IOLOCK.  It waits
+; Move DXCNT words between the disc of unit DXUNI, from sector DXSEC on,
+; and core at DXBUF -- to the disc if DXOP is set -- and return the
+; controller's status, zero for a clean transfer.  The caller holds
+; IOLOCK and sets DXUNI immediately before the call: a swapper that
+; borrows the disc in between sets it for its own.  It waits
 ; on the transfer the way a task waits on anything here: masked, look,
 ; and if not yet, mark itself waiting and hand the processor on, and
 ; DSERV wakes it; DWTR names the node for that.  A unit that is not
@@ -1524,7 +1537,13 @@ DWR1            SUBR
 ; for a completion that would never come.
 DXFER           SUBR
                 MSK
-                DIN     1,0
+                LDW     DXUNI
+                STW     DSUNI           ; masked: DSERV reads it
+                ADD     =DINT
+                CAX
+                LDW     *0
+                STW     .ST
+.ST             WORD    0               ; DIN 1,unit
                 JMI     .NRD            ; not ready?  say so
                 LDW     CURT
                 STW     DWTR
@@ -1540,12 +1559,16 @@ DXFER           SUBR
                 SLL     10
                 ORI     DXTS
                 DOT     1,2             ; track in bits 0-5, sector in 7-15 (5-9.5.3)
+                LDW     DXUNI           ; the unit in bits 0-1, the count below
+                SLL     14
+                ORI     DXCNT
+                STW     DXTS
                 LDW     DXOP
                 JNZ     .WR
-                LDW     DXCNT
-                DOT     1,6             ; unit 0, the count, read (5-9.5.4)
+                LDW     DXTS
+                DOT     1,6             ; read (5-9.5.4)
                 JMP     .WT
-.WR             LDW     DXCNT
+.WR             LDW     DXTS
                 DOT     1,4             ; ...write
 .WT             LDW     DBUSY
                 JNZ     .BLK            ; over?
