@@ -37,12 +37,12 @@ tracked**, for the same reason as `roms/` — see that README and
   `make -C test ray703-blank-disc` formats unit 0, which is what the disc
   exerciser writes to; it will not overwrite a disc that already exists,
   since one a guest has written to is data rather than a build product.
-  Unit 0 also holds REX's filesystem -- a directory in sectors 1-8 and
+  A REX platter holds its filesystem -- a directory in sectors 1-8 and
   contiguous files after it, which `tools/fs703.py` describes and lists.
-  `make -C rex disc` puts REX's modules on it (`tools/mkdisc703.py --add`),
-  making the image if there is none; each goes into the first hole it fits
-  and replaces a namesake, and nothing else moves, so files written from
-  inside REX stay as they are.
+  REX's build makes one as `rex/build/rex.img` and writes nothing here; a
+  platter meant to keep its files is a copy of that, booted with
+  `-s ray703-load -r` like the build's. Under `load` the platter given to
+  `-r` is unit 0 and `ray703-disc0.img` is not mounted.
 
   An image must be exactly 770,048 bytes (385,024 words), and writes go
   through to the file. `tools/mkdisc703.py` is what makes them.

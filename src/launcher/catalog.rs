@@ -108,7 +108,7 @@ pub fn find(root: &Path, files: &Files) -> Vec<PathBuf> {
     out
 }
 
-/// `roms/703/*.bin, rex/build/*.bin`, for a line saying none was found.
+/// `disks/*.img, rex/build/*.img`, for a line saying none was found.
 fn describe(files: &Files) -> String {
     let mut globs = Vec::new();
     for dir in files.dirs {
@@ -185,8 +185,7 @@ mod tests {
         let platter = crate::dev::disc74601::IMAGE_BYTES;
         root.put("roms/703/demo.bin", 100);
         root.put("roms/703/basic.bin", 100);
-        root.put("rex/build/rex.bin", 100);
-        root.put("rex/build/boot.bin", 90); // a boot sector, not a core image
+        root.put("rex/build/rex.bin", 100); // REX runs from its platter
         root.put("roms/703/tape.tape", 50);
         root.put("rex/build/rex.img", platter);
         root.put("disks/ray703-boot.img", platter);
@@ -203,7 +202,6 @@ mod tests {
             [
                 ("", Some("roms/703/basic.bin"), false),
                 ("", Some("roms/703/demo.bin"), true),
-                ("", Some("rex/build/rex.bin"), false),
                 ("ptb", Some("roms/703/tape.tape"), false),
                 ("load", Some("disks/ray703-boot.img"), false),
                 ("load", Some("rex/build/rex.img"), false),

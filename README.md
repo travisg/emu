@@ -144,7 +144,6 @@ make -C test ray703                                   # build the guests first
 
 ./target/debug/emu -s ray703                          # a demo: banner, then echoes what you type
 ./target/debug/emu -s ray703 -r roms/703/basic.bin    # Tiny BASIC, ~1300 words, written for it
-./target/debug/emu -s ray703 -r roms/703/rex.bin --fast-io   # REX, a multitasking executive with a shell
 ./target/debug/emu -s ray703 -r roms/703/xray.bin     # X-RAY EXEC, transcribed from a 1968 listing
 ```
 
@@ -168,15 +167,18 @@ only as a Ctrl-D exit path.
 ./target/debug/emu -s ray703-panel                    # at its own 571 kHz, so the lamps move
 ./target/debug/emu -s ray703-panel-ptb -r roms/703/tape.tape --throttle 10   # a tape, in slow motion
 ./target/debug/emu -s ray703-tty                      # the teletype in its own window
-./target/debug/emu -s ray703-panel-tty -r roms/703/rex.bin --fast-io   # the whole installation
+./target/debug/emu -s ray703-panel-tty-load -r rex/build/rex.img --fast-io   # the whole installation: RUN, and REX boots
 ./target/debug/emu -s ray703 --fast-io                # skip the teletype's real 10 chars/sec
 ```
 
-The disc is a Raytheon 74601 fixed-head unit, and its controller's LOAD button boots from it:
+The disc is a Raytheon 74601 fixed-head unit, and its controller's LOAD button boots from it.
+REX, a multitasking executive with a shell on every teletype, is booted that way (`rex/README.md`):
 
 ```bash
 make -C test ray703-boot-disc
-./target/debug/emu -s ray703-load -r disks/ray703-boot.img
+./target/debug/emu -s ray703-load -r disks/ray703-boot.img      # a one-sector boot program
+make -C rex bootdisc
+./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io   # REX
 ```
 
 ### Where the documentation came from

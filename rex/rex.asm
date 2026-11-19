@@ -331,13 +331,12 @@
 ; rexfs.asm and rexswap.asm, as one deck, into rex/build, with rexapi.asm, the
 ; interface the modules are assembled against, and the modules beside it
 ; -- brex.asm over test/703/bcore.asm is basic.obj, the module RUN BASIC
-; loads.  make -C rex disc puts them on the platter, and
-; then, from the repo root:
+; loads.  make -C rex bootdisc puts the kernel, behind boot.asm, and the
+; modules on a platter, rex/build/rex.img, and from the repo root
 ;
-;   ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io
+;   ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io
 ;
-; make -C rex bootdisc puts the kernel itself on a platter of its own,
-; behind boot.asm, and -s ray703-load -r rex/build/rex.img boots that.
+; boots it.
 
 ; ---------------------------------------------------------------- levels 0-3
                 ORG     0

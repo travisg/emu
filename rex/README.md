@@ -39,11 +39,9 @@ anything here.
 ## Build, run, test
 
     cargo build                                                  # the emulator
-    make -C rex disc                                             # rex.bin, the modules, and the platter
-    ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io  # a usable shell
-    ./target/debug/emu -s ray703 -r rex/build/rex.bin --fast-io --serial tcp:7031  # and a second terminal
     make -C rex bootdisc                                         # rex/build/rex.img, the whole system on a platter
-    ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io   # ...booted with the LOAD button
+    ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io   # booted with the LOAD button
+    ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io --serial window  # and a second terminal
     make -C rex test                                             # the scripted session
     make -C rex reloc-check                                      # the relocation check
 
@@ -326,10 +324,8 @@ its first digit.
 
 ## Booting
 
-`-s ray703 -r rex/build/rex.bin` puts the kernel in core the way the
-emulator can and a 703 could not. `make -C rex bootdisc` makes a platter
-that needs no such help, and `-s ray703-load` presses the disc controller's
-LOAD button on it: the button reads sector 0 into words 0-46 and starts
+`make -C rex bootdisc` makes the platter REX runs from, and `-s
+ray703-load` presses the disc controller's LOAD button on it: the button reads sector 0 into words 0-46 and starts
 there, and `boot.asm` is what it finds.
 
 The kernel's image begins at word 0, so the boot sector cannot stay where
@@ -469,8 +465,8 @@ for each of its two segments, and the scripted session runs it: each half
 is over half a page, so the loader cannot put both in one.
 
 Modules are files of type `RX` on disc unit 0 (`../tools/mkdisc703.py
---add`, which `make -C rex disc` runs for the platter the emulator mounts
-from the repo root; `DIR` at the shell lists it). The shell's `LOAD` finds
+--add`, which `make -C rex bootdisc` runs; `DIR` at the shell lists
+them). The shell's `LOAD` finds
 one by name, runs its text into a block from the kernel's pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields
 need -- gives it a task node and links it into the ring; `RUN` does the

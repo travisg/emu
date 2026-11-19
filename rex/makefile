@@ -14,9 +14,9 @@ MKDISC703 := ../tools/mkdisc703.py
 BCORE     := ../test/703/bcore.asm
 BUILD     := build
 
-.PHONY: all modules reloc-check disc bootdisc test clean
+.PHONY: all modules reloc-check bootdisc test clean
 
-all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules disc
+all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules bootdisc
 
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
 # the filesystem and the swapper at the top of core.
@@ -143,27 +143,17 @@ reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/far.obj $(BUILD)/she
 	    $(RELOAD703) $(BUILD)/shell.obj --base $$base --check $(BUILD)/shell-$$base.map || exit 1; \
 	done
 
-# The platter on unit 0, with the modules on it -- every one but BASIC
-# and the shell marked as loadable above word X'4000', which leaves the core below it
-# to what has to be there, and with a swap file: the emulator mounts
-# disks/ray703-disc0.img from the repo root, so after this the run line
-# in README.md has them. Made if absent; each module replaces its
-# namesake and nothing else on the platter moves.
-DISC := ../disks/ray703-disc0.img
-# The swap file, made once: room for a dozen tasks the size of BASIC.
+# The swap file: room for a dozen tasks the size of BASIC.
 SWAP_SECTORS := 1024
 
-disc: modules
-	@mkdir -p ../disks
-	$(MKDISC703) $(DISC) --swap $(SWAP_SECTORS) \
-	    --add BASIC $(BUILD)/basic.obj --add SHELL $(BUILD)/shell.obj \
-	    --add-high HELLO $(BUILD)/hello.obj \
-	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
-
 # A platter that is the whole system: the boot sector, the kernel as
-# REX.SY, a swap file and the modules. From the repo root,
+# REX.SY, a swap file and the modules -- every one but BASIC and the shell
+# marked as loadable above word X'4000', which leaves the core below it to
+# what has to be there. From the repo root,
 #     ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io
-# presses LOAD on it. A build product, made afresh each time.
+# presses LOAD on it. A build product, made afresh each time: nothing
+# written to it outlives the next build, and the build writes nothing
+# outside rex/build.
 bootdisc: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
 	$(MKDISC703) $(BUILD)/rex.img --force --boot $(BUILD)/boot.bin --sys $(BUILD)/rex.bin \
 	    --swap $(SWAP_SECTORS) \
@@ -172,9 +162,8 @@ bootdisc: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
 	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
 
 # The scripted session, on a platter it makes for itself in a scratch
-# directory -- so it wants the kernel and the modules, not `disc`, which
-# writes the user's own platter. EMU_BIN in the environment names another
-# emulator binary; the default is the debug build.
+# directory -- so it wants the kernel and the modules. EMU_BIN in the
+# environment names another emulator binary; the default is the debug build.
 test: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
 	./run_rex_test.py
 
