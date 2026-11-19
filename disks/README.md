@@ -39,10 +39,12 @@ tracked**, for the same reason as `roms/` — see that README and
   since one a guest has written to is data rather than a build product.
   A REX platter holds its filesystem -- a directory in sectors 1-8 and
   contiguous files after it, which `tools/fs703.py` describes and lists.
-  REX's build makes one as `rex/build/rex.img` and writes nothing here; a
-  platter meant to keep its files is a copy of that, booted with
-  `-s ray703-load -r` like the build's. Under `load` the platter given to
-  `-r` is unit 0 and `ray703-disc0.img` is not mounted.
+  REX's build makes one as `rex/build/rex.img` and writes nothing here.
+  Under `load` the platter given to `-r` is unit 0 and `ray703-disc0.img`
+  is not mounted, but `ray703-disc1.img`..`disc3.img` are: REX keeps its
+  files on `ray703-disc1.img` when that has a directory, which
+  `tools/mkdisc703.py --dir disks/ray703-disc1.img` gives an empty platter,
+  so what is saved there outlives every rebuild of `rex.img`.
 
   An image must be exactly 770,048 bytes (385,024 words), and writes go
   through to the file. `tools/mkdisc703.py` is what makes them.

@@ -39,7 +39,10 @@ image on as REX.SY -- its two parts, either side of the pool, one after the
 other -- and writes where they are into the six words at the end of REX's
 boot sector (rex/boot.asm), which must be in sector 0 already or be given
 with --boot in the same run; `emu -s ray703-load -r IMAGE` then boots it.
---list prints the directory.
+--dir gives the platter a directory if it has none, and nothing else:
+`mkdisc703.py --dir disks/ray703-disc1.img` is an empty platter REX can
+keep files on, its data unit when it is mounted as unit 1. --list prints
+the directory.
 
 An existing image is kept by every option but a bare run, which makes a blank
 one and so wants --force: --boot rewrites sector 0 and nothing else.
@@ -166,6 +169,8 @@ def main():
                         help="put REX's core image on the platter as REX.SY, for its boot sector to load")
     parser.add_argument("--swap", type=int, metavar="SECTORS",
                         help="make SWAP.SY, the file REX swaps tasks out to, if there is none")
+    parser.add_argument("--dir", action="store_true",
+                        help="give the platter a directory, empty, if it has none")
     parser.add_argument("--list", action="store_true", help="print the directory")
     parser.add_argument("--force", action="store_true",
                         help="overwrite an existing image")
@@ -174,7 +179,7 @@ def main():
     exists = args.output.exists()
     adding = [(name, path, 0) for name, path in args.add]
     adding += [(name, path, fs703.HIGH) for name, path in args.add_high]
-    fs = adding or args.swap or args.sys
+    fs = adding or args.swap or args.sys or args.dir
     if exists and (fs or args.list or args.boot) and not args.force:
         image = bytearray(args.output.read_bytes())
         if len(image) != IMAGE_BYTES:

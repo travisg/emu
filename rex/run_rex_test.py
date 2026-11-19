@@ -98,6 +98,16 @@ has to bring up a shell there too; and with more hogs loaded than core
 holds, a terminal's shell that is waiting for a key has to be put out
 and come back in for one.
 
+A seventh machine has a second platter on unit 1, made with nothing but
+a directory (mkdisc703.py --dir), which makes it the data unit. A file
+put with no unit named lands there, a program is still run from unit 0,
+and 0: and 1: in front of a name reach either platter: COPY goes both
+ways, a REN from one platter to the other is refused, DIR lists the data
+unit and DIR 0: the other, BASIC saves to unit 1 and runs a program from
+it, and SQUISH tidies unit 1. The host then reads both platters back:
+every file on the one it was meant for, and unit 0 as it was made but for
+the one file copied onto it.
+
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
   nohello  a platter without the hello module
@@ -120,6 +130,9 @@ REX_CONTROL names a negative control, each of which must FAIL:
   onetty   the printer started on any task's character, whichever
            terminal the task is on
   nogetty  a key at a terminal with no shell asking for none
+  nounit   the disc driver deaf to the unit, so every transfer is unit 0's
+  dirunit  K.DIRNT reading whichever platter's directory is in core
+  nodata   no data unit but unit 0, whatever unit 1 has
 """
 
 import contextlib
@@ -1069,7 +1082,8 @@ def make_platter(workdir, log, swap=False, boot=False):
     if CONTROL == 'blank':
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
-                     'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty'):
+                     'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
+                     'nounit', 'dirunit', 'nodata'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -1086,6 +1100,86 @@ def make_platter(workdir, log, swap=False, boot=False):
     subprocess.run(cmd, check=True, stdout=log)
     log.flush()
     return image
+
+
+def platters_session(emu):
+    """Unit 0, the platter make_platter makes, and unit 1, a directory and
+    nothing else, which makes it the data unit."""
+    if CONTROL == 'nounit':
+        # DXFER's start word: LDW DXUNI / SLL 14 / ORI DXCNT -- with a CLR
+        # for the load, the count goes out with unit 0 in front of it
+        emu.writew(listing_word('the unit in bits 0-1', 'DXFER           SUBR'), [CLR])
+    if CONTROL == 'dirunit':
+        # FBDIRN's JSX FDLOAD, the platter's directory brought in: a CLR
+        # in its place, the answer of a directory already there
+        emu.writew(listing_word('JSX     FDLOAD', 'FBDIRN          SUBR'), [CLR])
+    if CONTROL == 'nodata':
+        # FSUNIT's finding-out: LDW =1 / STW FSUNI / JSX FDLOAD -- with the
+        # call gone the answer is never zero, and the data unit unit 0
+        emu.writew(listing_word('JSX     FDLOAD', 'FSUNIT          SUBR'), [NOP])
+    emu.run()
+    s = Session(emu)
+    s.wait(b'REX 703 UP')
+    s.wait(re.compile(rb'^INIT RAN\r', re.M))   # INIT.CM, off unit 0
+    emu.wait_quiet()
+    s.say('PUT NOTE')                   # no unit: the data unit's
+    emu.key(NOTE_KEYS + '\x1a')
+    mark = s.say('TYPE NOTE')
+    s.wait(PROMPT)
+    if b'LINE ONE\r\nLINE TWO' not in s.since(mark):
+        raise AssertionError('TYPE NOTE: %r' % s.since(mark))
+    s.at = mark
+    s.say('COPY NOTE 0:NOTE0')          # onto unit 0...
+    s.say('COPY 0:MSG 1:MSG2')          # ...and off it
+    mark = s.say('REN NOTE 0:X')
+    s.wait(PROMPT)
+    if b'NOT ONE PLATTER' not in s.since(mark):
+        raise AssertionError('a REN across platters: %r' % s.since(mark))
+    s.at = mark
+    for command, there, absent in (('DIR', (b'NOTE.TX 1', b'MSG2.TX 1'), (b'HELLO.RX', b'NOTE0.TX')),
+                                   ('DIR 0:', (b'HELLO.RX', b'NOTE0.TX 1', b'MSG.TX'), (b'NOTE.TX', b'MSG2.TX'))):
+        mark = s.say(command)
+        s.wait(b'SECTORS FREE')
+        listed = s.since(mark)
+        for name in there + absent:
+            if (re.search(rb'^' + re.escape(name), listed, re.M) is not None) != (name in there):
+                raise AssertionError('%s: %r' % (command, listed))
+
+    # BASIC comes from unit 0; what it saves goes to unit 1, and a program
+    # named on its line comes from there.
+    s.say('BASIC')
+    s.basic('10 PRINT "ON ONE"\r')
+    s.basic('SAVE PROG\r')
+    s.basic('BYE\r')
+    s.say('BASIC PROG')
+    s.wait(b'ON ONE')
+    s.basic('BYE\r')
+    s.say('DEL MSG2')
+    s.say('SQUISH')
+    s.say('MEM')
+
+
+def check_platters(unit0, made0, unit1):
+    """Both platters, read the host's way: unit 1 holds what was put
+    there, and unit 0 is as it was made with one file more."""
+    p1 = fs703.Platter(bytearray(open(unit1, 'rb').read()))
+    p0 = fs703.Platter(bytearray(open(unit0, 'rb').read()))
+    for name, p in (('unit 0', p0), ('unit 1', p1)):
+        bad = p.check()
+        if bad:
+            raise AssertionError('%s breaks the rules: %s' % (name, '; '.join(bad)))
+    prog = bytes(c | 0x80 for c in b'10 PRINT "ON ONE"\r\n')
+    made1 = {e.title: p1.read(e.name, e.type) for e in p1.files()}
+    if made1 != {'NOTE.TX': NOTE, 'PROG.BA': prog}:
+        raise AssertionError('unit 1 holds %r' % made1)
+    kinds = [e.what for e in p1.entries()]
+    if kinds != [fs703.FILE] * (len(kinds) - 1) + [fs703.HOLE]:
+        raise AssertionError('unit 1 not squished: %r' % p1.entries())
+    before = fs703.Platter(bytearray(made0))
+    was = {e.title: before.read(e.name, e.type) for e in before.files()}
+    now = {e.title: p0.read(e.name, e.type) for e in p0.files()}
+    if now != dict(was, **{'NOTE0.TX': NOTE}):
+        raise AssertionError('unit 0 changed: %r' % sorted(set(now.items()) ^ set(was.items())))
 
 
 def listing_word(source, after):
@@ -1387,6 +1481,21 @@ def main():
             full_session(emu, image)
             finish(emu)
             log.write(b'\n--- paper, the full platter ---\n' + bytes(emu.output))
+
+            # And a second platter, the data unit.
+            platdir = os.path.join(workdir, 'platters')
+            os.makedirs(platdir)
+            unit0 = make_platter(platdir, log)
+            with open(unit0, 'rb') as f:
+                made0 = f.read()
+            unit1 = os.path.join(platdir, 'disks', 'ray703-disc1.img')
+            subprocess.run([sys.executable, MKDISC, '--dir', unit1], check=True, stdout=log)
+            with cwd(platdir):
+                emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--fast-io', '--no-throttle'], log=log)
+            platters_session(emu)
+            finish(emu)
+            log.write(b'\n--- paper, the platters session ---\n' + bytes(emu.output))
+            check_platters(unit0, made0, unit1)
 
             # And a second terminal, on a socket. The teletypes at their
             # own ten characters a second: a character printing holds its

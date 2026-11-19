@@ -49,7 +49,7 @@ anything here.
 tenth of a second per character, and the scheduling slices are real machine
 time either way. The commands the shell has in it:
 
-    HELP or ?    these, and then the programs the disc has
+    HELP or ?    these, and where the programs are listed (DIR 0:)
     STAT         every task's job number, name and state, how long each
                  sleeper has left, and OUT for one that is on the disc
     UPTIME, UP   seconds since the executive came up
@@ -58,7 +58,6 @@ time either way. The commands the shell has in it:
     KILL n       end one, whatever it was doing
     ECHO text    print the rest of the line
     MEM          the words free in the pool, below word X'4000' and above
-    DIR          the disc's directory: name, type, sectors; then what is free
     LOAD name    a module off the disc -- name.RX -- run behind the prompt
     RUN  name    the same, given the console until it exits -- the only
                  way to start a module that reads the console
@@ -86,19 +85,39 @@ the name on the line is the program's to read -- `BASIC PROG` loads and
 runs the saved program `PROG.BA`. The utilities are programs
 on the disc, each a small module from `util/`:
 
+    DIR [unit:]     a platter's directory: name, type, sectors; then what is free
     TYPE name       a file on the printer
     PUT name        the keyboard into a file, until Ctrl-Z
     COPY from to    a file again, under another name
     REN old new
     DEL name
     DUMP name       a file in hexadecimal
-    SQUISH          close up the holes between the files
+    SQUISH [unit:]  close up the holes between the files
 
 A file name is up to six characters and a type of two after a dot --
 `NOTE.TX`. A name given to `RUN`, `LOAD` or the shell without a type is a
 module, `.RX`; one given to `@` is a command file, `.CM`; one given to a
-utility is text, `.TX`. If the disc has an `INIT.CM`, the shell reads it
+utility is text, `.TX`. If unit 0 has an `INIT.CM`, the shell reads it
 when the machine comes up, before the keyboard.
+
+**Platters.** In front of a name, `0:` to `3:` is the disc unit it is on:
+`TYPE 0:MSG`, `COPY NOTE 1:NOTE`, `DIR 0:`. Without one, a program
+(`.RX`) is on unit 0, the platter REX boots from, and any other file is on
+the *data unit* -- unit 1 if it has a directory, unit 0 if not. So with a
+data platter mounted, what is saved goes on it and survives the next
+build of `rex.img`:
+
+    tools/mkdisc703.py --dir disks/ray703-disc1.img       # once: an empty platter
+    ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io
+
+Under `-s ray703-load` the `-r` platter is unit 0 and
+`disks/ray703-disc1.img` is mounted as unit 1 by its name. `DIR` lists the
+data unit, and `DIR 0:` the programs. Without a data platter, everything
+is on unit 0, as `rex.img` alone has it. A prefix only ever overrides the
+default: nothing is refused on either platter, except a `REN` from one to
+the other. Every name is read by one routine in the kernel, `K.NAME`, so
+the shell, the utilities and BASIC's `SAVE` and `OLD` all take the same
+names.
 
 Ctrl-C is the running program's to act on, and Tiny BASIC does. A second
 Ctrl-C while the first is still untaken ends the program that has the
@@ -388,7 +407,7 @@ way -- so the room in a free block is compared with the size instead.
 
 ## The filesystem
 
-Disc unit 0 holds files: contiguous runs of sectors under a directory in
+A platter holds files: contiguous runs of sectors under a directory in
 sectors 1-8, the way OS/8 and RT-11 kept theirs. `../tools/fs703.py` states
 the format word for word and is the host's side of it; `rexfs.asm` is the
 kernel's. An entry is eight words -- a name of six characters and a type
@@ -411,12 +430,16 @@ the name it is given. **A file being written that no channel
 holds is a hole** to whoever looks next -- its task exited, or the machine
 stopped -- which is all the recovery there is and all that is needed.
 
-The kernel keeps the directory in core, reads it once and writes it back
-whole after every change, one 376-word transfer each way. A task reads or
-writes a file a character at a time through one of four channels
-(`K.OPEN`, `K.GETC`, `K.PUTC`, `K.CLOSE`), and there are `K.LOOK`,
-`K.DELET` and `K.RENAM` beside them and the raw `K.DREAD` and `K.DWRIT`
-underneath; the vector in `rex.asm` says what each takes and gives. Every one of them
+The kernel keeps one platter's directory in core, reads it when a call is
+for another unit and writes it back whole after every change, one
+376-word transfer each way. A name in a call is five words: the four the
+directory holds and one whose high byte is the unit, `X'80'` for none.
+A task reads or writes a file a character at a time through one of four
+channels (`K.OPEN`, `K.GETC`, `K.PUTC`, `K.CLOSE`), each of which keeps
+its unit, and there are `K.LOOK`, `K.DELET`, `K.RENAM`, `K.SQUSH` and
+`K.DIRNT` (a directory entry, copied out, which is how `DIR` lists one
+an entry at a time) beside them and the raw `K.DREAD` and `K.DWRIT`
+underneath, which are unit 0's; the vector in `rex.asm` says what each takes and gives. Every one of them
 comes through `KENTER` and so runs with the disc claimed, one at a time.
 
 ## Modules
@@ -464,9 +487,9 @@ agree, with no emulator in the loop. `far.asm` gets the same with a base
 for each of its two segments, and the scripted session runs it: each half
 is over half a page, so the loader cannot put both in one.
 
-Modules are files of type `RX` on disc unit 0 (`../tools/mkdisc703.py
---add`, which `make -C rex bootdisc` runs; `DIR` at the shell lists
-them). The shell's `LOAD` finds
+Modules are files of type `RX`, on unit 0 unless a name says otherwise
+(`../tools/mkdisc703.py --add`, which `make -C rex bootdisc` runs; `DIR
+0:` lists them). The shell's `LOAD` finds
 one by name, runs its text into a block from the kernel's pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields
 need -- gives it a task node and links it into the ring; `RUN` does the

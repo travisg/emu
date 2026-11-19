@@ -17,7 +17,7 @@
 ;
 ; The commands the shell has in it:
 ;
-;   HELP or ?    these, and then the programs the disc has
+;   HELP or ?    these, and where the programs are listed (DIR 0:)
 ;   UPTIME, UP   seconds since the executive came up
 ;   STAT         every task's job number, name and state, how long each
 ;                sleeper has left, and OUT for one that is on the disc;
@@ -27,7 +27,6 @@
 ;   KILL n       end one
 ;   ECHO text    print the rest of the line
 ;   MEM          the words free in the pool
-;   DIR          the disc's directory: name, type, sectors; then what is free
 ;   LOAD name    a module off the disc -- name.RX -- run behind the prompt
 ;   RUN  name    the same, given the console until it exits
 ;   @name        the shell's lines from name.CM until it runs out; INIT.CM
@@ -319,13 +318,14 @@
 ;   1000-6FFF  the pool, which the allocator hands out: what the shell
 ;              loads and its workspaces live there.  The fence is the
 ;              two words below 4000
-;   7000-76FF  the filesystem (rexfs.asm, the next file of this deck):
+;   7000-77AC  the filesystem (rexfs.asm, the next file of this deck):
 ;              the directory's routines, the channels and the bodies of
 ;              the file calls, then the four channels and the directory
 ;              itself
-;   7800-7BFF  the swapper (rexswap.asm, the last): its task, its table
-;              of extents in the swap file, and two sectors of block lists
-;   7E00-7FAF  the node arena
+;   7800-7BDC  the swapper (rexswap.asm): its task, its table of extents
+;              in the swap file, and two sectors of block lists
+;   7BDD-7C57  K.NAME's parser (rexname.asm, the last)
+;   7E00-7FC7  the node arena
 ;
 ; Build with make -C rex: asm703.py over rexmac.asm, this file, shell.asm,
 ; rexfs.asm and rexswap.asm, as one deck, into rex/build, with rexapi.asm, the
