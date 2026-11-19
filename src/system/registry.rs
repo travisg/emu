@@ -125,6 +125,9 @@ pub struct Launch {
     /// Subsystem tokens that compose with every mode -- the windows --
     /// offered as switches, each with what it does.
     pub windows: &'static [(&'static str, &'static str)],
+    /// Whether a `serial_ports` line can be `--serial window` as well as a
+    /// pty or a port.
+    pub serial_window: bool,
 }
 
 /// One way of starting a machine: a subsystem and what it is given.
@@ -452,6 +455,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             }],
             needs: &[],
             windows: &[],
+            serial_window: false,
         },
     },
     SystemDescriptor {
@@ -476,6 +480,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             }],
             needs: &[],
             windows: &[],
+            serial_window: false,
         },
     },
     SystemDescriptor {
@@ -525,6 +530,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ],
             needs: &[],
             windows: &[("panel", "front panel window; starts stopped")],
+            serial_window: false,
         },
     },
     SystemDescriptor {
@@ -553,6 +559,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             }],
             needs: &[kaypro::VIDEO_ROM],
             windows: &[],
+            serial_window: false,
         },
     },
     SystemDescriptor {
@@ -599,6 +606,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ],
             needs: &[],
             windows: &[("panel", "front panel and disc rack; starts halted"), ("tty", "teletype in a window")],
+            serial_window: true,
         },
     },
     SystemDescriptor {
@@ -629,6 +637,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ],
             needs: &[],
             windows: &[],
+            serial_window: false,
         },
     },
 ];
@@ -737,6 +746,15 @@ mod tests {
                     if let Err(e) = (s.factory)(&rom, console, &sub, &MachineOpts::default()) {
                         assert!(!e.to_string().contains("unknown"), "{}-{sub}: {e}", s.name);
                     }
+                }
+            }
+            // the launcher offers a window on every port at once
+            if s.launch.serial_window {
+                let (_tx, rx) = std::sync::mpsc::channel();
+                let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+                let opts = MachineOpts { serial: vec![SerialSpec::Window; s.serial_ports.len()], ..MachineOpts::default() };
+                if let Err(e) = (s.factory)(&rom, console, s.launch.modes[0].variant, &opts) {
+                    panic!("{} with a window on every port: {e}", s.name);
                 }
             }
         }

@@ -10,10 +10,10 @@
 //! for, and how it is drawn -- all without touching the terminal, which is
 //! `term.rs`'s business, so every part of it is testable.
 //!
-//! Two panes: the machines on the left, and on the right the selected
-//! machine's items (one per mode and file found) followed by its switches.
-//! The cursor on an item selects it, so the switches below can be changed
-//! without losing which item Enter will run.
+//! Three columns: the machines, the selected machine's items (one per mode
+//! and file found), and its options (window tokens, spare serial ports and
+//! the speed switches). Each column keeps its own cursor, so an item stays
+//! selected while the options are changed and the other way round.
 
 use super::catalog::Entry;
 
@@ -46,26 +46,72 @@ pub enum Outcome {
 enum Focus {
     Machines,
     Items,
+    Options,
 }
 
-/// A switch on the right pane, after the items.
+/// A row of the options column.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Switch {
+enum Opt {
     /// The machine's `launch.windows[i]`.
     Window(usize),
+    /// The machine's `serial_ports[i]`.
+    Serial(usize),
     FastIo,
     FlatOut,
+}
+
+/// What a spare serial port is plugged into.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Line {
+    Off,
+    Window,
+    Pty,
+    Tcp,
+}
+
+impl Line {
+    /// The next setting a space gives, `Window` only where the machine
+    /// takes one.
+    fn next(self, window: bool) -> Line {
+        match self {
+            Line::Off if window => Line::Window,
+            Line::Off | Line::Window => Line::Pty,
+            Line::Pty => Line::Tcp,
+            Line::Tcp => Line::Off,
+        }
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            Line::Off => "off",
+            Line::Window => "window",
+            Line::Pty => "pty",
+            Line::Tcp => "tcp",
+        }
+    }
+
+    /// The `--serial` argument; a port of 0 is a free one, named at startup.
+    fn spec(self) -> Option<&'static str> {
+        match self {
+            Line::Off => None,
+            Line::Window => Some("window"),
+            Line::Pty => Some("pty"),
+            Line::Tcp => Some("tcp:0"),
+        }
+    }
 }
 
 pub struct Picker {
     entries: Vec<Entry>,
     machine: usize,
     focus: Focus,
-    /// The cursor on the right pane: items first, then switches.
-    row: usize,
-    /// Per machine: the selected item and the window switches.
+    /// The options column's cursor.
+    opt: usize,
+    /// Per machine: the selected item, the window switches and the serial
+    /// ports.
     item: Vec<usize>,
     windows: Vec<Vec<bool>>,
+    serial: Vec<Vec<Line>>,
     fast_io: bool,
     flat_out: bool,
     /// Arguments from the command line, after the launcher's own.
@@ -78,15 +124,17 @@ impl Picker {
     pub fn new(entries: Vec<Entry>, extra: Vec<String>) -> Picker {
         let item = entries.iter().map(|e| e.items.iter().position(|i| i.is_default).unwrap_or(0)).collect();
         let windows = entries.iter().map(|e| vec![false; e.desc.launch.windows.len()]).collect();
+        let serial = entries.iter().map(|e| vec![Line::Off; e.desc.serial_ports.len()]).collect();
         // start on the first machine there is something to run on
         let machine = entries.iter().position(|e| !e.items.is_empty()).unwrap_or(0);
         Picker {
             entries,
             machine,
             focus: Focus::Machines,
-            row: 0,
+            opt: 0,
             item,
             windows,
+            serial,
             fast_io: false,
             flat_out: false,
             extra,
@@ -98,51 +146,64 @@ impl Picker {
         &self.entries[self.machine]
     }
 
-    fn switches(&self) -> Vec<Switch> {
-        let mut s: Vec<Switch> = (0..self.entry().desc.launch.windows.len()).map(Switch::Window).collect();
-        s.extend([Switch::FastIo, Switch::FlatOut]);
-        s
+    /// The options column. `--serial` fills the ports in turn, so a port is
+    /// offered once the one before it is plugged in.
+    fn options(&self) -> Vec<Opt> {
+        let mut o: Vec<Opt> = (0..self.entry().desc.launch.windows.len()).map(Opt::Window).collect();
+        let lines = &self.serial[self.machine];
+        let shown = lines.iter().position(|l| *l == Line::Off).map_or(lines.len(), |off| off + 1);
+        o.extend((0..shown).map(Opt::Serial));
+        o.extend([Opt::FastIo, Opt::FlatOut]);
+        o
     }
 
-    /// The switch under the cursor, if the cursor is on one.
-    fn switch_at_cursor(&self) -> Option<Switch> {
-        let n = self.entry().items.len();
-        (self.focus == Focus::Items && self.row >= n).then(|| self.switches()[self.row - n])
-    }
-
-    fn rows(&self) -> usize {
-        self.entry().items.len() + self.switches().len()
-    }
-
-    fn toggle(&mut self, s: Switch) {
-        match s {
-            Switch::Window(i) => {
+    fn change(&mut self, o: Opt) {
+        match o {
+            Opt::Window(i) => {
                 let w = &mut self.windows[self.machine][i];
                 *w = !*w;
             }
-            Switch::FastIo => self.fast_io = !self.fast_io,
-            Switch::FlatOut => self.flat_out = !self.flat_out,
+            Opt::Serial(i) => {
+                let window = self.entry().desc.launch.serial_window;
+                let l = &mut self.serial[self.machine][i];
+                *l = l.next(window);
+            }
+            Opt::FastIo => self.fast_io = !self.fast_io,
+            Opt::FlatOut => self.flat_out = !self.flat_out,
         }
     }
 
-    fn switch_on(&self, s: Switch) -> bool {
-        match s {
-            Switch::Window(i) => self.windows[self.machine][i],
-            Switch::FastIo => self.fast_io,
-            Switch::FlatOut => self.flat_out,
+    /// The column after (or before) this one, past an items column with
+    /// nothing in it.
+    fn column(&self, from: Focus, forward: bool, wrap: bool) -> Focus {
+        let has_items = !self.entry().items.is_empty();
+        match (from, forward) {
+            (Focus::Machines, true) if has_items => Focus::Items,
+            (Focus::Machines | Focus::Items, true) => Focus::Options,
+            (Focus::Options, false) if has_items => Focus::Items,
+            (Focus::Options | Focus::Items, false) => Focus::Machines,
+            (Focus::Options, true) if wrap => Focus::Machines,
+            (Focus::Machines, false) if wrap => Focus::Options,
+            (f, _) => f,
         }
     }
 
-    fn enter_items(&mut self) {
-        self.focus = Focus::Items;
-        // onto the selected item, or the first switch when there is none
-        self.row = self.item[self.machine].min(self.rows() - 1);
+    fn move_cursor(&mut self, to: usize) {
+        match self.focus {
+            Focus::Machines => {
+                self.machine = to.min(self.entries.len() - 1);
+                self.opt = self.opt.min(self.options().len() - 1);
+            }
+            Focus::Items => self.item[self.machine] = to.min(self.entry().items.len() - 1),
+            Focus::Options => self.opt = to.min(self.options().len() - 1),
+        }
     }
 
-    fn move_row(&mut self, to: usize) {
-        self.row = to.min(self.rows() - 1);
-        if self.row < self.entry().items.len() {
-            self.item[self.machine] = self.row;
+    fn cursor(&self) -> usize {
+        match self.focus {
+            Focus::Machines => self.machine,
+            Focus::Items => self.item[self.machine],
+            Focus::Options => self.opt,
         }
     }
 
@@ -150,7 +211,8 @@ impl Picker {
         self.message = None;
         match (self.focus, key) {
             (_, Key::Quit) | (Focus::Machines, Key::Esc) => return Outcome::Quit,
-            (_, Key::Enter) if self.focus == Focus::Items || self.entry().items.is_empty() => {
+            (Focus::Machines, Key::Enter) if !self.entry().items.is_empty() => self.focus = Focus::Items,
+            (_, Key::Enter) => {
                 return match self.args() {
                     Some(args) => Outcome::Launch(args),
                     None => {
@@ -159,21 +221,17 @@ impl Picker {
                     }
                 };
             }
-            (Focus::Machines, Key::Up) => self.machine = self.machine.saturating_sub(1),
-            (Focus::Machines, Key::Down) => self.machine = (self.machine + 1).min(self.entries.len() - 1),
-            (Focus::Machines, Key::Home) => self.machine = 0,
-            (Focus::Machines, Key::End) => self.machine = self.entries.len() - 1,
-            (Focus::Machines, Key::Right | Key::Tab | Key::Enter | Key::Space) => self.enter_items(),
-            (Focus::Items, Key::Esc | Key::Tab | Key::BackTab) => self.focus = Focus::Machines,
-            (Focus::Items, Key::Up) => self.move_row(self.row.saturating_sub(1)),
-            (Focus::Items, Key::Down) => self.move_row(self.row + 1),
-            (Focus::Items, Key::Home) => self.move_row(0),
-            (Focus::Items, Key::End) => self.move_row(usize::MAX),
-            (Focus::Items, Key::Space | Key::Left | Key::Right) => match self.switch_at_cursor() {
-                Some(s) => self.toggle(s),
-                None if key == Key::Left => self.focus = Focus::Machines,
-                None => {}
-            },
+            (_, Key::Esc) => self.focus = Focus::Machines,
+            (Focus::Machines, Key::Space) => self.focus = self.column(self.focus, true, false),
+            (Focus::Options, Key::Space) => self.change(self.options()[self.opt]),
+            (f, Key::Tab) => self.focus = self.column(f, true, true),
+            (f, Key::BackTab) => self.focus = self.column(f, false, true),
+            (f, Key::Right) => self.focus = self.column(f, true, false),
+            (f, Key::Left) => self.focus = self.column(f, false, false),
+            (_, Key::Up) => self.move_cursor(self.cursor().saturating_sub(1)),
+            (_, Key::Down) => self.move_cursor(self.cursor() + 1),
+            (_, Key::Home) => self.move_cursor(0),
+            (_, Key::End) => self.move_cursor(usize::MAX),
             _ => {}
         }
         Outcome::Continue
@@ -200,6 +258,9 @@ impl Picker {
         if let Some(disk) = &item.disk {
             args.extend(["--disk".to_string(), disk.display().to_string()]);
         }
+        for spec in self.serial[self.machine].iter().map_while(|l| l.spec()) {
+            args.extend(["--serial".to_string(), spec.to_string()]);
+        }
         if self.fast_io {
             args.push("--fast-io".to_string());
         }
@@ -210,15 +271,72 @@ impl Picker {
         Some(args)
     }
 
+    /// The items column, under a heading per mode: (text, attribute, row).
+    fn item_lines(&self) -> Vec<(String, &'static str, Option<usize>)> {
+        let e = self.entry();
+        if e.items.is_empty() {
+            return vec![("nothing found".to_string(), DIM, None)];
+        }
+        let mut lines = Vec::new();
+        for (n, item) in e.items.iter().enumerate() {
+            if n == 0 || e.items[n - 1].what != item.what {
+                if n > 0 {
+                    lines.push((String::new(), "", None));
+                }
+                lines.push((item.what.to_string(), DIM, None));
+            }
+            let radio = if n == self.item[self.machine] { "(*)" } else { "( )" };
+            let file = match (&item.rom, &item.disk) {
+                (Some(p), _) | (None, Some(p)) => p.display().to_string(),
+                (None, None) => e.desc.default_rom.to_string(),
+            };
+            let default = if item.is_default { "  (default)" } else { "" };
+            lines.push((format!("{radio} {file}{default}"), "", Some(n)));
+        }
+        lines
+    }
+
+    /// The options column, under a heading per kind: (text, attribute, row).
+    fn option_lines(&self) -> Vec<(String, &'static str, Option<usize>)> {
+        let e = self.entry();
+        let token_w = e.desc.launch.windows.iter().map(|(t, _)| t.len()).max().unwrap_or(0);
+        let mut lines = Vec::new();
+        let mut heading = None;
+        for (row, o) in self.options().into_iter().enumerate() {
+            let (kind, text) = match o {
+                Opt::Window(i) => {
+                    let (token, what) = e.desc.launch.windows[i];
+                    let check = if self.windows[self.machine][i] { "[x]" } else { "[ ]" };
+                    ("windows", format!("{check} {token:<token_w$}  {what}"))
+                }
+                Opt::Serial(i) => {
+                    let word = self.serial[self.machine][i].word();
+                    ("serial ports (--serial)", format!("[{word:<6}] {}", e.desc.serial_ports[i]))
+                }
+                Opt::FastIo => ("speed", format!("[{}] --fast-io      devices finish i/o at once", check(self.fast_io))),
+                Opt::FlatOut => ("speed", format!("[{}] --no-throttle  run flat out, not at the real clock", check(self.flat_out))),
+            };
+            if heading != Some(kind) {
+                if heading.is_some() {
+                    lines.push((String::new(), "", None));
+                }
+                lines.push((kind.to_string(), DIM, None));
+                heading = Some(kind);
+            }
+            lines.push((text, "", Some(row)));
+        }
+        lines
+    }
+
     /// The screen, `height` lines each of at most `width` columns, with
     /// ANSI attributes. `argv0` is what the command line preview runs.
     pub fn render(&self, argv0: &str, width: usize, height: usize) -> Vec<String> {
         let width = width.max(20);
         let height = height.max(8);
         let mut lines = Vec::with_capacity(height);
-        lines.push(style(REVERSE, &fit(" emu launcher: pick a machine and what to load", width)));
+        lines.push(style(REVERSE, &fit(" emu launcher: pick a machine, what to load and how", width)));
 
-        // the left pane
+        // the machines
         let left_w = self.entries.iter().map(|e| e.desc.launch.name.len()).max().unwrap_or(0) + 4;
         let left: Vec<String> = self
             .entries
@@ -237,63 +355,60 @@ impl Picker {
             })
             .collect();
 
-        // the right pane: (text, attribute) and which row each line is
+        // to the right of them: the machine's name, then its items and its
+        // options side by side, then what was looked for and not found
         let right_w = width.saturating_sub(left_w + 3);
         let e = self.entry();
-        let mut right: Vec<(String, &str, Option<usize>)> = Vec::new();
         let clock = e.desc.clock_hz.map(|hz| format!(" at {}", crate::system::registry::fmt_hz(hz))).unwrap_or_default();
-        right.push((e.desc.title.to_string(), BOLD, None));
-        right.push((format!("cpu {}{clock}", e.desc.cpu), DIM, None));
-        right.push((String::new(), "", None));
-        let what_w = e.items.iter().map(|i| i.what.len()).max().unwrap_or(0);
-        for (n, item) in e.items.iter().enumerate() {
-            let radio = if n == self.item[self.machine] { "(*)" } else { "( )" };
-            let file = match (&item.rom, &item.disk) {
-                (Some(p), _) | (None, Some(p)) => p.display().to_string(),
-                (None, None) => e.desc.default_rom.to_string(),
-            };
-            let default = if item.is_default { "  (default)" } else { "" };
-            right.push((format!("{radio} {:<what_w$}  {file}{default}", item.what), "", Some(n)));
-        }
-        if !e.items.is_empty() {
-            right.push((String::new(), "", None));
-        }
-        let n_items = e.items.len();
-        for (k, s) in self.switches().into_iter().enumerate() {
-            let label = match s {
-                Switch::Window(i) => {
-                    let (token, what) = e.desc.launch.windows[i];
-                    format!("{what} ({token})")
-                }
-                Switch::FastIo => "devices finish i/o at once (--fast-io)".to_string(),
-                Switch::FlatOut => "run flat out, not at the real clock (--no-throttle)".to_string(),
-            };
-            let check = if self.switch_on(s) { "[x]" } else { "[ ]" };
-            right.push((format!("{check} {label}"), "", Some(n_items + k)));
-        }
+        let mut right: Vec<String> = vec![
+            style(BOLD, &fit(e.desc.title, right_w)),
+            style(DIM, &fit(&format!("cpu {}{clock}", e.desc.cpu), right_w)),
+            String::new(),
+        ];
+        let items = self.item_lines();
+        let options = self.option_lines();
+        let mut missing: Vec<String> = Vec::new();
         if !e.missing.is_empty() {
-            right.push((String::new(), "", None));
-            right.push(("not here:".to_string(), DIM, None));
-            for m in &e.missing {
-                right.push((format!("  {m}"), DIM, None));
-            }
+            missing.push(String::new());
+            missing.push(style(DIM, &fit("not here:", right_w)));
+            missing.extend(e.missing.iter().map(|m| style(DIM, &fit(&format!("  {m}"), right_w))));
         }
 
         // two lines at the bottom: the command line and the keys
         let body = height - 1 - 1 - 2;
-        // scroll the right pane to keep the cursor in view
-        let cursor_line = right.iter().position(|(_, _, r)| *r == Some(self.row)).unwrap_or(0);
-        let top = if self.focus == Focus::Items && cursor_line >= body { cursor_line + 1 - body } else { 0 };
+        let room = body.saturating_sub(right.len());
+        let tall = items.len().max(options.len());
+        let cols_h = tall.min(room.saturating_sub(missing.len()).max(room.min(5)));
+        let inner = right_w.saturating_sub(3);
+        let need = |c: &[(String, &str, Option<usize>)]| c.iter().map(|(t, _, _)| t.chars().count()).max().unwrap_or(0);
+        let (items_need, opts_need) = (need(&items), need(&options));
+        // the options lead with their token and lose only their description,
+        // so the items have the room first
+        let items_w = if items_need + opts_need <= inner { items_need } else { items_need.min(inner * 2 / 3).max(inner.saturating_sub(opts_need)) };
+        let opts_w = inner.saturating_sub(items_w);
+        let column = |c: &[(String, &'static str, Option<usize>)], w: usize, focus: Focus, cursor: usize| -> Vec<String> {
+            // scrolled to keep the cursor in view
+            let at = c.iter().position(|(_, _, r)| *r == Some(cursor)).unwrap_or(0);
+            let top = if at >= cols_h { at + 1 - cols_h } else { 0 };
+            (0..cols_h)
+                .map(|i| match c.get(top + i) {
+                    Some((text, attr, row)) => {
+                        let on_cursor = self.focus == focus && *row == Some(cursor);
+                        style(if on_cursor { REVERSE } else { attr }, &fit(text, w))
+                    }
+                    None => " ".repeat(w),
+                })
+                .collect()
+        };
+        let item_col = column(&items, items_w, Focus::Items, self.item[self.machine]);
+        let opt_col = column(&options, opts_w, Focus::Options, self.opt);
+        right.extend(item_col.into_iter().zip(opt_col).map(|(i, o)| format!("{i} | {o}")));
+        right.extend(missing);
+
         lines.push(String::new());
         for i in 0..body {
             let l = left.get(i).cloned().unwrap_or_else(|| " ".repeat(left_w));
-            let r = match right.get(top + i) {
-                Some((text, attr, row)) => {
-                    let on_cursor = self.focus == Focus::Items && *row == Some(self.row);
-                    style(if on_cursor { REVERSE } else { attr }, &fit(text, right_w))
-                }
-                None => String::new(),
-            };
+            let r = right.get(i).cloned().unwrap_or_default();
             lines.push(format!("{l} | {r}"));
         }
         let command = match self.args() {
@@ -310,8 +425,9 @@ impl Picker {
                 DIM,
                 &fit(
                     match self.focus {
-                        Focus::Machines => " up/down machine   right/tab choose   enter run   q quit",
-                        Focus::Items => " up/down choose   space toggle   enter run   tab/esc machines   q quit",
+                        Focus::Machines => " up/down machine   right/tab what to load   enter choose   q quit",
+                        Focus::Items => " up/down choose   right/tab options   left machines   enter run   q quit",
+                        Focus::Options => " up/down move   space change   left back   enter run   esc machines   q quit",
                     },
                     width,
                 ),
@@ -319,6 +435,14 @@ impl Picker {
         };
         lines.push(help);
         lines
+    }
+}
+
+fn check(on: bool) -> char {
+    if on {
+        'x'
+    } else {
+        ' '
     }
 }
 
@@ -410,17 +534,51 @@ mod tests {
     }
 
     #[test]
-    fn moving_onto_an_item_selects_it_and_switches_keep_it() {
+    fn the_items_and_the_options_keep_their_own_cursors() {
         let mut p = picker();
-        // to rex.img, then down past it onto the panel and tty switches
-        keys(&mut p, &[Key::Tab, Key::Down, Key::Down, Key::Space, Key::Down, Key::Right, Key::Down, Key::Space]);
+        // rex.img, then over to the options: panel on, down past tty onto
+        // the first serial port, and --fast-io at the end
+        keys(&mut p, &[Key::Tab, Key::Down, Key::Tab, Key::Space, Key::End, Key::Up, Key::Space]);
+        assert_eq!(p.key(Key::Enter), launch(&["-s", "ray703-load-panel", "-r", "rex/build/rex.img", "--fast-io"]));
+        // back to the items: the item moves, the options stay as they were
+        keys(&mut p, &[Key::Left, Key::Up]);
+        assert_eq!(p.focus, Focus::Items);
+        assert_eq!(p.key(Key::Enter), launch(&["-s", "ray703-panel", "-r", "roms/703/demo.bin", "--fast-io"]));
+        // and Tab from the options goes round to the machines
+        keys(&mut p, &[Key::Tab, Key::Tab]);
+        assert_eq!(p.focus, Focus::Machines);
+    }
+
+    #[test]
+    fn each_serial_port_is_offered_once_the_one_before_it_is_plugged_in() {
+        let mut p = picker();
+        keys(&mut p, &[Key::Tab, Key::Tab, Key::Down, Key::Down]);
+        assert_eq!(p.options()[p.opt], Opt::Serial(0));
+        assert!(!p.options().contains(&Opt::Serial(1)));
+        // off, window, pty, tcp
+        keys(&mut p, &[Key::Space, Key::Down, Key::Space, Key::Space, Key::Down, Key::Space, Key::Space, Key::Space]);
+        assert_eq!(p.options().iter().filter(|o| matches!(o, Opt::Serial(_))).count(), 3);
         assert_eq!(
             p.key(Key::Enter),
-            launch(&["-s", "ray703-load-panel-tty", "-r", "rex/build/rex.img", "--fast-io"])
+            launch(&["-s", "ray703", "-r", "roms/703/demo.bin", "--serial", "window", "--serial", "pty", "--serial", "tcp:0"])
         );
-        // toggled twice is off again, and the others stay as they were
-        keys(&mut p, &[Key::Up, Key::Left]);
-        assert_eq!(p.key(Key::Enter), launch(&["-s", "ray703-load-panel", "-r", "rex/build/rex.img", "--fast-io"]));
+        let screen = p.render("emu", 120, 30).join("\n");
+        assert!(screen.contains("[window] teletype 1, DIO device C"), "{screen}");
+        // the first unplugged again: the rest are kept but not passed, since
+        // --serial fills the ports in turn
+        keys(&mut p, &[Key::Up, Key::Up, Key::Space, Key::Space, Key::Space]);
+        assert_eq!(p.serial[p.machine][0], Line::Off);
+        assert_eq!(p.options().iter().filter(|o| matches!(o, Opt::Serial(_))).count(), 1);
+        assert_eq!(p.key(Key::Enter), launch(&["-s", "ray703", "-r", "roms/703/demo.bin"]));
+    }
+
+    #[test]
+    fn a_port_with_no_window_goes_from_off_to_pty() {
+        let mut p = picker();
+        // the kaypro: no window tokens, so its serial port heads the options
+        keys(&mut p, &[Key::Down, Key::Tab, Key::Tab, Key::Space]);
+        assert_eq!(p.serial[p.machine][0], Line::Pty);
+        assert_eq!(p.key(Key::Enter), launch(&["-s", "kaypro", "--disk", "disks/a b.img", "--serial", "pty"]));
     }
 
     #[test]
@@ -430,6 +588,9 @@ mod tests {
         assert_eq!(p.key(Key::Enter), Outcome::Continue);
         let screen = p.render("emu", 80, 24).join("\n");
         assert!(screen.contains("nothing to run System09 on yet"), "{screen}");
+        // and its items column is passed over on the way to its options
+        keys(&mut p, &[Key::Right]);
+        assert_eq!(p.focus, Focus::Options);
     }
 
     #[test]
@@ -447,35 +608,47 @@ mod tests {
         let mut p = picker();
         keys(&mut p, &[Key::Right, Key::Left]);
         assert_eq!(p.focus, Focus::Machines);
-        keys(&mut p, &[Key::Right, Key::Esc]);
+        keys(&mut p, &[Key::Right, Key::Right, Key::Esc]);
         assert_eq!(p.focus, Focus::Machines);
         assert_eq!(p.key(Key::Esc), Outcome::Quit);
         assert_eq!(picker().key(Key::Quit), Outcome::Quit);
     }
 
+    fn visible(l: &str) -> String {
+        let mut out = String::new();
+        let mut esc = false;
+        for c in l.chars() {
+            match (esc, c) {
+                (false, '\x1b') => esc = true,
+                (true, 'm') => esc = false,
+                (true, _) => {}
+                (false, c) => out.push(c),
+            }
+        }
+        out
+    }
+
     #[test]
     fn the_screen_fits_the_terminal_and_scrolls_to_the_cursor() {
         let mut p = picker();
-        keys(&mut p, &[Key::Tab, Key::End]);
-        let screen = p.render("emu", 60, 10);
-        assert_eq!(screen.len(), 10);
-        let visible = |l: &str| {
-            let mut out = String::new();
-            let mut esc = false;
-            for c in l.chars() {
-                match (esc, c) {
-                    (false, '\x1b') => esc = true,
-                    (true, 'm') => esc = false,
-                    (true, _) => {}
-                    (false, c) => out.push(c),
-                }
+        keys(&mut p, &[Key::Tab, Key::Tab, Key::End]);
+        for (w, h) in [(60, 10), (80, 24), (200, 50)] {
+            let screen = p.render("emu", w, h);
+            assert_eq!(screen.len(), h);
+            for l in &screen {
+                assert!(visible(l).chars().count() <= w, "{w}x{h}: {l:?}");
             }
-            out
-        };
-        for l in &screen {
-            assert!(visible(l).chars().count() <= 60, "{l:?}");
+            assert!(screen.iter().any(|l| l.contains("--no-thro") && l.contains(REVERSE)), "{w}x{h}: {screen:#?}");
         }
-        assert!(screen.iter().any(|l| l.contains("run flat out") && l.contains(REVERSE)), "{screen:#?}");
+    }
+
+    #[test]
+    fn the_items_and_the_options_are_side_by_side() {
+        let mut p = picker();
+        keys(&mut p, &[Key::Tab]);
+        let screen: Vec<String> = p.render("emu", 160, 24).iter().map(|l| visible(l)).collect();
+        let row = screen.iter().find(|l| l.contains("demo.bin")).expect("the default item");
+        assert!(row.contains("(*)") && row.contains("| [ ] tty"), "{screen:#?}");
     }
 
     #[test]

@@ -17,10 +17,11 @@ the same items on every host, whatever roms it has fetched. The cases:
 
   bare       `emu` on a terminal, keys one at a time: Enter onto the 703's
              items, Enter on the default -- the demo -- and its banner.
-  burst      `emu -L --fast-io`, every key in one write: End to the last
+  burst      `emu -L --fast-io`, every key in one write: Tab to the
+             options, teletype 1 turned round to tcp, End to the last
              switch, space for --no-throttle, Enter. The printed line must
-             be the menu's choice with --fast-io after it, and the banner
-             must come.
+             be the menu's choice with --fast-io after it, the machine must
+             say where teletype 1 is listening, and the banner must come.
   quit       `emu` and q: nothing starts and the exit status is 0.
   piped      bare `emu` with no terminal: no menu, the 6809 as ever (whose
              rom is not there, which is the point -- it is the 6809's path
@@ -59,7 +60,7 @@ DEMO = os.path.join(ROOT, 'roms', '703', 'demo.bin')
 
 BANNER = b'RAYTHEON 703 READY'
 ALT_SCREEN = b'\x1b[?1049h'
-UP, END = b'\x1b[A', b'\x1b[F'
+UP, DOWN, END = b'\x1b[A', b'\x1b[B', b'\x1b[F'
 TIMEOUT = 20
 
 
@@ -161,9 +162,10 @@ def exit_status(out):
     return int(m.group(1))
 
 
-def terminal_case(name, emu_args, keys, workdir, log, launches, printed=None):
+def terminal_case(name, emu_args, keys, workdir, log, launches, printed=None, startup=None):
     """Run one case: `keys` is a list of writes, paced apart. A launching
-    case must print `printed`, show the banner and leave on Ctrl-D."""
+    case must print `printed` (and then `startup`, if given), show the
+    banner and leave on Ctrl-D."""
     log.write(('\n=== %s: emu %s ===\n' % (name, emu_args)).encode())
     p = Pty(bracketed(emu_args), workdir, log)
     try:
@@ -175,6 +177,8 @@ def terminal_case(name, emu_args, keys, workdir, log, launches, printed=None):
         if launches:
             line = b'$ %s %s' % (EMU_BIN.encode(), printed.encode())
             after = p.expect(line + b'\r\n', menu)
+            if startup:
+                after = p.expect(startup, after)
             p.expect(BANNER, after)
             p.send(b'\x04')
         p.wait()
@@ -221,8 +225,12 @@ def main():
             else:
                 pick, image = [b'\r', b'\r'], 'demo.bin'
             terminal_case('bare', '', pick, workdir, log, True, '-s ray703 -r roms/703/' + image)
-            terminal_case('burst', '-L --fast-io', [b'\r' + END + b' \r'], workdir, log, True,
-                          '-s ray703 -r roms/703/demo.bin --no-throttle --fast-io')
+            # the options start on the panel switch: tty, then teletype 1,
+            # which goes off, window, pty, tcp
+            burst = b'\r\t' + DOWN + DOWN + b'   ' + END + b' \r'
+            terminal_case('burst', '-L --fast-io', [burst], workdir, log, True,
+                          '-s ray703 -r roms/703/demo.bin --serial tcp:0 --no-throttle --fast-io',
+                          b'serial: teletype 1, DIO device C is on 127.0.0.1:')
             terminal_case('quit', '', [b'q'], workdir, log, False)
             piped_case(workdir, log)
         except Exception:

@@ -74,10 +74,11 @@ Or let it show you what there is to run:
 ./target/debug/emu -L --fast-io # the launcher, with options to go after its choice (also --launch)
 ```
 
-The launcher lists the machines on the left and, for the one under the cursor, every ROM, tape,
-core image and disk image found for it under `roms/`, `disks/` and `rex/build/`, with the window
-and speed switches below. Up and down move, right or Tab goes from the machines to their files,
-space toggles a switch, Enter runs, q quits. What it runs is an ordinary command line, shown at
+The launcher has three columns: the machines; for the one under the cursor, every ROM, tape,
+core image and disk image found for it under `roms/`, `disks/` and `rex/build/`; and its options,
+which are the windows, the spare serial ports (the 703's three extra teletypes, each off, a
+window, a pty or a TCP port) and the speed switches. Left, right and Tab go between the columns,
+up and down move in one, space changes an option, Enter runs, q quits. What it runs is an ordinary command line, shown at
 the bottom and printed as it starts, so the same thing can be run again without it. Anything else
 on the line is passed on (`emu -L --debug /tmp/emu.sock`). Run with no arguments and no terminal (a
 script, a pipe), `emu` is the 6809 as it always was. A machine with nothing to run says what
