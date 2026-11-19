@@ -133,6 +133,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nounit   the disc driver deaf to the unit, so every transfer is unit 0's
   dirunit  K.DIRNT reading whichever platter's directory is in core
   nodata   no data unit but unit 0, whatever unit 1 has
+  fcwho    a channel's unit taken as 0 when the directory in core is asked
+           who is writing, so a write on unit 1 looks abandoned
 """
 
 import contextlib
@@ -163,7 +165,8 @@ DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
 FST_OBJ = os.path.join(BUILD, 'fst.obj')
 MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
     (name, os.path.join(BUILD, name.lower() + '.obj'))
-    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'DIR', 'NAP', 'HOG', 'BLIP', 'FAR', 'SHELL'))
+    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'DIR', 'NAP', 'HOG', 'BLIP', 'FAR', 'PLAT',
+                 'SHELL'))
 # Every module but BASIC and the shell goes on the platter marked as
 # loadable above word X'4000', where the kernel then puts it.
 LOW_ONLY = ('BASIC', 'SHELL')
@@ -1083,7 +1086,7 @@ def make_platter(workdir, log, swap=False, boot=False):
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
-                     'nounit', 'dirunit', 'nodata'):
+                     'nounit', 'dirunit', 'nodata', 'fcwho'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -1117,6 +1120,10 @@ def platters_session(emu):
         # FSUNIT's finding-out: LDW =1 / STW FSUNI / JSX FDLOAD -- with the
         # call gone the answer is never zero, and the data unit unit 0
         emu.writew(listing_word('JSX     FDLOAD', 'FSUNIT          SUBR'), [NOP])
+    if CONTROL == 'fcwho':
+        # FCWHO's LDW *C.UNI / CMW FDUNIT: a CLR makes every channel unit
+        # 0's, which unit 0 never notices
+        emu.writew(listing_word('LDW     *C.UNI', 'FCWHO           SUBR'), [CLR])
     emu.run()
     s = Session(emu)
     s.wait(b'REX 703 UP')
@@ -1145,6 +1152,16 @@ def platters_session(emu):
             if (re.search(rb'^' + re.escape(name), listed, re.M) is not None) != (name in there):
                 raise AssertionError('%s: %r' % (command, listed))
 
+    # A write on unit 1 that a look at unit 0 comes between (plat.asm),
+    # and a program run off unit 1.
+    s.say('RUN PLAT')
+    m = s.wait(re.compile(rb'PLAT (OK|BAD \d+)'))
+    if m.group(1) != b'OK':
+        raise AssertionError(m.group(0).decode())
+    s.say('COPY 0:HELLO.RX 1:HI.RX')
+    s.say('1:HI')
+    s.wait(b'HELLO FROM WORD')
+
     # BASIC comes from unit 0; what it saves goes to unit 1, and a program
     # named on its line comes from there.
     s.say('BASIC')
@@ -1170,7 +1187,9 @@ def check_platters(unit0, made0, unit1):
             raise AssertionError('%s breaks the rules: %s' % (name, '; '.join(bad)))
     prog = bytes(c | 0x80 for c in b'10 PRINT "ON ONE"\r\n')
     made1 = {e.title: p1.read(e.name, e.type) for e in p1.files()}
-    if made1 != {'NOTE.TX': NOTE, 'PROG.BA': prog}:
+    with open(HELLO_OBJ, 'rb') as f:
+        hello = f.read()
+    if made1 != {'NOTE.TX': NOTE, 'PROG.BA': prog, 'PW.TX': bytes([0xc1]) * 200, 'HI.RX': hello}:
         raise AssertionError('unit 1 holds %r' % made1)
     kinds = [e.what for e in p1.entries()]
     if kinds != [fs703.FILE] * (len(kinds) - 1) + [fs703.HOLE]:

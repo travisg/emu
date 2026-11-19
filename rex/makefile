@@ -54,7 +54,7 @@ UTILS := type copy del ren squish dump put dir
 UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
 
 modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \
-         $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/nap.obj $(BUILD)/hog.obj \
+         $(BUILD)/dskt.obj $(BUILD)/fst.obj $(BUILD)/plat.obj $(BUILD)/nap.obj $(BUILD)/hog.obj \
          $(BUILD)/blip.obj $(BUILD)/far.obj $(BUILD)/shell.obj
 
 $(UTIL_OBJS): $(BUILD)/%.obj: util/%.asm $(API) rexmac.asm rexlib.asm $(ASM703)
@@ -102,6 +102,11 @@ $(BUILD)/dskt.obj: $(API) dskt.asm $(ASM703)
 $(BUILD)/fst.obj: $(API) rexmac.asm rexlib.asm fst.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM) $(API) rexmac.asm rexlib.asm fst.asm --object $@ -l $(BUILD)/fst.lst
+
+# The two platters' exerciser: a write on unit 1 across a look at unit 0.
+$(BUILD)/plat.obj: $(API) rexmac.asm rexlib.asm plat.asm $(ASM703)
+	@mkdir -p $(BUILD)
+	$(ASM) $(API) rexmac.asm rexlib.asm plat.asm --object $@ -l $(BUILD)/plat.lst
 
 # Tiny BASIC as a module: the glue that pays the interpreter's wrapper
 # debts with the executive's services, over the interpreter itself, which

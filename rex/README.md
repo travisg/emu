@@ -67,8 +67,8 @@ time either way. The commands the shell has in it:
     BYE          end this shell; every other terminal's shell only
 
 **The other terminals.** Teletypes 1-3 sit beside the console, each given a
-host end by one `--serial` (`nc localhost 7031` for the line above), or a
-teletype window of its own by `--serial window`. A key
+host end by one `--serial` -- `--serial tcp:7031`, and then `nc localhost
+7031` -- or a teletype window of its own by `--serial window`. A key
 typed at one that has no shell brings it one: the console's shell loads
 `SHELL.RX` for it -- `shell.asm`, the console's own shell, assembled again
 as a module behind `shellmod.asm` -- and the key goes to that shell, so the
@@ -318,23 +318,41 @@ LOAD button, and has to come up, list its directory and run a program. A
 fifth has a platter with two sectors free: a `SAVE` too long for them
 under a saved program's name has to be refused with the program left as
 it was, a `COPY` onto the swap file's name refused outright, and the
-host's tools have to refuse the same of a system file.
-It runs `--fast-io` (the slices stay real machine time; the clock ignores
+host's tools have to refuse the same of a system file. A sixth has two
+more teletypes on localhost sockets: a key at each brings it a shell, a
+blip behind each prompt prints on its own terminal's paper alone, a second
+Ctrl-C there ends only its own program, `BYE` gives the pool back, and a
+terminal's shell waiting for a key is put out and comes back for one. A
+seventh has a data platter on unit 1 made with `mkdisc703.py --dir`: a
+file with no unit lands there and a program still comes from unit 0,
+`COPY` goes both ways, a `REN` across them is refused, `DIR` and `DIR 0:`
+list their own platters, `plat.asm` writes a file on unit 1 across a look
+at unit 0 -- the close has to find the write it began in unit 1's
+directory, brought back in -- a program copied there runs as `1:HI`, and
+BASIC saves to unit 1 and runs from it; the host then reads both platters
+back, unit 0 as it was made but for the one file copied onto it.
+The main session runs `--fast-io` (the slices stay real machine time; the clock ignores
 the flag), walks the paper with a cursor so each wait finds the next prompt
 rather than the first, and paces every command on that prompt and then on
 the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
 `=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin`, `=nosys`,
-`=nopark`, `=nolatch`, `=sysopen` and `=noseg` are its negative controls --
+`=nopark`, `=nolatch`, `=sysopen`, `=noseg`, `=onlycon`, `=onetty`,
+`=nogetty`, `=nounit`, `=dirunit`, `=nodata` and `=fcwho` are its negative
+controls --
 a platter with nothing on it, one
 without the hello module, a kernel with its wait for the disc patched out,
 one that never writes the directory back, one that lets any task read the
 console, one that cuts a returning task's blocks out of the free list but
 never reads them back, a boot sector never told where the kernel is, a
 `HALT` that stops no task, a channel that forgets it refused a character,
-a file opened for writing under a system file's name, and a loader that
-adds a segment's own base to an address in another -- which must all
-FAIL. Two things that make it hard
+a file opened for writing under a system file's name, a loader that
+adds a segment's own base to an address in another, a teletypes' service
+routine that asks only the console's status, a printer started on any
+terminal's task, a key that asks for no shell, a disc driver deaf to the
+unit, a directory entry read from whichever platter's directory is in
+core, no data unit but unit 0, and a channel's unit forgotten when the
+directory is asked who is writing -- which must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
