@@ -111,6 +111,11 @@ FLANK = r'[0-9A-Fa-f]\s+[0-9A-Fa-f]{3}\s+[0-9A-Fa-f]'
 XREF_ROW = re.compile(rf'^\s*(?:{FLANK}|[0-9A-Fa-f]{{4}})\s+'
                       rf'[A-Za-z][A-Za-z0-9_.]*\s+(?:{FLANK}\s*)+$')
 XREF_CONT = re.compile(rf'^\s*(?:{FLANK}\s*)+$')
+# A symbol nothing refers to has a row of its value and its name alone. With a
+# name that is all hex digits -- the loader's `D8`, at 7DC -- that is also what
+# a BYTE card's second byte looks like, so it is a row only inside the cross
+# reference.
+XREF_BARE = re.compile(rf'^\s*(?:{FLANK}|[0-9A-Fa-f]{{4}})\s+[A-Za-z][A-Za-z0-9_.]*\s*$')
 # The assembly trailer: an error line, then a column header, then a row of
 # counts. The counts row is matched only when the header was the line before
 # it -- on its own, "a row of five numbers" is also what a continuation word
@@ -199,7 +204,8 @@ def read_transcript(paths):
                 if XREF_ROW.match(line):
                     in_xref = True
                     continue
-                if in_xref and (XREF_CONT.match(line) or XREF_ROW.match(line)):
+                if in_xref and (XREF_CONT.match(line) or XREF_ROW.match(line)
+                                or XREF_BARE.match(line)):
                     continue
                 if TRAILER_HEAD.match(line):
                     after_trailer_head = 'CARDS' in line
