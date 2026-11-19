@@ -493,6 +493,9 @@ SWXFER          SUBR
                 LDW     SWADR
                 SMB     DXBUF
                 STW     DXBUF
+                CLR                     ; SWAP.SY is unit 0's, and the unit
+                SMB     DXUNI           ; is set for every transfer: the
+                STW     DXUNI           ; holder this borrows from sets its own
                 CALL    DXFER
                 EXIT    SWXFER
 
@@ -826,7 +829,7 @@ SWFP            WORD    0
 SWFC            WORD    0
                 LPOOL                   ; what this page's code writes as literals
 
-SWNAME          WORD    'SW','AP',0,'SY'
+SWNAME          WORD    'SW','AP',0,'SY',0  ; on unit 0
 
 SWXTAB          RES     SWXN*3          ; an extent: the node, the first sector, how many
 SWHDO           RES     47              ; a list going out: how many blocks,

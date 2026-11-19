@@ -417,81 +417,31 @@ BFERR           CLR
                 STW     BOUT
                 JMP     E.HOW
 
-; Open the file BFN names: ACR zero to read it, one to write it.
+; Open the file BFN names: ACR zero to read it, one to write it, beside
+; the unit BNAME left in the high byte.
 BOPEN           SUBR
+                ORI     BFN+4
                 STW     BFN+4
                 LDW     BKFN
                 SMB     K.OPEN
                 JSX     K.OPEN
                 EXIT    BOPEN
 
-; The file name at byte BNP into BFN, as the directory holds one: blanks
-; passed over, up to six characters, then two of type after a dot, BA
-; without one.  A zero ends the name, and so does a blank or any
-; character below one.  Lower case goes in as upper: the core keeps a
-; line as it was typed, and the directory's names are the shell's, which
-; folds what it reads.
+; The file name at byte BNP into BFN, BA its type without one, and BNP
+; past it: K.NAME's reading of a name, as the shell's and the utilities'
+; -- 1:PROG is PROG.BA on unit 1, and lower case goes in as upper, since
+; the core keeps a line as it was typed.
 BNAME           SUBR
-                CLR
-                STW     BFN
-                STW     BFN+1
-                STW     BFN+2
-                LDW     BKBA
-                STW     BFN+3
-                LDW     BKFNB
-                STW     BNQ
-                LDW     BK6
-                STW     BNN
-BNSK            LDX     BNP
-                CLR
-                LDB     *0
-                CLB     X'A0'
-                SEQ                     ; a blank in front?
-                JMP     BNL1
                 LDW     BNP
-                ADD     BK1
+                STW     BNB
+                LDW     BKBA
+                STW     BNB+1
+                LDW     BKNB
+                SMB     K.NAME
+                JSX     K.NAME
+                LDW     BNB
                 STW     BNP
-                JMP     BNSK
-BNL             LDX     BNP
-                CLR
-                LDB     *0
-BNL1            SAZ                     ; a command tail ends on a zero,
-                JMP     BNL2            ; which is above every character as
-BNX             EXIT    BNAME           ; CLB counts -- it compares signed
-BNL2            CLB     X'A1'
-                SLS                     ; and a blank or a CR ends it too
-                JMP     BN1
-                JMP     BNX
-BN1             CLB     X'AE'           ; a dot starts the type
-                SNE
-                JMP     BNDOT
-                CLB     X'E1'           ; from 'a' up: bit 5 off
-                SLS
-                AND     K1.DF
-                STW     BCH2
-                LDW     BNN
-                SAZ                     ; room for it?
-                JMP     BN2
-                JMP     BN3
-BN2             SUB     BK1
-                STW     BNN
-                LDX     BNQ
-                LDW     BCH2
-                STB     *0
-                LDW     BNQ
-                ADD     BK1
-                STW     BNQ
-BN3             LDW     BNP
-                ADD     BK1
-                STW     BNP
-                JMP     BNL
-BNDOT           CLR
-                STW     BFN+3
-                LDW     BKFTB
-                STW     BNQ
-                LDW     BK2
-                STW     BNN
-                JMP     BN3
+                EXIT    BNAME
 ; ---------------------------------------------------------------- glue data
 ; The cells of the core's seam, and this wrapper's own.
 T.PWEND         WORD    0               ; T.PUTW's end-of-window argument
@@ -513,16 +463,12 @@ BNOC            WORD    0               ; this task has no console
 BSIL            WORD    0               ; ...and so only a running program prints
 BFN             WORD    0,0,0,0,0       ; a file's name, type and mode
 BNP             WORD    0               ; BNAME's source, a byte address,
-BNQ             WORD    0               ; where its next character goes,
-BNN             WORD    0               ; and how many more it will take
+BNB             WORD    0,0,BFN         ; and its three words for K.NAME
 BK1             WORD    1
-BK2             WORD    2
-BK6             WORD    6
 BK80            WORD    X'0080'
 BKBA            WORD    'BA'            ; a program's type
 BKFN            WORD    BFN
-BKFNB           WORD    BFN*2
-BKFTB           WORD    BFN*2+6
+BKNB            WORD    BNB
 BK0FF           WORD    X'00FF'
 BKCR            WORD    X'008D'
 BKLF            WORD    X'008A'

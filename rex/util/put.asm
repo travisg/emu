@@ -22,8 +22,9 @@ PUT             SMB     CURT
                 LDW     =PUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-.OPEN             LDW     =1
-                STW     PNAM+4          ; to write
+.OPEN             LDW     =1              ; to write
+                ORI     PNAM+4
+                STW     PNAM+4
                 LDW     =PNAM
                 CALL    K.OPEN
                 JMI     .ERR

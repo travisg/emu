@@ -19,7 +19,7 @@ REN             JSX     L.ARGS
                 JSX     L.ERR
                 JMP     L.EXIT
 
-ROLD            WORD    0,0,0,0
-RNEW            WORD    0,0,0,0
+ROLD            WORD    0,0,0,0,0
+RNEW            WORD    0,0,0,0,0
 RUSE            MSG     "REN OLD NEW\r\n"
                 END     REN

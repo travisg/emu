@@ -2,7 +2,7 @@
 ;
 ; REX's filesystem -- the file of the kernel's deck after shell.asm.
 ;
-; Files are contiguous runs of sectors on disc unit 0 under a directory
+; Files are contiguous runs of sectors on a platter under a directory
 ; in sectors 1-8, which tools/fs703.py describes word for word and writes
 ; from the host; this is the side that runs on the machine, and the
 ; scripted session holds the two to each other.  In short: a five-word
@@ -21,8 +21,15 @@
 ; the rest, and closing it gives the sectors back and leaves the older
 ; file be.  A system file's name is nobody's to write under.
 ;
-; The directory is kept in core, read once and written back whole after
-; every change, one 376-word transfer each way.
+; The directory is kept in core, one platter's at a time, read when a
+; call is for another unit than the one in core and written back whole
+; after every change, one 376-word transfer each way.  Every call names
+; its unit (FSUNIT): a name is four words and then one whose high byte is
+; the unit, 0 to 3, or X'80' for no unit given -- a program, type RX, is
+; then on unit 0 and any other file on the data unit, which is unit 1 if
+; that has a directory and unit 0 if not.  A channel keeps its unit, and
+; is told from another unit's only by it, sector numbers being every
+; platter's own.
 ;
 ; A task reads or writes a file a character at a time through one of
 ; four channels, each a sector buffer and its place in the file.  The
@@ -57,16 +64,20 @@ C.LST           EQU     6               ; reading: bytes in the last sector
 C.STA           EQU     7               ; writing: the hole's first sector
 C.ERR           EQU     8               ; writing: what a character was refused
                                         ; with, which the rest and the close get
-C.BUF           EQU     9               ; the sector, 47 words
+C.UNI           EQU     9               ; the unit
+C.BUF           EQU     10              ; the sector, 47 words
 C.LEN           EQU     C.BUF+47
 CHN             EQU     4               ; channels
 
 ; ---------------------------------------------------------------- the directory
-; The directory into core, if it is not there already: zero, or why not.
-; What it finds being written it makes a hole.
+; Unit FSUNI's directory into core, if it is not there already: zero,
+; or why not.  What it finds being written it makes a hole.
 FDLOAD          SUBR
-                LDW     FDVLD
-                JNZ     .OK
+                LDW     FDUNIT
+                CMW     FSUNI
+                JEQ     .OK
+                LDW     =X'FFFF'        ; nobody's until it is read
+                STW     FDUNIT
                 CLR
                 JSX     FDXFR
                 JNZ     .DE
@@ -76,8 +87,8 @@ FDLOAD          SUBR
                 LDW     FDBUF+1
                 CMW     ='XF'
                 JNE     .ND
-                LDW     =1
-                STW     FDVLD
+                LDW     FSUNI
+                STW     FDUNIT
                 JSX     FDNORM
 .OK             CLR
                 EXIT    FDLOAD
@@ -93,15 +104,19 @@ FDSAVE          SUBR
                 JSX     FDXFR
                 JNZ     .BAD
                 EXIT    FDSAVE
-.BAD            CLR
-                STW     FDVLD
+.BAD            LDW     =X'FFFF'
+                STW     FDUNIT
                 LDW     =E.DISC
                 EXIT    FDSAVE
 
-; The directory's transfer: ACR zero to read it, else to write it.
+; The directory's transfer, on unit FSUNI: ACR zero to read it, else to
+; write it.
 FDXFR           SUBR
                 SMB     DXOP
                 STW     DXOP
+                LDW     FSUNI
+                SMB     DXUNI
+                STW     DXUNI
                 LDW     =FSDIRS
                 SMB     DXSEC
                 STW     DXSEC
@@ -367,9 +382,10 @@ FCHK            SUBR
 .KNO            CLR
                 EXIT    FCHK
 
-; Is a channel writing the file that starts at sector ACR?  And, with no
-; sector to match -- ACR minus one -- how many channels are writing at
-; all: FCWN is left holding the count either way.
+; Is a channel writing the file that starts at sector ACR of the
+; directory in core?  And, with no sector to match -- ACR minus one -- how
+; many channels are writing on its unit at all: FCWN is left holding the
+; count either way.  A channel on another unit is none of these.
 FCWHO           SUBR
                 STW     FCT
                 CLR
@@ -387,6 +403,9 @@ FCWHO           SUBR
                 JMP     .WNX
 .W1             LDW     *C.MOD
                 CMW     =2
+                JNE     .WNX
+                LDW     *C.UNI
+                CMW     FDUNIT
                 JNE     .WNX
                 LDW     FCWN
                 ADD     =1
@@ -434,6 +453,9 @@ FCFLSH          SUBR
                 SMB     DXBUF
                 STW     DXBUF
                 LDX     FCH
+                LDW     *C.UNI
+                SMB     DXUNI
+                STW     DXUNI
                 LDW     *C.SEC
                 CALL    DWR1
                 JNZ     .BAD
@@ -494,7 +516,7 @@ FCREL           SUBR
 ; name ACR addresses, as its entry's address -- or zero for no such
 ; file, or an error, which is minus.
 FSFND           SUBR
-                STW     FNPTR
+                JSX     FSNAME
                 JSX     FDLOAD
                 JNZ     .X
                 JSX     FDFIND
@@ -502,7 +524,7 @@ FSFND           SUBR
 
 ; K.LOOK
 FBLOOK          SUBR
-                STW     FNPTR
+                JSX     FSNAME
                 JSX     FDLOAD
                 JNZ     .LX
                 JSX     FDFIND
@@ -561,10 +583,15 @@ FBOPEN          SUBR
 .GOT            LDW     =5              ; its number, 1 to 4
                 SUB     FOC
                 STW     FON
+                LDW     FNPTR
+                JSX     FSNAME
+                LDX     FCH
+                STW     *C.UNI
                 JSX     FDLOAD
                 JNZ     .X
                 LDX     FNPTR
                 LDW     *4
+                AND     =X'00FF'
                 JNZ     .CR             ; to read?
 
                 JSX     FDFIND
@@ -751,6 +778,9 @@ FBGETC          SUBR
                 SMB     DXBUF
                 STW     DXBUF
                 LDX     FCH
+                LDW     *C.UNI
+                SMB     DXUNI
+                STW     DXUNI
                 LDW     *C.SEC
                 CALL    DRD1
                 JNZ     .GDE
@@ -831,6 +861,8 @@ FBCLOS          SUBR
                 LDW     =E.CHN
                 EXIT    FBCLOS
 .C1             CAX
+                LDW     *C.UNI          ; the directory is its unit's
+                STW     FSUNI
                 LDW     *C.MOD
                 CMW     =2
                 JNE     .CRD            ; a reader just lets go
@@ -916,7 +948,7 @@ FBCLOS          SUBR
 
 ; K.DELET
 FBDELE          SUBR
-                STW     FNPTR
+                JSX     FSNAME
                 JSX     FDLOAD
                 JNZ     .DX
                 JSX     FDFIND
@@ -939,7 +971,15 @@ FBDELE          SUBR
 ; K.RENAM
 FBRENA          SUBR
                 STW     FRP
-                ADD     =4
+                ADD     =5              ; the new name's unit...
+                JSX     FSNAME
+                STW     FDN0
+                LDW     FRP
+                JSX     FSNAME          ; ...and the old one's, which it
+                CMW     FDN0            ; must be
+                JNE     .RU
+                LDW     FRP
+                ADD     =5
                 STW     FNPTR
                 JSX     FDLOAD
                 JNZ     .RX
@@ -957,13 +997,13 @@ FBRENA          SUBR
                 AND     =DF.SYS
                 JNZ     .RPR
                 LDX     FRP
-                LDW     *4
-                STW     FDN0
                 LDW     *5
-                STW     FDN1
+                STW     FDN0
                 LDW     *6
-                STW     FDN2
+                STW     FDN1
                 LDW     *7
+                STW     FDN2
+                LDW     *8
                 STW     FDN3
                 LDX     FCE
                 LDW     FDN0
@@ -980,6 +1020,8 @@ FBRENA          SUBR
                 EXIT    FBRENA
 .RPR            LDW     =E.PROT
                 EXIT    FBRENA
+.RU             LDW     =E.UNIT
+                EXIT    FBRENA
 
 ; K.SQUSH: every file that has a hole in front of it moves down over the
 ; hole, a sector at a time through the first channel's buffer, until the
@@ -990,6 +1032,11 @@ FBRENA          SUBR
 ; machine stopped part way through one loses that file if the hole was
 ; smaller than it.
 FBSQSH          SUBR
+                STW     FDN0
+                CLR                     ; no name: the data unit for none
+                STW     FNPTR
+                LDW     FDN0
+                JSX     FSUNIT
                 JSX     FDLOAD
                 JNZ     .SX
                 LDW     =FCHTAB
@@ -1049,9 +1096,15 @@ FBSQSH          SUBR
 .SM1            LDW     =FKSBUF
                 SMB     DXBUF
                 STW     DXBUF
+                LDW     FSUNI
+                SMB     DXUNI
+                STW     DXUNI
                 LDW     FSS
                 CALL    DRD1
                 JNZ     .SERR
+                LDW     FSUNI
+                SMB     DXUNI
+                STW     DXUNI
                 LDW     FSD
                 CALL    DWR1
                 JNZ     .SERR
@@ -1109,8 +1162,100 @@ FBSQSH          SUBR
 .SERR           LDW     =E.DISC
                 EXIT    FBSQSH
 
+; K.DIRNT: the directory's entry ACR+1 names, of the unit ACR's high byte
+; names, copied out to ACR+2..ACR+9 -- so that a listing at the
+; teletype's pace holds the disc for an entry at a time, while another
+; task's call may change which unit's directory is in core in between.
+FBDIRN          SUBR
+                STW     FRP
+                CLR                     ; no name: the data unit for none
+                STW     FNPTR
+                LDX     FRP
+                LDW     *0
+                JSX     FSUNIT
+                JSX     FDLOAD
+                JNZ     .X
+                LDX     FRP
+                LDW     *1
+                CMW     =FSNENT
+                JGE     .NO             ; inside the table?
+                SLL     3
+                ADD     =FDENT
+                STW     FDE
+                CAX
+                LDW     *DE.FLG
+                AND     =X'00FF'
+                JNZ     .Y              ; an unused entry ends it
+.NO             LDW     =E.NOF
+.X              EXIT    FBDIRN
+.Y              LDW     FRP
+                ADD     =2
+                STW     FDD
+                LDW     =DE.LEN
+                STW     FDR
+.L              LDX     FDE
+                LDW     *0
+                LDX     FDD
+                STW     *0
+                LDW     FDE
+                ADD     =1
+                STW     FDE
+                LDW     FDD
+                ADD     =1
+                STW     FDD
+                LDW     FDR
+                SUB     =1
+                STW     FDR
+                JNZ     .L
+                EXIT    FBDIRN
+
+; ---------------------------------------------------------------- units
+; The name ACR addresses is the one a search is for, and its unit is the
+; one the call is on: FSUNI, and ACR.
+FSNAME          SUBR
+                STW     FNPTR
+                CAX
+                LDW     *4
+                JSX     FSUNIT
+                EXIT    FSNAME
+
+; The unit ACR's high byte names, into FSUNI and ACR: 0 to 3 as given,
+; and X'80', none given, settled by the type of the name FNPTR addresses
+; -- or by none, FNPTR zero -- as the header says.  Which unit is the
+; data unit is found out once, the first time it is wanted: the 703's
+; platters are not changed while it runs.
+FSUNIT          SUBR
+                SRL     8
+                CMW     =X'80'
+                JEQ     .D
+                AND     =3
+.S              STW     FSUNI
+                EXIT    FSUNIT
+.D              LDW     FNPTR
+                JNZ     .T              ; a name?
+                JMP     .DU
+.T              CAX
+                LDW     *3
+                CMW     ='RX'
+                JNE     .DU             ; a program is on unit 0
+                CLR
+                JMP     .S
+.DU             LDW     FSDU
+                JPL     .S              ; known already?
+                LDW     =1
+                STW     FSUNI
+                JSX     FDLOAD
+                JNZ     .D0             ; unit 1 has a directory?
+                LDW     =1
+                JMP     .DS
+.D0             CLR
+.DS             STW     FSDU
+                JMP     .S
+
 ; ---------------------------------------------------------------- data
-FDVLD           WORD    0               ; the directory is in core
+FDUNIT          WORD    X'FFFF'         ; the unit whose directory is in core; -1 none
+FSUNI           WORD    0               ; the unit of the call in hand
+FSDU            WORD    X'FFFF'         ; the data unit; -1 not found out yet
 FNPTR           WORD    0               ; the name a search is for
 FDE             WORD    0               ; a walk's entry
 FDN0            WORD    0               ; four words in hand

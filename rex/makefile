@@ -20,7 +20,7 @@ all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules bootdisc
 
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
 # the filesystem and the swapper at the top of core.
-KERNEL := rexmac.asm rex.asm shell.asm rexfs.asm rexswap.asm
+KERNEL := rexmac.asm rex.asm shell.asm rexfs.asm rexswap.asm rexname.asm
 
 $(BUILD)/rex.bin: $(KERNEL) $(ASM703)
 	@mkdir -p $(BUILD)
@@ -50,7 +50,7 @@ $(BUILD)/boot.bin: boot.asm $(ASM703)
 # The utilities, each a file in util/ behind rexlib.asm, a library: the
 # assembler takes the routines a deck names and leaves the rest. And the test
 # modules beside them.
-UTILS := type copy del ren squish dump put
+UTILS := type copy del ren squish dump put dir
 UTIL_OBJS := $(UTILS:%=$(BUILD)/%.obj)
 
 modules: $(BUILD)/hello.obj $(BUILD)/basic.obj $(UTIL_OBJS) \

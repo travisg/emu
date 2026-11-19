@@ -23,10 +23,10 @@
 ;   L.ARGS   start reading the command tail (T.ARG) from its beginning:
 ;            L.AP is then the byte address of its next character
 ;   L.NADV   L.AP one character on
-;   L.NAME   the next file name on it, into the four words ACR addresses,
-;            as the directory holds one; a name with no type gets the one
-;            in L.DTY, which is TX until a module stores another.  Zero
-;            if the tail has run out, else not
+;   L.NAME   the next file name on it, into the five words ACR addresses,
+;            as K.OPEN takes one, unit and all; a name with no type gets
+;            the one in L.DTY, which is TX until a module stores another.
+;            Zero if the tail has run out, else not
 ;   L.ERR    what a file call answered, ACR an E. value, said in words
 ;   L.BRK    nonzero if a Ctrl-C is waiting for this task: the flag is the
 ;            console's, so a task without the console is never told of one
@@ -191,70 +191,24 @@ L.NADV          SUBR
                 EXIT    L.NADV
 
                 LIBR    L.NAME,L.DTY
-; The shell's SHNAME over the tail: up to six characters of name, two of
-; type after a dot, each left-justified and zero-filled, the rest of an
-; over-long word stepped over.
+; The next name in the tail into the five words ACR addresses, the type
+; in L.DTY for one without, and the cursor past it: K.NAME's reading of
+; a name, as everything's.  The answer is its first word, zero for none.
 L.NAME          SUBR
+                STW     L.NB+2
+                LDW     L.AP
                 STW     L.NB
-                CAX
-                CLR
-                STW     *0
-                STW     *1
-                STW     *2
                 LDW     L.DTY
-                STW     *3
-L.NSK           LDX     L.AP            ; past the blanks
-                CLR
-                LDB     *0
-                CMW     =' '
-                JNE     L.NGO
-                JSX     L.NADV
-                JMP     L.NSK
-L.NGO           LDW     L.NB
-                SLL     1
-                STW     L.NP
-                LDW     =6
-                STW     L.NN
-L.NL1           LDX     L.AP
-                CLR
-                LDB     *0
-                JNZ     L.N1            ; the zero ends it
-                JMP     L.NX
-L.N1            CMW     =' '            ; and so does a blank
-                JEQ     L.NX
-                CMW     ='.'            ; a dot starts the type
-                JEQ     L.NDOT
+                STW     L.NB+1
+                LDW     =L.NB
+                CALL    K.NAME
                 STW     L.NC
-                LDW     L.NN            ; room for it?
-                JNZ     L.N2
-                JMP     L.N3
-L.N2            SUB     =1
-                STW     L.NN
-                LDX     L.NP
-                LDW     L.NC
-                STB     *0
-                LDW     L.NP
-                ADD     =1
-                STW     L.NP
-L.N3            JSX     L.NADV
-                JMP     L.NL1
-L.NDOT          LDX     L.NB
-                CLR
-                STW     *3
                 LDW     L.NB
-                SLL     1
-                ADD     =6
-                STW     L.NP
-                LDW     =2
-                STW     L.NN
-                JMP     L.N3
-L.NX            LDX     L.NB
-                LDW     *0
+                STW     L.AP
+                LDW     L.NC
                 EXIT    L.NAME
-L.NB            WORD    0               ; L.NAME's four words,
-L.NP            WORD    0               ; where its next character goes,
-L.NN            WORD    0               ; how many more it will take,
-L.NC            WORD    0               ; and the character in hand
+L.NB            WORD    0,0,0           ; L.NAME's three words for K.NAME
+L.NC            WORD    0               ; and its answer
 L.DTY           WORD    'TX'            ; the type a bare name is given
 
                 LIBR    L.ERR
@@ -272,7 +226,7 @@ L.ERR           SUBR
                 JSX     L.MSG
                 JSX     L.NL
                 EXIT    L.ERR
-L.KNERR         EQU     8               ; how many E. values there are
+L.KNERR         EQU     9               ; how many E. values there are
 L.ETAB          WORD    L.E1T*2,L.E1E*2 ; E.NOF, and on down
                 WORD    L.E2T*2,L.E2E*2
                 WORD    L.E3T*2,L.E3E*2
@@ -281,6 +235,7 @@ L.ETAB          WORD    L.E1T*2,L.E1E*2 ; E.NOF, and on down
                 WORD    L.E6T*2,L.E6E*2
                 WORD    L.E7T*2,L.E7E*2
                 WORD    L.E8T*2,L.E8E*2
+                WORD    L.E9T*2,L.E9E*2
 L.E1T           TEXT    "NO SUCH FILE"
 L.E1E           EQU     $
 L.E2T           TEXT    "NO CHANNEL"
@@ -297,6 +252,8 @@ L.E7T           TEXT    "SYSTEM FILE "
 L.E7E           EQU     $
 L.E8T           TEXT    "NAME IN USE "
 L.E8E           EQU     $
+L.E9T           TEXT    "NOT ONE PLATTER "
+L.E9E           EQU     $
 
                 LIBR    L.BRK
 L.BRK           SUBR

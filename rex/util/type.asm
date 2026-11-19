@@ -13,9 +13,7 @@ TYPE            JSX     L.ARGS
                 LDW     =TUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-.OPEN           CLR
-                STW     TNAM+4          ; to read
-                LDW     =TNAM
+.OPEN           LDW     =TNAM           ; to read
                 CALL    K.OPEN
                 JMI     .ERR
                 STW     TCH

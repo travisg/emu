@@ -401,7 +401,7 @@
 ; The vector, at X'10'-X'1B'.
                 NTRY    K.ALLOC,K.ALLCW,K.ALLCB,K.FREE,K.EXIT,K.SWTCH
                 NTRY    K.KICK,K.QGET,K.DREAD,K.DWRIT,K.ALLHI,K.ALHIW
-                NTRY    K.BRKQ,K.BRKC
+                NTRY    K.BRKQ,K.BRKC,K.DIRNT,K.NAME
                 ORG     X'10'
 K.ALLOC         JMP     ALLOC           ; ACR = words wanted -> ACR = the block, or 0.
                                         ; These three hand out core below word
@@ -436,7 +436,14 @@ K.BRKQ          JMP     BRKQ            ; -> ACR = nonzero if a Ctrl-C is waitin
                                         ; read only while it holds the console
                                         ; (T.CON)
 K.BRKC          JMP     BRKC            ; spend it: the flag cleared
-                WORD    0,0             ; X'1E'-X'1F'
+K.DIRNT         JMP     KDIRNT          ; ACR = ten words: a unit word, as a
+                                        ; name's fifth (see K.OPEN), an entry's
+                                        ; index from 0, and eight for the entry
+                                        ; -> zero, or E.NOF past the last
+K.NAME          JMP     KNAME           ; ACR = three words: a byte cursor, a
+                                        ; type, five words' address -> the name
+                                        ; there and the cursor past it
+                                        ; (rexname.asm)
 
 ; The cells, at X'20'-X'23', the block of level 8.
                 NTRY    CURT,KCONSQ
@@ -456,10 +463,10 @@ KCONSQ          WORD    QCONS           ; the console queue's descriptor address
                                         ; T.CON at entry and says so when it is
                                         ; clear.
 
-; Files: the vector goes on at X'28'-X'2F'.  A name is four words, as the
-; directory holds one: six characters and then two of type, bit 7 set,
-; each left-justified and zero-filled -- HELLO.RX is 'HE','LL',X'CF00',
-; 'RX'.  A file is read or written a character at a time through a
+; Files: the vector goes on at X'28'-X'2F'.  A name is four words as the
+; directory holds one -- six characters and then two of type, bit 7 set,
+; each left-justified and zero-filled: HELLO.RX is 'HE','LL',X'CF00',
+; 'RX' -- and a fifth whose high byte is its unit, as K.OPEN says.  A file is read or written a character at a time through a
 ; channel, of which the kernel has four; what a task leaves open is let
 ; go when it exits, and a file it was writing and never closed is gone.
 ; A new file replaces an older one of its name when it is closed, not
@@ -469,12 +476,16 @@ KCONSQ          WORD    QCONS           ; the console queue's descriptor address
                 NTRY    K.LOOK,K.OPEN,K.GETC,K.PUTC,K.CLOSE,K.DELET,K.RENAM,K.SQUSH
                 ORG     X'28'
 ; Each goes through KENTER to its body in rexfs.asm.
-K.LOOK          JMP     KLOOK           ; ACR = eight words, the first four a name
+K.LOOK          JMP     KLOOK           ; ACR = eight words, the first five a name
                                         ; -> zero and the last four filled in --
                                         ; DE.SEC, DE.CNT, DE.LST, DE.FLG -- or E.
-K.OPEN          JMP     KOPEN           ; ACR = five words: a name, then zero to
-                                        ; read or one to write -> a channel, or E.
-                                        ; E.PROT to write under a system file's name
+K.OPEN          JMP     KOPEN           ; ACR = a name: four words of it, then the
+                                        ; unit in the high byte -- 0 to 3, or
+                                        ; X'80' for a program's on unit 0 and any
+                                        ; other file's on the data unit -- and
+                                        ; zero to read or one to write in the low
+                                        ; -> a channel, or E.  E.PROT to write
+                                        ; under a system file's name
 K.GETC          JMP     KGETC           ; ACR = a channel -> the next character,
                                         ; or E.NOF at the end of the file
 K.PUTC          JMP     KPUTC           ; ACR = channel*256 + character -> zero, or E.,
@@ -484,9 +495,10 @@ K.CLOSE         JMP     KCLOSE          ; ACR = a channel -> zero, or E.  A file
                                         ; here; one K.PUTC refused a character of
                                         ; is given up instead, with K.PUTC's answer
 K.DELET         JMP     KDELET          ; ACR = a name -> zero, or E.
-K.RENAM         JMP     KRENAM          ; ACR = eight words, the old name and the
-                                        ; new -> zero, or E.
-K.SQUSH         JMP     KSQUSH          ; -> zero, or E.: every file moved down
+K.RENAM         JMP     KRENAM          ; ACR = ten words, the old name and the
+                                        ; new, on one unit -> zero, or E.
+K.SQUSH         JMP     KSQUSH          ; ACR = a unit word -> zero, or E.: on
+                                        ; that platter, every file moved down
                                         ; over the hole in front of it.  E.CHN
                                         ; while any channel is open.
 
@@ -600,7 +612,7 @@ DF.HIGH         EQU     X'0100'         ; a module that may load above X'4000'
 DF.SYS          EQU     X'0200'         ; never moved, renamed or deleted
 
 ; What a file call answers when it cannot do what was asked: all minus.
-                NTRY    E.NOF,E.CHN,E.DFUL,E.FULL,E.DISC,E.NDIR,E.PROT,E.EXST
+                NTRY    E.NOF,E.CHN,E.DFUL,E.FULL,E.DISC,E.NDIR,E.PROT,E.EXST,E.UNIT
 E.NOF           EQU     X'FFFF'         ; no such file; K.GETC's end of file
 E.CHN           EQU     X'FFFE'         ; no channel free, or not this task's, or the wrong way
 E.DFUL          EQU     X'FFFD'         ; the directory is full
@@ -609,6 +621,7 @@ E.DISC          EQU     X'FFFB'         ; the disc is not ready, or a transfer f
 E.NDIR          EQU     X'FFFA'         ; the platter has no directory
 E.PROT          EQU     X'FFF9'         ; a system file
 E.EXST          EQU     X'FFF8'         ; the new name is taken
+E.UNIT          EQU     X'FFF7'         ; a rename from one platter to another
 
 SWAPST          EQU     X'F080'         ; the swapper's first status: global,
                                         ; and the page it starts in, X'7800'
@@ -1480,6 +1493,21 @@ KSQUSH          MSK
                 STW     KEARG
                 LDW     =FBSQSH
                 JMP     KENTER
+KDIRNT          MSK
+                STX     KELNK
+                STW     KEARG
+                LDW     =FBDIRN
+                JMP     KENTER
+
+; K.NAME: no disc, so no claim -- masked from the first instruction to
+; the last, which is what lets the parser keep cells of its own.
+KNAME           MSK
+                STX     KNLNK
+                CALL    KNPARS
+                LDX     KNLNK
+                UNM
+                JMP     *0
+KNLNK           WORD    0
 
 KDRB            SUBR
                 STW     DXARG
@@ -1494,6 +1522,8 @@ KDWB            SUBR
                 JSX     KDXP
                 EXIT    KDWB
 KDXP            SUBR
+                CLR                     ; a task's transfers are unit 0's
+                STW     DXUNI
                 LDX     DXARG           ; the caller's three words
                 LDW     *0
                 STW     DXSEC
@@ -2382,7 +2412,7 @@ LDBUF           RES     47              ; the loader's sector
 ; the shell's: they are the kernel's own routines, cells and layout, with
 ; nothing in front of them to keep them where they are.
                 NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY
-                NTRY    SECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,FDENT,FDEND
+                NTRY    SECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,DXUNI,FSUNI
                 NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,FSFND,DRD1
                 NTRY    ALLOCW,ALLCHW,ALLOCB,ALLCHB
 

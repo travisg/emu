@@ -150,7 +150,7 @@ DSKT_OBJ = os.path.join(BUILD, 'dskt.obj')
 FST_OBJ = os.path.join(BUILD, 'fst.obj')
 MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST', FST_OBJ)) + tuple(
     (name, os.path.join(BUILD, name.lower() + '.obj'))
-    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'NAP', 'HOG', 'BLIP', 'FAR', 'SHELL'))
+    for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'DIR', 'NAP', 'HOG', 'BLIP', 'FAR', 'SHELL'))
 # Every module but BASIC and the shell goes on the platter marked as
 # loadable above word X'4000', where the kernel then puts it.
 LOW_ONLY = ('BASIC', 'SHELL')
@@ -1007,10 +1007,9 @@ def full_session(emu, image):
         raise AssertionError('fs703 ' + what)
 
 
-def verdict(paper, programs):
+def verdict(paper):
     """What the shell had to have printed, on lines of its own: the
-    terminal's echo of a command begins with the prompt instead. The
-    programs are the platter's, by name, in the directory's order."""
+    terminal's echo of a command begins with the prompt instead."""
     text = paper.replace(b'\r', b'')
 
     def line(pattern):
@@ -1029,9 +1028,7 @@ def verdict(paper, programs):
         ('idle listed', line(rb'^0 ID RUN')),
         ('help: what is built in', line(rb'^BUILT IN: HELP STAT UPTIME')),
         # every one of them, eight to a line
-        ('help: what is on the disc', bool(programs) and line(b'^' + b'\n'.join(
-            b''.join(b' ' + name.encode() for name in programs[i:i + 8])
-            for i in range(0, len(programs), 8)) + b'$')),
+        ('help: where the programs are', line(rb'^ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME\. DIR 0: LISTS THEM\.$')),
         ('echo', line(rb'^SHELL OUTPUT OK')),
         ('unknown command', line(rb'^WHAT')),
         ('directory: hello', line(rb'^HELLO\.RX \d+$')),
@@ -1343,8 +1340,7 @@ def main():
                 emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE,
                                  '--fast-io', '--no-throttle'], log=log)
             session(emu)
-            programs = [e.name for e in fs703.Platter(bytearray(pristine)).files() if e.type == 'RX']
-            failed = verdict(bytes(emu.output), programs)
+            failed = verdict(bytes(emu.output))
             if failed:
                 raise AssertionError('not on the paper: ' + ', '.join(failed))
             finish(emu)

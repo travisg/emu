@@ -36,6 +36,8 @@ SHELL           LDW     =SHBAN
                 STW     SHFN+2
                 LDW     ='CM'
                 STW     SHFN+3
+                CLR                     ; on unit 0, the system's platter
+                STW     SHFN+4
                 JSX     SHCMOP
                 ENDC
 
@@ -129,11 +131,9 @@ SHLOOP          CLR                     ; a kill aimed at nobody is forgotten
                 JMP     SHLOOP
 
 ; Open the file SHFN names as the command file, in place of one that is
-; open already: the channel, or minus.
+; open already: the channel, or minus.  SHFN+4's mode is to read.
 SHCMOP          SUBR
                 JSX     SHCMCL
-                CLR
-                STW     SHFN+4          ; to read
                 LDW     =SHFN
                 CALL    K.OPEN
                 JMI     .X
@@ -151,55 +151,14 @@ SHCMCL          SUBR
                 EXIT    SHCMCL
 
 ; ---------------------------------------------------------------- commands
-; HELP: the commands that are in the shell, and then the ones that are
-; not -- every program the directory has, eight names to a line.  With
-; no disc, or no directory on it, there are none to name.
+; HELP: the commands that are in the shell, and a word on the ones that
+; are not.
 SHHELP          LDW     =SHHL1
                 JSX     SHMSG
                 LDW     =SHHL2
                 JSX     SHMSG
                 LDW     =SHHL3
                 JSX     SHMSG
-                JSX     SHDLD
-                JPL     .P0
-                JMP     SHLOOP
-.P0             CLR
-                STW     SHTI            ; names on the line so far
-                LDW     =FDENT
-                STW     LDCP
-.PL             LDW     LDCP
-                CMW     =FDEND
-                JGE     .PX             ; inside the table?
-                CAX
-                LDW     *DE.FLG
-                AND     =X'00FF'
-                JNZ     .P1             ; an unused entry ends it
-                JMP     .PX
-.P1             CMW     =DK.FILE
-                JNE     .PN             ; a file...
-                LDW     *DE.TYP
-                CMW     =SHKRX
-                JNE     .PN             ; ...and a program?
-                LDW     =' '
-                JSX     SHPUTC
-                JSX     SHPNAM
-                LDW     SHTI
-                ADD     =1
-                STW     SHTI
-                CMW     =8
-                JGE     .PW             ; room on the line for another?
-                JMP     .PN
-.PW             JSX     SHNL
-                CLR
-                STW     SHTI
-.PN             LDW     LDCP
-                ADD     =8
-                STW     LDCP
-                JMP     .PL
-.PX             LDW     SHTI
-                JNZ     .PE             ; a line part made?
-                JMP     SHLOOP
-.PE             JSX     SHNL
                 JMP     SHLOOP
 
 ; Seconds since the executive came up. SECS is the scheduler's, counted
@@ -594,6 +553,7 @@ SHGTY           SUBR
                 LDW     =SHKRX
                 STW     SHFN+3
                 CLR
+                STW     SHFN+4          ; unit 0's
                 STW     LDCON           ; given no console: it is the
                 STW     SHIMPL          ; terminal's shell instead
                 LDW     =SHKZB          ; and no command tail
@@ -671,6 +631,9 @@ LDMOD           SUBR
                 JNZ     .M2             ; no such file?
                 JMP     LDNOF
 .M2             JMI     LDEDE           ; an error is minus
+                SMB     FSUNI           ; the unit it was found on
+                LDX     FSUNI
+                STX     LDUNI
                 CAX
                 LDW     *DE.SEC         ; where it starts...
                 STW     LDSEC
@@ -1022,6 +985,9 @@ LDGCRD          SUBR
                 LDW     =LDBUF
                 SMB     DXBUF
                 STW     DXBUF
+                LDW     LDUNI
+                SMB     DXUNI
+                STW     DXUNI
                 LDW     LDSEC
                 CALL    DRD1
                 JNZ     LDEDE
@@ -1087,87 +1053,6 @@ SHIOR           SUBR
                 SMB     IOLOCK
                 STW     IOLOCK
                 EXIT    SHIOR
-
-; DIR: the directory, a line to a file -- its name, its type and how
-; many sectors it has -- and then the sectors that are free.  The disc is
-; claimed only to bring the directory into core; the walk is of the
-; kernel's copy, unclaimed, so that a listing at the teletype's pace does
-; not hold every other task off the disc -- and a file made or deleted
-; meanwhile may show in it twice or not at all.
-SHDIR           JSX     SHDLD
-                JPL     .R0             ; an error is minus
-                CMW     =E.NDIR
-                JNE     .RE
-                LDW     =SHNDR
-                JSX     SHMSG
-                JMP     SHLOOP
-.R0             CLR
-                STW     SHMTOT
-                LDW     =FDENT
-                STW     LDCP
-.RL             LDW     LDCP
-                CMW     =FDEND
-                JGE     .RT             ; inside the table?
-                CAX
-                LDW     *DE.FLG
-                AND     =X'00FF'
-                JNZ     .R1             ; an unused entry ends it
-                JMP     .RT
-.R1             CMW     =DK.FILE
-                JNE     .RH             ; a file?
-                JSX     SHPNAM
-                LDW     ='.'
-                JSX     SHPUTC
-                LDX     LDCP
-                LDW     *DE.TYP
-                JSX     SHPW2
-                LDW     =' '
-                JSX     SHPUTC
-                LDX     LDCP
-                LDW     *DE.CNT
-                JSX     SHDEC
-                JSX     SHNL
-                JMP     .RN
-.RH             LDW     *DE.CNT         ; a hole, or what is being written
-                ADD     SHMTOT
-                STW     SHMTOT
-.RN             LDW     LDCP
-                ADD     =8
-                STW     LDCP
-                JMP     .RL
-.RT             LDW     SHMTOT
-                JSX     SHDEC
-                LDW     =SHSFR
-                JSX     SHMSG
-                JMP     SHLOOP
-.RE             LDW     =SHNRD
-                JSX     SHMSG
-                JMP     SHLOOP
-
-; Bring the directory into the kernel's copy of it: what FSFND says,
-; which is minus for an error.  The name it looks for is whatever SHFN
-; holds, and beside the point.
-SHDLD           SUBR
-                JSX     SHIOC
-                LDW     =SHFN
-                CALL    FSFND
-                STW     SHW2
-                JSX     SHIOR
-                LDW     SHW2
-                EXIT    SHDLD
-
-; The name of the directory entry LDCP is at.
-SHPNAM          SUBR
-                LDX     LDCP
-                LDW     *0
-                JSX     SHPW2
-                LDX     LDCP
-                LDW     *1
-                JSX     SHPW2
-                LDX     LDCP
-                LDW     *2
-                JSX     SHPW2
-                EXIT    SHPNAM
 
 ; The words free in the pool, below the fence and above it: the free
 ; list's sizes added up, under the mask that every walk of the list
@@ -1310,56 +1195,18 @@ SHTOK           SUBR
                 JMP     .KL
 .KD             EXIT    SHTOK
 
-; The file name at SHCUR into SHFN, as the directory holds one: up to
-; six characters, left-justified in three words and zero-filled, then
-; the type, two characters after a dot -- or the type in SHDTY when the
-; name has no dot.  Characters past the six, or the two, are stepped
-; over.
+; The file name at SHCUR into SHFN, the type in SHDTY for one without,
+; and SHCUR past it: K.NAME's reading of a name, as everything's.
 SHNAME          SUBR
-                CLR
-                STW     SHFN
-                STW     SHFN+1
-                STW     SHFN+2
+                LDW     SHCUR
+                STW     SHNB
                 LDW     SHDTY
-                STW     SHFN+3
-                JSX     SHSKB
-                LDW     =SHKFNB
-                STW     SHNP
-                LDW     =6
-                STW     SHNN
-.NL1            LDX     SHCUR
-                CLR
-                LDB     *0
-                JNZ     .N1             ; the terminator ends it
-                JMP     .NX
-.N1             CMW     =' '            ; and so does a blank
-                JEQ     .NX
-                CMW     ='.'            ; a dot starts the type
-                JEQ     .NDOT
-                STW     SHW2
-                LDW     SHNN            ; room for another character?
-                JNZ     .N2
-                JMP     .N3
-.N2             SUB     =1
-                STW     SHNN
-                LDX     SHNP
-                LDW     SHW2
-                STB     *0
-                LDW     SHNP
-                ADD     =1
-                STW     SHNP
-.N3             LDW     SHCUR
-                ADD     =1
+                STW     SHNB+1
+                LDW     =SHNB
+                CALL    K.NAME
+                LDW     SHNB
                 STW     SHCUR
-                JMP     .NL1
-.NDOT           CLR
-                STW     SHFN+3
-                LDW     =SHKFTB
-                STW     SHNP
-                LDW     =2
-                STW     SHNN
-                JMP     .N3
-.NX             EXIT    SHNAME
+                EXIT    SHNAME
 
 ; ---------------------------------------------------------------- output
 ; One character from ACR: deposit in the shell's mailbox, kick the
@@ -1610,8 +1457,7 @@ SHSS            WORD    0               ; STAT's one reading of a state
 LDARG           WORD    0               ; the command tail's block
 LDHIGH          WORD    0               ; nonzero: the module may load high
 LDTP            WORD    0               ; and a byte pointer over the tail
-SHNP            WORD    0               ; where SHNAME's next character goes...
-SHNN            WORD    0               ; ...and how many more it will take
+SHNB            WORD    0,0,SHFN        ; SHNAME's three words for K.NAME
 SHW2            WORD    0               ; scratch
 SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
 SHMTOT          WORD    0               ; MEM's running totals, below the
@@ -1626,9 +1472,9 @@ LDPTR           WORD    0               ; where the next word goes, and the limi
 LDLIM           WORD    0
 LDSIZE          WORD    0               ; the SIZE code's word
 LDEXEC          WORD    0               ; the entry
+LDUNI           WORD    0               ; the unit the module is on,
 LDSEC           WORD    0               ; the next sector, and how many are left
 LDNSEC          WORD    0
-LDCP            WORD    0               ; DIR's cursor over the directory
 LDBP            WORD    0               ; the byte pointer into the sector buffer
 LDBV            WORD    0               ; the byte it fetched
 LDSUM           WORD    0               ; the record's byte sum, and its fold
@@ -1653,8 +1499,6 @@ SHDB            RES     3               ; six digits, filled backwards
 SHKIN0          EQU     'IN'            ; INIT, as SHNAME leaves a name
 SHK0C           EQU     14              ; the control codes, 0..D
 SHKRX           EQU     'RX'            ; a module's type
-SHKFNB          EQU     SHFN*2          ; the name's first byte...
-SHKFTB          EQU     SHFN*2+6        ; ...and its type's
 SHKUPM          EQU     X'FFDF'         ; folds a letter to upper case
 SHKLBB          EQU     LBUF*2          ; the line, and the last byte its
 SHKLBE          EQU     LBUF*2+62       ; zero terminator may need
@@ -1688,7 +1532,6 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'EC','HO',SHECHO
                 WORD    'KI','LL',SHKILL
                 WORD    'M','EM',SHMEM
-                WORD    'D','IR',SHDIR
                 WORD    'LO','AD',SHLOAD
                 WORD    'R','UN',SHRUN
                 TRUE    SHMOD=0
@@ -1713,17 +1556,14 @@ SHHNT           MSG     "TYPE HELP FOR THE COMMANDS\r\n"
 SHPRM           MSG     "REX>  "
 SHWHT           MSG     "WHAT\r\n"
                 TRUE    SHMOD=0
-SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM DIR LOAD RUN HALT \r\n"
+SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM LOAD RUN HALT \r\n"
                 ENDC
                 TRUE    SHMOD=1
-SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM DIR LOAD RUN BYE \r\n"
+SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM LOAD RUN BYE \r\n"
                 ENDC
 SHHL2           MSG     "STOP, START AND KILL TAKE A JOB NUMBER. @NAME RUNS A FILE OF COMMANDS.\r\n"
 SHFRE           MSG     "FREE "
 SHNOF           MSG     "NO SUCH FILE\r\n"
-SHNRD           MSG     "DISC NOT READY\r\n"
-SHNDR           MSG     "NO DIRECTORY\r\n"
-SHSFR           MSG     " SECTORS FREE \r\n"
 SHSWP           MSG     "SWAPS "
 SHSWO           MSG     " OUT "
 SHSWI           MSG     " IN\r\n"
@@ -1739,7 +1579,7 @@ SHSEC           MSG     " SEC\r\n"
 SHDWN           MSG     "REX 703 DOWN\r\n"
 SHNOT           MSG     "NO SUCH TASK\r\n"
 SHKIL           MSG     "KILLED\r\n"
-SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. ON THE DISC:\r\n"
+SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. DIR 0: LISTS THEM.\r\n"
 
                 TRUE    SHMOD=0         ; the rest of page 1, which is where
                 RES     X'1000'-$       ; the console's shell must end: past

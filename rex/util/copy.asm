@@ -13,14 +13,13 @@ COPY            JSX     L.ARGS
 .USAGE          LDW     =CUSE
                 JSX     L.MSG
                 JMP     L.EXIT
-.GO             CLR
-                STW     CFROM+4         ; one to read...
-                LDW     =CFROM
+.GO             LDW     =CFROM          ; one to read...
                 CALL    K.OPEN
                 JMI     .ERR
                 STW     CIN
-                LDW     =1
-                STW     CTO+4           ; ...and one to write
+                LDW     =1              ; ...and one to write
+                ORI     CTO+4
+                STW     CTO+4
                 LDW     =CTO
                 CALL    K.OPEN
                 JMI     .ERR

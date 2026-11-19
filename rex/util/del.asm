@@ -15,6 +15,6 @@ DEL             JSX     L.ARGS
                 JSX     L.ERR
                 JMP     L.EXIT
 
-DNAM            WORD    0,0,0,0
+DNAM            WORD    0,0,0,0,0
 DUSE            MSG     "DEL NAME\r\n"
                 END     DEL

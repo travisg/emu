@@ -101,6 +101,9 @@ FST             LDW     =1              ; 1: make T1.TX, 300 bytes
 
                 LDW     =7              ; 7: T3.TX goes
                 STW     FSTEP
+                LDX     =FL3            ; unit 0 again, over the look's answer
+                CLR
+                STW     *4
                 LDW     =FL3
                 CALL    K.DELET
                 JNZ     FFAIL
@@ -186,9 +189,15 @@ FCLOSE          SUBR
                 JNZ     FFAIL
                 EXIT    FCLOSE
 
-; K.LOOK on the eight words ACR addresses; the answer is the caller's to
-; judge.
+; K.LOOK on the eight words ACR addresses, on unit 0 -- the fifth word
+; is the unit going in and the first of the answer coming out -- and the
+; answer is the caller's to judge.
 FLOOK           SUBR
+                STW     FLB
+                CAX
+                CLR
+                STW     *4
+                LDW     FLB
                 CALL    K.LOOK
                 EXIT    FLOOK
 
@@ -245,8 +254,9 @@ FCHN            WORD    0               ; the channel in hand
 FN              WORD    0               ; bytes to go
 FI              WORD    0               ; and how far in
 FB              WORD    0               ; the byte expected
+FLB             WORD    0               ; FLOOK's block
 
-FO1W            WORD    'T1',0,0,'TX',1 ; names, with the mode K.OPEN wants
+FO1W            WORD    'T1',0,0,'TX',1 ; names on unit 0, with the mode K.OPEN wants
 FO1R            WORD    'T1',0,0,'TX',0
 FO2W            WORD    'T2',0,0,'TX',1
 FO2R            WORD    'T2',0,0,'TX',0
@@ -256,8 +266,8 @@ FL1             WORD    'T1',0,0,'TX',0,0,0,0   ; and with room for K.LOOK's ans
 FL2             WORD    'T2',0,0,'TX',0,0,0,0
 FL3             WORD    'T3',0,0,'TX',0,0,0,0
 FL4             WORD    'T4',0,0,'TX',0,0,0,0
-FR13            WORD    'T1',0,0,'TX','T3',0,0,'TX'
-FR24            WORD    'T2',0,0,'TX','T4',0,0,'TX'
+FR13            WORD    'T1',0,0,'TX',0,'T3',0,0,'TX',0
+FR24            WORD    'T2',0,0,'TX',0,'T4',0,0,'TX',0
 
 FMOK            MSG     "FST OK\r\n"
 FMBAD           MSG     "FST BAD "

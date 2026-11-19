@@ -12,7 +12,6 @@ DUMP            JSX     L.ARGS
                 JSX     L.MSG
                 JMP     L.EXIT
 .OPEN             CLR
-                STW     UNAM+4
                 STW     UOFF
                 LDW     =UNAM
                 CALL    K.OPEN
