@@ -186,6 +186,7 @@ mod tests {
         root.put("roms/703/demo.bin", 100);
         root.put("roms/703/basic.bin", 100);
         root.put("rex/build/rex.bin", 100);
+        root.put("rex/build/boot.bin", 90); // a boot sector, not a core image
         root.put("roms/703/tape.tape", 50);
         root.put("rex/build/rex.img", platter);
         root.put("disks/ray703-boot.img", platter);

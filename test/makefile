@@ -38,6 +38,7 @@ $(M6809)/memtest.bin: $(M6809)/memtest.ihx
 clean:
 	rm -f $(M6809)/*.rel $(M6809)/*.lst $(M6809)/*.rst $(M6809)/*.ihx $(M6809)/*.bin
 	rm -f 703/demo.lst 703/basic.lst 703/disc.lst 703/boot.lst 703/tape.lst
+	rm -f 703/boot.bin 703/tape.bin 703/listings/loader.bin
 	rm -f *.log
 
 basic6809-test:
@@ -131,10 +132,11 @@ $(RAY703_ROMS)/disc.bin: 703/disc.asm $(ASM703)
 
 # The boot sector for the disc controller's LOAD button. It must fit in the
 # one sector the button reads -- 47 words, 94 bytes -- so the build enforces it.
-ray703-boot: $(RAY703_ROMS)/boot.bin
+# It runs only from a platter (ray703-boot-disc), so it stays beside its
+# source rather than in roms/703, where everything is a core image that runs.
+ray703-boot: 703/boot.bin
 
-$(RAY703_ROMS)/boot.bin: 703/boot.asm $(ASM703)
-	@mkdir -p $(RAY703_ROMS)
+703/boot.bin: 703/boot.asm $(ASM703)
 	$(ASM) $< -o $@ -l 703/boot.lst
 	@size=$$(wc -c < $@); if [ $$size -gt 94 ]; then \
 		echo "error: boot.bin is $$size bytes; the LOAD button reads one 94-byte sector"; \
@@ -151,30 +153,31 @@ $(RAY703_ROMS)/basic.bin: 703/basic.asm 703/bcore.asm $(ASM703)
 	$(ASM) 703/basic.asm 703/bcore.asm -o $@ -l 703/basic.lst
 
 # tape.asm is punched rather than loaded: the .tape is what the ray703-ptb
-# subsystem feeds through the paper tape reader. The .bin beside it is only a
-# build by-product.
+# subsystem feeds through the paper tape reader. The .bin is only a build
+# by-product, kept beside the listing.
 ray703-tape: $(RAY703_ROMS)/tape.tape
 
 $(RAY703_ROMS)/tape.tape: 703/tape.asm $(ASM703)
 	@mkdir -p $(RAY703_ROMS)
-	$(ASM) $< -o $(RAY703_ROMS)/tape.bin -t $@ -l 703/tape.lst
+	$(ASM) $< -o 703/tape.bin -t $@ -l 703/tape.lst
 
 # --- the transcribed period software -------------------------------------
 # X-RAY EXEC and the relocating loader, from the hand transcriptions of their
 # 1968 assembly listings in 703/listings. Every card that generated a word
 # printed its own absolute address beside it, so a listing already *is* a core
 # image and no assembler is on the path: xraylist.py --core writes one out.
+# The loader does not stand alone (it calls a resident X-RAY), so its image
+# stays beside its listing.
 XRAYLIST    := python3 ../tools/xraylist.py
 LISTINGS    := 703/listings
 
-ray703-listings: $(RAY703_ROMS)/xray.bin $(RAY703_ROMS)/loader.bin
+ray703-listings: $(RAY703_ROMS)/xray.bin $(LISTINGS)/loader.bin
 
 $(RAY703_ROMS)/xray.bin: $(LISTINGS)/390779_XRAY_listing.txt ../tools/xraylist.py
 	@mkdir -p $(RAY703_ROMS)
 	$(XRAYLIST) $< --core $@
 
-$(RAY703_ROMS)/loader.bin: $(LISTINGS)/390682C_RelocatingLoader_listing.txt ../tools/xraylist.py
-	@mkdir -p $(RAY703_ROMS)
+$(LISTINGS)/loader.bin: $(LISTINGS)/390682C_RelocatingLoader_listing.txt ../tools/xraylist.py
 	$(XRAYLIST) $< --core $@
 
 # Re-assemble a transcript and diff it against the object code the 1968
@@ -197,7 +200,7 @@ ray703-verify:
 #
 ray703-boot-disc: $(RAY703_DISKS)/ray703-boot.img
 
-$(RAY703_DISKS)/ray703-boot.img: $(RAY703_ROMS)/boot.bin $(MKDISC703)
+$(RAY703_DISKS)/ray703-boot.img: 703/boot.bin $(MKDISC703)
 	@mkdir -p $(RAY703_DISKS)
 	$(MKDISC703) $@ --boot $< --force
 

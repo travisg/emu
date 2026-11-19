@@ -11,7 +11,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 EMU_BIN="${EMU_BIN:-$ROOT_DIR/target/debug/emu}"
-BOOT_BIN="$ROOT_DIR/roms/703/boot.bin"
+BOOT_BIN="$ROOT_DIR/test/703/boot.bin"
 LOG_FILE="${1:-$SCRIPT_DIR/ray703_boot_test.log}"
 
 if [[ ! -x "$EMU_BIN" ]]; then

@@ -47,7 +47,7 @@ own project under `../../rex/`.
 
 ## Running the period software
 
-    make -C test ray703-listings          # -> roms/703/xray.bin, loader.bin
+    make -C test ray703-listings          # -> roms/703/xray.bin, listings/loader.bin
     ./target/debug/emu -s ray703 -r roms/703/xray.bin
 
 **Type a LINE FEED before every command and a RETURN after it.** That is
@@ -82,7 +82,7 @@ Things worth knowing at the console:
   -- the thirty pages ahead of Appendix A, which are not transcribed. Read them
   rather than guessing; that is where the comma came from.
 
-`roms/703/loader.bin` builds too, but it does not stand alone: it is written to
+`test/703/listings/loader.bin` builds too, but it does not stand alone: it is written to
 call a resident X-RAY through the jump table at `44`/`46`. See item 2 below.
 
 ## Where things stand

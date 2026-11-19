@@ -583,8 +583,15 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
                 LaunchMode {
                     variant: "",
                     what: "core image",
-                    media: Media::Rom(Files { dirs: &["roms/703", "rex/build"], exts: &["bin"], name_has: "", size: FileSize::Any }),
+                    media: Media::Rom(Files { dirs: &["roms/703"], exts: &["bin"], name_has: "", size: FileSize::Any }),
                     fetch: "make -C test ray703",
+                },
+                // the kernel alone: rex/build also holds its boot sector
+                LaunchMode {
+                    variant: "",
+                    what: "core image",
+                    media: Media::Rom(Files { dirs: &["rex/build"], exts: &["bin"], name_has: "rex", size: FileSize::Any }),
+                    fetch: "make -C rex build/rex.bin",
                 },
                 LaunchMode {
                     variant: "ptb",

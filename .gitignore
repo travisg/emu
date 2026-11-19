@@ -22,6 +22,8 @@ __pycache__/
 /test/6809/*.lst
 /test/6809/*.bin
 /test/703/*.lst
+/test/703/*.bin
+/test/703/listings/*.bin
 
 # REX builds into its own directory
 /rex/build/
