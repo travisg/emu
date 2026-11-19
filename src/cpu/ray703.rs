@@ -91,8 +91,11 @@ pub struct Cpu703 {
     neg: bool,
     /// ADFEQL: the last compare found them equal
     eql: bool,
-    /// ADFOVF. Sticky: set by ADD/SUB/CMP/SLA/SLAD and cleared only by SNO
-    /// (2-13) or by an interrupt status restore.
+    /// ADFOVF. ADD, SUB, CMP, SLA and SLAD load it -- reset, then set if the
+    /// result overflows -- and SNO clears it (2-13); nothing else touches it
+    /// but an interrupt status restore. The manual says only when each sets
+    /// it. The reset is the 704 Technical Manual's (4-211, 4-236, 4-251), and
+    /// Raytheon's own diagnostics require it of SUB and SLA.
     ovf: bool,
     /// CCFGLB. Global mode zeroes EXR when forming an *indexed* base address
     /// (1-3.3.3); direct addressing always uses EXR.
@@ -447,14 +450,14 @@ impl Cpu703 {
                 let operand = self.read_word(bus, ea);
                 let (sum, over) = (self.acr as i16).overflowing_add(operand as i16);
                 self.acr = sum as u16;
-                self.ovf |= over;
+                self.ovf = over;
             }
             0xb => {
                 let ea = self.word_ea(insn);
                 let operand = self.read_word(bus, ea);
                 let (diff, over) = (self.acr as i16).overflowing_sub(operand as i16);
                 self.acr = diff as u16;
-                self.ovf |= over;
+                self.ovf = over;
             }
             0xc => {
                 let ea = self.word_ea(insn);
@@ -498,7 +501,7 @@ impl Cpu703 {
                     // CMP: two's complement negate, overflow only on -2^15
                     let (neg, over) = (self.acr as i16).overflowing_neg();
                     self.acr = neg as u16;
-                    self.ovf |= over;
+                    self.ovf = over;
                 }
                 0x2 => self.acr = !self.acr,             // INV
                 0x3 => self.ixr = self.acr,              // CAX
@@ -585,7 +588,7 @@ impl Cpu703 {
             0x8 => !self.eql && !self.neg,           // SGR
             0x9 => self.neg || self.eql,             // SLE
             0xa => {
-                // SNO is the only thing that clears the overflow flip flop.
+                // SNO tests the overflow flip flop and clears it.
                 let no_overflow = !self.ovf;
                 self.ovf = false;
                 no_overflow
@@ -620,11 +623,9 @@ impl Cpu703 {
                 0x1 => {
                     // SLA: "if the sign bit of the accumulator is changed by
                     // this operation, the overflow storage flip flop is set"
-                    let before = self.acr & 0x8000;
-                    self.acr <<= n;
-                    if self.acr & 0x8000 != before {
-                        self.ovf = true;
-                    }
+                    let (v, over) = shift_left_arithmetic((self.acr as u32) << 16, n);
+                    self.acr = (v >> 16) as u16;
+                    self.ovf = over;
                 }
                 0x2 => {
                     // SRAD, the only shift that is arithmetic across all 32
@@ -633,12 +634,9 @@ impl Cpu703 {
                     self.set_double(v);
                 }
                 0x3 => {
-                    let before = self.acr & 0x8000;
-                    let v = self.double() << n;
+                    let (v, over) = shift_left_arithmetic(self.double(), n);
                     self.set_double(v);
-                    if self.acr & 0x8000 != before {
-                        self.ovf = true;
-                    }
+                    self.ovf = over;
                 }
                 // Appendix B assigns 090 through 093 and stops. Everything
                 // else in the arithmetic class is as unassigned as the
@@ -816,6 +814,20 @@ impl Cpu703 {
             self.acr = (self.acr & 0xff00) | f(self.acr as u8) as u16;
         }
     }
+}
+
+/// A left arithmetic shift of `n` on a value whose sign is bit 31 -- ACR in
+/// the high half, alone for SLA or with IXR under it for SLAD -- and whether
+/// it overflowed. The sign is compared with the bit below it before each
+/// place, so a step that changes it counts although a later one changes it
+/// back (704 Technical Manual 4-211).
+fn shift_left_arithmetic(mut v: u32, n: u32) -> (u32, bool) {
+    let mut over = false;
+    for _ in 0..n {
+        over |= (v ^ (v << 1)) & 0x8000_0000 != 0;
+        v <<= 1;
+    }
+    (v, over)
 }
 
 impl Cpu for Cpu703 {
@@ -1326,21 +1338,51 @@ mod tests {
         }
     }
 
-    /// SNO is the only instruction that clears the overflow flip flop, so
-    /// overflow is sticky across everything else (2-13).
+    /// Overflow outlives everything that does not load it, and SNO both tests
+    /// and clears it (2-13).
     #[test]
-    fn overflow_is_sticky_until_sno() {
-        // ADD 0x50 / ADD 0x50 / SNO / SNO
-        let (mut cpu, mut bus) = boot(&[0xa050, 0xa050, 0x08a0, 0x08a0]);
+    fn overflow_stays_until_sno_or_the_next_arithmetic() {
+        // ADD 0x50 / LDW 0x51 / LDX 0x51 / STW 0x52 / INV / CAX / SNO / SNO
+        let (mut cpu, mut bus) =
+            boot(&[0xa050, 0x8051, 0x9051, 0x7052, 0x0120, 0x0130, 0x08a0, 0x08a0]);
         bus.load(0x50 << 1, &0x7000u16.to_be_bytes());
-        run_steps(&mut cpu, &mut bus, 2);
+        cpu.acr = 0x7000;
+        run_steps(&mut cpu, &mut bus, 1);
         assert!(cpu.ovf, "0x7000 + 0x7000 overflows a signed 16-bit add");
+        run_steps(&mut cpu, &mut bus, 5);
+        assert!(cpu.ovf, "a load, a store, INV and CAX are not arithmetic");
         let pc = cpu.pcr;
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(cpu.pcr, pc + 1, "SNO must not skip while overflow is set");
         assert!(!cpu.ovf, "SNO clears it");
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(cpu.pcr, pc + 3, "and now SNO skips");
+    }
+
+    /// ADD and SUB reset the flip flop before they set it (704 Technical
+    /// Manual 4-236), so one that does not overflow leaves it clear whatever
+    /// went before. The second half is the check at word 414 of Raytheon's
+    /// primary instruction diagnostic, 390392: 8000 - 1, then FFFF - 1.
+    #[test]
+    fn add_and_sub_load_overflow() {
+        // ADD 0x50 / ADD 0x50
+        let (mut cpu, mut bus) = boot(&[0xa050, 0xa050]);
+        bus.load(0x50 << 1, &0x7000u16.to_be_bytes());
+        cpu.acr = 0x7000;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert!(cpu.ovf);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.acr, 0x5000, "0xe000 + 0x7000");
+        assert!(!cpu.ovf, "an add that does not overflow clears it");
+
+        // LDW 0x50 / SUB 0x52 / LDW 0x51 / SUB 0x52
+        let (mut cpu, mut bus) = boot(&[0x8050, 0xb052, 0x8051, 0xb052]);
+        bus.load(0x50 << 1, &[0x80, 0x00, 0xff, 0xff, 0x00, 0x01]);
+        run_steps(&mut cpu, &mut bus, 2);
+        assert!(cpu.ovf, "-32768 - 1");
+        run_steps(&mut cpu, &mut bus, 2);
+        assert_eq!(cpu.acr, 0xfffe);
+        assert!(!cpu.ovf, "a subtract that does not overflow clears it");
     }
 
     /// There is no front panel and no external sense line, so all five sense
@@ -1425,6 +1467,13 @@ mod tests {
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(cpu.acr, 0x8000);
         assert!(cpu.ovf);
+
+        // CMP resets it first, like ADD and SUB (704 Technical Manual 4-251).
+        cpu.pcr = 0x40;
+        cpu.acr = 1;
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.acr, 0xffff);
+        assert!(!cpu.ovf);
     }
 
     // -- shifts ------------------------------------------------------------
@@ -1441,6 +1490,39 @@ mod tests {
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(cpu.acr, 0x8000);
         assert!(cpu.ovf, "SLA sets overflow when it changes the sign bit");
+    }
+
+    /// A left arithmetic shift resets overflow as it is fetched and sets it
+    /// at any step that changes the sign (704 Technical Manual 4-211), so a
+    /// sign that ends where it began has still overflowed. The first two
+    /// cases are checks of Raytheon's secondary instruction diagnostics,
+    /// 390390 and 390894: 8000 + 8000, then 1000 and 3000 shifted two.
+    #[test]
+    fn a_left_arithmetic_shift_loads_overflow() {
+        let run = |word: u16, acr: u16, ixr: u16| {
+            let (mut cpu, mut bus) = boot(&[word]);
+            (cpu.acr, cpu.ixr, cpu.ovf) = (acr, ixr, true);
+            run_steps(&mut cpu, &mut bus, 1);
+            (cpu.acr, cpu.ixr, cpu.ovf)
+        };
+        assert_eq!(run(0x0912, 0x1000, 0), (0x4000, 0, false), "SLA 2 with no change of sign");
+        assert_eq!(run(0x0912, 0x3000, 0), (0xc000, 0, true), "SLA 2 into the sign");
+        assert_eq!(run(0x0912, 0x5000, 0), (0x4000, 0, true), "SLA 2 through the sign and back");
+        assert_eq!(run(0x0910, 0x1234, 0), (0x1234, 0, false), "SLA 0 shifts nothing and still resets");
+        assert_eq!(run(0x0932, 0x1000, 0xc000), (0x4003, 0, false), "SLAD 2 with no change of sign");
+        assert_eq!(run(0x0932, 0x5000, 0), (0x4000, 0, true), "SLAD 2 through the sign and back");
+    }
+
+    /// Only the left arithmetic shifts touch overflow: the right ones cannot
+    /// change the sign and the logical ones have none.
+    #[test]
+    fn other_shifts_leave_overflow_alone() {
+        // NOP (SRA 0) / SRA 3 / SRAD 3 / SLL 3 / SLLD 3 / SLC 3
+        let (mut cpu, mut bus) = boot(&[0x0900, 0x0903, 0x0923, 0x0a13, 0x0a33, 0x0a53]);
+        cpu.acr = 0x4321;
+        cpu.ovf = true;
+        run_steps(&mut cpu, &mut bus, 6);
+        assert!(cpu.ovf);
     }
 
     /// The index register is the right extension of the accumulator for the
