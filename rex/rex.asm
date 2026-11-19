@@ -591,7 +591,7 @@ POOLH           EQU     X'4000'         ; where a byte address turns negative:
                                         ; the pool's high part starts here,
 FENCE           EQU     POOLH-2         ; behind a block that is never free
 
-; A directory entry (rexfs.asm, tools/fs703.py), and the eight words a
+; A directory entry (rexfs.asm, fs703.py), and the eight words a
 ; task hands K.LOOK, whose first four it fills in and whose last four the
 ; kernel does.
                 NTRY    DE.NAM,DE.TYP,DE.SEC,DE.CNT,DE.LST,DE.FLG,DE.LEN

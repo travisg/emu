@@ -332,7 +332,7 @@ def rex(workdir, log):
     and the tasks' sleeps in flight. Needs make -C rex all modules."""
     build = os.path.join(ROOT, 'rex', 'build')
     os.makedirs(os.path.join(workdir, 'disks'), exist_ok=True)
-    subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'mkdisc703.py'),
+    subprocess.run([sys.executable, os.path.join(ROOT, 'rex', 'fs703.py'),
                     os.path.join(workdir, 'disks', 'ray703-disc0.img'),
                     '--add-high', 'BLIP', os.path.join(build, 'blip.obj')], check=True, stdout=log)
     with cwd(workdir):

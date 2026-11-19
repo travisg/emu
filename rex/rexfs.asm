@@ -3,7 +3,7 @@
 ; REX's filesystem -- the file of the kernel's deck after shell.asm.
 ;
 ; Files are contiguous runs of sectors on a platter under a directory
-; in sectors 1-8, which tools/fs703.py describes word for word and writes
+; in sectors 1-8, which fs703.py describes word for word and writes
 ; from the host; this is the side that runs on the machine, and the
 ; scripted session holds the two to each other.  In short: a five-word
 ; header, then 46 entries of eight words -- a name of six characters and

@@ -36,7 +36,7 @@ nothing here matches a line while a task behind the prompt could be
 printing into it: the three blips are killed before anything is matched
 exactly.
 
-The filesystem is held to the host's reading of it (tools/fs703.py): the
+The filesystem is held to the host's reading of it (fs703.py): the
 session runs the file calls' exerciser (fst.asm) twice, makes, copies,
 renames and deletes files with the utilities, deletes a file the platter
 was made with in front of everything else and has SQUISH move the lot
@@ -99,7 +99,7 @@ holds, a terminal's shell that is waiting for a key has to be put out
 and come back in for one.
 
 A seventh machine has a second platter on unit 1, made with nothing but
-a directory (mkdisc703.py --dir), which makes it the data unit. A file
+a directory (fs703.py --dir), which makes it the data unit. A file
 put with no unit named lands there, a program is still run from unit 0,
 and 0: and 1: in front of a name reach either platter: COPY goes both
 ways, a REN from one platter to the other is refused, DIR lists the data
@@ -258,6 +258,7 @@ NOTE_KEYS = 'LINE ONE\rLINE TWO\r'
 NOTE = bytes(c | 0x80 for c in b'LINE ONE\r\nLINE TWO\r\n')
 REX_LST = os.path.join(BUILD, 'rex.lst')
 MKDISC = os.path.join(ROOT, 'tools', 'mkdisc703.py')
+FS703 = os.path.join(HERE, 'fs703.py')
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, 'rex_test.log')
 CONTROL = os.environ.get('REX_CONTROL', '')
 
@@ -1077,9 +1078,10 @@ def verdict(paper):
 def make_platter(workdir, log, swap=False, boot=False):
     os.makedirs(os.path.join(workdir, 'disks'))
     image = os.path.join(workdir, 'disks', 'ray703-disc0.img')
-    cmd = [sys.executable, MKDISC, image]
-    if boot:
-        cmd += ['--boot', BOOT_BIN] + ([] if CONTROL == 'nosys' else ['--sys', ROM_FILE])
+    blank = [sys.executable, MKDISC, image] + (['--boot', BOOT_BIN] if boot else [])
+    cmd = [sys.executable, FS703, image]
+    if boot and CONTROL != 'nosys':
+        cmd += ['--sys', ROM_FILE]
     if swap:
         cmd += ['--swap', str(SWAP_SECTORS)]
     if CONTROL == 'blank':
@@ -1100,7 +1102,9 @@ def make_platter(workdir, log, swap=False, boot=False):
                 cmd += ['--add-high' if high else '--add', name, path]
     else:
         sys.exit('REX_CONTROL=%s: not a control this harness has' % CONTROL)
-    subprocess.run(cmd, check=True, stdout=log)
+    subprocess.run(blank, check=True, stdout=log)
+    if cmd[3:]:
+        subprocess.run(cmd, check=True, stdout=log)
     log.flush()
     return image
 
@@ -1508,7 +1512,7 @@ def main():
             with open(unit0, 'rb') as f:
                 made0 = f.read()
             unit1 = os.path.join(platdir, 'disks', 'ray703-disc1.img')
-            subprocess.run([sys.executable, MKDISC, '--dir', unit1], check=True, stdout=log)
+            subprocess.run([sys.executable, FS703, '--dir', unit1], check=True, stdout=log)
             with cwd(platdir):
                 emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--fast-io', '--no-throttle'], log=log)
             platters_session(emu)

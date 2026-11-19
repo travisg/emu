@@ -13,17 +13,21 @@ tests it.
     boot.asm           the boot sector: reads the kernel in off the platter
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
+    rexname.asm        K.NAME, the one reading of a file name, unit and all
     rexmac.asm         the macros a deck is written with: conditional jumps, CALL, MSG
     rexlib.asm         a library for a module's deck: the printer, the command line
     brex.asm           the wrapper that makes Tiny BASIC a module
     hello.asm          a module: prints where it landed, sleeps, exits
-    util/              the utilities: TYPE, PUT, COPY, REN, DEL, DUMP, SQUISH
+    util/              the utilities: DIR, TYPE, PUT, COPY, REN, DEL, DUMP, SQUISH
     dskt.asm           a test module: writes a disc sector and reads it back, over and over
     fst.asm            a test module: makes, reads, replaces, renames and deletes files
     nap.asm            a test module: never ends, for the shell to end
     blip.asm           a test module: prints a character and sleeps, over and over
     hog.asm            a test module: holds a block of core and watches it
     far.asm            a test module: two segments, each calling into the other
+    plat.asm           a test module: a write on unit 1 across a look at unit 0
+    fs703.py           the filesystem from the host's side: lists, checks and
+                       puts files on a platter, the kernel and swap file too
     run_rex_test.py    the end-to-end test
     makefile           builds everything into build/, which is gitignored
 
@@ -33,8 +37,9 @@ made there with the kernel (see Modules).
 Two things it depends on stay where they are, reached by relative path from
 the makefile: the interpreter itself is `../test/703/bcore.asm`, shared with
 the standalone Tiny BASIC guest the emulator's own tests boot, and the
-assembler is `../tools/asm703.py`. The emulator's tests do not depend on
-anything here.
+assembler is `../tools/asm703.py`, beside `../tools/mkdisc703.py`, which
+makes a blank platter and puts a boot sector on it. The emulator's tests
+depend on nothing here but the snapshot harness's REX case.
 
 ## Build, run, test
 
@@ -107,7 +112,7 @@ the *data unit* -- unit 1 if it has a directory, unit 0 if not. So with a
 data platter mounted, what is saved goes on it and survives the next
 build of `rex.img`:
 
-    tools/mkdisc703.py --dir disks/ray703-disc1.img       # once: an empty platter
+    rex/fs703.py --dir disks/ray703-disc1.img             # once: an empty platter
     ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io
 
 Under `-s ray703-load` the `-r` platter is unit 0 and
@@ -246,7 +251,7 @@ is never free, so nothing is ever joined across it -- and what a task asks
 for comes from below it unless the task asks otherwise (`K.ALLHI`,
 `K.ALHIW`), which is a promise to compare no byte addresses in what it
 gets. A module is loaded above the fence only if its directory entry says
-it may be (`mkdisc703.py --add-high`): everything here but BASIC, whose
+it may be (`fs703.py --add-high`): everything here but BASIC, whose
 interpreter walks its own tables and its workspace by byte address and so
 has the core below the fence to itself.
 
@@ -279,7 +284,7 @@ still loaded, whose node has to say stopped once the machine has. The saved prog
 are among the files the host reads back afterwards. In between it runs `fst.asm` twice, which makes,
 reads back, replaces, renames and deletes files through the vector and
 checks every answer; afterwards the harness reads the platter the host's
-way (`../tools/fs703.py`): the directory has to pass the check of its
+way (`fs703.py`): the directory has to pass the check of its
 rules, hold exactly the files the exerciser leaves with the bytes it
 wrote, and still hold every module byte for byte, and the platter as it
 was made has to hold none of them. The same session drives the shell and
@@ -323,7 +328,7 @@ more teletypes on localhost sockets: a key at each brings it a shell, a
 blip behind each prompt prints on its own terminal's paper alone, a second
 Ctrl-C there ends only its own program, `BYE` gives the pool back, and a
 terminal's shell waiting for a key is put out and comes back for one. A
-seventh has a data platter on unit 1 made with `mkdisc703.py --dir`: a
+seventh has a data platter on unit 1 made with `fs703.py --dir`: a
 file with no unit lands there and a program still comes from unit 0,
 `COPY` goes both ways, a `REN` across them is refused, `DIR` and `DIR 0:`
 list their own platters, `plat.asm` writes a file on unit 1 across a look
@@ -373,7 +378,7 @@ for the second address and nothing needs to be: both are the first word of
 a page, and every reference is an offset within the page it is executed
 in. Then it reads the kernel, which is two runs of words with the whole
 pool between them and is kept as two: `REX.SY` holds the low part and,
-from the next sector, the high part, and `mkdisc703.py --sys`, which makes
+from the next sector, the high part, and `fs703.py --sys`, which makes
 that file from `rex.bin`, writes where each part is, how long, and where
 it goes into the six words at the end of the boot sector. Each transfer is
 polled to its end, there being nothing enabled yet to interrupt; then a
@@ -409,7 +414,7 @@ that new, the asker waits for one to age rather than fail. A task that is
 itself waiting for core, or has the disc, is never put out.
 
 On the disc a task is one extent of `SWAP.SY`, a system file the platter is
-made with (`mkdisc703.py --swap N`): a sector listing its blocks and then
+made with (`fs703.py --swap N`): a sector listing its blocks and then
 each block. With no `SWAP.SY` there is no swapping, and an allocation that
 finds no room fails as it always did. `STAT` marks a task that is out and
 counts how many have gone out and come in.
@@ -426,7 +431,7 @@ way -- so the room in a free block is compared with the size instead.
 ## The filesystem
 
 A platter holds files: contiguous runs of sectors under a directory in
-sectors 1-8, the way OS/8 and RT-11 kept theirs. `../tools/fs703.py` states
+sectors 1-8, the way OS/8 and RT-11 kept theirs. `fs703.py` states
 the format word for word and is the host's side of it; `rexfs.asm` is the
 kernel's. An entry is eight words -- a name of six characters and a type
 of two, the first sector, the sector count, the bytes used in the last
@@ -442,7 +447,7 @@ channel that has refused a character -- the file filled its half of the
 hole -- refuses the rest, and closing it gives the sectors back and
 answers with the refusal, the older file still there. A system file --
 the kernel's, the swap file -- is not deleted, renamed or written over,
-by the kernel's calls or by the host's tools short of `mkdisc703.py --sys`.
+by the kernel's calls or by the host's tools short of `fs703.py --sys`.
 Names are upper case: the shell folds what it is typed, and BASIC folds
 the name it is given. **A file being written that no channel
 holds is a hole** to whoever looks next -- its task exited, or the machine
@@ -506,7 +511,7 @@ for each of its two segments, and the scripted session runs it: each half
 is over half a page, so the loader cannot put both in one.
 
 Modules are files of type `RX`, on unit 0 unless a name says otherwise
-(`../tools/mkdisc703.py --add`, which `make -C rex bootdisc` runs; `DIR
+(`fs703.py --add`, which `make -C rex bootdisc` runs; `DIR
 0:` lists them). The shell's `LOAD` finds
 one by name, runs its text into a block from the kernel's pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields

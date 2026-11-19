@@ -17,7 +17,7 @@
 ; The kernel is two runs of words with the whole pool between them, the
 ; shell's end and the filesystem's beginning, so it is kept as two: the
 ; file REX.SY holds the low part and then, from the next sector, the high
-; part, and tools/mkdisc703.py --sys, which makes that file, writes where
+; part, and fs703.py --sys, which makes that file, writes where
 ; each is, how long, and where it goes into the six words at the end of
 ; this sector.  A transfer is polled to its end -- the controller's
 ; status reads zero when it is over -- since nothing is enabled yet to
@@ -64,7 +64,7 @@ BOOT2H          EQU     BOOTAT+BOOT2
 BKAT            WORD    BOOTAT
 BK47            WORD    47
 
-; What mkdisc703.py --sys fills in, having seen the mark in front of it:
+; What fs703.py --sys fills in, having seen the mark in front of it:
 ; for each part of the kernel, the track and sector it starts at as the
 ; controller wants them, how many words it is, and the core address it
 ; goes to.

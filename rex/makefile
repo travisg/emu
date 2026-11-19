@@ -11,6 +11,7 @@ ASM703    := ../tools/asm703.py
 ASM       := $(ASM703) --werror
 RELOAD703 := ../tools/reload703.py
 MKDISC703 := ../tools/mkdisc703.py
+FS703     := ./fs703.py
 BCORE     := ../test/703/bcore.asm
 BUILD     := build
 
@@ -39,7 +40,7 @@ $(API): $(KERNEL) $(ASM703)
 	$(ASM) $(KERNEL) --exports $@
 
 # The boot sector the disc controller's LOAD button reads: one sector, 47
-# words, which mkdisc703.py holds it to.
+# words, which tools/mkdisc703.py holds it to.
 $(BUILD)/boot.bin: boot.asm $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM) boot.asm -o $@ -l $(BUILD)/boot.lst
@@ -160,8 +161,8 @@ SWAP_SECTORS := 1024
 # written to it outlives the next build, and the build writes nothing
 # outside rex/build.
 bootdisc: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
-	$(MKDISC703) $(BUILD)/rex.img --force --boot $(BUILD)/boot.bin --sys $(BUILD)/rex.bin \
-	    --swap $(SWAP_SECTORS) \
+	$(MKDISC703) $(BUILD)/rex.img --force --boot $(BUILD)/boot.bin
+	$(FS703) $(BUILD)/rex.img --sys $(BUILD)/rex.bin --swap $(SWAP_SECTORS) \
 	    --add BASIC $(BUILD)/basic.obj --add SHELL $(BUILD)/shell.obj \
 	    --add-high HELLO $(BUILD)/hello.obj \
 	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
