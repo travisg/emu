@@ -127,6 +127,13 @@ const FN_COLLECT_KEYBOARD: u8 = 0xf;
 const FN_WRITE: u8 = 0xe;
 /// `DIN dev,0`, "Return Status to Accumulator" (706 UM Table 5-14).
 const FN_STATUS: u8 = 0x0;
+/// `DIN dev,8`: the character, and nothing selected. Table 5-14 has no such
+/// DIN -- every transfer it lists selects the next -- but Raytheon's
+/// teletype test (DN 390443 rev B) takes its key with one, having selected
+/// the keyboard with `DOT dev,B`, and selects again for the next. The code
+/// is the ASCII bit with no device in its low two bits, which as a DOT is a
+/// disconnect; that the character comes with it is the test's word alone.
+const FN_TAKE: u8 = 0x8;
 
 /// The status word's two bits (706 UM Table 5-15), bit 0 the most
 /// significant as everywhere on this machine.
@@ -334,6 +341,11 @@ impl Tty703 {
                 self.irq = false;
                 self.armed = true;
                 self.echo = function == FN_COLLECT_KEYBOARD;
+                self.frame.take().unwrap_or(0) as u16
+            }
+            FN_TAKE => {
+                self.irq = false;
+                self.armed = false;
                 self.frame.take().unwrap_or(0) as u16
             }
             // Selected is a read armed or a character printing. Asking
@@ -720,13 +732,29 @@ mod tests {
     }
 
     #[test]
-    fn only_the_collect_function_returns_the_frame() {
+    fn a_din_that_is_no_transfer_leaves_the_frame() {
         let mut tty = tty_with_input(b"A");
         tty.dot(FN_READ, 0);
         tty.poll(TTY_CHAR_CYCLES);
         assert_eq!(tty.din(FN_STATUS), STATUS_SELECTED | STATUS_IRQ, "status, not the frame");
         assert_eq!(tty.din(0x3), 0);
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'A' as u16);
+    }
+
+    /// `DOT dev,B`, a key, `DIN dev,8`: the character once, and no second
+    /// one until the keyboard is selected again.
+    #[test]
+    fn the_take_function_returns_the_frame_and_selects_nothing() {
+        let mut tty = tty_with_input(b"AZ");
+        tty.dot(FN_READ_KEYBOARD, 0);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(tty.din(FN_TAKE), 0x80 | b'A' as u16);
+        assert_eq!(tty.din(FN_STATUS), 0, "serviced, and nothing selected");
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "the next key waits for a select");
+        assert_eq!(tty.din(FN_TAKE), 0);
+        tty.dot(FN_READ_KEYBOARD, 0);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(tty.din(FN_TAKE), 0x80 | b'Z' as u16);
     }
 
     #[test]
