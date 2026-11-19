@@ -91,11 +91,12 @@ pub struct Cpu703 {
     neg: bool,
     /// ADFEQL: the last compare found them equal
     eql: bool,
-    /// ADFOVF. ADD, SUB, CMP, SLA and SLAD load it -- reset, then set if the
-    /// result overflows -- and SNO clears it (2-13); nothing else touches it
-    /// but an interrupt status restore. The manual says only when each sets
-    /// it. The reset is the 704 Technical Manual's (4-211, 4-236, 4-251), and
-    /// Raytheon's own diagnostics require it of SUB and SLA.
+    /// ADFOVF. ADD, SUB, CMP, SLA, SLAD, MPY and DIV load it -- reset, then
+    /// set if the result overflows -- and SNO clears it (2-13); nothing else
+    /// touches it but an interrupt status restore. The manual says only when
+    /// each sets it. The reset is the 704 Technical Manual's (4-211, 4-236,
+    /// 4-251, and 4-299 for the multiply/divide option), and Raytheon's own
+    /// diagnostics require it of SUB and SLA.
     ovf: bool,
     /// CCFGLB. Global mode zeroes EXR when forming an *indexed* base address
     /// (1-3.3.3); direct addressing always uses EXR.
@@ -721,7 +722,9 @@ impl Cpu703 {
     /// versions of the option set OVF for exactly that case (704 technical
     /// manual 4-291, 706 users manual 2-1.10), and the 1968 *software*
     /// multiply (BLG, DN 390663) documents the flag too, but 6-2's sentence
-    /// is unambiguous and this is a 703.
+    /// is unambiguous and this is a 703. So a multiply only ever resets the
+    /// flag, which the option's logic does first thing in the fetch both
+    /// instructions share (704 technical manual 4-299).
     fn mpy(&mut self, bus: &mut dyn Bus) -> StepResult {
         // "an execution time of 12.25 to 17.5 microseconds" (6-2) is 7 to 10
         // cycles; the manual never says what picks the point in the range.
@@ -733,6 +736,7 @@ impl Cpu703 {
 
         let m = self.mpy_div_operand(bus);
         let product = (self.acr as i16 as i32) * (m as i16 as i32);
+        self.ovf = false;
         self.ixr = (product >> 15) as u16;
         self.acr = (product as u16 & 0x7fff) | (self.ixr & 0x8000);
         self.reload_exr();
@@ -758,6 +762,8 @@ impl Cpu703 {
     /// (-5 has IXR = FFFF), which no divider that divides magnitudes does.
     /// One real edge stays: a quotient of exactly -2^15 is representable but
     /// still trips the pretest, on this reading and on the 706's alike.
+    /// A divide that goes through leaves the flag reset (704 technical
+    /// manual 4-299; 6-3 says only when it is turned on).
     fn div(&mut self, bus: &mut dyn Bus) -> StepResult {
         // "an execution time of 24.5 microseconds" (6-3): 14 cycles flat --
         // not the 706's 10-11, the two machines' dividers genuinely differed.
@@ -767,9 +773,9 @@ impl Cpu703 {
         let divisor = m as i16;
         let dividend = ((self.ixr as i16 as i32) << 15) | (self.acr & 0x7fff) as i32;
 
-        if divisor == 0 || dividend.unsigned_abs() >> 15 >= divisor.unsigned_abs() as u32 {
+        self.ovf = divisor == 0 || dividend.unsigned_abs() >> 15 >= divisor.unsigned_abs() as u32;
+        if self.ovf {
             self.acr = (self.acr & 0x7fff) | (self.ixr & 0x8000);
-            self.ovf = true;
             // "The execution time of the divide instruction for this
             // condition is 8.75 microseconds" (6-3): 5 cycles.
             self.cycles = 5;
@@ -2010,6 +2016,20 @@ mod tests {
         assert_eq!(cpu.step(&mut bus), StepResult::Ok);
         assert_eq!((cpu.ixr, cpu.acr), (0x8002, 0x8000));
         assert!(cpu.ovf);
+    }
+
+    /// The option resets overflow as either instruction is fetched (704
+    /// technical manual 4-299), so a multiply, which cannot set it on a 703,
+    /// and a divide that goes through both leave it off.
+    #[test]
+    fn mpy_and_div_load_overflow() {
+        for first in [0x0b0fu16, 0x0c0f] {
+            let (mut cpu, mut bus) = boot(&[first, 0x0200]);
+            bus.load(0x200 << 1, &0x0003u16.to_be_bytes());
+            (cpu.ixr, cpu.acr, cpu.ovf) = (0, 7, true);
+            assert_eq!(cpu.step(&mut bus), StepResult::Ok);
+            assert!(!cpu.ovf, "first word {first:04x}");
+        }
     }
 
     // -- interrupts --------------------------------------------------------

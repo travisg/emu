@@ -1310,8 +1310,8 @@ E.ADIV          JSX     E.POP
                 SRA     15              ; widen to the 31-bit dividend
                 CAX
                 LDW     M.T
-                SNO                     ; a clean flag going in
-                NOP
+                SNO                     ; a clean flag going in: 6-3 says
+                NOP                     ; only when a divide sets it
                 DIV     M.ARG
                 SNO
                 JMP     E.HOW           ; divide by zero, or -32768/-1
@@ -1319,7 +1319,7 @@ E.ADIV          JSX     E.POP
 E.ANEG          JSX     E.POP
                 CMP
                 SNO                     ; negating -32768 wraps, deliberately;
-                NOP                     ; keep the sticky flag clean for '/'
+                NOP                     ; leave the flag clear
                 JMP     E.APSH
 E.AEQ           JSX     E.ACMP
                 SEQ
