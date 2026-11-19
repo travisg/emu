@@ -9,6 +9,7 @@ to-do list; the detail is in the documents it points at.
 | file | what it is |
 |---|---|
 | `TRANSCRIBING.md` | the method, and the brief handed to each transcribing agent. **Read this first** before transcribing anything. |
+| `WRITING.md` | how to write a program for the machine with `asm703.py`: the idioms the guests here are built from, and the mistakes the machine makes easy. |
 | `XRAY-STATUS.md` | X-RAY EXEC - BASIC (DN 390779). Transcribed, runs, answers commands. |
 | `LOADER-STATUS.md` | Relocating Loader - Basic (DN 390682C). Transcribed, and re-assembles to the printed object exactly. |
 
@@ -20,6 +21,7 @@ to-do list; the detail is in the documents it points at.
     ../../tools/xraylist.py          transcript -> source, object, core image
     ../../tools/asm703.py            a SYM II assembler, enough to rebuild both decks
     ../../tools/reload703.py         a reference loader for the relocatable object text asm703.py --object writes
+    ../../tools/tape703.py           a Raytheon absolute paper tape -> what is on it, and a core image
 
 The **master transcripts are the source of everything** and live here:
 
