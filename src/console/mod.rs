@@ -378,6 +378,16 @@ impl PanelState {
         self.0.sense.fetch_xor(1 << n, Ordering::Relaxed);
     }
 
+    /// All four SENSE toggles, bit n switch n, set = up.
+    pub fn sense_switches(&self) -> u8 {
+        self.0.sense.load(Ordering::Relaxed)
+    }
+
+    /// The debugger's hand on the toggles.
+    pub fn set_sense_switches(&self, up: u8) {
+        self.0.sense.store(up & 0xf, Ordering::Relaxed);
+    }
+
     /// Frontend-side: is the machine halted at the panel? Lights the HALT
     /// indicator's red lens.
     pub fn halted(&self) -> bool {

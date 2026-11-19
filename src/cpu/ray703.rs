@@ -115,6 +115,11 @@ pub struct Cpu703 {
     /// straight into the processor, not onto the DIO channel -- the same
     /// reasoning that put `set_index` here.
     panel: Option<PanelState>,
+
+    /// The SENSE toggles of a machine with no panel to hold them: bit n
+    /// switch n, set = up. Down until the debugger's `SS` register moves
+    /// them, which is how a headless run sets a diagnostic's options.
+    sense: u8,
 }
 
 impl Default for Cpu703 {
@@ -138,6 +143,7 @@ impl Cpu703 {
             inhibit: false,
             cycles: 0,
             panel: None,
+            sense: 0,
         }
     }
 
@@ -222,10 +228,14 @@ impl Cpu703 {
         }
     }
 
-    /// The position of SENSE toggle `n`, false when there is no panel --
-    /// which preserves the pre-panel behaviour of every sense skip skipping.
+    /// The SENSE toggles, bit n switch n, set = up: the panel's where there
+    /// is one, the core's own otherwise.
+    fn sense_switches(&self) -> u8 {
+        self.panel.as_ref().map_or(self.sense, |p| p.sense_switches())
+    }
+
     fn sense_switch(&self, n: u8) -> bool {
-        self.panel.as_ref().is_some_and(|p| p.sense(n))
+        self.sense_switches() & (1 << n) != 0
     }
 
     /// End-of-step panel bookkeeping: publish the point samples, then charge
@@ -597,10 +607,10 @@ impl Cpu703 {
             // here, so it reads false -- and the skip takes the *false*
             // position, so SSE always skips.
             0xb => true,
-            // SS0-SS3 read the front panel's SENSE toggles, "operator
-            // setable and program testable", skipping on the down = false
-            // position (5-4). With no panel attached they read false and
-            // always skip, exactly as before the panel existed.
+            // SS0-SS3 read the SENSE toggles, "operator setable and program
+            // testable", skipping on the down = false position (5-4). With
+            // no panel they are the debugger's SS register, down until it
+            // moves them.
             0xc..=0xf => !self.sense_switch((f1 - 0xc) as u8),
             _ => return StepResult::BadOpcode,
         };
@@ -925,7 +935,8 @@ impl Cpu for Cpu703 {
     /// system, which the trace never shows: INH is the inhibit mask, and
     /// ENB/PND/ACT are masks over the sixteen levels with bit n level n --
     /// a stuck executive is usually a level that is enabled but never
-    /// pending, or active with no INR in sight.
+    /// pending, or active with no INR in sight. SS is the four SENSE
+    /// toggles, bit n switch n, set = up.
     fn registers(&self) -> Vec<Register> {
         let mask = |pick: fn(&Level) -> bool| -> u16 {
             self.levels
@@ -948,12 +959,14 @@ impl Cpu for Cpu703 {
             Register::new("ENB", mask(|l| l.enabled), 16),
             Register::new("PND", mask(|l| l.pending), 16),
             Register::new("ACT", mask(|l| l.active), 16),
+            Register::new("SS", self.sense_switches(), 4),
         ]
     }
 
     /// Everything `registers()` lists is settable. Setting PND on an
     /// enabled level is how the debugger injects an interrupt: the next
-    /// step's entry sequence takes it exactly as a device pulse.
+    /// step's entry sequence takes it exactly as a device pulse. Setting SS
+    /// moves the SENSE toggles, the panel's own where there is one.
     fn set_register(&mut self, name: &str, value: u32) -> bool {
         let bit = value & 1 != 0;
         match name {
@@ -977,6 +990,10 @@ impl Cpu for Cpu703 {
                     }
                 }
             }
+            "SS" => match &self.panel {
+                Some(p) => p.set_sense_switches(value as u8 & 0xf),
+                None => self.sense = value as u8 & 0xf,
+            },
             _ => return false,
         }
         self.publish_panel();
@@ -989,7 +1006,7 @@ impl Cpu for Cpu703 {
     }
 
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
-        let Cpu703 { acr, ixr, pcr, exr, neg, eql, ovf, global, levels, inhibit, cycles, panel: _session } = self;
+        let Cpu703 { acr, ixr, pcr, exr, neg, eql, ovf, global, levels, inhibit, cycles, panel: _session, sense: _operator } = self;
         for v in [acr, ixr, pcr] {
             w.u16(*v);
         }
@@ -1178,6 +1195,7 @@ mod tests {
                 ("ENB", 0x8001, 0x8001),
                 ("PND", 0x0002, 0x0002),
                 ("ACT", 0x4000, 0x4000),
+                ("SS", 0xff, 0xf),
             ],
         );
         assert_eq!(cpu.exr, 0x1f);
@@ -1385,8 +1403,9 @@ mod tests {
         assert!(!cpu.ovf, "a subtract that does not overflow clears it");
     }
 
-    /// There is no front panel and no external sense line, so all five sense
-    /// skips see a false input -- and all five skip when their input is false.
+    /// With no front panel, nothing on the external sense line and the SS
+    /// register left alone, all five sense skips see a false input -- and
+    /// all five skip when their input is false.
     #[test]
     fn sense_skips_always_skip() {
         for insn in [0x08b0u16, 0x08c0, 0x08d0, 0x08e0, 0x08f0] {
@@ -2333,6 +2352,35 @@ mod tests {
         }
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!(cpu.pcr, 0x42, "SSE reads the J2 line, not the toggles");
+    }
+
+    /// The debugger's SS register is the toggles: the core's own on a
+    /// machine with no panel, the panel's on one that has it.
+    #[test]
+    fn the_ss_register_moves_the_sense_toggles() {
+        use crate::console::PanelState;
+        // SS1 with switch 1 up takes the next word, with only the others up skips
+        for (up, pc) in [(0b0010, 0x41), (0b1101, 0x42)] {
+            let (mut cpu, mut bus) = boot(&[0x08d0]);
+            assert!(cpu.set_register("SS", up));
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.pcr, pc, "SS={up:04b}, no panel");
+
+            let (mut cpu, mut bus) = boot(&[0x08d0]);
+            let panel = PanelState::new();
+            cpu.attach_panel(panel.clone());
+            assert!(cpu.set_register("SS", up));
+            assert_eq!(panel.sense(1), up & 2 != 0);
+            run_steps(&mut cpu, &mut bus, 1);
+            assert_eq!(cpu.pcr, pc, "SS={up:04b}, panel");
+        }
+
+        let (mut cpu, _bus) = boot(&[0x0100]);
+        let panel = PanelState::new();
+        cpu.attach_panel(panel.clone());
+        panel.toggle_sense(3);
+        let ss = cpu.registers().into_iter().find(|r| r.name == "SS").unwrap();
+        assert_eq!(ss.value, 0b1000, "a toggle flipped at the panel reads back");
     }
 
     /// The lamp accumulators charge each step's cycle count to the bits the
