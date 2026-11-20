@@ -34,8 +34,8 @@ names are how far it got.
 390390C says nothing for thousands of passes and is watched with
 breakpoints instead, and it runs with one word changed: see its entry
 below. BRAINWASH (the memory test) and the teletype test print as they go.
-The punch and reader test, 390444B, is a program for X-RAY and a punch, and
-is not run.
+The punch and reader test, 390444B, is a program for X-RAY's I/O entries,
+and is not run (test/703/README.md says what was tried).
 
 Negative controls, each of which must FAIL: DIAG_CONTROL=constant (the
 primary diagnostic with its all-ones constant zeroed, which halts in its
@@ -60,8 +60,8 @@ sys.path.insert(0, os.path.join(ROOT, 'tools'))
 from emudbg import Emu, Stopped  # noqa: E402
 import tape703  # noqa: E402
 
-EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
-DIAG_DIR = os.environ.get('DIAG_DIR', os.path.join(ROOT, 'roms', '703', 'diag'))
+EMU_BIN = os.path.abspath(os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu')))
+DIAG_DIR = os.path.abspath(os.environ.get('DIAG_DIR', os.path.join(ROOT, 'roms', '703', 'diag')))
 LOG_FILE = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(HERE, 'ray703_diag_test.log')
 CONTROL = os.environ.get('DIAG_CONTROL', '')
 ONLY = [t for t in os.environ.get('DIAG_TAPES', '').split(',') if t]

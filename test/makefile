@@ -113,7 +113,7 @@ MKDISC703    := ../tools/mkdisc703.py
 RAY703_ROMS  := ../roms/703
 RAY703_DISKS := ../disks
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-dis-test ray703-asm-test ray703-diag-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-dis-test ray703-asm-test ray703-diag-test ray703-math-test ray703-fortran-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
 
 ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-listings
 
@@ -237,3 +237,13 @@ ray703-asm-test:
 # in roms/703/diag.
 ray703-diag-test:
 	./run_ray703_diag_test.py
+
+# Raytheon's math library, off its tape in roms/703/tapes, against the
+# host's arithmetic.
+ray703-math-test:
+	./run_ray703_math_test.py
+
+# Conversational FORTRAN under the Paper Tape I/O System, the tapes through
+# the reader and the punch.
+ray703-fortran-test:
+	./run_ray703_fortran_test.py

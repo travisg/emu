@@ -114,6 +114,41 @@ switch 2. The primary instruction diagnostic, 390392C, first checks the
 switches themselves: all up and RUN to its first halt, all down and RUN to
 its second, then the options.
 
+## FORTRAN and the math library
+
+    tools/fetch-roms.py                  # the tapes, into roms/703/tapes
+    make -C test ray703-fortran-test
+    make -C test ray703-math-test
+
+Four more of the museum's tapes. `PTIOS.bin` is the Paper Tape I/O System
+its site ran in place of X-RAY: 128 words that sit in words 0-7F with the
+executive's I/O entry at 44 and an absolute loader at 78, and drive the
+teletype, the high speed reader and the punch by asking each one's status
+word, with no interrupt. `393295B.bin` and `394002B.bin` are Conversational
+FORTRAN for a 4K machine, the compiler and the run-time library that is
+loaded over it; `392325.bin` is the math library, as relocatable text.
+
+`../run_ray703_fortran_test.py` is the reference for the session: PTIOS
+started at 80, its units assigned (`4:R` is the loader's tape to the reader,
+`2:R` the compiler's source, `n:P` a unit to the punch, `n:T` to the
+teletype; it answers `OK`), `AL` for the loader, then `G` to the compiler,
+`E` back to the loader for the library, and `G` to run. Every line typed at
+PTIOS or a program under it opens with a line feed and closes with a
+carriage return, as at X-RAY. By hand it is a debug port and three
+commands of its own -- `tape 0 FILE` threads a tape through the high speed
+reader, `tape 1 FILE` through the teletype's, and `savetape FILE` tears off
+what the punch has punched:
+
+    tools/tape703.py roms/703/tapes/PTIOS.bin -o /tmp/ptios.core --start 80
+    ./target/debug/emu -s ray703 -r /tmp/ptios.core --debug /tmp/emu.sock
+    tools/emudbg.py /tmp/emu.sock -c 'tape 0 roms/703/tapes/393295B.bin'   # from another terminal
+
+The math library is not loaded by the machine: `tools/reload703.py --library`
+places its twenty-seven modules on the host and fills the references between
+them, and `../run_ray703_math_test.py` calls the result routine by routine.
+Its module doc says which two routines the tape has at mismatched revisions
+and how each is run.
+
 ## Where things stand
 
 Both listings are transcribed in full and reconcile against their own trailers.

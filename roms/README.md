@@ -17,5 +17,7 @@ in place by hand.
 
 The 703 is the exception that needs no fetching to run: it has no period ROM
 at all, and every guest image under `703/` is assembled out of `test/703/` by
-`tools/asm703.py`. What is fetched for it is `703/diag/`, Raytheon's
-diagnostic paper tapes, which `make -C test ray703-diag-test` runs.
+`tools/asm703.py`. What is fetched for it is Raytheon's paper tapes:
+`703/diag/`, the diagnostics, which `make -C test ray703-diag-test` runs, and
+`703/tapes/`, the Paper Tape I/O System, Conversational FORTRAN and the math
+library, which `ray703-fortran-test` and `ray703-math-test` run.

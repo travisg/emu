@@ -7,8 +7,8 @@
 # URL, and verifies the hash either way.
 #
 # The 703 guests are not here -- they are built from source in this tree with
-# "make -C test ray703", which writes them to roms/703. Its diagnostic tapes,
-# which are Raytheon's, are.
+# "make -C test ray703", which writes them to roms/703. Raytheon's paper
+# tapes for it are: its diagnostics, and the FORTRAN and math library tapes.
 
 # 6809 (System09): Grant Searle's build of Microsoft Extended BASIC. His page
 # asks that its contents not be reproduced elsewhere, so this links to the zip
@@ -68,3 +68,15 @@ disks/rc2014-cf.img             5166111260c5d8397c952a0a7381e14384cdf5db68485ecf
 disks/cpm/prelim.com            3b3578f19030a4df7e25ce852f763af26053b12582a576c4dffb014aa7c590d1  https://raw.githubusercontent.com/superzazu/z80/master/roms/prelim.com
 disks/cpm/zexdoc.com            34923a7ed82285d3038b2d54bd64899e12173eebb61f9d07b4fc72e78af2ae8f  https://raw.githubusercontent.com/agn453/ZEXALL/master/zexdoc.com
 disks/cpm/zexall.com            6e2da55147a04f28d303d5da6a1e6b771557ac244653590a0f24a2d39c8537e8  https://raw.githubusercontent.com/agn453/ZEXALL/master/zexall.com
+
+# Raytheon 703: more of the museum's tapes, which the 703 loads through its
+# paper tape reader or tools/reload703.py places. PTIOS is the Paper Tape
+# I/O System the museum's site ran in place of X-RAY (DN 393954), an absolute
+# tape as the diagnostics are; 393295B is the Conversational FORTRAN compiler
+# for a 4K machine and 394002B its run-time library, absolute tapes that load
+# under it (test/run_ray703_fortran_test.py); 392325 is the math library,
+# relocatable text (test/run_ray703_math_test.py).
+roms/703/tapes/PTIOS.bin        ee003d017ac22d90340e2c73e35088f7ff0d85b8f7029ca7722d405a1ff250c0  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/PTIOS.bin
+roms/703/tapes/393295B.bin      42630ce45c4ffec11366ac621a4f0831f3899e76f2dc86afce1d178313b2e6a5  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/393295B.bin
+roms/703/tapes/394002B.bin      27f694d68db6ccb21d045f97f7715c30a3181d380984cc78f437ef2e31d5f3fb  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/394002B.bin
+roms/703/tapes/392325.bin       4c45d4ff62a0eb602412e95076fbb6976236463754e342850bb4795b999b50db  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/392325.bin
