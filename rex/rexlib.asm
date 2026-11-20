@@ -19,7 +19,7 @@
 ;   L.NL     carriage return and line feed
 ;   L.DEC    ACR in decimal, unsigned
 ;   L.HEX    ACR as four hexadecimal digits
-;   L.SLEEP  ACR ticks, a sixtieth of a second each
+;   L.SLEEP  ACR ticks, a fiftieth of a second each
 ;   L.ARGS   start reading the command tail (T.ARG) from its beginning:
 ;            L.AP is then the byte address of its next character
 ;   L.NADV   L.AP one character on

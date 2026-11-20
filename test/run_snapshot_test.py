@@ -328,7 +328,7 @@ def ray703_demo(workdir, log):
 
 def rex(workdir, log):
     """REX with three blips loaded and printing, stopped between ticks:
-    the line clock armed and part way to its next, the scheduler's slices
+    the clock part way to its next interval, the scheduler's slices
     and the tasks' sleeps in flight. Needs make -C rex all modules."""
     build = os.path.join(ROOT, 'rex', 'build')
     os.makedirs(os.path.join(workdir, 'disks'), exist_ok=True)

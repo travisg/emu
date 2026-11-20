@@ -7,7 +7,7 @@
  * https://opensource.org/licenses/MIT
  */
 //! Raytheon 703 DIO devices: the console teletype, the high speed paper tape
-//! reader and punch, and the line clock.
+//! reader and punch, and the time-of-day clock.
 //!
 //! They hang off the 16-bit Direct Input/Output channel rather than the memory
 //! space, so none is a `MemoryDevice`: the machine decodes the DIO address
@@ -71,10 +71,9 @@
 //! however fast the host gets through them. The guest sees ten a second of its
 //! own time either way, which is the part a program can observe.
 //!
-//! The 60 Hz line clock at the bottom is paced the same way and for the same
-//! reason, sixty a second of wall clock being what a mains tap gives. It is
-//! also the one device in this file with no drawing number behind it -- it is
-//! invented, and its own doc comment says so at length.
+//! The time-of-day clock at the bottom is paced the same way and for the same
+//! reason: a second on it is a second of wall clock, a crystal being a
+//! crystal.
 //!
 //! The rule those two share is the whole of it: `--throttle` is a knob on the
 //! cpu, and a device keeps the rate its real counterpart ran at however fast
@@ -90,12 +89,9 @@ use std::path::Path;
 pub const DEV_TTY: u8 = 0xe;
 pub const DEV_TAPE_READER: u8 = 0xd;
 pub const DEV_TAPE_PUNCH: u8 = 0xc;
-/// ...and the invented line clock's, which no Raytheon document assigns
-/// it. The 706 User's Manual gives 2 to the DMA magnetic tape controller
-/// (Table 5-1); this machine has none.
-pub const DEV_LINE_CLOCK: u8 = 0x2;
-/// The teletypes, the console first. The three after it are invented as the
-/// line clock is: the console's controller again, strapped to another
+/// The Time-of-Day Clock (706 UM Table 5-1).
+pub const DEV_TOD_CLOCK: u8 = 0xb;
+/// The teletypes, the console first. The three after it are invented: the console's controller again, strapped to another
 /// device code -- the card has jumpers for all sixteen (704 technical
 /// manual, table 5-6) -- and sharing its interrupt level, which is the
 /// shape the status word (706 UM Table 5-15) and X-RAY's shared-level loop
@@ -805,127 +801,238 @@ impl TapePunch703 {
     }
 }
 
-/// 60 Hz line-frequency clock, DIO device 2.
+/// Time-of-Day Clock, DIO device B (706 User's Manual 5-18, models 77651,
+/// 77652 and 77653: the clock, its 0.1 ms extended resolution and its
+/// computer time set, all three installed).
 ///
-/// INVENTED HARDWARE. Unlike everything else in this file -- and everything
-/// else on this machine's DIO channel -- no Raytheon document stands behind
-/// this device: no drawing number, no manual section, no driver listing. The
-/// tree needed a periodic interrupt source for a preemptive executive
-/// (`rex/rex.asm`), and a line clock is the period-plausible shape for
-/// one: a transformer tap and a zero-crossing detector pulsing an interrupt
-/// level at the mains rate, the instrument the PDP-8 knew as the KW8.
+/// A crystal-controlled BCD counter from 00:00:00.0000 to 23:59:59.9999 --
+/// stages of 10 hr, hr, 10 min, min, 10 s, s, 100 ms, 10 ms, 1 ms and
+/// 0.1 ms, the tens of seconds, minutes and hours short-counted -- which the
+/// program starts, stops, resets, sets and reads:
 ///
-/// The programming model is one bit. `DOT 2,1` connects it, and every zero
-/// crossing from then on pulses the level; function 0 -- the tree-wide
-/// disconnect code -- or any other function disconnects, and disconnecting
-/// forgets the phase, so a re-arm always waits one full period. It has no
-/// readable register at all: a DIN to device 2 falls through the machine
-/// decode's open-bus default and reads zero, exactly as when the device was
-/// not installed.
+/// ```text
+///     DOT B,0  hold, for a read       DIN B,1  word 1: 10hr hr 10min min 10s
+///     DOT B,1  write word 1           DIN B,2  word 2: s 100ms 10ms ms
+///     DOT B,2  write word 2           DIN B,3  word 3: 0.1 ms in bits 12-15
+///     DOT B,4  stop
+///     DOT B,5  reset, without stopping
+///     DOT B,6  start
+/// ```
 ///
-/// Sixty a second is sixty a second of wall clock, the mains being the mains,
-/// so the period follows the rate machine time is being paced at
-/// (`set_pacing_hz`, the resolved `--throttle`) exactly as the teletype's
-/// character time does. `--throttle` is a knob on the cpu; the hardware around
-/// it keeps its own rate.
+/// Table 5-68 and Figure 5-33. A read is a hold and then the words, the
+/// least significant last: reading it ends the hold, and a hold never ended
+/// holds the time indefinitely (5-18.3.5). The hold stops the counter, and
+/// a hold over 60 us loses accuracy (Table 5-67), so the counter remembers
+/// one count that came due while it was held and loses the rest -- a read
+/// that keeps to the limit costs nothing, and a clock left held stands
+/// still, its interval interrupt with it. There is no status word
+/// and no select or disconnect ("the clock is considered always ready"), so
+/// any other DIN reads zero and any other DOT does nothing.
 ///
-/// `--fast-io` is the one thing that takes a device off that rate, and it is
-/// the one flag this device sits out: a completion is one-shot and something
-/// waits for it, so making one instant only makes a machine more responsive,
-/// where a periodic interrupt with no period at all never returns. So
-/// `Ray703::set_fast_io` does not reach the clock, and a test can run
-/// `--fast-io` for an instant teletype over unchanged scheduling slices.
-pub struct LineClock703 {
+/// It interrupts only as an interval timer: a jumper takes one counter
+/// stage's edge to the interrupt line (Table 5-69, ten microseconds to a
+/// day). This one is jumpered to `10MS1-`, the 10 ms stage's 1 bit falling,
+/// which is every 20 ms of a running count -- REX's tick, on level 2. Being
+/// a stage's edge, its phase is the count's: setting or resetting the clock
+/// moves it, and a stopped clock never interrupts.
+///
+/// The counter counts machine time: a tenth of a millisecond is a ten
+/// thousandth of the rate machine time is being paced at (`set_pacing_hz`,
+/// the resolved `--throttle`), so the time of day keeps up with the wall
+/// clock at any throttle, and unpaced it is the machine's own. `--fast-io`
+/// does not reach it -- a crystal has no I/O to hurry, and a periodic
+/// interrupt with no period would never return. What it reads at power-on
+/// is the factory's choice (`TodClock703::new`): the operator set it from
+/// the clock's own panel.
+pub struct TodClock703 {
     level: u8,
-    armed: bool,
-    /// Cycles banked toward the next tick. The post-pulse remainder carries
-    /// forward -- unlike the teletype, which starts a fresh character time
-    /// per character -- because a clock's whole job is the long-run rate,
-    /// and resetting would lose up to an instruction's worth of cycles on
-    /// every tick.
-    acc: u32,
-    /// Cycles to the tick, [`line_clock_period_cycles`] of whatever rate
-    /// machine time is being paced at.
-    period_cycles: u32,
+    /// Tenths of a millisecond since midnight.
+    count: u32,
+    running: bool,
+    /// Held for a read, until word 3 is read.
+    held: bool,
+    /// A count that came due while held, which the release makes up.
+    owed: bool,
+    /// An interval edge the release crossed, for the next poll to pulse.
+    edge: bool,
+    /// Cycles banked toward the next tenth of a millisecond, times
+    /// `TOD_COUNTS_PER_SEC`: the remainder carries forward, so the long-run
+    /// rate is exact whatever the pacing rate divides into.
+    acc: u64,
+    /// The rate machine time is being paced at, cycles a second.
+    pacing_hz: u64,
 }
 
-/// The mains rate, which is also 1800 RPM -- the figure the disc uses for half
-/// a revolution.
-const LINE_HZ: u64 = 60;
+/// Counts a second: the 0.1 ms stage.
+const TOD_COUNTS_PER_SEC: u64 = 10_000;
+/// Counts in a day, where the clock goes back to zero.
+const TOD_DAY: u32 = 24 * 3600 * TOD_COUNTS_PER_SEC as u32;
+/// The interval jumper, 10MS1-: an interrupt each 20 ms of count.
+const TOD_INTERVAL: u32 = 200;
 
-/// The mains rate as a count of clock cycles, which is the only time base a
-/// device on this bus has -- see `Bus::poll_interrupt_lines`. The divisor is
-/// the rate machine time is being paced at (`LineClock703::set_pacing_hz`).
-///
-/// The floor of one cycle guards the modulus in `poll`, which a pacing rate
-/// under 60 Hz would otherwise divide by zero. It guards nothing else: a cpu
-/// held that far below its own rate cannot answer sixty ticks a second, and
-/// choosing such a throttle is choosing that.
-fn line_clock_period_cycles(pacing_hz: u64) -> u32 {
-    ((pacing_hz / LINE_HZ) as u32).max(1)
+const FN_TOD_HOLD: u8 = 0x0;
+const FN_TOD_WORD1: u8 = 0x1;
+const FN_TOD_WORD2: u8 = 0x2;
+const FN_TOD_WORD3: u8 = 0x3;
+const FN_TOD_STOP: u8 = 0x4;
+const FN_TOD_RESET: u8 = 0x5;
+const FN_TOD_START: u8 = 0x6;
+
+/// A count as Figure 5-33's three words.
+fn tod_words(count: u32) -> [u16; 3] {
+    let tenth = count % 10;
+    let ms = count / 10 % 1000;
+    let secs = count / 10_000;
+    let (s, m, h) = (secs % 60, secs / 60 % 60, secs / 3600);
+    let w1 = (h / 10) << 14 | (h % 10) << 10 | (m / 10) << 7 | (m % 10) << 3 | (s / 10);
+    let w2 = (s % 10) << 12 | (ms / 100) << 8 | (ms / 10 % 10) << 4 | (ms % 10);
+    [w1 as u16, w2 as u16, tenth as u16]
 }
 
-/// The unpaced figure, the machine running at its own clock rate: 571,429 / 60
-/// truncates to 9,523 cycles, 16.665 ms. The 0.03% truncation error is far
-/// inside any mains tolerance.
-const LINE_CLOCK_PERIOD_CYCLES: u32 = (CLOCK_HZ / LINE_HZ) as u32;
+/// The fields of a count: hours, minutes, seconds, milliseconds, tenths.
+fn tod_fields(count: u32) -> [u32; 5] {
+    let secs = count / 10_000;
+    [secs / 3600, secs / 60 % 60, secs % 60, count / 10 % 1000, count % 10]
+}
 
-const FN_LINE_CLOCK_CONNECT: u8 = 0x1;
+/// The count of those fields, a digit past its stage's count taken at its
+/// weight and the day wrapped -- what a stage set past its short count
+/// would do is not in the manual, so this does the arithmetic.
+fn tod_count([h, m, s, ms, tenth]: [u32; 5]) -> u32 {
+    let secs = h * 3600 + m * 60 + s;
+    ((secs as u64 * TOD_COUNTS_PER_SEC + ms as u64 * 10 + tenth as u64) % TOD_DAY as u64) as u32
+}
 
-impl crate::snapshot::Snapshot for LineClock703 {
+impl crate::snapshot::Snapshot for TodClock703 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
-        let LineClock703 { level: _wiring, armed, acc, period_cycles: _session_pacing } = self;
-        w.bool(*armed);
-        w.u32(*acc);
+        let TodClock703 { level: _wiring, count, running, held, owed, edge, acc, pacing_hz: _session_pacing } = self;
+        w.u32(*count);
+        w.bool(*running);
+        w.bool(*held);
+        w.bool(*owed);
+        w.bool(*edge);
+        w.u64(*acc);
     }
 
     fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
-        self.armed = r.bool()?;
-        self.acc = r.u32()?;
+        self.count = r.u32()?;
+        self.running = r.bool()?;
+        self.held = r.bool()?;
+        self.owed = r.bool()?;
+        self.edge = r.bool()?;
+        self.acc = r.u64()?;
         Ok(())
     }
 }
 
-impl LineClock703 {
-    pub fn new(level: u8) -> Self {
-        LineClock703 { level, armed: false, acc: 0, period_cycles: LINE_CLOCK_PERIOD_CYCLES }
+impl TodClock703 {
+    /// A running clock reading `count` tenths of a millisecond since
+    /// midnight.
+    pub fn new(level: u8, count: u32) -> Self {
+        TodClock703 {
+            level,
+            count: count % TOD_DAY,
+            running: true,
+            held: false,
+            owed: false,
+            edge: false,
+            acc: 0,
+            pacing_hz: CLOCK_HZ,
+        }
     }
 
-    /// Pace the tick against `pacing_hz` cycles to the second, so that sixty a
-    /// second is sixty of wall clock rather than sixty per 571,429 emulated
-    /// cycles. Unlike the teletype there is no `--fast-io` to outrank it: the
-    /// clock is never asked to run at host speed.
-    ///
-    /// The banked cycles are left alone -- the modulus in `poll` absorbs an
-    /// overhang from the old period, so a rate arriving mid-run costs at most
-    /// one early tick, and the rate arrives before the machine runs anyway.
-    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
-        self.period_cycles = line_clock_period_cycles(pacing_hz);
+    /// The clock as power reaches it: stopped, at zero.
+    pub fn at_power_on(level: u8) -> Self {
+        TodClock703 { running: false, ..TodClock703::new(level, 0) }
     }
 
-    pub fn dot(&mut self, function: u8, _val: u16) {
-        // Connecting -- or reconnecting -- starts a fresh full period, and
-        // anything that is not the connect function disconnects, the
-        // teletype's rule.
-        self.armed = function == FN_LINE_CLOCK_CONNECT;
+    /// Set the count and start it, as the operator does from the panel.
+    /// The pacing rate the machine was given stays.
+    pub fn set_and_start(&mut self, count: u32) {
+        self.count = count % TOD_DAY;
+        self.running = true;
+        self.held = false;
+        self.owed = false;
+        self.edge = false;
         self.acc = 0;
     }
 
-    /// Bank the elapsed cycles and pulse the level once per period. A
-    /// disconnected clock banks nothing -- contrast the teletype's standing
-    /// keystroke credit, which models an operator the machine kept waiting;
-    /// nothing waits behind a clock. Multiple owed periods merge into one
-    /// pulse, which the CPU's per-level latch would do anyway.
+    /// Count against `pacing_hz` cycles to the second. The banked remainder
+    /// stays: a rate arriving mid-run costs at most one count early.
+    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        self.pacing_hz = pacing_hz.max(1);
+    }
+
+    /// Advance the count by `counts`, saying whether it passed an interval
+    /// edge -- the day is a whole number of intervals, so the wrap is none.
+    fn advance(&mut self, counts: u64) -> bool {
+        let from = self.count as u64;
+        let to = from + counts;
+        self.count = (to % TOD_DAY as u64) as u32;
+        to / TOD_INTERVAL as u64 != from / TOD_INTERVAL as u64
+    }
+
+    pub fn dot(&mut self, function: u8, val: u16) {
+        let val = val as u32;
+        let [h, m, s, ms, tenth] = tod_fields(self.count);
+        match function {
+            FN_TOD_HOLD => self.held = true,
+            FN_TOD_WORD1 => {
+                let h = (val >> 14 & 3) * 10 + (val >> 10 & 0xf);
+                let m = (val >> 7 & 7) * 10 + (val >> 3 & 0xf);
+                let s = (val & 7) * 10 + s % 10;
+                self.count = tod_count([h, m, s, ms, tenth]);
+            }
+            FN_TOD_WORD2 => {
+                let s = s / 10 * 10 + (val >> 12 & 0xf);
+                let ms = (val >> 8 & 0xf) * 100 + (val >> 4 & 0xf) * 10 + (val & 0xf);
+                self.count = tod_count([h, m, s, ms, tenth]);
+            }
+            FN_TOD_STOP => self.running = false,
+            FN_TOD_RESET => self.count = 0,
+            FN_TOD_START => self.running = true,
+            _ => {}
+        }
+    }
+
+    pub fn din(&mut self, function: u8) -> u16 {
+        let words = tod_words(self.count);
+        match function {
+            FN_TOD_WORD1 => words[0],
+            FN_TOD_WORD2 => words[1],
+            FN_TOD_WORD3 => {
+                if std::mem::take(&mut self.held) && std::mem::take(&mut self.owed) {
+                    self.edge |= self.advance(1);
+                }
+                words[2]
+            }
+            _ => 0,
+        }
+    }
+
+    /// Count the elapsed cycles and pulse the level when the count passes
+    /// a multiple of the interval -- one pulse however many it passed, as
+    /// the CPU's per-level latch would merge them anyway. Held, the counts
+    /// that come due are one owed count and the rest lost.
     pub fn poll(&mut self, elapsed: u32) -> u16 {
-        if !self.armed {
-            return 0;
+        let mut edge = std::mem::take(&mut self.edge);
+        if self.running {
+            self.acc += elapsed as u64 * TOD_COUNTS_PER_SEC;
+            let counts = self.acc / self.pacing_hz;
+            self.acc %= self.pacing_hz;
+            if counts > 0 {
+                if self.held {
+                    self.owed = true;
+                } else {
+                    edge |= self.advance(counts);
+                }
+            }
         }
-        self.acc = self.acc.saturating_add(elapsed);
-        if self.acc >= self.period_cycles {
-            self.acc %= self.period_cycles;
-            return 1 << self.level;
+        if edge {
+            1 << self.level
+        } else {
+            0
         }
-        0
     }
 }
 
@@ -1557,79 +1664,131 @@ mod tests {
         assert!(punch.tape().is_empty(), "torn off");
     }
 
-    // -- the line clock ----------------------------------------------------
+    // -- the time-of-day clock ---------------------------------------------
 
+    /// 13:45:27.3916, in tenths of a millisecond.
+    const TOD_SAMPLE: u32 = ((13 * 3600 + 45 * 60 + 27) * 10_000) + 3916;
+
+    /// Figure 5-33, bit 0 the most significant: word 1 is 10 hr (2 bits),
+    /// hr, 10 min (3), min, 10 s (3); word 2 is s, 100 ms, 10 ms, ms; word 3
+    /// the tenths in bits 12-15.
     #[test]
-    fn an_unarmed_line_clock_never_pulses() {
-        let mut clk = LineClock703::new(2);
-        for _ in 0..10 {
-            assert_eq!(clk.poll(LINE_CLOCK_PERIOD_CYCLES), 0);
+    fn the_words_are_figure_5_33s_bcd() {
+        let mut clk = TodClock703::new(2, TOD_SAMPLE);
+        assert_eq!(clk.din(FN_TOD_WORD1), 0x4e2a); // 1 3 4 5 2: 01 0011 100 0101 010
+        assert_eq!(clk.din(FN_TOD_WORD2), 0x7391);
+        assert_eq!(clk.din(FN_TOD_WORD3), 0x0006);
+        assert_eq!(clk.din(0), 0, "no status word");
+        assert_eq!(clk.din(7), 0);
+    }
+
+    /// A hold stops the clock until the least significant word is read.
+    /// One count that came due meanwhile is made up at the release, so a
+    /// read inside the 60 us limit costs nothing; the rest are lost, and a
+    /// hold never ended holds the time, and the interval, for good.
+    #[test]
+    fn a_hold_stops_the_clock_until_word_3_is_read() {
+        let mut clk = TodClock703::new(2, TOD_SAMPLE);
+        clk.dot(FN_TOD_HOLD, 0);
+        assert_eq!(clk.poll(CLOCK_HZ as u32), 0, "a second held: no interval");
+        assert_eq!(clk.din(FN_TOD_WORD1), 0x4e2a); // 1 3 4 5 2: 01 0011 100 0101 010
+        assert_eq!(clk.din(FN_TOD_WORD2), 0x7391, "still the held time");
+        clk.dot(FN_TOD_HOLD, 0); // a second hold changes nothing
+        assert_eq!(clk.din(FN_TOD_WORD2), 0x7391, "word 2 does not end it");
+        assert_eq!(clk.din(FN_TOD_WORD3), 0x0006, "the held tenths");
+        assert_eq!(clk.din(FN_TOD_WORD3), 0x0007, "the owed count made up, the rest lost");
+
+        // a hold shorter than a count loses nothing at all
+        let mut short = TodClock703::new(2, 0);
+        let mut long = TodClock703::new(2, 0);
+        for _ in 0..1000 {
+            short.dot(FN_TOD_HOLD, 0);
+            short.poll(20);
+            short.din(FN_TOD_WORD3);
+            short.poll(37);
+            long.poll(57);
         }
-        // disconnecting after a connect leaves it just as silent
-        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
-        clk.dot(FN_DISCONNECT, 0);
-        assert_eq!(clk.poll(10 * LINE_CLOCK_PERIOD_CYCLES), 0);
+        assert_eq!(short.count, long.count);
     }
 
-    /// The first tick comes one full period after the connect, never sooner:
-    /// a disconnected clock banks nothing.
     #[test]
-    fn the_first_pulse_comes_exactly_one_period_after_arming() {
-        let mut clk = LineClock703::new(5); // the level is configurable
-        clk.poll(LINE_CLOCK_PERIOD_CYCLES); // banked nowhere -- still unarmed
-        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
-        assert_eq!(clk.poll(LINE_CLOCK_PERIOD_CYCLES - 1), 0);
-        assert_eq!(clk.poll(1), 1 << 5);
+    fn reset_does_not_stop_it_and_stop_and_start_do() {
+        let mut clk = TodClock703::new(2, TOD_SAMPLE);
+        clk.dot(FN_TOD_RESET, 0);
+        assert_eq!(clk.din(FN_TOD_WORD1), 0);
+        clk.poll(CLOCK_HZ as u32);
+        assert_eq!(clk.din(FN_TOD_WORD2), 0x1000, "counting from zero");
+        clk.dot(FN_TOD_STOP, 0);
+        assert_eq!(clk.poll(10 * CLOCK_HZ as u32), 0);
+        assert_eq!(clk.din(FN_TOD_WORD2), 0x1000, "stopped");
+        clk.dot(FN_TOD_START, 0);
+        clk.poll(CLOCK_HZ as u32);
+        assert_eq!(clk.din(FN_TOD_WORD2), 0x2000);
     }
 
-    /// The accumulator keeps the remainder past each pulse, so the long-run
-    /// rate is exact: one hundred periods of cycles fed in chunks that never
-    /// divide evenly must yield exactly one hundred pulses. A counter that
-    /// restarted from zero at each pulse -- the teletype's per-character
-    /// pattern -- would lose most of a chunk every period and drift slow.
+    /// The computer time set: stop, reset, write the two words, start.
+    /// The tenths stage cannot be set and is zero from the reset.
     #[test]
-    fn the_cadence_carries_the_remainder_and_does_not_drift() {
-        let mut clk = LineClock703::new(2);
-        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
-        let total = 100 * LINE_CLOCK_PERIOD_CYCLES;
-        let mut fed = 0;
+    fn the_time_is_set_by_writing_words_1_and_2() {
+        let mut clk = TodClock703::new(2, TOD_SAMPLE);
+        clk.dot(FN_TOD_STOP, 0);
+        clk.dot(FN_TOD_RESET, 0);
+        clk.dot(FN_TOD_WORD1, 0x8ecd); // 23:59:5x -- 10 0011 101 1001 101
+        clk.dot(FN_TOD_WORD2, 0x9998); // x9.998
+        assert_eq!(clk.din(FN_TOD_WORD1), 0x8ecd);
+        assert_eq!(clk.din(FN_TOD_WORD2), 0x9998);
+        assert_eq!(clk.din(FN_TOD_WORD3), 0);
+        clk.dot(FN_TOD_START, 0);
+        // 2.5 ms later it is a little past midnight: every stage short-counts
+        clk.poll((CLOCK_HZ / 400) as u32);
+        assert_eq!(clk.din(FN_TOD_WORD1), 0);
+        assert_eq!(clk.din(FN_TOD_WORD2) & 0xfff0, 0);
+    }
+
+    /// The interval jumper: one pulse per 20 ms of count, no drift over
+    /// chunks that never divide evenly, and the phase the count's.
+    #[test]
+    fn the_interval_is_every_20_ms_of_count_and_follows_its_phase() {
+        let mut clk = TodClock703::new(5, 0); // the level is the wiring's
         let mut pulses = 0;
-        while fed < total {
-            let chunk = 13.min(total - fed); // 13 does not divide 9,523
+        let mut fed = 0;
+        while fed < CLOCK_HZ as u32 {
+            let chunk = 13.min(CLOCK_HZ as u32 - fed);
             if clk.poll(chunk) != 0 {
+                assert_eq!(clk.poll(0), 0);
                 pulses += 1;
             }
             fed += chunk;
         }
-        assert_eq!(pulses, 100);
+        assert_eq!(pulses, 50, "fifty a second");
+
+        // a count 1 ms short of an edge interrupts after 1 ms
+        clk.dot(FN_TOD_STOP, 0);
+        clk.dot(FN_TOD_RESET, 0);
+        clk.dot(FN_TOD_WORD2, 0x0019); // 19 ms
+        clk.dot(FN_TOD_START, 0);
+        let ms = (CLOCK_HZ / 1000) as u32;
+        assert_eq!(clk.poll(ms - 2), 0);
+        assert_eq!(clk.poll(4), 1 << 5);
     }
 
     #[test]
-    fn disconnecting_forgets_the_phase() {
-        let mut clk = LineClock703::new(2);
-        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
-        clk.poll(LINE_CLOCK_PERIOD_CYCLES - 1);
-        clk.dot(FN_DISCONNECT, 0);
-        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
-        assert_eq!(clk.poll(LINE_CLOCK_PERIOD_CYCLES - 1), 0, "the banked cycles are gone");
-        assert_eq!(clk.poll(1), 1 << 2);
-
-        // any function that is not the connect disconnects
-        clk.dot(0x3, 0);
-        assert_eq!(clk.poll(10 * LINE_CLOCK_PERIOD_CYCLES), 0);
+    fn a_stopped_clock_never_interrupts() {
+        let mut clk = TodClock703::new(2, 0);
+        clk.dot(FN_TOD_STOP, 0);
+        for _ in 0..10 {
+            assert_eq!(clk.poll(CLOCK_HZ as u32), 0);
+        }
     }
 
-    /// The whole of the clock's pacing in one invariant, the teletype's test
-    /// in the other units: ticks a *wall* second is `pacing_hz /
-    /// period_cycles`, which is sixty at every rate the cpu can be held to.
+    /// The count is machine time paced at the resolved throttle: a second
+    /// of the pacing rate's cycles is a second on the clock, at any rate.
     #[test]
-    fn the_tick_is_sixty_a_wall_second_at_every_pacing_rate() {
+    fn a_second_of_the_pacing_rate_is_a_second_on_the_clock() {
         for hz in [CLOCK_HZ, CLOCK_HZ / 100, CLOCK_HZ * 4, 10_000, 1_000_000] {
-            let mut clk = LineClock703::new(2);
+            let mut clk = TodClock703::new(2, 0);
             clk.set_pacing_hz(hz);
-            clk.dot(FN_LINE_CLOCK_CONNECT, 0);
             let mut pulses = 0;
-            // one wall second of machine time, an instruction's worth at a time
             let mut fed = 0;
             while fed < hz as u32 {
                 let chunk = 7.min(hz as u32 - fed);
@@ -1638,21 +1797,16 @@ mod tests {
                 }
                 fed += chunk;
             }
-            assert_eq!(pulses, LINE_HZ, "{hz} Hz");
+            assert_eq!(clk.din(FN_TOD_WORD2), 0x1000, "{hz} Hz");
+            assert_eq!(pulses, 50, "{hz} Hz");
         }
     }
 
-    /// The floor keeps the modulus in `poll` from dividing by zero when the
-    /// pacing rate is under 60 Hz. One cycle to the tick is as fast as the
-    /// device goes; whether a cpu paced that slowly can answer it is the
-    /// operator's problem, not the device's.
     #[test]
-    fn a_pacing_rate_under_sixty_hertz_floors_at_one_cycle() {
-        let mut clk = LineClock703::new(2);
-        clk.set_pacing_hz(10);
-        clk.dot(FN_LINE_CLOCK_CONNECT, 0);
-        assert_eq!(clk.poll(0), 0, "not even the floor ticks on no cycles at all");
-        assert_eq!(clk.poll(1), 1 << 2);
-        assert_eq!(clk.poll(1), 1 << 2);
+    fn the_day_wraps_to_midnight() {
+        let mut clk = TodClock703::new(2, TOD_DAY - 1);
+        clk.poll((CLOCK_HZ / 1000) as u32);
+        assert_eq!(clk.din(FN_TOD_WORD1), 0);
+        assert!(clk.count < 20, "a little past it");
     }
 }

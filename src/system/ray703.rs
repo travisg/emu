@@ -15,10 +15,9 @@
 //! four drive bays mount whatever `ray703-disc{0..3}.img` files the current
 //! directory holds (the Kaypro floppy convention: a file that is not there is
 //! a drive that was never installed). Plus two things Raytheon did not
-//! sell in this form, where its catalogue had a time-of-day clock and a
-//! teletype multiplexer: the invented 60 Hz line clock (`dev/ray703.rs` says
-//! invented at length), silent until a program connects it, and three more
-//! teletypes beside the console, on the console's level -- each an
+//! Raytheon's Time-of-Day Clock, its interval jumper giving REX its tick.
+//! Plus one thing Raytheon did not sell in this form, where its catalogue had
+//! a teletype multiplexer: three more teletypes beside the console, on the console's level -- each an
 //! unplugged line until `--serial` gives it a host end, and present either
 //! way, so that a snapshot is the same machine whatever was plugged in.
 //!
@@ -44,7 +43,7 @@ use crate::console::ConsoleEndpoint;
 use crate::dev::disc74601::{Disc74601, DEV_DISC};
 use crate::dev::memory::Memory;
 use crate::dev::ray703::{
-    LineClock703, TapePunch703, TapeReader703, Tty703, DEV_LINE_CLOCK, DEV_TAPE_PUNCH, DEV_TAPE_READER,
+    TapePunch703, TapeReader703, TodClock703, Tty703, DEV_TAPE_PUNCH, DEV_TAPE_READER, DEV_TOD_CLOCK,
     DEV_TERMINALS,
 };
 use crate::rom;
@@ -108,7 +107,7 @@ pub struct Ray703 {
     reader: TapeReader703,
     punch: TapePunch703,
     disc: Disc74601,
-    line_clock: LineClock703,
+    tod: TodClock703,
 }
 
 impl Ray703 {
@@ -125,10 +124,12 @@ impl Ray703 {
         // device (`ready_level` scans 15 down to 0), and it makes this the
         // first machine here with two live interrupt levels.
         //
-        // The invented line clock gets level 2, the next free one. Not the
-        // character devices' 0: a tick has no collect function, so a shared
-        // service routine could not tell a tick from the empty DIN that
-        // already means something there.
+        // The clock's interval interrupt gets level 2, the next free one.
+        // Not the character devices' 0: the clock has no status word, so a
+        // shared service routine could not tell its interrupt from theirs.
+        // It powers up stopped at zero, as the hardware does; the factory
+        // stands in for the operator who set and started it
+        // (`set_time_of_day`).
         let mut sys = Ray703 {
             core: Memory::new(CORE_BYTES),
             ttys: [
@@ -140,7 +141,7 @@ impl Ray703 {
             reader: TapeReader703::new(0),
             punch: TapePunch703::new(0),
             disc: Disc74601::new(1),
-            line_clock: LineClock703::new(2),
+            tod: TodClock703::at_power_on(2),
         };
 
         match subsystem {
@@ -213,9 +214,15 @@ impl Ray703 {
         }
         self.punch.set_fast_io();
         self.disc.set_fast_io();
-        // Not the line clock: a periodic interrupt with no period never
+        // Not the clock: a periodic interrupt with no period never
         // returns. That is what lets a test run --fast-io for an instant
         // teletype over unchanged scheduling slices.
+    }
+
+    /// Set the time-of-day clock to `count` tenths of a millisecond since
+    /// midnight and start it -- the operator at the clock's panel.
+    pub fn set_time_of_day(&mut self, count: u32) {
+        self.tod.set_and_start(count);
     }
 
     /// Give extra terminal `n` (1 to `TERMINALS - 1`) its host end.
@@ -284,14 +291,14 @@ impl Bus for Ray703 {
 
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         use crate::snapshot::Snapshot;
-        let Ray703 { core, ttys, reader, punch, disc, line_clock } = self;
+        let Ray703 { core, ttys, reader, punch, disc, tod } = self;
         w.section(b"CORE", |w| core.save(w));
         for (tty, tag) in ttys.iter().zip(TTY_SECTIONS) {
             w.section(tag, |w| tty.save(w));
         }
         w.section(b"PTR ", |w| reader.save(w));
         w.section(b"PTP ", |w| punch.save(w));
-        w.section(b"CLK ", |w| line_clock.save(w));
+        w.section(b"TOD ", |w| tod.save(w));
         // the disc last: nothing after it can fail once its platters are on
         w.section(b"DISC", |w| disc.save(w));
         Ok(())
@@ -305,7 +312,7 @@ impl Bus for Ray703 {
         }
         r.section(b"PTR ", |r| self.reader.load(r))?;
         r.section(b"PTP ", |r| self.punch.load(r))?;
-        r.section(b"CLK ", |r| self.line_clock.load(r))?;
+        r.section(b"TOD ", |r| self.tod.load(r))?;
         r.section(b"DISC", |r| self.disc.load(r))
     }
 
@@ -330,6 +337,7 @@ impl Bus for Ray703 {
             DEV_TAPE_READER => self.reader.din(function),
             DEV_TAPE_PUNCH => self.punch.din(function),
             DEV_DISC => self.disc.din(function),
+            DEV_TOD_CLOCK => self.tod.din(function),
             _ => 0,
         }
     }
@@ -343,9 +351,7 @@ impl Bus for Ray703 {
             DEV_TAPE_READER => self.reader.dot(function, val),
             DEV_TAPE_PUNCH => self.punch.dot(function, val),
             DEV_DISC => self.disc.dot(function, val),
-            // no read arm anywhere for the clock: it has no readable
-            // register, so its DIN is the open-bus default below on purpose
-            DEV_LINE_CLOCK => self.line_clock.dot(function, val),
+            DEV_TOD_CLOCK => self.tod.dot(function, val),
             _ => {}
         }
     }
@@ -353,8 +359,8 @@ impl Bus for Ray703 {
     /// Every device gets the same elapsed cycle count, which is how they
     /// share one clock without sharing any state: the teletypes spend it
     /// running its character at ten a second, the reader ignores it, the
-    /// punch and the disc count down what they have in flight, and the line
-    /// clock banks it toward the next tick. The disc alone is handed the core -- it is the
+    /// punch and the disc count down what they have in flight, and the clock
+    /// counts it. The disc alone is handed the core -- it is the
     /// machine's one DMA device, and this poll is the one place the memory
     /// and the devices meet.
     fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
@@ -362,14 +368,14 @@ impl Bus for Ray703 {
         ttys | self.reader.poll(elapsed_cycles)
             | self.punch.poll(elapsed_cycles)
             | self.disc.poll(elapsed_cycles, &mut self.core)
-            | self.line_clock.poll(elapsed_cycles)
+            | self.tod.poll(elapsed_cycles)
     }
 
     /// Hand the pacing rate to the devices whose periods are I/O completions:
     /// the teletype's character time, the punch's frame and the disc's
     /// access. The reader takes no time at all -- it free-runs by design.
     ///
-    /// The line clock takes it too: the mains does not slow down because the
+    /// The clock takes it too: its crystal does not slow down because the
     /// cpu did. It sits out only `--fast-io`, which is the other axis --
     /// whether a device charges time at all, rather than what a second of it
     /// is worth in cycles.
@@ -379,7 +385,7 @@ impl Bus for Ray703 {
         }
         self.punch.set_pacing_hz(hz);
         self.disc.set_pacing_hz(hz);
-        self.line_clock.set_pacing_hz(hz);
+        self.tod.set_pacing_hz(hz);
     }
 }
 
@@ -580,40 +586,44 @@ mod tests {
         assert!(printed[2].lock().unwrap().is_empty());
     }
 
-    /// The invented line clock: DOT 2,1 connects it, the pulse arrives on
-    /// its own level 2 exactly one period later, and the decode isolates it
-    /// -- no other device stirs, and its read side is the open-bus zero.
+    /// The clock answers at B, powers up stopped at zero, and the factory's
+    /// setting starts it; its interval interrupt is level 2, and code 2,
+    /// which is the DMA magnetic tape's, answers nothing.
     #[test]
-    fn a_dot_to_device_2_arms_only_the_line_clock() {
+    fn the_clock_is_device_b_and_interrupts_on_level_2() {
         let rom = scratch_file("clock-dio", &[0x01, 0x00]);
         let mut sys = machine("", &rom).unwrap();
-        let period = (crate::cpu::ray703::CLOCK_HZ / 60) as u32;
-        sys.io_write16(0x21, 0); // DOT 2,1
-        assert_eq!(sys.poll_interrupt_lines(period - 1), 0, "one cycle short of a period");
-        assert_eq!(sys.poll_interrupt_lines(1), 1 << 2, "the tick, on the clock's own level");
-        assert_eq!(sys.io_read16(0x21), 0, "no readable register");
-        assert_eq!(sys.io_read16(0x20), 0);
-        sys.io_write16(0x20, 0); // DOT 2,0 disconnects
-        assert_eq!(sys.poll_interrupt_lines(u32::MAX), 0);
+        let interval = (crate::cpu::ray703::CLOCK_HZ / 50) as u32;
+        assert_eq!(sys.poll_interrupt_lines(10 * interval), 0, "stopped at power-on");
+        assert_eq!(sys.io_read16(0xb2), 0);
+        sys.set_time_of_day(10); // a millisecond past midnight
+        assert_eq!(sys.io_read16(0xb2), 0x0001);
+        assert_eq!(sys.poll_interrupt_lines(interval * 19 / 20 - 1), 0);
+        assert_eq!(sys.poll_interrupt_lines(4), 1 << 2, "at 20 ms on the clock");
+        sys.io_write16(0xb4, 0); // DOT B,4 -- stop
+        assert_eq!(sys.poll_interrupt_lines(10 * interval), 0);
+        sys.io_write16(0x21, 0);
+        assert_eq!(sys.io_read16(0x20), 0, "nothing at code 2");
+        assert_eq!(sys.poll_interrupt_lines(10 * interval), 0);
     }
 
     /// Guards the deliberate gap in `set_fast_io`: the clock keeps its
-    /// period while the teletype and the disc go instant.
+    /// interval while the teletype and the disc go instant.
     #[test]
-    fn the_line_clock_ignores_fast_io() {
+    fn the_clock_ignores_fast_io() {
         let rom = scratch_file("clock-fastio", &[0x01, 0x00]);
         let mut sys = machine("", &rom).unwrap();
         sys.set_fast_io();
-        sys.io_write16(0x21, 0);
-        let period = (crate::cpu::ray703::CLOCK_HZ / 60) as u32;
+        sys.set_time_of_day(0);
+        let interval = (crate::cpu::ray703::CLOCK_HZ / 50) as u32;
         assert_eq!(sys.poll_interrupt_lines(0), 0, "nothing here is instant");
-        assert_eq!(sys.poll_interrupt_lines(period - 1), 0);
-        assert_eq!(sys.poll_interrupt_lines(1), 1 << 2);
+        assert_eq!(sys.poll_interrupt_lines(interval - 2), 0);
+        assert_eq!(sys.poll_interrupt_lines(4), 1 << 2);
     }
 
-    /// The pacing rate reaches every device with a period, the line clock
+    /// The pacing rate reaches every device with a period, the clock
     /// included. At a hundredth of the machine's speed a teletype character
-    /// and a clock tick are both a hundredth of the cycles, which is what
+    /// and a clock interval are both a hundredth of the cycles, which is what
     /// keeps each of them the fraction of a *wall* second it claims to be.
     #[test]
     fn the_pacing_rate_reaches_the_teletype_and_the_clock() {
@@ -627,10 +637,10 @@ mod tests {
         assert_eq!(sys.poll_interrupt_lines(char_cycles - 1), 0, "not printed yet");
         assert_eq!(sys.poll_interrupt_lines(1), 1, "the completion, on level 0");
 
-        let period = (hz / 60) as u32;
-        sys.io_write16(0x21, 0); // DOT 2,1 -- connect the clock
-        assert_eq!(sys.poll_interrupt_lines(period - 1), 0, "one cycle short of a period");
-        assert_eq!(sys.poll_interrupt_lines(1), 1 << 2, "the tick, on level 2");
+        let interval = (hz / 50) as u32;
+        sys.set_time_of_day(0);
+        assert_eq!(sys.poll_interrupt_lines(interval - 1), 0, "one cycle short of 20 ms");
+        assert_eq!(sys.poll_interrupt_lines(2), 1 << 2, "the interval, on level 2");
     }
 
     /// End to end through the real core: PTB loads an absolute tape out of a

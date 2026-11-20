@@ -6,8 +6,8 @@
 ; made visible.  Each prints the first character of its command tail --
 ; a dot, given none -- through its mailbox and then sleeps fifteen ticks
 ; for its job number and fifteen more, so the first three loaded come
-; round every 30, 45 and 60 ticks and drift through every phase against
-; each other.  KILL is the way out of it.
+; round every 30, 45 and 60 ticks -- 0.6, 0.9 and 1.2 seconds -- and
+; drift through every phase against each other.  KILL is the way out of it.
 
 BLIP            JSX     L.ARGS
 .SKP            LDX     L.AP            ; past the blanks, to the character

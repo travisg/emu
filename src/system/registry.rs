@@ -266,6 +266,20 @@ fn build_sys09(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineO
     })
 }
 
+/// The host's local time of day, in the 703 clock's tenths of a
+/// millisecond since midnight; midnight if the host cannot say.
+fn host_time_of_day() -> u32 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let t = now.as_secs() as libc::time_t;
+    // SAFETY: localtime_r writes only the tm it is given.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return 0;
+    }
+    let secs = (tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec) as u32;
+    secs * 10_000 + now.subsec_micros() / 100
+}
+
 fn build_ray703(
     rom: &Path,
     mut console: ConsoleEndpoint,
@@ -342,6 +356,9 @@ fn build_ray703(
     }
 
     let mut bus = ray703::Ray703::new(rom, console, sub)?;
+    // The operator set the time-of-day clock from its panel and started it;
+    // the host's local time is what an operator would have set.
+    bus.set_time_of_day(host_time_of_day());
     // Each --serial in turn is the next teletype's line: a window of its
     // own -- the paper its sink, the window's keys its keyboard -- or a
     // line to the host.

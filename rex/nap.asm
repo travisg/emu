@@ -23,7 +23,7 @@ NAP             SMB     CURT
                 JMP     .LOOP
 .READ           LDW     =NBAD
                 JSX     L.MSG
-.LOOP           LDW     =60
+.LOOP           LDW     =50
                 JSX     L.SLEEP
                 JMP     .LOOP
 

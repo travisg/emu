@@ -162,7 +162,7 @@ SHHELP          LDW     =SHHL1
                 JMP     SHLOOP
 
 ; Seconds since the executive came up. SECS is the scheduler's, counted
-; sixty ticks at a time.
+; fifty ticks at a time.
 SHUPT           JSX     SHPUP
                 JMP     SHLOOP
 
@@ -177,6 +177,56 @@ SHPUP           SUBR
                 LDW     =SHSEC
                 JSX     SHMSG
                 EXIT    SHPUP
+
+; The time of day, HH:MM:SS, off the clock (706 UM 5-18.3.5): a hold,
+; then the words, the least significant last because reading it is what
+; ends the hold -- masked, since the whole read has to be over inside 60
+; microseconds for the clock to lose nothing.
+SHTIME          MSK
+                DOT     11,0            ; hold the clock
+                DIN     11,1            ; 10 hr, hr, 10 min, min, 10 s
+                STW     SHTW1
+                DIN     11,2            ; s, 100 ms, 10 ms, ms
+                STW     SHTW2
+                DIN     11,3            ; tenths of a ms, which ends the hold
+                UNM
+                LDW     SHTW1
+                SRL     14
+                JSX     SHTDIG
+                LDW     SHTW1
+                SRL     10
+                JSX     SHTDIG
+                JSX     SHTCOL
+                LDW     SHTW1
+                SRL     7
+                AND     =7
+                JSX     SHTDIG
+                LDW     SHTW1
+                SRL     3
+                JSX     SHTDIG
+                JSX     SHTCOL
+                LDW     SHTW1
+                AND     =7
+                JSX     SHTDIG
+                LDW     SHTW2
+                SRL     12
+                JSX     SHTDIG
+                JSX     SHNL
+                JMP     SHLOOP
+
+SHTDIG          SUBR                    ; the BCD digit in ACR's low four bits
+                AND     =X'000F'
+                ADD     ='0'
+                JSX     SHPUTC
+                EXIT    SHTDIG
+
+SHTCOL          SUBR
+                LDW     =':'
+                JSX     SHPUTC
+                EXIT    SHTCOL
+
+SHTW1           WORD    0               ; the clock's word 1
+SHTW2           WORD    0               ; and word 2
 
 ; The tasks: job number, name, state, how much longer a sleeper has, and
 ; OUT for one whose blocks are on the disc.  Not a walk of the ring,
@@ -1139,8 +1189,7 @@ SHHD0           LDX     SHTO
                 LDX     SHTM
                 LDW     *TM.OWN
                 JPL     .DW
-                MSK
-                DOT     2,0             ; disconnect the line clock
+                MSK                     ; the clock keeps the time
                 HLT
                 ENDC
 
@@ -1527,6 +1576,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'ST','AT',SHSTAT
                 WORD    'UP','TI',SHUPT
                 WORD    0,'UP',SHUPT
+                WORD    'TI','ME',SHTIME
                 WORD    'ST','OP',SHSTOP
                 WORD    'ST','AR',SHSTRT
                 WORD    'EC','HO',SHECHO
@@ -1556,10 +1606,10 @@ SHHNT           MSG     "TYPE HELP FOR THE COMMANDS\r\n"
 SHPRM           MSG     "REX>  "
 SHWHT           MSG     "WHAT\r\n"
                 TRUE    SHMOD=0
-SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM LOAD RUN HALT \r\n"
+SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME STOP START KILL ECHO MEM LOAD RUN HALT\r\n"
                 ENDC
                 TRUE    SHMOD=1
-SHHL1           MSG     "BUILT IN: HELP STAT UPTIME STOP START KILL ECHO MEM LOAD RUN BYE \r\n"
+SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME STOP START KILL ECHO MEM LOAD RUN BYE \r\n"
                 ENDC
 SHHL2           MSG     "STOP, START AND KILL TAKE A JOB NUMBER. @NAME RUNS A FILE OF COMMANDS.\r\n"
 SHFRE           MSG     "FREE "

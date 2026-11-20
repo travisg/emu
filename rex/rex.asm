@@ -51,12 +51,12 @@
 ; armed for it at start-up (DOT d,11) and nothing here echoes a character.
 ; The console's teletype is DIO device 14; teletypes 1, 2 and 3 are 7, 6
 ; and 4, on the console's interrupt level -- an invented configuration,
-; as the line clock is, which src/dev/ray703.rs describes.
+; which src/dev/ray703.rs describes.
 ;
-; The timer is the emulator's invented 60 Hz line clock: DIO device 2,
-; interrupt level 2, connected with DOT 2,1 -- the one device on this
-; machine that no Raytheon document describes (src/dev/ray703.rs says so
-; at length).  Everything else is the hardware the other guests drive.
+; The timer is the Time-of-Day Clock, DIO device 11 (706 User's Manual
+; 5-18), jumpered to interrupt on level 2 every 20 ms of its count: fifty
+; ticks a second.  It has no select and no disconnect; START starts it
+; (DOT 11,6) in case nobody had, and it keeps the time of day for TIME.
 ;
 ; The machine does the heavy lifting.  There is no stack to switch: the
 ; interrupt entry saves the program counter at word 4L and the machine
@@ -106,7 +106,7 @@
 ; * SCHEDULING HAPPENS AT BOTH ENDS.  The tick takes the processor from a
 ;   task that has had it long enough; a service routine that made a task
 ;   runnable gives it the processor as it returns, rather than leaving it
-;   to wait up to a sixtieth of a second for the next tick.  A character
+;   to wait up to a fiftieth of a second for the next tick.  A character
 ;   posted to the console queue therefore reaches the shell in the time
 ;   it takes to return from the interrupt that carried it.  SERV holds
 ;   the mask across its switch, because the tick outranks level 0 and
@@ -301,7 +301,7 @@
 ; Memory map:
 ;
 ;   0000-000F  interrupt blocks: level 0 (teletype), level 1 (disc),
-;              level 2 (line clock), level 3 (never signalled -- SWTCH
+;              level 2 (the clock), level 3 (never signalled -- SWTCH
 ;              stages a switch in it and loads it with INR 3)
 ;   0010-002F  the kernel interface for what loads under it: the jump
 ;              vector, then the exported cells
@@ -632,13 +632,13 @@ NARID           EQU     1               ; the first one's job number
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
 
-; Connect the keyboard and the clock, then *become* the shell: its block
-; is left blank and the first tick fills it in.  ENB
-; before UNM because a masked signal is held where a disabled one is
-; dropped; ENB 2 before the arming DOT so not even the first tick can be
-; dropped -- it is 9,523 cycles out, held by the mask until the UNM.  A
-; tick that lands on the two instructions after the UNM parks this tail in
-; the shell's block, which is exactly right.
+; Connect the keyboard and start the clock, then *become* the shell: its
+; block is left blank and the first tick fills it in.  ENB before UNM
+; because a masked signal is held where a disabled one is dropped, so a
+; tick that comes before the UNM waits for it; one from before the ENB is
+; dropped, which costs nothing.  A tick that lands on the two
+; instructions after the UNM parks this tail in the shell's block, which
+; is exactly right.
 START           MSK
                 SGM                     ; flat addressing, everywhere, always
                 LDW     =POOLB          ; the pool: a free block below the
@@ -694,7 +694,7 @@ START           MSK
                 ENB     0
                 ENB     1
                 ENB     2
-                DOT     2,1             ; connect the line clock
+                DOT     11,6            ; start the clock, if it was not
                 UNM
                 SMB     SHELL
                 JMP     SHELL           ; the kernel becomes the shell
@@ -711,12 +711,12 @@ SCHED           SMB     S2SAVA          ; the SMB lead: EXR still holds the
 
 ; Count the tick against every sleeping task, and do it before the defer
 ; check: a tick that caught the teletype's service routine still spent a
-; sixtieth of a second, and a sleep that skipped those would stretch by
+; fiftieth of a second, and a sleep that skipped those would stretch by
 ; however long the driver happened to be busy.  A delay is never stored
 ; below one, so the count reaches zero exactly and never runs past it.
                 LDW     TICKS           ; uptime, for the shell to report
                 ADD     =1
-                CMW     =60
+                CMW     =50
                 JGE     .SEC            ; a whole second of them?
                 STW     TICKS
                 JMP     .TK0
@@ -916,7 +916,7 @@ SERV            SMB     S0SAVA          ; the SMB lead again
 ; not before.  This is the second half of the scheduling: the tick takes
 ; the processor away from a task that has had it long enough, and this
 ; gives it to a task that has just been given something to do, without
-; waiting up to a sixtieth of a second for the next tick.  Together they
+; waiting up to a fiftieth of a second for the next tick.  Together they
 ; are why a character posted to the console queue reaches the shell in
 ; the time it takes to return from the interrupt.
 ;
@@ -1282,7 +1282,7 @@ K3FFF           EQU     X'3FFF'         ; a transfer's word count; the unit is a
 ; interrupt speed and the shell empties it a slice at a time, so its
 ; depth is how far input may run ahead of the shell being scheduled --
 ; several typed lines, which is more than a Model 33 can deliver in the
-; sixtieth of a second the shell waits to be picked.  Past that it drops,
+; fiftieth of a second the shell waits to be picked.  Past that it drops,
 ; the way a teletype drops what nobody is reading.
 QCONS           WORD    0,0,0,QCONSN,QCONSB,X'FFFF'
 QCONSN          EQU     128

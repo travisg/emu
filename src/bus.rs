@@ -199,8 +199,8 @@ pub trait Bus {
     /// second waits `hz / 10` cycles.
     ///
     /// `--throttle` is a knob on the cpu and only the cpu. A device keeps the
-    /// rate its real counterpart ran at -- ten characters a second, sixty
-    /// ticks a second -- however fast the cpu is being run, which is what this
+    /// rate its real counterpart ran at -- ten characters a second, a clock's
+    /// second a second -- however fast the cpu is being run, which is what this
     /// call is for; periods derived from the machine's own clock instead would
     /// scale with the throttle and drag a teletype down to minutes to the
     /// character. Unset -- `--no-throttle`, or no `--throttle` at all -- leaves

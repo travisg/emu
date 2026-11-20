@@ -1,9 +1,9 @@
 # REX
 
 REX -- Raytheon EXec -- is a round-robin executive for the Raytheon 703,
-preemptive and cooperative at once, running on the emulator's invented 60 Hz
-line clock. It is new software written for a 1967 machine, not a
-transcription, and this directory is its own project: the executive, the
+preemptive and cooperative at once, its tick the interval interrupt of
+Raytheon's Time-of-Day Clock, fifty a second. It is new software written
+for a 1967 machine, not a transcription, and this directory is its own project: the executive, the
 glue that puts Tiny BASIC aboard it as a task, and the scripted session that
 tests it.
 
@@ -58,6 +58,7 @@ time either way. The commands the shell has in it:
     STAT         every task's job number, name and state, how long each
                  sleeper has left, and OUT for one that is on the disc
     UPTIME, UP   seconds since the executive came up
+    TIME         the time of day, off the clock (HH:MM:SS)
     STOP n       suspend a task the shell loaded, by job number
     START n      release one
     KILL n       end one, whatever it was doing
@@ -309,7 +310,7 @@ the key is struck: it has to reach the file's last line.
 
 A third machine is the swapper's, on a platter with a swap file. Four
 copies of `hog.asm` each take 8,000 words, which is more than there is,
-fill them with a pattern of their own and check it thirty times over ten
+fill them with a pattern of their own and check it twenty times over ten
 seconds. The first two are stopped before the other two are loaded, so
 they are the ones put out to make room, and `STAT` has to show them out
 and stopped; then they are started again, and all four have to finish
@@ -343,7 +344,7 @@ the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
 `=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin`, `=nosys`,
 `=nopark`, `=nolatch`, `=sysopen`, `=noseg`, `=onlycon`, `=onetty`,
-`=nogetty`, `=nounit`, `=dirunit`, `=nodata` and `=fcwho` are its negative
+`=nogetty`, `=nounit`, `=dirunit`, `=nodata`, `=fcwho` and `=nohold` are its negative
 controls --
 a platter with nothing on it, one
 without the hello module, a kernel with its wait for the disc patched out,
@@ -357,7 +358,8 @@ routine that asks only the console's status, a printer started on any
 terminal's task, a key that asks for no shell, a disc driver deaf to the
 unit, a directory entry read from whichever platter's directory is in
 core, no data unit but unit 0, and a channel's unit forgotten when the
-directory is asked who is writing -- which must all FAIL. Two things that make it hard
+directory is asked who is writing, and a TIME that never ends the
+clock's hold, which stops the clock and the tick with it -- which must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed

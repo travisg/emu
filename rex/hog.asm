@@ -4,7 +4,7 @@
 ;
 ; A test module, for the swapper: it takes a block of n words, fills it
 ; with a pattern that carries its job number, and then HOGRND times over
-; -- ten seconds of it -- sleeps a third of a second and checks that
+; -- ten seconds of it -- sleeps half a second and checks that
 ; every word is still what it wrote.  Four of these wanting more core than there is cannot all be
 ; in it at once, so each goes out to the disc and comes back between
 ; checks, to the same words, which in the meantime were another hog's.
@@ -16,7 +16,7 @@
 ; Word i of job j's block is j*256 + i.
 
 HOGSEC          EQU     4200
-HOGRND          EQU     30
+HOGRND          EQU     20
 HKGOOD          EQU     X'600D'         ; the verdicts: every check passed,
 HKDEAD          EQU     X'DEAD'         ; a word was not what was put there,
 HKNOC           EQU     X'0C0E'         ; and there was no core to be had
@@ -64,7 +64,7 @@ HOG             SMB     CURT
                 JNZ     .FL
                 LDW     =HOGRND
                 STW     HR
-.RL             LDW     =20
+.RL             LDW     =25
                 JSX     L.SLEEP
                 JSX     HFIRST          ; and is it still there?
 .VL             LDX     HP

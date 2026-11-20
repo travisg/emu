@@ -9,7 +9,7 @@
 """End-to-end test for REX, the 703 executive: boot it, load three
 copies of blip.asm behind the prompt, each printing a mark of its own and
 sleeping an interval of its own, and watch them run -- the scheduler, the
-line clock, the context switch, the sleeps and the mailbox teletype
+clock's tick, the context switch, the sleeps and the mailbox teletype
 driver all at once -- load the
 hello module off a scratch platter both ways (RUN, which waits for it, and
 LOAD, which leaves it running behind the prompt) and see the pool's free
@@ -25,8 +25,9 @@ and the emulator run from there, since it mounts disks/ray703-disc0.img
 relative to where it runs -- the repo root's is the user's own.
 
 --fast-io: the teletype's pacing is not what is under test, and the
-scheduling slices stay machine time regardless, since the line clock
-ignores the flag.
+scheduling slices stay machine time regardless, since the time-of-day
+clock ignores the flag. TIME is asked at the start and again near the end:
+two readings of the clock, the second later.
 
 Every wait raises on its timeout and the handler at the bottom turns that
 into a FAIL with the transcript in the log. The walk over the output keeps
@@ -59,7 +60,7 @@ console holder's, and DUMP has to reach the file's last line.
 
 A third machine, also without --fast-io, is the swapper's. Four copies
 of hog.asm each take 8,000 words of core, which is more than there is,
-fill them with a pattern of their own and check it thirty times over
+fill them with a pattern of their own and check it twenty times over
 ten seconds; each leaves its verdict in a sector of its own. The first
 two are stopped before the other two are loaded, so they are the ones
 put out to make room, and STAT has to show them out and stopped; then
@@ -135,6 +136,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nodata   no data unit but unit 0, whatever unit 1 has
   fcwho    a channel's unit taken as 0 when the directory in core is asked
            who is writing, so a write on unit 1 looks abandoned
+  nohold   TIME never reading the clock's word 3, so the hold it starts
+           is never ended: the clock stands still, and the tick with it
 """
 
 import contextlib
@@ -394,6 +397,9 @@ def session(emu):
         symbols = Symbols()
         symbols.load(REX_LST)
         emu.writew(symbols.value('LDSEGR') + 2, [NOP])
+    if CONTROL == 'nohold':
+        # TIME's last read is the one that ends the hold
+        emu.writew(listing_word('DIN     11,3', 'SHTIME          MSK'), [NOP])
     emu.run()
     s.wait(b'REX 703 UP')
 
@@ -404,6 +410,7 @@ def session(emu):
     # Nothing is running yet, so these are quiet and exact.
     s.say('STAT')
     s.say('MEM')
+    s.say('TIME')
 
     # Three blips behind the prompt, typed ahead in one go, and let them
     # run. They are the first three tasks loaded, which is what their job
@@ -670,6 +677,7 @@ def session(emu):
     mark = s.say('LOAD NAP')
     emu.wait_for_output(b'THE CONSOLE WAS REFUSED', start=mark)
     emu.wait_quiet()
+    s.say('TIME')
     s.say('HALT')
     s.wait(b'REX 703 DOWN')
     stopped = emu.wait_stopped()
@@ -1071,8 +1079,19 @@ def verdict(paper):
         ('two runs', count(rb'^SQ9') == 2),
         ('two breaks', count(rb'BREAK AT 50') == 2),
         ('the program typed once and listed once', count(rb'20 PRINT "SQ"') == 2),
+        ('the time of day, twice, the second later', clock_moved(text)),
     ]
     return [name for name, ok in checks if not ok]
+
+
+def clock_moved(text):
+    """TIME's two readings, HH:MM:SS each, the second later -- across
+    midnight too, and by less than an hour."""
+    times = [(int(h), int(m), int(s)) for h, m, s in re.findall(rb'^(\d\d):(\d\d):(\d\d)$', text, re.M)]
+    if len(times) != 2 or any(h > 23 or m > 59 or s > 59 for h, m, s in times):
+        return False
+    first, second = [h * 3600 + m * 60 + s for h, m, s in times]
+    return 0 < (second - first) % 86400 < 3600
 
 
 def make_platter(workdir, log, swap=False, boot=False):
@@ -1088,7 +1107,7 @@ def make_platter(workdir, log, swap=False, boot=False):
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
-                     'nounit', 'dirunit', 'nodata', 'fcwho'):
+                     'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),

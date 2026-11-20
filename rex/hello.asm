@@ -25,12 +25,12 @@ HELLO           SMB     HKMSGA          ; a selection of our own page: nothing
                 LDW     HKCRLA
                 JSX     HMSG
 
-; Sleep 120 ticks and go.  The delay and the state go into the node in
+; Sleep 100 ticks and go.  The delay and the state go into the node in
 ; one masked window; K.SWTCH returns when the scheduler next picks us.
                 MSK
                 SMB     CURT
                 LDX     CURT
-                LDW     HK120
+                LDW     HK100
                 STW     *T.DLY
                 LDW     HKSLP
                 STW     *T.STA
@@ -132,7 +132,7 @@ HV              WORD    0               ; HDEC's running value...
 HDP             WORD    0               ; ...and where its next digit goes
 HDB             RES     3               ; six digits, filled backwards
 HK1             WORD    1
-HK120           WORD    120
+HK100           WORD    100
 HK0FF           WORD    X'00FF'
 HKTEN           WORD    10
 HKZER           WORD    '0'
