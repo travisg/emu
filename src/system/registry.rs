@@ -884,8 +884,8 @@ mod tests {
     }
 
     /// `--serial window` is teletype 1's line: a paper of its own for what
-    /// device 7 prints, and the window's keys for its keyboard -- with no
-    /// console window, which stays on the terminal.
+    /// multiplexer channel 0 prints, and the window's keys for its keyboard
+    /// -- with no console window, which stays on the terminal.
     #[test]
     fn a_window_line_is_teletype_1s_paper_and_keyboard() {
         let dir = std::env::temp_dir().join(format!("emu-registry-window-{}", std::process::id()));
@@ -902,12 +902,16 @@ mod tests {
         };
         let [terminal] = &terminals[..] else { panic!("one terminal window expected") };
         let Some((1, keys)) = &terminal.line else { panic!("teletype 1's window expected") };
-        m.bus.io_write16(0x7e, 0x8000 | b'A' as u16); // DOT 7,E
-        terminal.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
-        keys.send(b'K').unwrap();
-        m.bus.io_write16(0x7b, 0); // DOT 7,B: its keyboard
+        m.bus.io_write16(0xa2, 0); // DOT A,2: channel 0 for output
         assert_eq!(m.bus.poll_interrupt_lines(0), 1);
-        assert_eq!(m.bus.io_read16(0x7f), 0x80 | b'K' as u16);
+        assert_eq!(m.bus.io_read16(0xa1), 0, "channel 0, ready");
+        m.bus.io_write16(0xa3, 0x80 | b'A' as u16); // DOT A,3
+        terminal.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+        m.bus.io_write16(0xa1, 0); // DOT A,1: listening
+        keys.send(b'K').unwrap();
+        assert_eq!(m.bus.poll_interrupt_lines(0), 1);
+        assert_eq!(m.bus.io_read16(0xa1), 0x8000 | 0x80 | b'K' as u16);
+        terminal.paper.with_lines(|lines, _| assert_eq!(lines[0][1], b'K', "the set prints its key"));
         assert_eq!(m.bus.io_read16(0xef), 0, "nothing reached the console");
     }
 

@@ -76,7 +76,7 @@ Or let it show you what there is to run:
 
 The launcher has three columns: the machines; for the one under the cursor, every ROM, tape,
 core image and disk image found for it under `roms/`, `disks/` and `rex/build/`; and its options,
-which are the windows, the spare serial ports (the 703's three extra teletypes, each off, a
+which are the windows, the spare serial ports (the 703's three multiplexer teletypes, each off, a
 window, a pty or a TCP port) and the speed switches. Left, right and Tab go between the columns,
 up and down move in one, space changes an option, Enter runs, q quits. What it runs is an ordinary command line, shown at
 the bottom and printed as it starts, so the same thing can be run again without it. Anything else
@@ -112,7 +112,7 @@ still has a teletype printing ten characters a second.
 The Kaypro, the RC2014 and the Altair 8800 each have a serial port with nothing on it — the
 Kaypro's RS-232 connector, the RC2014's second SIO channel, the Altair's second 2SIO port — and `--serial pty` or `--serial tcp:PORT` plugs the
 host into it: a new pseudo-terminal for `screen` or a Kermit, or a localhost socket for `nc`. The 703
-has three more teletypes beside its console, and takes `--serial` once for each -- or `--serial window`,
+has three more teletypes beside its console, on its Teletype Multiplexer, and takes `--serial` once for each -- or `--serial window`,
 which gives that teletype a paper window of its own. The
 RC2014's monitor takes its console from whichever channel sees a space first, so it can be driven
 entirely over the socket.

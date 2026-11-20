@@ -47,11 +47,14 @@
 ; task belongs to the terminal of the shell that started it: it prints
 ; there, and that is the console RUN gives it.
 ;
-; The Model 33 echoes what is typed in hardware, so every keyboard is
-; armed for it at start-up (DOT d,11) and nothing here echoes a character.
-; The console's teletype is DIO device 14; teletypes 1, 2 and 3 are 7, 6
-; and 4, on the console's interrupt level -- an invented configuration,
-; which src/dev/ray703.rs describes.
+; Every terminal prints its own keys, so nothing here echoes a character:
+; the console's Model 33 is armed for it at start-up (DOT 14,11), and
+; teletypes 1, 2 and 3 are wired so, on channels 0, 1 and 2 of the
+; Teletype Multiplexer, DIO device 10 (706 User's Manual 5-14), on the
+; console's interrupt level.  A multiplexer channel goes one way at a
+; time: it is selected for output only while it has a character to
+; print, and a key typed meanwhile waits in its line, but for a Ctrl-C,
+; which there is the set's BREAK and reaches the program all the same.
 ;
 ; The timer is the Time-of-Day Clock, DIO device 11 (706 User's Manual
 ; 5-18), jumpered to interrupt on level 2 every 20 ms of its count: fifty
@@ -308,7 +311,7 @@
 ;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
 ;              KICK, PICK, SWTCH, Q.PUT and DSERV; then the kernel cells,
 ;              the console queue, the terminal table and the other
-;              terminals' queues, the nodes of the tasks that are here
+;              terminals' queues' descriptors, the nodes of the tasks that are here
 ;              from power-on, the disc -- IOTRY, KENTER, DXFER -- Q.GET,
 ;              the idle task, the allocator, the node arena's two doors,
 ;              and the console's shell's line and loader sector
@@ -324,7 +327,8 @@
 ;              itself
 ;   7800-7BDC  the swapper (rexswap.asm): its task, its table of extents
 ;              in the swap file, and two sectors of block lists
-;   7BDD-7C57  K.NAME's parser (rexname.asm, the last)
+;   7BDD-7CB7  K.NAME's parser (rexname.asm, the last), then the
+;              other terminals' queues' rings
 ;   7E00-7FC7  the node arena
 ;
 ; Build with make -C rex: asm703.py over rexmac.asm, this file, shell.asm,
@@ -681,13 +685,17 @@ START           MSK
 .R1             LDW     NFREH
                 SUB     =T.LEN
                 JMP     .R
-.R2             LDW     =TMT            ; select every terminal's keyboard;
-.R3             STW     SVTM            ; function 11 is the one that echoes,
-                CAX                     ; which is the Model 33 printing what
-                LDW     *TM.DKB         ; its own keyboard sent -- full
-                STW     .R4             ; duplex, and free of the printer's
-.R4             WORD    0               ; time.  A teletype that is not there
-                LDW     SVTM            ; takes no notice
+.R2             DOT     14,11           ; the console's keyboard: function 11
+                                        ; is the one that echoes, which is the
+                                        ; Model 33 printing what its own
+                                        ; keyboard sent -- full duplex, and
+                                        ; free of the printer's time
+                LDW     =TMT+TM.LEN     ; and every terminal's multiplexer
+.R3             STW     SVTM            ; channel, listening.  A channel with
+                CAX                     ; no set on it takes no notice
+                LDW     *TM.CHN
+                DOT     10,1
+                LDW     SVTM
                 ADD     =TM.LEN
                 CMW     =TMTE
                 JNE     .R3
@@ -785,132 +793,93 @@ SCHED           SMB     S2SAVA          ; the SMB lead: EXR still holds the
                 INR     2
 
 ; ------------------------------------------------------- level 0 service
-; The teletypes.  They share the level, and the level says nothing of
-; which of them interrupted, so the routine asks each one's status in turn
-; and serves every one whose interrupt is up -- a pulse from one that
-; arrives while another is being served holds the level, and brings the
-; routine round again.
+; The terminals: the console's teletype and the multiplexer share the
+; level, and the level says nothing of which of them interrupted, so the
+; routine asks each in turn -- the teletype's status, then the
+; multiplexer's for as long as its scanner is stopped on a channel -- and
+; serves whatever it finds.  A pulse from one that arrives while the
+; other is being served holds the level and brings the routine round
+; again.
 ;
-; One line serves both of a teletype's directions, so for each the
-; routine decides what happened by what it started, the period driver's
-; way: a node in the terminal's owner cell means a character was
-; printing, so this is its completion.  The completion path falls into
-; the keyboard check because the two events merge into one interrupt
-; when they coincide (the demo's discipline).  A keystroke arriving
-; *while* a character prints takes the completion path early: the
-; mailbox is cleared and the next DOT queues behind the busy printer,
-; which only tells the owner "printed" a tenth of a second soon and
-; never reorders anything.
+; The teletype's one line serves both its directions, so the routine
+; decides what happened by what it started, the period driver's way: a
+; node in the console's owner cell means a character was printing, so
+; this is its completion.  The completion path falls into the keyboard
+; check because the two events merge into one interrupt when they
+; coincide (the demo's discipline).  A keystroke arriving *while* a
+; character prints takes the completion path early: the mailbox is
+; cleared and the next DOT queues behind the busy printer, which only
+; tells the owner "printed" a tenth of a second soon and never reorders
+; anything.
+;
+; A multiplexer channel says which way it is going in the word it hands
+; over.  An input word is a key.  An output word is the channel ready for
+; a character: the one KICK claimed when it selected the channel for
+; output, or, with none claimed, the last one done -- after which the
+; channel takes the next or goes back to listening.  Either way the
+; scanner is released before the routine asks again.
 SERV            SMB     S0SAVA          ; the SMB lead again
                 STW     S0SAVA
                 STX     S0SAVX
-                LDW     =TMT
-.TM             STW     SVTM            ; each terminal in turn
-                CAX
-                LDW     *TM.DST
-                STW     .ST
-.ST             WORD    0               ; DIN d,0: its status
+                DIN     14,0            ; the console's status
                 AND     =X'0100'
-                JNZ     .HIT            ; interrupting?
-                JMP     .NXT
-.HIT            LDX     SVTM
+                JNZ     .CON            ; interrupting?
+                JMP     .MUX
+.CON            LDW     =TMT
+                STW     SVTM
+                CAX
                 LDW     *TM.OWN
                 JPL     .TX0            ; no owner: a keystroke should wait
                 JMP     .RX
-.TX0            CAX                     ; the owner's node
-                CLR
-                STW     *T.MBX          ; the owner's "printed" signal
-
-; ...and wake it, if it is waiting for exactly that.  Only if: a task the
-; shell stopped between depositing and this completion must stay stopped,
-; and the wake is advice rather than a promise -- the waiter looks at its
-; own mailbox again when it runs, and finds it empty either way.
-                LDW     *T.STA
-                CMW     =SWAI
-                JNE     .TX1            ; waiting on the printer?
-                CLR
-                STW     *T.STA
-                LDW     =1
-                STW     RESCHD
-.TX1            LDX     SVTM
-                LDW     =X'FFFF'
-                STW     *TM.OWN
-                LDW     SVTM
-                JSX     KICK            ; start the next waiting character
-.RX             LDX     SVTM
-                LDW     *TM.DCL
-                STW     .CL
-.CL             WORD    0               ; DIN d,15: collect the frame, and
-                JNZ     .RX1            ; ask for another; empty is the
-                                        ; merge's other half, not an error
-                JMP     .NXT
-
-; Post the character to the terminal's queue and have done with it.  The
-; driver keeps no line: what a line is -- where it ends, what a rubout
-; does to it, which case it is in -- is the shell's business, and this
-; routine's is to get the character off the teletype.  Nothing is echoed
-; here either; the Model 33 is armed to print its own keyboard.
-.RX1            STW     QITEM
-                CLB     X'83'           ; Ctrl-C is a flag, not a queued
-                JEQ     .RXBRK          ; character: nothing reads the queue
-                                        ; while a program holds the console,
-                LDX     SVTM            ; so an in-band break could never be
-                LDW     *TM.Q           ; seen.  Whoever consumes the flag
-                JSX     Q.PUT           ; clears it.
+.TX0            JSX     SVDONE
+.RX             DIN     14,15           ; collect the frame, and ask for
+                JNZ     .RX1            ; another; empty is the merge's
+                JMP     .MUX            ; other half, not an error
+.RX1            JSX     SVPOST
+.MUX            DIN     10,0            ; the multiplexer's status
+                JMI     .MX             ; stopped on a channel?
+                JMP     .EXIT
+.MX             DIN     10,1            ; the channel's word
+                STW     SVMW
+                JMI     .MXI            ; an input word?
+                AND     =X'000F'        ; an output word: the channel
+                STW     SVCH
+                JSX     SVBLK
+                JNZ     .MXO            ; a terminal's?
+                LDW     SVCH            ; no: let it go
+                DOT     10,0
+                JMP     .MUX
+.MXO            LDW     SVMW
+                AND     =X'4000'
+                SAZ                     ; BREAK, the set's?
+                JSX     SVBRK
                 LDX     SVTM
-                LDW     *TM.SH
-                JNZ     .NXT            ; and the terminal has no shell?
-
-; Then it asks the console's shell for one, and the key waits in the
-; queue for the shell it gets.  The shell is told the way anything that
-; waits is told: if it is the console queue's waiter -- at its prompt --
-; with a nudge in the queue, which only it can read then; if it is
-; waiting for a RUN to be over, by being woken; otherwise it is busy, and
-; looks at GETTY before it next waits for a key.
-                LDW     =1
-                STW     *TM.REQ
-                STW     GETTY
-                LDW     QCONS+Q.WTR
-                CMW     =SHTCB
-                JNE     .GW             ; at the prompt?
-                LDW     =KNUDGE
-                STW     QITEM
-                LDW     =QCONS
-                JSX     Q.PUT
-                JMP     .NXT
-.GW             LDX     =SHTCB
-                LDW     *T.STA
-                CMW     =SWAI
-                JNE     .NXT
+                LDW     *TM.PND
+                JNZ     .MXS            ; a character to send?
+                LDW     *TM.OWN
+                JMI     .MXL            ; one done?
+                JSX     SVDONE
+                LDX     SVTM
+                LDW     *TM.PND
+                JNZ     .MXS            ; and another claimed?
+.MXL            LDW     SVCH            ; none: listen again
+                DOT     10,1
+                JMP     .MUX
+.MXS            STW     SVMW
                 CLR
-                STW     *T.STA
-                LDW     =1
-                STW     RESCHD
-                JMP     .NXT
-.RXBRK          LDX     SVTM
-                LDW     *TM.BRK
-                JNZ     .RXKIL          ; one already there that nobody took?
-                LDW     =1
-                STW     *TM.BRK
-                JMP     .NXT
-.RXKIL          LDW     =1              ; then this one is for the shell: the
-                STW     *TM.KIL         ; program is not listening
-                LDW     *TM.SH
-                JNZ     .RXK1           ; a shell to tell?
-                JMP     .NXT
-.RXK1           CAX
-                LDW     *T.STA
-                CMW     =SWAI
-                JNE     .NXT            ; only out of a wait, like any wake
-                CLR
-                STW     *T.STA
-                LDW     =1
-                STW     RESCHD
-.NXT            LDW     SVTM
-                ADD     =TM.LEN
-                CMW     =TMTE
-                JEQ     .EXIT           ; the last terminal?
-                JMP     .TM
+                STW     *TM.PND
+                LDW     SVMW
+                DOT     10,3            ; send it
+                JMP     .MUX
+.MXI            SRL     8               ; an input word: the channel,
+                AND     =X'000F'
+                JSX     SVBLK
+                JNZ     .MXP            ; a terminal's?
+                JMP     .MUX            ; no: dropped
+.MXP            LDW     SVMW            ; and the key
+                AND     =X'00FF'
+                JSX     SVPOST
+                JMP     .MUX
 
 ; Return -- as somebody else, if waking a task made one runnable that was
 ; not before.  This is the second half of the scheduling: the tick takes
@@ -966,11 +935,124 @@ SERV            SMB     S0SAVA          ; the SMB lead again
                 LDX     S0SAVX
                 INR     0
 
+; The character the terminal in SVTM was printing is done: tell its owner
+; and start the next.  The owner is woken only if it is waiting for
+; exactly that: a task the shell stopped between depositing and this
+; completion must stay stopped, and the wake is advice rather than a
+; promise -- the waiter looks at its own mailbox again when it runs, and
+; finds it empty either way.
+SVDONE          SUBR
+                LDX     SVTM
+                LDW     *TM.OWN
+                CAX                     ; the owner's node
+                CLR
+                STW     *T.MBX          ; the owner's "printed" signal
+                LDW     *T.STA
+                CMW     =SWAI
+                JNE     .D1             ; waiting on the printer?
+                CLR
+                STW     *T.STA
+                LDW     =1
+                STW     RESCHD
+.D1             LDX     SVTM
+                LDW     =X'FFFF'
+                STW     *TM.OWN
+                LDW     SVTM
+                JSX     KICK            ; start the next waiting character
+                EXIT    SVDONE
+
+; Post the key in ACR to the queue of the terminal in SVTM and have done
+; with it.  The driver keeps no line: what a line is -- where it ends,
+; what a rubout does to it, which case it is in -- is the shell's
+; business, and this routine's is to get the character off the line.
+; Nothing is echoed here either; a set prints its own keyboard.
+SVPOST          SUBR
+                STW     QITEM
+                CLB     X'83'           ; Ctrl-C is a flag, not a queued
+                JEQ     .BRK            ; character: nothing reads the queue
+                                        ; while a program holds the console,
+                LDX     SVTM            ; so an in-band break could never be
+                LDW     *TM.Q           ; seen.  Whoever consumes the flag
+                JSX     Q.PUT           ; clears it.
+                LDX     SVTM
+                LDW     *TM.SH
+                JNZ     .X              ; and the terminal has no shell?
+
+; Then it asks the console's shell for one, and the key waits in the
+; queue for the shell it gets.  The shell is told the way anything that
+; waits is told: if it is the console queue's waiter -- at its prompt --
+; with a nudge in the queue, which only it can read then; if it is
+; waiting for a RUN to be over, by being woken; otherwise it is busy, and
+; looks at GETTY before it next waits for a key.
+                LDW     =1
+                STW     *TM.REQ
+                STW     GETTY
+                LDW     QCONS+Q.WTR
+                CMW     =SHTCB
+                JNE     .GW             ; at the prompt?
+                LDW     =KNUDGE
+                STW     QITEM
+                LDW     =QCONS
+                JSX     Q.PUT
+                JMP     .X
+.GW             LDX     =SHTCB
+                LDW     *T.STA
+                CMW     =SWAI
+                JNE     .X
+                CLR
+                STW     *T.STA
+                LDW     =1
+                STW     RESCHD
+                JMP     .X
+.BRK            JSX     SVBRK
+.X              EXIT    SVPOST
+
+; A Ctrl-C, or a multiplexer set's BREAK, at the terminal in SVTM.  The
+; first is the program's; a second while the first is untaken is the
+; shell's: the program is not listening.
+SVBRK           SUBR
+                LDX     SVTM
+                LDW     *TM.BRK
+                JNZ     .KIL            ; one already there that nobody took?
+                LDW     =1
+                STW     *TM.BRK
+                JMP     .X
+.KIL            LDW     =1
+                STW     *TM.KIL
+                LDW     *TM.SH
+                JNZ     .K1             ; a shell to tell?
+                JMP     .X
+.K1             CAX
+                LDW     *T.STA
+                CMW     =SWAI
+                JNE     .X              ; only out of a wait, like any wake
+                CLR
+                STW     *T.STA
+                LDW     =1
+                STW     RESCHD
+.X              EXIT    SVBRK
+
+; The block of the terminal on multiplexer channel ACR into SVTM, and ACR
+; not zero; zero if no terminal is on it.
+SVBLK           SUBR
+                CMW     =TMNMUX
+                JGE     .NO             ; one of ours?
+                ADD     =SVBTAB
+                CAX
+                LDW     *0
+                STW     SVTM
+                EXIT    SVBLK
+.NO             CLR
+                EXIT    SVBLK
+SVBTAB          WORD    TMT+TM.LEN,TMT+2*TM.LEN,TMT+3*TM.LEN
+
 ; Start the printer of the terminal whose block ACR holds on the next
 ; occupied mailbox of a task of that terminal's, round robin from the one
 ; served last, or leave it idle if every one is empty.  The owner is
 ; claimed before the DOT because the completion can arrive on the very
-; next instruction (the disc exerciser's flag-before-DOT rule).
+; next instruction (the disc exerciser's flag-before-DOT rule).  A
+; multiplexer channel is selected for output instead, with the character
+; claimed for it to take when the scanner stops there.
 KICK            SUBR
                 STW     KTM
                 CAX
@@ -1000,11 +1082,19 @@ KICK            SUBR
                 LDW     KCAND
                 STW     *TM.OWN
                 STW     *TM.LST
-                LDW     *TM.DWR
-                STW     .WR
+                LDW     *TM.CHN
+                JMI     .CON            ; the console's teletype?
+                STW     KCH
                 LDX     KCAND
                 LDW     *T.MBX
-.WR             WORD    0               ; DOT d,14: the character
+                LDX     KTM
+                STW     *TM.PND         ; for the channel's output stop
+                LDW     KCH
+                DOT     10,2            ; select it for output
+                JMP     .DONE
+.CON            LDX     KCAND
+                LDW     *T.MBX
+                DOT     14,14           ; the character
 .DONE           EXIT    KICK
 
 ; K.KICK: KICK for the running task's own terminal.  Tasks call it under
@@ -1231,7 +1321,10 @@ S1SAVX          WORD    0
 S2SAVA          WORD    0               ; level 2's register saves
 S2SAVX          WORD    0
 SVTM            WORD    0               ; the terminal SERV is serving
+SVMW            WORD    0               ; the multiplexer's word
+SVCH            WORD    0               ; and its channel
 KTM             WORD    0               ; and the one KICK is starting
+KCH             WORD    0               ; its multiplexer channel
 KCAND           WORD    0               ; KICK's scan scratch
 KTRY            WORD    0
 BKRET           WORD    0               ; BRKQ's and BRKC's way back
@@ -1288,67 +1381,45 @@ QCONS           WORD    0,0,0,QCONSN,QCONSB,X'FFFF'
 QCONSN          EQU     128
 QCONSB          RES     QCONSN
 
-; The terminals: the console's teletype and the three beside it on the
-; same interrupt level, one block each.  The four instructions that drive
-; a teletype carry its device code in the word, and there is no execute
-; instruction, so each block holds them ready-made and the driver copies
-; the one it wants into the word in front of it and runs on into it --
-; X-RAY's way with a device it learns at run time.  The other three
+; The terminals: the console's teletype, and three teletypes on the
+; multiplexer's channels 0 to 2, one block each.  The other three
 ; terminals' queues are shallower than the console's: they are typed at
 ; by a person, not by a command file run ahead of the shell.
                 NTRY    TM.OWN,TM.BSY,TM.BRK,TM.KIL,TM.SH,TM.REQ,TM.NO,TM.LEN,TMT,TMTE
-TM.DST          EQU     0               ; DIN d,0: status, 0100 an interrupt
-TM.DCL          EQU     1               ; DIN d,15: the frame, and ask for the next
-TM.DWR          EQU     2               ; DOT d,14: print
-TM.DKB          EQU     3               ; DOT d,11: select the keyboard, echoing
-TM.OWN          EQU     4               ; node whose character is printing;
+TM.CHN          EQU     0               ; the multiplexer channel; minus one is
+                                        ; the console's teletype
+TM.PND          EQU     1               ; a character KICK claimed for the
+                                        ; channel's output stop, or zero
+TM.OWN          EQU     2               ; node whose character is printing;
                                         ; minus one means the printer is idle
-TM.LST          EQU     5               ; last node served, for fairness
-TM.Q            EQU     6               ; the terminal's input queue
-TM.BSY          EQU     7               ; the console belongs to a task, not the
+TM.LST          EQU     3               ; last node served, for fairness
+TM.Q            EQU     4               ; the terminal's input queue
+TM.BSY          EQU     5               ; the console belongs to a task, not the
                                         ; shell: the shell sets it as it grants
                                         ; it and waits until the task clears it
-TM.BRK          EQU     8               ; Ctrl-C arrived; the console's holder
+TM.BRK          EQU     6               ; Ctrl-C arrived; the console's holder
                                         ; clears it
-TM.KIL          EQU     9               ; a second Ctrl-C came with the first
+TM.KIL          EQU     7               ; a second Ctrl-C came with the first
                                         ; still untaken: the shell's to act on
-TM.SH           EQU     10              ; the terminal's shell, or zero
-TM.REQ          EQU     11              ; a key came and it had none: the
+TM.SH           EQU     8               ; the terminal's shell, or zero
+TM.REQ          EQU     9               ; a key came and it had none: the
                                         ; console's shell is to give it one
-TM.NO           EQU     12              ; which terminal it is, 0 to 3
-TM.LEN          EQU     13
+TM.NO           EQU     10              ; which terminal it is, 0 to 3
+TM.LEN          EQU     11
 TMQN            EQU     32              ; the other terminals' queue depth
-TMT             DIN     14,0            ; the console
-                DIN     14,15
-                DOT     14,14
-                DOT     14,11
-                WORD    X'FFFF',SHTCB,QCONS,0,0,0,SHTCB,0,0
-                DIN     7,0             ; teletype 1
-                DIN     7,15
-                DOT     7,14
-                DOT     7,11
-                WORD    X'FFFF',SHTCB,TMQ1,0,0,0,0,0,1
-                DIN     6,0             ; teletype 2
-                DIN     6,15
-                DOT     6,14
-                DOT     6,11
-                WORD    X'FFFF',SHTCB,TMQ2,0,0,0,0,0,2
-                DIN     4,0             ; teletype 3
-                DIN     4,15
-                DOT     4,14
-                DOT     4,11
-                WORD    X'FFFF',SHTCB,TMQ3,0,0,0,0,0,3
+TMNMUX          EQU     3               ; the multiplexer channels with terminals
+TMT             WORD    X'FFFF',0,X'FFFF',SHTCB,QCONS,0,0,0,SHTCB,0,0 ; the console
+                WORD    0,0,X'FFFF',SHTCB,TMQ1,0,0,0,0,0,1      ; teletype 1
+                WORD    1,0,X'FFFF',SHTCB,TMQ2,0,0,0,0,0,2      ; teletype 2
+                WORD    2,0,X'FFFF',SHTCB,TMQ3,0,0,0,0,0,3      ; teletype 3
 TMTE            EQU     $
 GETTY           WORD    0               ; a terminal has TM.REQ up
 KNUDGE          EQU     X'0100'         ; what SERV puts in the console's queue
                                         ; to wake its shell for GETTY: not a
                                         ; character, which is a byte
-TMQ1            WORD    0,0,0,TMQN,TMQ1B,X'FFFF'
+TMQ1            WORD    0,0,0,TMQN,TMQ1B,X'FFFF' ; their rings are in rexname.asm's page
 TMQ2            WORD    0,0,0,TMQN,TMQ2B,X'FFFF'
 TMQ3            WORD    0,0,0,TMQN,TMQ3B,X'FFFF'
-TMQ1B           RES     TMQN
-TMQ2B           RES     TMQN
-TMQ3B           RES     TMQN
 KNRING          WORD    NRING
 KPGMSK          EQU     X'7C00'         ; the page bits of a word address, which
                                         ; doubled are a status word's EXR field

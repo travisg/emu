@@ -6,8 +6,8 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-//! Raytheon 703 DIO devices: the console teletype, the high speed paper tape
-//! reader and punch, and the time-of-day clock.
+//! Raytheon 703 DIO devices: the console teletype, the teletype multiplexer,
+//! the high speed paper tape reader and punch, and the time-of-day clock.
 //!
 //! They hang off the 16-bit Direct Input/Output channel rather than the memory
 //! space, so none is a `MemoryDevice`: the machine decodes the DIO address
@@ -91,18 +91,8 @@ pub const DEV_TAPE_READER: u8 = 0xd;
 pub const DEV_TAPE_PUNCH: u8 = 0xc;
 /// The Time-of-Day Clock (706 UM Table 5-1).
 pub const DEV_TOD_CLOCK: u8 = 0xb;
-/// The teletypes, the console first. The three after it are invented: the console's controller again, strapped to another
-/// device code -- the card has jumpers for all sixteen (704 technical
-/// manual, table 5-6) -- and sharing its interrupt level, which is the
-/// shape the status word (706 UM Table 5-15) and X-RAY's shared-level loop
-/// were made for. It is not how Raytheon sold more teletypes: that was the
-/// Teletype Multiplexer, one controller at device A with up to sixteen
-/// teletypes behind a scanner (706 UM 5-14), which this machine does not
-/// have. Table 5-1 of that manual gives every one of the sixteen codes to
-/// some peripheral, so these take three whose owners are not here either:
-/// the buffered output and input channels' and the digital to analog
-/// converter's.
-pub const DEV_TERMINALS: [u8; 4] = [DEV_TTY, 0x7, 0x6, 0x4];
+/// The Teletype Multiplexer (706 UM Table 5-1).
+pub const DEV_MUX: u8 = 0xa;
 
 /// Characters a second for the Model 33 on the console. The driver listing
 /// (392292, "Individual Devices") says it outright: "the standard Teletype
@@ -155,8 +145,7 @@ const FN_TAKE: u8 = 0x8;
 const STATUS_SELECTED: u16 = 0x8000;
 const STATUS_IRQ: u16 = 0x0100;
 
-/// The ASR-33 teletype controller: the console's at DIO device 14, and the
-/// invented extra terminals' at the other `DEV_TERMINALS`.
+/// The ASR-33 teletype controller: the console's, at DIO device 14.
 ///
 /// The 703's software world is eight-bit ASCII with the high bit *set* -- the
 /// driver documentation spells out CR as 8D, LF as 8A, blank as A0 and RUBOUT
@@ -798,6 +787,311 @@ impl TapePunch703 {
         }
         self.irq = true;
         1 << self.level
+    }
+}
+
+/// The Teletype Multiplexer, DIO device A (706 User's Manual 5-14, models
+/// 76601 and 76602): one controller, sixteen teletype channels, and a
+/// scanner that goes round them and stops on one that wants service.
+///
+/// ```text
+///     DOT A,0  disconnect the channel in ACR bits 12-15
+///     DOT A,1  select it for input
+///     DOT A,2  select it for output: the scanner stops there at once
+///     DOT A,3  send ACR bits 8-15 to the channel the scanner stopped on
+///     DIN A,0  status: bit 0 the scanner stopped, bit 1 BREAK on that
+///              channel, bit 15 a channel selected (Table 5-53)
+///     DIN A,1  the stopped channel's word (Figure 5-25):
+///              input    1 L - - chan(4-7) char(8-15), and the scanner moves on
+///              output   0 A - ... chan(12-15), and it waits for DOT A,3
+/// ```
+///
+/// A channel is in one mode at a time. An input channel wants service when
+/// a character has come in; an output channel when it is ready for the next,
+/// at once on selection and a character time after each `DOT A,3`. Every
+/// stop pulses the multiplexer's interrupt level, and the stop holds until
+/// the program has dealt with it: an input stop until its `DIN A,1`, an
+/// output stop until the character is sent -- or, here, until the program
+/// selects the channel for input or disconnects it instead, which is the
+/// manual's "the program should normally disconnect the channel at this
+/// time" taken to cover a channel with nothing more to print.
+///
+/// The controller has no say over echo: what a set prints of its own
+/// keyboard is the set's wiring (5-14.3, NOTE). These are wired half
+/// duplex, so a channel prints its own keys, the way the console's
+/// function B does.
+///
+/// Keys reach a channel only while it is selected for input, at ten a
+/// second; the rest wait in the host's queue, so the `L` bit, a character
+/// that came before the last was taken, is never set. A Ctrl-C typed at a
+/// channel selected for output is the set's BREAK key -- the one way to
+/// interrupt a channel that is printing, since it is not listening -- and
+/// sets `A` in its next output word and bit 1 of the status; selected for
+/// input, a Ctrl-C is an ordinary character.
+pub struct Mux703 {
+    channels: Vec<MuxChannel>,
+    level: u8,
+    /// The channel the scanner is stopped on.
+    stop: Option<usize>,
+    /// Where the scanner looks next.
+    next: usize,
+    /// Cycles per character, as the console teletype's.
+    char_cycles: u32,
+    fast_io: bool,
+}
+
+/// The multiplexer's channels.
+pub const MUX_CHANNELS: usize = 16;
+
+const FN_MUX_DISCONNECT: u8 = 0x0;
+const FN_MUX_INPUT: u8 = 0x1;
+const FN_MUX_OUTPUT: u8 = 0x2;
+const FN_MUX_SEND: u8 = 0x3;
+const FN_MUX_STATUS: u8 = 0x0;
+const FN_MUX_WORD: u8 = 0x1;
+
+const MUX_STOPPED: u16 = 0x8000;
+const MUX_BREAK: u16 = 0x4000;
+const MUX_SELECTED: u16 = 0x0001;
+const MUX_INPUT_WORD: u16 = 0x8000;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum MuxMode {
+    Off,
+    Input,
+    Output,
+}
+
+struct MuxChannel {
+    line: ConsoleEndpoint,
+    mode: MuxMode,
+    /// A character in, waiting for its `DIN A,1`.
+    frame: Option<u8>,
+    /// A key the set sent while selected for output, kept for when it is
+    /// listening again.
+    held: Option<u8>,
+    /// BREAK, for the next output word.
+    brk: bool,
+    /// Cycles left of the character being printed.
+    tx: Option<u32>,
+    /// Selected for output and ready for a character.
+    ready: bool,
+    /// Cycles banked toward the next key, at most one character's.
+    rx_credit: u32,
+}
+
+impl MuxChannel {
+    fn new(line: ConsoleEndpoint) -> Self {
+        MuxChannel {
+            line,
+            mode: MuxMode::Off,
+            frame: None,
+            held: None,
+            brk: false,
+            tx: None,
+            ready: false,
+            rx_credit: TTY_CHAR_CYCLES,
+        }
+    }
+
+    fn wants_service(&self) -> bool {
+        self.frame.is_some() || (self.mode == MuxMode::Output && self.ready)
+    }
+}
+
+impl crate::snapshot::Snapshot for Mux703 {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let Mux703 { channels, level: _wiring, stop, next, char_cycles: _session_pacing, fast_io: _session_flag } = self;
+        for ch in channels {
+            let MuxChannel { line: _session, mode, frame, held, brk, tx, ready, rx_credit } = ch;
+            w.u8(*mode as u8);
+            w.opt(frame, |w, f| w.u8(*f));
+            w.opt(held, |w, k| w.u8(*k));
+            w.bool(*brk);
+            w.opt(tx, |w, t| w.u32(*t));
+            w.bool(*ready);
+            w.u32(*rx_credit);
+        }
+        w.opt(&stop.map(|s| s as u8), |w, s| w.u8(*s));
+        w.u8(*next as u8);
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        for ch in &mut self.channels {
+            ch.mode = match r.u8()? {
+                0 => MuxMode::Off,
+                1 => MuxMode::Input,
+                2 => MuxMode::Output,
+                m => return Err(format!("multiplexer channel mode {m}")),
+            };
+            ch.frame = r.opt(|r| r.u8())?;
+            ch.held = r.opt(|r| r.u8())?;
+            ch.brk = r.bool()?;
+            ch.tx = r.opt(|r| r.u32())?;
+            ch.ready = r.bool()?;
+            ch.rx_credit = r.u32()?;
+        }
+        self.stop = r.opt(|r| r.u8())?.map(|s| s as usize % MUX_CHANNELS);
+        self.next = r.u8()? as usize % MUX_CHANNELS;
+        Ok(())
+    }
+}
+
+impl Mux703 {
+    /// Sixteen channels with nothing on their lines.
+    pub fn new(level: u8, unplugged: impl Fn() -> ConsoleEndpoint) -> Self {
+        Mux703 {
+            channels: (0..MUX_CHANNELS).map(|_| MuxChannel::new(unplugged())).collect(),
+            level,
+            stop: None,
+            next: 0,
+            char_cycles: TTY_CHAR_CYCLES,
+            fast_io: false,
+        }
+    }
+
+    /// Plug a line into channel `n`.
+    pub fn attach(&mut self, n: usize, line: ConsoleEndpoint) {
+        self.channels[n].line = line;
+    }
+
+    pub fn set_fast_io(&mut self) {
+        self.fast_io = true;
+        self.char_cycles = 0;
+    }
+
+    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        if self.fast_io {
+            return;
+        }
+        self.char_cycles = tty_char_cycles(pacing_hz);
+        for ch in &mut self.channels {
+            ch.rx_credit = self.char_cycles;
+        }
+    }
+
+    fn release(&mut self) {
+        if let Some(n) = self.stop.take() {
+            self.next = (n + 1) % MUX_CHANNELS;
+        }
+    }
+
+    pub fn dot(&mut self, function: u8, val: u16) {
+        let n = (val & 0xf) as usize;
+        match function {
+            FN_MUX_DISCONNECT | FN_MUX_INPUT => {
+                let ch = &mut self.channels[n];
+                ch.mode = if function == FN_MUX_INPUT { MuxMode::Input } else { MuxMode::Off };
+                ch.ready = false;
+                if function == FN_MUX_DISCONNECT {
+                    ch.frame = None;
+                }
+                // a character still waiting keeps its stop for its DIN
+                if self.stop == Some(n) && !self.channels[n].wants_service() {
+                    self.release();
+                }
+            }
+            FN_MUX_OUTPUT => {
+                let ch = &mut self.channels[n];
+                ch.mode = MuxMode::Output;
+                ch.ready = ch.tx.is_none();
+            }
+            FN_MUX_SEND => {
+                let Some(n) = self.stop else { return };
+                let char_cycles = self.char_cycles;
+                let ch = &mut self.channels[n];
+                if ch.mode != MuxMode::Output || ch.frame.is_some() {
+                    return;
+                }
+                ch.line.put_char((val & 0x7f) as u8);
+                ch.tx = Some(char_cycles);
+                ch.ready = false;
+                self.release();
+            }
+            _ => {}
+        }
+    }
+
+    pub fn din(&mut self, function: u8) -> u16 {
+        match function {
+            FN_MUX_STATUS => {
+                let stopped = self.stop.map_or(0, |n| {
+                    MUX_STOPPED | if self.channels[n].brk { MUX_BREAK } else { 0 }
+                });
+                let selected = self.channels.iter().any(|c| c.mode != MuxMode::Off);
+                stopped | if selected { MUX_SELECTED } else { 0 }
+            }
+            FN_MUX_WORD => {
+                let Some(n) = self.stop else { return 0 };
+                let ch = &mut self.channels[n];
+                if let Some(frame) = ch.frame.take() {
+                    self.release();
+                    MUX_INPUT_WORD | (n as u16) << 8 | frame as u16
+                } else {
+                    let brk = std::mem::take(&mut ch.brk);
+                    (if brk { MUX_BREAK } else { 0 }) | n as u16
+                }
+            }
+            _ => 0,
+        }
+    }
+
+    /// Advance every channel by `elapsed` cycles -- a character printed, a
+    /// key come in -- and let the scanner find the next channel wanting
+    /// service, pulsing the level when it stops on one.
+    pub fn poll(&mut self, elapsed: u32) -> u16 {
+        let char_cycles = self.char_cycles;
+        for ch in &mut self.channels {
+            if let Some(left) = ch.tx {
+                let left = left.saturating_sub(elapsed);
+                if left == 0 {
+                    ch.tx = None;
+                    ch.ready = ch.mode == MuxMode::Output;
+                } else {
+                    ch.tx = Some(left);
+                }
+            }
+            ch.rx_credit = ch.rx_credit.saturating_add(elapsed).min(char_cycles);
+            if ch.mode == MuxMode::Off || ch.rx_credit < char_cycles {
+                continue;
+            }
+            if ch.mode == MuxMode::Output {
+                // listening only for BREAK; anything else waits its turn
+                if ch.held.is_none() {
+                    match ch.line.try_next_char() {
+                        Some(0x03) => {
+                            ch.brk = true;
+                            ch.rx_credit = 0;
+                        }
+                        key => ch.held = key,
+                    }
+                }
+                continue;
+            }
+            if ch.frame.is_some() {
+                continue;
+            }
+            if let Some(key) = ch.held.take().or_else(|| ch.line.try_next_char()) {
+                // the set prints what its keyboard sends
+                ch.line.put_char(key & 0x7f);
+                if key & 0x7f == 0x0d {
+                    ch.line.put_char(0x0a);
+                }
+                ch.frame = Some(key | 0x80);
+                ch.rx_credit = 0;
+            }
+        }
+        if self.stop.is_some() {
+            return 0;
+        }
+        let found = (0..MUX_CHANNELS).map(|i| (self.next + i) % MUX_CHANNELS).find(|&n| self.channels[n].wants_service());
+        match found {
+            Some(n) => {
+                self.stop = Some(n);
+                1 << self.level
+            }
+            None => 0,
+        }
     }
 }
 
@@ -1662,6 +1956,147 @@ mod tests {
         assert_eq!(punch.din(FN_STATUS) & STATUS_IRQ, 0);
         assert_eq!(punch.take_tape(), [0x41]);
         assert!(punch.tape().is_empty(), "torn off");
+    }
+
+    // -- the teletype multiplexer -------------------------------------------
+
+    /// A multiplexer with three plugged channels: their keyboards and their
+    /// papers.
+    fn mux_lines() -> (Mux703, Vec<mpsc::Sender<u8>>, Vec<Captured>) {
+        let unplugged = || ConsoleEndpoint::new(mpsc::channel().1, Box::new(io::sink()));
+        let mut mux = Mux703::new(0, unplugged);
+        let (mut keys, mut papers) = (Vec::new(), Vec::new());
+        for n in 0..3 {
+            let (tx, rx) = mpsc::channel();
+            let paper = Captured::default();
+            mux.attach(n, ConsoleEndpoint::new(rx, Box::new(paper.clone())));
+            keys.push(tx);
+            papers.push(paper);
+        }
+        (mux, keys, papers)
+    }
+
+    /// Figure 5-25's input word and Table 5-53's status: a key on a
+    /// listening channel stops the scanner there with an interrupt, and the
+    /// DIN that takes it moves the scanner on. The set prints its own key.
+    #[test]
+    fn a_key_on_a_listening_channel_is_its_input_word() {
+        let (mut mux, keys, papers) = mux_lines();
+        assert_eq!(mux.din(FN_MUX_STATUS), 0, "nothing selected");
+        keys[2].send(b'\r').unwrap();
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES), 0, "not listening: the key waits");
+        mux.dot(FN_MUX_INPUT, 2);
+        assert_eq!(mux.poll(0), 1, "an interrupt on the multiplexer's level");
+        assert_eq!(mux.din(FN_MUX_STATUS), MUX_STOPPED | MUX_SELECTED);
+        assert_eq!(mux.din(FN_MUX_WORD), 0x8000 | 2 << 8 | 0x8d, "1 L -- chan char");
+        assert_eq!(mux.din(FN_MUX_STATUS), MUX_SELECTED, "released");
+        assert_eq!(*papers[2].0.lock().unwrap(), b"\r\n", "the set's own carriage return");
+        assert_eq!(mux.din(FN_MUX_WORD), 0, "no stop, no word");
+    }
+
+    /// Selecting a channel for output stops the scanner there at once; each
+    /// character sent releases it, and the channel asks again a character
+    /// time later.
+    #[test]
+    fn an_output_channel_asks_for_each_character_a_character_time_apart() {
+        let (mut mux, _keys, papers) = mux_lines();
+        mux.dot(FN_MUX_OUTPUT, 1);
+        assert_eq!(mux.poll(0), 1);
+        assert_eq!(mux.din(FN_MUX_WORD), 1, "0 A ... chan");
+        assert_eq!(mux.din(FN_MUX_STATUS), MUX_STOPPED | MUX_SELECTED, "an output stop holds");
+        mux.dot(FN_MUX_SEND, 0x80 | b'H' as u16);
+        assert_eq!(mux.din(FN_MUX_STATUS), MUX_SELECTED, "sent: released");
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES - 1), 0, "still printing");
+        assert_eq!(mux.poll(1), 1, "ready for the next");
+        assert_eq!(mux.din(FN_MUX_WORD), 1);
+        mux.dot(FN_MUX_SEND, 0x80 | b'I' as u16);
+        assert_eq!(*papers[1].0.lock().unwrap(), b"HI");
+
+        // nothing more to say: back to listening releases the stop
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES), 1);
+        mux.dot(FN_MUX_INPUT, 1);
+        assert_eq!(mux.din(FN_MUX_STATUS), MUX_SELECTED);
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES), 0);
+    }
+
+    /// One stop at a time, and the scanner goes round from where it last
+    /// stopped, so no channel is starved.
+    #[test]
+    fn the_scanner_serves_one_channel_at_a_time_round_robin() {
+        let (mut mux, keys, _papers) = mux_lines();
+        for (n, key) in keys.iter().enumerate() {
+            key.send(b'a' + n as u8).unwrap();
+            key.send(b'x').unwrap();
+            mux.dot(FN_MUX_INPUT, n as u16);
+        }
+        let mut order = Vec::new();
+        for _ in 0..6 {
+            assert_eq!(mux.poll(TTY_CHAR_CYCLES), 1);
+            assert_eq!(mux.poll(TTY_CHAR_CYCLES), 0, "still stopped on the last");
+            let word = mux.din(FN_MUX_WORD);
+            order.push(((word >> 8 & 0xf) as u8, (word & 0x7f) as u8));
+        }
+        assert_eq!(order, [(0, b'a'), (1, b'b'), (2, b'c'), (0, b'x'), (1, b'x'), (2, b'x')]);
+    }
+
+    /// A disconnected channel is the set in LOCAL: nothing reaches the
+    /// computer, and the stop on it goes.
+    #[test]
+    fn a_disconnected_channel_is_not_served() {
+        let (mut mux, keys, _papers) = mux_lines();
+        mux.dot(FN_MUX_OUTPUT, 0);
+        assert_eq!(mux.poll(0), 1);
+        mux.dot(FN_MUX_DISCONNECT, 0);
+        assert_eq!(mux.din(FN_MUX_STATUS), 0, "released, and nothing selected");
+        keys[0].send(b'k').unwrap();
+        assert_eq!(mux.poll(10 * TTY_CHAR_CYCLES), 0);
+    }
+
+    /// A Ctrl-C at a channel that is printing is its BREAK key: A in the
+    /// next output word and bit 1 of the status. Listening, it is a key.
+    #[test]
+    fn break_is_ctrl_c_while_printing_and_a_key_while_listening() {
+        let (mut mux, keys, _papers) = mux_lines();
+        mux.dot(FN_MUX_OUTPUT, 0);
+        assert_eq!(mux.poll(0), 1);
+        mux.dot(FN_MUX_SEND, 0x80 | b'.' as u16);
+        keys[0].send(0x03).unwrap();
+        keys[0].send(b'q').unwrap();
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES), 1, "ready again");
+        assert_eq!(mux.din(FN_MUX_STATUS), MUX_STOPPED | MUX_BREAK | MUX_SELECTED);
+        assert_eq!(mux.din(FN_MUX_WORD), MUX_BREAK, "0 A ... channel 0");
+        assert_eq!(mux.din(FN_MUX_WORD), 0, "taken");
+        mux.dot(FN_MUX_INPUT, 0);
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(mux.din(FN_MUX_WORD), 0x8000 | (0x80 | b'q' as u16), "the key behind it kept");
+        keys[0].send(0x03).unwrap();
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(mux.din(FN_MUX_WORD), 0x8083, "listening, Ctrl-C is a character");
+    }
+
+    /// Keys come at ten a second a channel, and `--fast-io` takes the time
+    /// out of both directions; a pacing rate after it changes nothing.
+    #[test]
+    fn the_multiplexer_keeps_the_teletype_rate_until_fast_io() {
+        let (mut mux, keys, _papers) = mux_lines();
+        keys[0].send(b'a').unwrap();
+        keys[0].send(b'b').unwrap();
+        mux.dot(FN_MUX_INPUT, 0);
+        assert_eq!(mux.poll(0), 1, "the first key is free");
+        mux.din(FN_MUX_WORD);
+        assert_eq!(mux.poll(TTY_CHAR_CYCLES - 1), 0);
+        assert_eq!(mux.poll(1), 1);
+        mux.din(FN_MUX_WORD);
+
+        mux.set_fast_io();
+        mux.set_pacing_hz(CLOCK_HZ / 100);
+        keys[0].send(b'c').unwrap();
+        assert_eq!(mux.poll(0), 1);
+        mux.din(FN_MUX_WORD);
+        mux.dot(FN_MUX_OUTPUT, 0);
+        assert_eq!(mux.poll(0), 1);
+        mux.dot(FN_MUX_SEND, b'z' as u16);
+        assert_eq!(mux.poll(0), 1, "printed on the next poll");
     }
 
     // -- the time-of-day clock ---------------------------------------------

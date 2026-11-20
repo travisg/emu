@@ -1,7 +1,8 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
 ; K.NAME, REX's one reading of a file name -- the file of the kernel's
-; deck after rexswap.asm, in the rest of its page.  The shell, rexlib and
+; deck after rexswap.asm, in the rest of its page, where the rings of
+; the other terminals' input queues come after it.  The shell, rexlib and
 ; BASIC all hand their text to it, so a name means the same at the
 ; prompt, to a utility and to SAVE.
 ;
@@ -119,6 +120,13 @@ KNQ             WORD    0               ; where the next character goes,
 KNN             WORD    0               ; how many more it will take,
 KNT             WORD    0               ; and the character in hand
                 LPOOL
+
+; The other terminals' input queues' rings, out of page 0, where their
+; descriptors are: Q.PUT and Q.GET reach a ring by its descriptor's word
+; address, so it may be anywhere.
+TMQ1B           RES     TMQN
+TMQ2B           RES     TMQN
+TMQ3B           RES     TMQN
 KNEND           EQU     $
 
                 TRUE    KNEND>NARB      ; into the node arena: a negative RES,

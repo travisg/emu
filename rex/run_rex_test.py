@@ -86,14 +86,17 @@ then has to find both files untouched and the two sectors free again,
 and its own tools are held to the same rule about system files and to
 ASCII in a name.
 
-A sixth machine has a second teletype on a localhost socket (--serial
-tcp:0), which the harness types at and reads as it does the console. The
-first key there has to bring up a shell of that terminal's own, and the
-two shells run side by side: a BLIP behind each prompt prints on its own
+A sixth machine has teletypes 1, 2 and 3 on the Teletype Multiplexer's
+channels 0-2, each on a localhost socket (--serial tcp:0), which the
+harness types at and reads as it does the console. The first key at
+teletype 1 has to bring up a shell of that terminal's own, and the two
+shells run side by side: a BLIP behind each prompt prints on its own
 terminal's paper and never on the other's, STAT on the console shows the
 other terminal's shell and its task, a second Ctrl-C there ends only the
-program in front of it, and its BYE leaves the pool as it was before the
-terminal had a shell -- after which a key brings up another. Then, with
+program in front of it, a Ctrl-C while it prints -- the set's BREAK --
+stops a dump, teletype 3 gets a shell of its own, and teletype 1's BYE
+leaves the pool as it was before the terminal had a shell -- after which
+a key brings up another. Then, with
 the console's shell waiting on a program it ran, teletype 2's first key
 has to bring up a shell there too; and with more hogs loaded than core
 holds, a terminal's shell that is waiting for a key has to be put out
@@ -126,8 +129,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   sysopen  a file opened for writing under a system file's name
   noseg    the loader deaf to the code that says a word holds an address
            in another segment of the module, so it adds the wrong base
-  onlycon  the teletypes' service routine asking only the console's
-           status, as if it were the only one
+  onlycon  the terminals' service routine never asking the multiplexer,
+           as if the console were the only one
   onetty   the printer started on any task's character, whichever
            terminal the task is on
   nogetty  a key at a terminal with no shell asking for none
@@ -138,6 +141,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
            who is writing, so a write on unit 1 looks abandoned
   nohold   TIME never reading the clock's word 3, so the hold it starts
            is never ended: the clock stands still, and the tick with it
+  nobreak  a multiplexer set's BREAK, its Ctrl-C while it prints, never
+           passed on, so a dump on teletype 1 cannot be stopped
 """
 
 import contextlib
@@ -1107,7 +1112,7 @@ def make_platter(workdir, log, swap=False, boot=False):
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
-                     'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold'):
+                     'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -1242,7 +1247,7 @@ def terminal_port(log, n):
     """Where the emulator just said teletype n's line is: the last such line
     in the log, the startup line of the machine that was just spawned."""
     log.flush()
-    found = re.findall(rb'serial: teletype %d, DIO device [0-9A-F] is on 127\.0\.0\.1:(\d+)' % n,
+    found = re.findall(rb'serial: teletype %d, multiplexer channel %d is on 127\.0\.0\.1:(\d+)' % (n, n - 1),
                        open(LOG_FILE, 'rb').read())
     if not found:
         raise AssertionError('the emulator never said where teletype %d is' % n)
@@ -1263,16 +1268,20 @@ def wait_without(paper, pattern, start, marks, timeout=120):
         time.sleep(0.1)
 
 
-def terminals_session(emu, t1, t2):
+def terminals_session(emu, t1, t2, t3):
     """The console and teletype 1, a shell on each. While something prints
     behind a prompt its marks land inside whatever else that paper prints,
     so commands typed then go in without waiting for a prompt -- the shell
     reads them from its queue when it is ready -- and what comes back is
     read with the marks taken out."""
     if CONTROL == 'onlycon':
-        # SERV's walk: CMW =TMTE / SNE / JMP .EXIT -- without the skip it
-        # leaves after the console
-        emu.writew(listing_word('the last terminal?', 'SERV            SMB'), [NOP])
+        # SERV's ask of the multiplexer's status: a CLR there, and it never
+        # looks past the console
+        emu.writew(listing_word('DIN     10,0', 'SERV            SMB'), [CLR])
+    if CONTROL == 'nobreak':
+        # SERV's BREAK test: SAZ / JSX SVBRK -- without the call a set's
+        # BREAK goes nowhere
+        emu.writew(listing_word("BREAK, the set's?", 'SERV            SMB') + 1, [NOP])
     if CONTROL == 'onetty':
         # KICK's test of a node's terminal: CMW KTM / SEQ / JMP .NXT --
         # without the jump every task's mailbox is the printer's
@@ -1356,6 +1365,27 @@ def terminals_session(emu, t1, t2):
     term.wait(b'KILLED\r\n')
     con.say('ECHO STILL HERE')
     con.wait(b'STILL HERE\r\n')
+
+    # a Ctrl-C while teletype 1 prints: its channel is not listening, so
+    # the key is the set's BREAK, which stops a dump that has twenty
+    # minutes of printing left in it
+    mark = term.say('DUMP BASIC.RX')
+    t1.wait_for_output(b'\n0010 ', start=mark)
+    t1.key('\x03')
+    term.at = term.wait(PROMPT, timeout=120).start()     # the next say's prompt
+    if re.search(rb'\n0100 ', bytes(t1.output[mark:])):
+        raise AssertionError('the dump ran on past the BREAK: %r' % bytes(t1.output[mark:])[-200:])
+
+    # teletype 3, the multiplexer's channel 2
+    term3 = Session(t3)
+    t3.key('\r')
+    term3.wait(b'REX 703 TERMINAL 3\r\n')
+    term3.say('ECHO THREE')
+    term3.wait(b'THREE\r\n')
+    term3.say('BYE')
+    t3.wait_quiet()
+    if b'THREE' in emu.output or b'THREE' in t1.output or b'THREE' in t2.output:
+        raise AssertionError("teletype 3's echo came out elsewhere")
 
     # both printers busy at once: a long dump behind the console's prompt
     # and a file typed out on teletype 1, three times over, which has to
@@ -1548,15 +1578,14 @@ def main():
             make_platter(termdir, log, swap=True)
             with cwd(termdir):
                 emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--no-throttle',
-                                 '--serial', 'tcp:0', '--serial', 'tcp:0'], log=log)
-            t1, t2 = Terminal(terminal_port(log, 1)), Terminal(terminal_port(log, 2))
+                                 '--serial', 'tcp:0', '--serial', 'tcp:0', '--serial', 'tcp:0'], log=log)
+            t1, t2, t3 = (Terminal(terminal_port(log, n)) for n in (1, 2, 3))
             try:
-                terminals_session(emu, t1, t2)
+                terminals_session(emu, t1, t2, t3)
             finally:
-                log.write(b'\n--- paper, the terminals session: teletype 1 ---\n' + bytes(t1.output))
-                log.write(b'\n--- paper, the terminals session: teletype 2 ---\n' + bytes(t2.output))
-                t1.close()
-                t2.close()
+                for n, t in enumerate((t1, t2, t3), 1):
+                    log.write(b'\n--- paper, the terminals session: teletype %d ---\n' % n + bytes(t.output))
+                    t.close()
             finish(emu)
             log.write(b'\n--- paper, the terminals session: the console ---\n' + bytes(emu.output))
         except Exception:

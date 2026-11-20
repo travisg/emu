@@ -9,17 +9,15 @@
 //! Raytheon 703 (1967).
 //!
 //! Not a port of anything -- the C++ tree never had this machine. It is a
-//! fully populated 703: 32K words of core, a console teletype and the high
-//! speed paper tape reader and punch on the DIO channel, and a 74601 disc
-//! controller whose
-//! four drive bays mount whatever `ray703-disc{0..3}.img` files the current
-//! directory holds (the Kaypro floppy convention: a file that is not there is
-//! a drive that was never installed). Plus two things Raytheon did not
-//! Raytheon's Time-of-Day Clock, its interval jumper giving REX its tick.
-//! Plus one thing Raytheon did not sell in this form, where its catalogue had
-//! a teletype multiplexer: three more teletypes beside the console, on the console's level -- each an
-//! unplugged line until `--serial` gives it a host end, and present either
-//! way, so that a snapshot is the same machine whatever was plugged in.
+//! fully populated 703: 32K words of core, and on the DIO channel a console
+//! teletype, the Teletype Multiplexer with its sixteen channels, the high
+//! speed paper tape reader and punch, the Time-of-Day Clock, its interval
+//! jumper giving REX its tick, and a 74601 disc controller whose four drive
+//! bays mount whatever `ray703-disc{0..3}.img` files the current directory
+//! holds (the Kaypro floppy convention: a file that is not there is a drive
+//! that was never installed). A multiplexer channel is an unplugged line
+//! until `--serial` gives it a host end, and present either way, so that a
+//! snapshot is the same machine whatever was plugged in.
 //!
 //! The 703 has no ROM at all. An operator keyed a bootstrap in from the front
 //! panel and fed the machine an absolute paper tape; there was nothing in core
@@ -43,8 +41,8 @@ use crate::console::ConsoleEndpoint;
 use crate::dev::disc74601::{Disc74601, DEV_DISC};
 use crate::dev::memory::Memory;
 use crate::dev::ray703::{
-    TapePunch703, TapeReader703, TodClock703, Tty703, DEV_TAPE_PUNCH, DEV_TAPE_READER, DEV_TOD_CLOCK,
-    DEV_TERMINALS,
+    Mux703, TapePunch703, TapeReader703, TodClock703, Tty703, DEV_MUX, DEV_TAPE_PUNCH, DEV_TAPE_READER, DEV_TOD_CLOCK,
+    DEV_TTY,
 };
 use crate::rom;
 use std::io;
@@ -90,20 +88,19 @@ const PTB: [u16; 11] = [
 /// number and says so.
 const PTB_LOAD_ORIGIN: u16 = 0x0100;
 
-/// How many teletypes, the console included (`DEV_TERMINALS`).
-pub const TERMINALS: usize = DEV_TERMINALS.len();
-
-/// The extra terminals as `--serial` names them, one line each in turn.
-pub const SERIAL_PORTS: [&str; TERMINALS - 1] =
-    ["teletype 1, DIO device 7", "teletype 2, DIO device 6", "teletype 3, DIO device 4"];
-
-/// The snapshot section of each teletype, the console's first.
-const TTY_SECTIONS: [&[u8; 4]; TERMINALS] = [b"TTY ", b"TTY1", b"TTY2", b"TTY3"];
+/// The multiplexer's channels `--serial` plugs, one line each in turn:
+/// teletype n is channel n-1, REX's terminal n.
+pub const SERIAL_PORTS: [&str; 3] = [
+    "teletype 1, multiplexer channel 0",
+    "teletype 2, multiplexer channel 1",
+    "teletype 3, multiplexer channel 2",
+];
 
 pub struct Ray703 {
     core: Memory,
-    /// The console first, then the extra terminals in `DEV_TERMINALS` order.
-    ttys: [Tty703; TERMINALS],
+    /// The console.
+    tty: Tty703,
+    mux: Mux703,
     reader: TapeReader703,
     punch: TapePunch703,
     disc: Disc74601,
@@ -113,9 +110,9 @@ pub struct Ray703 {
 impl Ray703 {
     pub fn new(rom_path: &Path, console: ConsoleEndpoint, subsystem: &str) -> io::Result<Self> {
         // The character devices signal level 0, which is what PTB and every
-        // driver listing assume. A program that arms one at a time knows
-        // which interrupted by what it started; one that runs several at
-        // once asks each teletype's status word.
+        // driver listing assume, and the multiplexer with them. A program
+        // that arms one at a time knows which interrupted by what it
+        // started; one that runs several at once asks each one's status.
         //
         // The disc gets level 1. X-RAY leaves every channel number to the
         // per-installation system description ('DSKI EQU NUMBER, cards
@@ -132,12 +129,8 @@ impl Ray703 {
         // (`set_time_of_day`).
         let mut sys = Ray703 {
             core: Memory::new(CORE_BYTES),
-            ttys: [
-                Tty703::new(console, 0),
-                Tty703::new(unplugged(), 0),
-                Tty703::new(unplugged(), 0),
-                Tty703::new(unplugged(), 0),
-            ],
+            tty: Tty703::new(console, 0),
+            mux: Mux703::new(0, unplugged),
             reader: TapeReader703::new(0),
             punch: TapePunch703::new(0),
             disc: Disc74601::new(1),
@@ -209,9 +202,8 @@ impl Ray703 {
     /// instead of ten characters a second, a hundred and ten frames and half
     /// a revolution per transfer. The tape reader already free-runs.
     pub fn set_fast_io(&mut self) {
-        for tty in &mut self.ttys {
-            tty.set_fast_io();
-        }
+        self.tty.set_fast_io();
+        self.mux.set_fast_io();
         self.punch.set_fast_io();
         self.disc.set_fast_io();
         // Not the clock: a periodic interrupt with no period never
@@ -225,9 +217,10 @@ impl Ray703 {
         self.tod.set_and_start(count);
     }
 
-    /// Give extra terminal `n` (1 to `TERMINALS - 1`) its host end.
+    /// Give teletype `n` (1 to `SERIAL_PORTS.len()`) its host end: the line
+    /// into multiplexer channel `n - 1`.
     pub fn attach_terminal(&mut self, n: usize, line: ConsoleEndpoint) {
-        self.ttys[n].set_console(line);
+        self.mux.attach(n - 1, line);
     }
 
     /// Wire the panel window's disc rack lamps into the controller.
@@ -277,7 +270,7 @@ impl Bus for Ray703 {
     fn load_tape(&mut self, reader: usize, frames: Vec<u8>) -> Result<(), String> {
         match reader {
             0 => self.reader.load_tape(frames),
-            1 => self.ttys[0].load_tape(frames),
+            1 => self.tty.load_tape(frames),
             n => return Err(format!("no paper tape reader {n}: 0 is the high speed reader, 1 the teletype's")),
         }
         Ok(())
@@ -291,11 +284,10 @@ impl Bus for Ray703 {
 
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         use crate::snapshot::Snapshot;
-        let Ray703 { core, ttys, reader, punch, disc, tod } = self;
+        let Ray703 { core, tty, mux, reader, punch, disc, tod } = self;
         w.section(b"CORE", |w| core.save(w));
-        for (tty, tag) in ttys.iter().zip(TTY_SECTIONS) {
-            w.section(tag, |w| tty.save(w));
-        }
+        w.section(b"TTY ", |w| tty.save(w));
+        w.section(b"MUX ", |w| mux.save(w));
         w.section(b"PTR ", |w| reader.save(w));
         w.section(b"PTP ", |w| punch.save(w));
         w.section(b"TOD ", |w| tod.save(w));
@@ -307,9 +299,8 @@ impl Bus for Ray703 {
     fn load_state(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
         use crate::snapshot::Snapshot;
         r.section(b"CORE", |r| self.core.load(r))?;
-        for (tty, tag) in self.ttys.iter_mut().zip(TTY_SECTIONS) {
-            r.section(tag, |r| tty.load(r))?;
-        }
+        r.section(b"TTY ", |r| self.tty.load(r))?;
+        r.section(b"MUX ", |r| self.mux.load(r))?;
         r.section(b"PTR ", |r| self.reader.load(r))?;
         r.section(b"PTP ", |r| self.punch.load(r))?;
         r.section(b"TOD ", |r| self.tod.load(r))?;
@@ -330,10 +321,9 @@ impl Bus for Ray703 {
     /// would.
     fn io_read16(&mut self, port: u8) -> u16 {
         let (device, function) = (port >> 4, port & 0x0f);
-        if let Some(n) = DEV_TERMINALS.iter().position(|&d| d == device) {
-            return self.ttys[n].din(function);
-        }
         match device {
+            DEV_TTY => self.tty.din(function),
+            DEV_MUX => self.mux.din(function),
             DEV_TAPE_READER => self.reader.din(function),
             DEV_TAPE_PUNCH => self.punch.din(function),
             DEV_DISC => self.disc.din(function),
@@ -344,10 +334,9 @@ impl Bus for Ray703 {
 
     fn io_write16(&mut self, port: u8, val: u16) {
         let (device, function) = (port >> 4, port & 0x0f);
-        if let Some(n) = DEV_TERMINALS.iter().position(|&d| d == device) {
-            return self.ttys[n].dot(function, val);
-        }
         match device {
+            DEV_TTY => self.tty.dot(function, val),
+            DEV_MUX => self.mux.dot(function, val),
             DEV_TAPE_READER => self.reader.dot(function, val),
             DEV_TAPE_PUNCH => self.punch.dot(function, val),
             DEV_DISC => self.disc.dot(function, val),
@@ -364,8 +353,9 @@ impl Bus for Ray703 {
     /// machine's one DMA device, and this poll is the one place the memory
     /// and the devices meet.
     fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
-        let ttys = self.ttys.iter_mut().fold(0, |lines, tty| lines | tty.poll(elapsed_cycles));
-        ttys | self.reader.poll(elapsed_cycles)
+        self.tty.poll(elapsed_cycles)
+            | self.mux.poll(elapsed_cycles)
+            | self.reader.poll(elapsed_cycles)
             | self.punch.poll(elapsed_cycles)
             | self.disc.poll(elapsed_cycles, &mut self.core)
             | self.tod.poll(elapsed_cycles)
@@ -380,9 +370,8 @@ impl Bus for Ray703 {
     /// whether a device charges time at all, rather than what a second of it
     /// is worth in cycles.
     fn set_device_pacing_hz(&mut self, hz: u64) {
-        for tty in &mut self.ttys {
-            tty.set_pacing_hz(hz);
-        }
+        self.tty.set_pacing_hz(hz);
+        self.mux.set_pacing_hz(hz);
         self.punch.set_pacing_hz(hz);
         self.disc.set_pacing_hz(hz);
         self.tod.set_pacing_hz(hz);
@@ -480,11 +469,11 @@ mod tests {
         assert_eq!(sys.io_read16(0x1d), 0);
     }
 
-    /// `--serial`'s names for the extra teletypes say the codes they answer.
+    /// `--serial`'s names say the multiplexer channel each line is.
     #[test]
-    fn the_serial_ports_name_their_device_codes() {
-        for (port, dev) in SERIAL_PORTS.iter().zip(&DEV_TERMINALS[1..]) {
-            assert!(port.ends_with(&format!("DIO device {dev:X}")), "{port}");
+    fn the_serial_ports_name_their_channels() {
+        for (n, port) in SERIAL_PORTS.iter().enumerate() {
+            assert_eq!(*port, format!("teletype {}, multiplexer channel {n}", n + 1));
         }
     }
 
@@ -500,9 +489,8 @@ mod tests {
         sys.io_write16(0xce, 0x8a); // DOT 12,14
         assert_eq!(sys.poll_interrupt_lines(0), 1, "punched, on level 0");
         assert_eq!(sys.io_read16(0xc0), 0x0100);
-        for &dev in &DEV_TERMINALS {
-            assert_eq!(sys.io_read16(dev << 4), 0, "no teletype stirred");
-        }
+        assert_eq!(sys.io_read16(0xe0), 0, "the teletype did not stir");
+        assert_eq!(sys.io_read16(0xa0), 0, "nor the multiplexer");
     }
 
     /// The port's `tape` and `savetape`: reader 0 is the high speed reader
@@ -555,35 +543,41 @@ mod tests {
         (ConsoleEndpoint::new(rx, Box::new(Shared(printed.clone()))), printed)
     }
 
-    /// Each teletype answers its own device code: what the program prints on
-    /// one comes out of that line alone, a key typed on one is that one's to
-    /// collect, and only its status word says it interrupted -- all four on
-    /// level 0, the console's.
+    /// The console teletype and the multiplexer share level 0 and answer
+    /// their own codes: a key typed on teletype 2 is multiplexer channel 1's
+    /// input word, what the program sends to teletype 1 comes out of that
+    /// line alone, and a set prints its own keys. Codes 7, 6 and 4 answer
+    /// nothing.
     #[test]
-    fn each_teletype_answers_its_own_device_code() {
+    fn the_terminals_are_the_console_and_the_multiplexer() {
         let rom = scratch_file("terminals", &[0x01, 0x00]);
         let mut sys = machine("", &rom).unwrap();
         let mut printed = Vec::new();
-        for n in 1..TERMINALS {
+        for n in 1..=SERIAL_PORTS.len() {
             let (endpoint, out) = line(if n == 2 { b"K" } else { b"" });
             sys.attach_terminal(n, endpoint);
             printed.push(out);
         }
         sys.set_fast_io();
-        let port = |dev: u8, function: u8| (dev << 4) | function;
-        // a character on teletype 1, and every keyboard armed
-        sys.io_write16(port(DEV_TERMINALS[1], 0xe), 0x80 | b'X' as u16);
-        for &dev in &DEV_TERMINALS {
-            sys.io_write16(port(dev, 0xb), 0);
+        for ch in 0..3 {
+            sys.io_write16(0xa1, ch); // DOT A,1: listen
         }
-        assert_eq!(sys.poll_interrupt_lines(0), 1, "one level for all of them");
-        let status: Vec<u16> = DEV_TERMINALS.iter().map(|&d| sys.io_read16(port(d, 0x0))).collect();
-        assert_eq!(status, [0x8000, 0x8100, 0x8100, 0x8000], "teletype 1 printed, teletype 2 has a key");
-        assert_eq!(sys.io_read16(port(DEV_TERMINALS[2], 0xf)), 0x80 | b'K' as u16);
-        assert_eq!(sys.io_read16(port(DEV_TERMINALS[3], 0xf)), 0, "nothing typed there");
+        assert_eq!(sys.poll_interrupt_lines(0), 1, "the key, on level 0");
+        assert_eq!(sys.io_read16(0xa0), 0x8001, "stopped, a channel selected");
+        assert_eq!(sys.io_read16(0xa1), 0x8100 | 0x80 | b'K' as u16, "channel 1's key");
+        assert_eq!(sys.io_read16(0xa0), 0x0001, "moved on");
+
+        sys.io_write16(0xa2, 0); // DOT A,2: channel 0 for output
+        assert_eq!(sys.poll_interrupt_lines(0), 1);
+        assert_eq!(sys.io_read16(0xa1), 0x0000, "channel 0 ready for a character");
+        sys.io_write16(0xa3, 0x80 | b'X' as u16);
         assert_eq!(*printed[0].lock().unwrap(), b"X", "teletype 1's paper");
-        assert_eq!(*printed[1].lock().unwrap(), b"K", "teletype 2 echoes its own keyboard");
+        assert_eq!(*printed[1].lock().unwrap(), b"K", "teletype 2 prints its own key");
         assert!(printed[2].lock().unwrap().is_empty());
+        assert_eq!(sys.io_read16(0xe0), 0, "the console did not stir");
+        for dev in [7u8, 6, 4] {
+            assert_eq!(sys.io_read16(dev << 4), 0, "nothing at {dev}");
+        }
     }
 
     /// The clock answers at B, powers up stopped at zero, and the factory's

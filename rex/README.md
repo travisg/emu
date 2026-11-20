@@ -131,9 +131,10 @@ console, which is the way out of one that is not listening.
 
 A task `LOAD` started ticks along behind whatever is typed -- a BASIC
 session included, its output interleaving with `PRINT`'s on the one
-printer. The Model 33 echoes what is typed in hardware here
-(`DOT 14,11`), so typing interleaves with the tasks' output character by
-character, the way two users on one printer did. Unlike standalone Tiny
+printer. Every terminal prints its own keys -- the console's Model 33
+armed for it (`DOT 14,11`), the multiplexer's sets wired for it -- so
+typing interleaves with the tasks' output character by character, the way
+two users on one printer did. Unlike standalone Tiny
 BASIC it has type-ahead: input goes through a queue, so a burst typed while
 it is busy is held and run in order, and only a burst deeper than the queue
 is lost.
@@ -202,11 +203,16 @@ queue**: the service routine posts a character and wakes the waiter -- only
 out of its wait, so a keystroke cannot restart a stopped task -- the reader
 blocks in `Q.GET` rather than polling, and one waiter to a queue means one
 reader. **There are four terminals**, the console's teletype and teletypes
-1-3 beside it (DIO devices 7, 6 and 4, on the console's interrupt
-level): each has a block in the kernel's terminal table, the service
-routine asks each teletype's status word in turn to find which
-interrupted, and every task has its terminal (`T.TTY`), where what it
-prints goes and whose console it may be given. And **a console has one
+1-3 on the Teletype Multiplexer's channels 0-2, sharing the console's
+interrupt level: each has a block in the kernel's terminal table, the
+service routine asks the teletype's status and then the multiplexer's,
+taking the stopped channel's word for as long as its scanner stops on
+one, and every task has its terminal (`T.TTY`), where what it prints goes
+and whose console it may be given. A multiplexer channel goes one way at a
+time: the driver selects it for output while a task has a character for
+it and for input again when none is left, so keys typed while one prints
+wait in its line -- all but a Ctrl-C, which is the set's BREAK there and
+raises the break flag like any other. And **a console has one
 reader at a time**, named by its
 terminal's `TM.BSY` cell: `RUN` raises it in the masked window that clears
 the break flag, then waits on it -- reading no queue -- until the task's
@@ -324,11 +330,13 @@ LOAD button, and has to come up, list its directory and run a program. A
 fifth has a platter with two sectors free: a `SAVE` too long for them
 under a saved program's name has to be refused with the program left as
 it was, a `COPY` onto the swap file's name refused outright, and the
-host's tools have to refuse the same of a system file. A sixth has two
-more teletypes on localhost sockets: a key at each brings it a shell, a
-blip behind each prompt prints on its own terminal's paper alone, a second
-Ctrl-C there ends only its own program, `BYE` gives the pool back, and a
-terminal's shell waiting for a key is put out and comes back for one. A
+host's tools have to refuse the same of a system file. A sixth has the
+three multiplexer teletypes on localhost sockets: a key at each brings it
+a shell, a blip behind each prompt prints on its own terminal's paper
+alone, a second Ctrl-C there ends only its own program, a Ctrl-C while
+one prints -- the set's BREAK -- stops a dump, `BYE` gives the pool back,
+and a terminal's shell waiting for a key is put out and comes back for
+one. A
 seventh has a data platter on unit 1 made with `fs703.py --dir`: a
 file with no unit lands there and a program still comes from unit 0,
 `COPY` goes both ways, a `REN` across them is refused, `DIR` and `DIR 0:`
@@ -344,7 +352,7 @@ the printer falling quiet, which is the rule for driving any 703 guest from
 a script. Every wait raises on its timeout, and `REX_CONTROL=blank`,
 `=nohello`, `=nolock`, `=nosave`, `=noguard`, `=noswapin`, `=nosys`,
 `=nopark`, `=nolatch`, `=sysopen`, `=noseg`, `=onlycon`, `=onetty`,
-`=nogetty`, `=nounit`, `=dirunit`, `=nodata`, `=fcwho` and `=nohold` are its negative
+`=nogetty`, `=nounit`, `=dirunit`, `=nodata`, `=fcwho`, `=nohold` and `=nobreak` are its negative
 controls --
 a platter with nothing on it, one
 without the hello module, a kernel with its wait for the disc patched out,
@@ -353,13 +361,14 @@ console, one that cuts a returning task's blocks out of the free list but
 never reads them back, a boot sector never told where the kernel is, a
 `HALT` that stops no task, a channel that forgets it refused a character,
 a file opened for writing under a system file's name, a loader that
-adds a segment's own base to an address in another, a teletypes' service
-routine that asks only the console's status, a printer started on any
+adds a segment's own base to an address in another, a terminals' service
+routine that never asks the multiplexer, a printer started on any
 terminal's task, a key that asks for no shell, a disc driver deaf to the
 unit, a directory entry read from whichever platter's directory is in
 core, no data unit but unit 0, and a channel's unit forgotten when the
 directory is asked who is writing, and a TIME that never ends the
-clock's hold, which stops the clock and the tick with it -- which must all FAIL. Two things that make it hard
+clock's hold, which stops the clock and the tick with it, and a set's BREAK
+gone nowhere -- which must all FAIL. Two things that make it hard
 to verify by hand: under `--fast-io` the keyboard has no rate limit at all,
 so a burst of input outruns any consumer and proves nothing about the
 scheduling -- measure a switch in a `--trace` instead; and a number printed
