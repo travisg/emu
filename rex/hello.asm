@@ -11,7 +11,7 @@
 ; a word address and the divide's flat operand (W15), the byte addresses
 ; of the text (B16), a page selection of our own page (SMB, which the
 ; loader builds from wherever we land) and a reserved run (ILOC).  make
-; -C rex reloc-check assembles this absolute at two bases and holds the
+; -C rex reloc-check assembles this absolute at four bases and holds the
 ; reference loader's placement of the object to those images.
 ;
 ; Output is the mailbox protocol of the shell's SHPUTC against our own

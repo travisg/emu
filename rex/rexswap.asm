@@ -1,6 +1,7 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; REX's swapper -- the last file of the kernel's deck, after rexfs.asm.
+; REX's swapper -- the file of the kernel's deck after rexfs.asm, with
+; rexname.asm behind it.
 ;
 ; When more is loaded than core holds, a task that is not running goes
 ; out to the disc and comes back when it can run again.  A task cannot
@@ -13,7 +14,7 @@
 ; wakes a task touches anything but its node, so a task may be put out in
 ; any state; PICK passes over one whose blocks are not in core.
 ;
-; The swapper is a task, the fifth on the ring, asleep until one of two
+; The swapper is a task, on the ring from power-on, asleep until one of two
 ; things wants it:
 ;
 ;   a task waiting for core   an allocation found nothing that fits and

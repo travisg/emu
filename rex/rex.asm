@@ -19,6 +19,7 @@
 ;
 ;   HELP or ?    these, and where the programs are listed (DIR 0:)
 ;   UPTIME, UP   seconds since the executive came up
+;   TIME         the time of day, off the clock (HH:MM:SS)
 ;   STAT         every task's job number, name and state, how long each
 ;                sleeper has left, and OUT for one that is on the disc;
 ;                and, with a swap file, how many have gone out and come in
@@ -332,7 +333,7 @@
 ;   7E00-7FC7  the node arena
 ;
 ; Build with make -C rex: asm703.py over rexmac.asm, this file, shell.asm,
-; rexfs.asm and rexswap.asm, as one deck, into rex/build, with rexapi.asm, the
+; rexfs.asm, rexswap.asm and rexname.asm, as one deck, into rex/build, with rexapi.asm, the
 ; interface the modules are assembled against, and the modules beside it
 ; -- brex.asm over test/703/bcore.asm is basic.obj, the module RUN BASIC
 ; loads.  make -C rex bootdisc puts the kernel, behind boot.asm, and the

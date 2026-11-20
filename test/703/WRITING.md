@@ -10,7 +10,7 @@ for them:
 | the assembler's syntax, literals, macros, libraries, modules, warnings | the docstring of `tools/asm703.py` |
 | a complete small program | `demo.asm` |
 | the rules a large one lives by | the header of `bcore.asm` |
-| a program that loads under REX | `../../rex/hello.asm`, and "Modules" in `../../rex/README.md` |
+| a program that loads under REX | `../../rex/hello.asm`, and "Modules" in `../../rex/AGENTS.md` |
 | the macros | `../../rex/rexmac.asm` |
 | every device function code | `../../src/dev/ray703.rs` |
 | what the machine does with an instruction | `../../src/cpu/ray703.rs`, which cites the manual's sections |
