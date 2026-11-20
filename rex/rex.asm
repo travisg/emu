@@ -49,8 +49,8 @@
 ;
 ; The Model 33 echoes what is typed in hardware, so every keyboard is
 ; armed for it at start-up (DOT d,11) and nothing here echoes a character.
-; The console's teletype is DIO device 14; teletypes 1, 2 and 3 are 12, 11
-; and 10, on the console's interrupt level -- an invented configuration,
+; The console's teletype is DIO device 14; teletypes 1, 2 and 3 are 7, 6
+; and 4, on the console's interrupt level -- an invented configuration,
 ; as the line clock is, which src/dev/ray703.rs describes.
 ;
 ; The timer is the emulator's invented 60 Hz line clock: DIO device 2,
@@ -1323,20 +1323,20 @@ TMT             DIN     14,0            ; the console
                 DOT     14,14
                 DOT     14,11
                 WORD    X'FFFF',SHTCB,QCONS,0,0,0,SHTCB,0,0
-                DIN     12,0            ; teletype 1
-                DIN     12,15
-                DOT     12,14
-                DOT     12,11
+                DIN     7,0             ; teletype 1
+                DIN     7,15
+                DOT     7,14
+                DOT     7,11
                 WORD    X'FFFF',SHTCB,TMQ1,0,0,0,0,0,1
-                DIN     11,0            ; teletype 2
-                DIN     11,15
-                DOT     11,14
-                DOT     11,11
+                DIN     6,0             ; teletype 2
+                DIN     6,15
+                DOT     6,14
+                DOT     6,11
                 WORD    X'FFFF',SHTCB,TMQ2,0,0,0,0,0,2
-                DIN     10,0            ; teletype 3
-                DIN     10,15
-                DOT     10,14
-                DOT     10,11
+                DIN     4,0             ; teletype 3
+                DIN     4,15
+                DOT     4,14
+                DOT     4,11
                 WORD    X'FFFF',SHTCB,TMQ3,0,0,0,0,0,3
 TMTE            EQU     $
 GETTY           WORD    0               ; a terminal has TM.REQ up

@@ -230,7 +230,7 @@ def main():
             burst = b'\r\t' + DOWN + DOWN + b'   ' + END + b' \r'
             terminal_case('burst', '-L --fast-io', [burst], workdir, log, True,
                           '-s ray703 -r roms/703/demo.bin --serial tcp:0 --no-throttle --fast-io',
-                          b'serial: teletype 1, DIO device C is on 127.0.0.1:')
+                          b'serial: teletype 1, DIO device 7 is on 127.0.0.1:')
             terminal_case('quit', '', [b'q'], workdir, log, False)
             piped_case(workdir, log)
         except Exception:

@@ -201,7 +201,7 @@ queue**: the service routine posts a character and wakes the waiter -- only
 out of its wait, so a keystroke cannot restart a stopped task -- the reader
 blocks in `Q.GET` rather than polling, and one waiter to a queue means one
 reader. **There are four terminals**, the console's teletype and teletypes
-1-3 beside it (DIO devices 12, 11 and 10, on the console's interrupt
+1-3 beside it (DIO devices 7, 6 and 4, on the console's interrupt
 level): each has a block in the kernel's terminal table, the service
 routine asks each teletype's status word in turn to find which
 interrupted, and every task has its terminal (`T.TTY`), where what it

@@ -179,11 +179,10 @@ address and object columns rather than pattern-match them.
 ### 5. Emulator gaps
 
 - **A punch (DIO device `C`).** PEAT names `M.THSPT` for it, the same driver
-  the teletype uses, so no new guest-side work would be needed. The address
-  is spoken for, though: the first of this machine's extra teletypes sits at
-  `C`. Raytheon's punch and reader test (390444B, with the museum's other
-  tapes) is a program for X-RAY that wants a punch, and a way to feed the
-  reader what was punched.
+  the teletype uses, so no new guest-side work would be needed. Raytheon's
+  punch and reader test (390444B, with the museum's other tapes) is a
+  program for X-RAY that wants a punch, and a way to feed the reader what
+  was punched.
 - **The status DIN, `DIN dev,0`.** The driver's shared-interrupt path reads one
   and tests bit 7 for "IR OR NO", which pins that single bit and nothing else
   about the layout — so nothing was invented. Only assembled when

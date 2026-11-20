@@ -867,7 +867,7 @@ mod tests {
     }
 
     /// `--serial window` is teletype 1's line: a paper of its own for what
-    /// device C prints, and the window's keys for its keyboard -- with no
+    /// device 7 prints, and the window's keys for its keyboard -- with no
     /// console window, which stays on the terminal.
     #[test]
     fn a_window_line_is_teletype_1s_paper_and_keyboard() {
@@ -885,12 +885,12 @@ mod tests {
         };
         let [terminal] = &terminals[..] else { panic!("one terminal window expected") };
         let Some((1, keys)) = &terminal.line else { panic!("teletype 1's window expected") };
-        m.bus.io_write16(0xce, 0x8000 | b'A' as u16); // DOT 12,E
+        m.bus.io_write16(0x7e, 0x8000 | b'A' as u16); // DOT 7,E
         terminal.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
         keys.send(b'K').unwrap();
-        m.bus.io_write16(0xcb, 0); // DOT 12,B: its keyboard
+        m.bus.io_write16(0x7b, 0); // DOT 7,B: its keyboard
         assert_eq!(m.bus.poll_interrupt_lines(0), 1);
-        assert_eq!(m.bus.io_read16(0xcf), 0x80 | b'K' as u16);
+        assert_eq!(m.bus.io_read16(0x7f), 0x80 | b'K' as u16);
         assert_eq!(m.bus.io_read16(0xef), 0, "nothing reached the console");
     }
 

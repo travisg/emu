@@ -1223,7 +1223,7 @@ def terminal_port(log, n):
     """Where the emulator just said teletype n's line is: the last such line
     in the log, the startup line of the machine that was just spawned."""
     log.flush()
-    found = re.findall(rb'serial: teletype %d, DIO device [A-F] is on 127\.0\.0\.1:(\d+)' % n,
+    found = re.findall(rb'serial: teletype %d, DIO device [0-9A-F] is on 127\.0\.0\.1:(\d+)' % n,
                        open(LOG_FILE, 'rb').read())
     if not found:
         raise AssertionError('the emulator never said where teletype %d is' % n)

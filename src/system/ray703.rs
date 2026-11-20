@@ -13,12 +13,13 @@
 //! paper tape reader on the DIO channel, and a 74601 disc controller whose
 //! four drive bays mount whatever `ray703-disc{0..3}.img` files the current
 //! directory holds (the Kaypro floppy convention: a file that is not there is
-//! a drive that was never installed). Plus two things no Raytheon catalogue
-//! offered: the invented 60 Hz line clock (`dev/ray703.rs` says invented at
-//! length), silent until a program connects it, and three more teletypes
-//! beside the console, on the console's level -- each an unplugged line
-//! until `--serial` gives it a host end, and present either way, so that a
-//! snapshot is the same machine whatever was plugged in.
+//! a drive that was never installed). Plus two things Raytheon did not
+//! sell in this form, where its catalogue had a time-of-day clock and a
+//! teletype multiplexer: the invented 60 Hz line clock (`dev/ray703.rs` says
+//! invented at length), silent until a program connects it, and three more
+//! teletypes beside the console, on the console's level -- each an
+//! unplugged line until `--serial` gives it a host end, and present either
+//! way, so that a snapshot is the same machine whatever was plugged in.
 //!
 //! The 703 has no ROM at all. An operator keyed a bootstrap in from the front
 //! panel and fed the machine an absolute paper tape; there was nothing in core
@@ -91,7 +92,7 @@ pub const TERMINALS: usize = DEV_TERMINALS.len();
 
 /// The extra terminals as `--serial` names them, one line each in turn.
 pub const SERIAL_PORTS: [&str; TERMINALS - 1] =
-    ["teletype 1, DIO device C", "teletype 2, DIO device B", "teletype 3, DIO device A"];
+    ["teletype 1, DIO device 7", "teletype 2, DIO device 6", "teletype 3, DIO device 4"];
 
 /// The snapshot section of each teletype, the console's first.
 const TTY_SECTIONS: [&[u8; 4]; TERMINALS] = [b"TTY ", b"TTY1", b"TTY2", b"TTY3"];
@@ -441,6 +442,14 @@ mod tests {
         assert_eq!(sys.poll_interrupt_lines(0), 0, "no tape is mounted");
         // and an absent device reads back zero rather than panicking
         assert_eq!(sys.io_read16(0x1d), 0);
+    }
+
+    /// `--serial`'s names for the extra teletypes say the codes they answer.
+    #[test]
+    fn the_serial_ports_name_their_device_codes() {
+        for (port, dev) in SERIAL_PORTS.iter().zip(&DEV_TERMINALS[1..]) {
+            assert!(port.ends_with(&format!("DIO device {dev:X}")), "{port}");
+        }
     }
 
     /// A plugged-in line whose keys are `input`, and what it prints.

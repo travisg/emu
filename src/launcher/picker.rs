@@ -563,7 +563,7 @@ mod tests {
             launch(&["-s", "ray703", "-r", "roms/703/demo.bin", "--serial", "window", "--serial", "pty", "--serial", "tcp:0"])
         );
         let screen = p.render("emu", 120, 30).join("\n");
-        assert!(screen.contains("[window] teletype 1, DIO device C"), "{screen}");
+        assert!(screen.contains("[window] teletype 1, DIO device 7"), "{screen}");
         // the first unplugged again: the rest are kept but not passed, since
         // --serial fills the ports in turn
         keys(&mut p, &[Key::Up, Key::Up, Key::Space, Key::Space, Key::Space]);

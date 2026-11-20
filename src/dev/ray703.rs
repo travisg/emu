@@ -78,16 +78,23 @@ use std::path::Path;
 /// DIO device codes (392292, "Individual Devices").
 pub const DEV_TTY: u8 = 0xe;
 pub const DEV_TAPE_READER: u8 = 0xd;
-/// ...and the one code no Raytheon document assigns: the invented line
-/// clock's, picked from the unused space (the disc holds 1, disc74601.rs).
+/// ...and the invented line clock's, which no Raytheon document assigns
+/// it. The 706 User's Manual gives 2 to the DMA magnetic tape controller
+/// (Table 5-1); this machine has none.
 pub const DEV_LINE_CLOCK: u8 = 0x2;
 /// The teletypes, the console first. The three after it are invented as the
-/// line clock is: no Raytheon document shows a 703 with a second teletype
-/// controller, but the controller is the console's, strapped to another
-/// device code and sharing its interrupt level, which is the shape the
-/// status word (706 UM Table 5-15) and X-RAY's shared-level loop were made
-/// for. The codes count down from the console's, past the tape reader's.
-pub const DEV_TERMINALS: [u8; 4] = [DEV_TTY, 0xc, 0xb, 0xa];
+/// line clock is: the console's controller again, strapped to another
+/// device code -- the card has jumpers for all sixteen (704 technical
+/// manual, table 5-6) -- and sharing its interrupt level, which is the
+/// shape the status word (706 UM Table 5-15) and X-RAY's shared-level loop
+/// were made for. It is not how Raytheon sold more teletypes: that was the
+/// Teletype Multiplexer, one controller at device A with up to sixteen
+/// teletypes behind a scanner (706 UM 5-14), which this machine does not
+/// have. Table 5-1 of that manual gives every one of the sixteen codes to
+/// some peripheral, so these take three whose owners are not here either:
+/// the buffered output and input channels' and the digital to analog
+/// converter's.
+pub const DEV_TERMINALS: [u8; 4] = [DEV_TTY, 0x7, 0x6, 0x4];
 
 /// Characters a second for the Model 33 on the console. The driver listing
 /// (392292, "Individual Devices") says it outright: "the standard Teletype
