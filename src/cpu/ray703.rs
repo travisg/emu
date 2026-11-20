@@ -412,10 +412,14 @@ impl Cpu703 {
             }
             0x2 => {
                 // JSX: "forces the computer into global addressing mode prior
-                // to the transfer" (2-6), so the EA is computed first.
+                // to the transfer" (2-6), and its own address is formed that
+                // way: "in the indexed global mode, regardless of the state
+                // of the CCFGLB flip-flop" (704 technical manual 4-67). So a
+                // routine that set local mode still returns anywhere with
+                // `LDX save / JSX *0`. A direct JSX takes EXR like any other.
+                self.global = true;
                 let target = self.word_ea(insn);
                 self.ixr = self.pcr;
-                self.global = true;
                 self.pcr = target;
             }
             0x3 => {
@@ -1760,6 +1764,25 @@ mod tests {
         assert_eq!(cpu.pcr, 0x60);
         assert_eq!(cpu.ixr, 0x42, "the return address is the word after JSX");
         assert!(cpu.global, "JSX forces global mode prior to the transfer");
+    }
+
+    /// An indexed JSX forms its address globally whatever the mode (704
+    /// technical manual 4-67): from word page 1 in local mode, `JSX *0` with
+    /// a page 0 address in the index register goes to that address, not to
+    /// the same offset in page 1.
+    #[test]
+    fn an_indexed_jsx_forms_its_address_globally_in_local_mode() {
+        let (mut cpu, mut bus) = boot(&[0x0040]); // SLM
+        bus.load(0x900 << 1, &0x2800u16.to_be_bytes()); // JSX *0
+        run_steps(&mut cpu, &mut bus, 1);
+        cpu.pcr = 0x900;
+        cpu.exr = (0x900u16 >> 10) as u8; // the byte page of word 900
+        cpu.ixr = 0x0123;
+        assert!(!cpu.global);
+        run_steps(&mut cpu, &mut bus, 1);
+        assert_eq!(cpu.pcr, 0x0123, "not X'923', the page of the JSX");
+        assert_eq!(cpu.ixr, 0x901);
+        assert!(cpu.global);
     }
 
     /// A branch to self stops the emulator only when nothing could ever wake
