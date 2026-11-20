@@ -28,6 +28,32 @@ segment's, to be stored from its first word and relocated by its base; and
 0D, that the words from here on are relocated by that segment's base
 instead -- they hold addresses in it. A module of one segment has neither.
 
+A library is module after module on one tape, each naming what it defines
+(NTRY) and what it wants from the others (EXTN). `--library` places every
+module on the tape back to back from a word address and fills the
+references between them, as the loader's EXTN, NTRY and STRING11 do, and
+writes what it placed as a core image and a list of the names:
+
+    reload703.py 392325.bin --library 0x800 --image math.core --symbols math.sym
+
+An external has no word of its own in the text. Each word that refers to
+one holds, where its address belongs, the address of the next such word,
+and the EXTN code gives the first: a chain through the module, ended by an
+address field of all ones. Filling it puts the definition in each word by
+the word's kind (cards 1087-1127): a word with no operation code is an SMB
+for the definition's page, a store-byte word becomes the definition's
+fifteen bits under the word's own index bit, and any other keeps its
+operation code and index bit over the definition's low eleven.
+
+Two things here are not the loader's. It takes the modules a program asks
+for, in the order they come; this takes them all, and puts the ones with
+byte references first, so that a library placed at the bottom of a word
+page has those in the page's first 1,024 words, where a byte address formed
+in the module's own page can reach them. And on paper tape each record is
+framed as an absolute tape's are -- 8A, a count of 94, the record, 8D --
+with whatever is punched between records, a legend or a BELL, to be passed
+over; `--library` takes a tape either way.
+
 The records: a zero marker, ninety-two bytes of text and a checksum which is
 the byte sum folded, (sum >> 8) + sum. The marker and the checksum are the
 record's framing and never reach the code stream -- GETCARD leaves the byte
@@ -72,19 +98,53 @@ def stream(data):
         yield from rec
 
 
+def unframe(frames):
+    """The records off a paper tape, end to end: each is 8A, its length in
+    two frames, itself and 8D. A file with no such record is returned as it
+    is, the records already end to end."""
+    out = bytearray()
+    i = 0
+    head = b'\x8a' + RECORD.to_bytes(2, 'big')
+    while True:
+        i = frames.find(head, i)
+        if i < 0:
+            break
+        end = i + len(head) + RECORD
+        if frames[end:end + 1] == b'\x8d':
+            out += frames[i + len(head):end]
+            i = end + 1
+        else:
+            i += 1
+    return bytes(out) if out else frames
+
+
+def name(text):
+    """A name as the text has it: eight characters, the eighth bit set."""
+    return bytes(c & 0x7f for c in text).decode('ascii', 'replace').rstrip()
+
+
 def relo11(word, base):
     """RELO11, cards 1165-1172: the address relocated within the M field and
     the opcode and index bit kept."""
     return (word & 0xf800) | ((word + base) & 0x07ff)
 
 
-def load(data, bases, trace=None):
+def load(data, bases, trace=None, names=None):
     """Place the module with its segments at `bases`: returns (core, entry,
     sizes, byte_pages) with `core` a dict of word address to word and one
-    size and one byte-page flag to a segment."""
+    size and one byte-page flag to a segment.
+
+    `data` is the records, or an iterator over their text that is left
+    after the module's END code, for a tape of several. `names`, a dict,
+    is given the module's 'library' and 'block' names, its 'entries' as
+    (name, address) and its 'externals' as (name, address of the chain's
+    first word, or None for a name with no chain); without it a module
+    with entries or externals is refused."""
     if isinstance(bases, int):
         bases = [bases]
-    bytes_ = stream(data)
+    bytes_ = stream(data) if isinstance(data, (bytes, bytearray)) else data
+    if names is not None:
+        names.update(library=[], block=None, entries=[], externals=[])
 
     def getbyte():
         try:
@@ -146,8 +206,21 @@ def load(data, bases, trace=None):
             continue
         if code in (0x01, 0x08):
             # a name: GETNAME reads four words and keeps two (cards 1534-1547)
-            for _ in range(8):
-                getbyte()
+            text = name(getbyte() for _ in range(8))
+            if names is not None and code == 0x01:
+                names['library'].append(text)
+            elif names is not None:
+                names['block'] = text
+            continue
+        if code in (0x02, 0x05) and names is not None:
+            # EXTN and NTRY: a name and a value, which GETVAL relocates
+            # unless it is all ones (cards 1430-1439)
+            text = name(getbyte() for _ in range(8))
+            value = getword()
+            if code == 0x05:
+                names['entries'].append((text, (value + base) & 0x7fff))
+            else:
+                names['externals'].append((text, None if value == 0xffff else (value + base) & 0x7fff))
             continue
         if code == 0x03:
             # SMB, cards 744-748: ADD BASE / SRL 10 / ORI X'80'
@@ -196,6 +269,94 @@ def load(data, bases, trace=None):
     if pointer is None:
         raise LoadError('no SIZE code')
     return core, entry, sizes, byte_pages
+
+
+class Text:
+    """The text of a tape of modules, with a look ahead for the next."""
+
+    def __init__(self, data):
+        self.text = bytes(stream(data))
+        self.at = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.at >= len(self.text):
+            raise StopIteration
+        self.at += 1
+        return self.text[self.at - 1]
+
+    def another(self):
+        """Whether a module follows, passing over the zeros before it."""
+        while self.at < len(self.text) and self.text[self.at] == 0:
+            self.at += 1
+        return self.at < len(self.text)
+
+
+def string11(core, head, value, where):
+    """STRING11, cards 1087-1127: follow the chain from the word at `head`
+    and put `value` in each word of it. Returns how many it filled."""
+    block = head & 0x7800
+    link = head
+    filled = 0
+    while link & 0x7ff != 0x7ff:
+        addr = block | (link & 0x7ff)
+        if addr not in core or filled > len(core):
+            raise LoadError(f'{where}: the chain leaves the text at {addr:#x}')
+        item = link = core[addr]
+        if item & 0xf800 == 0:
+            core[addr] = 0x80 | (value >> 10)                       # SMBDEF
+        elif item >> 12 == 3:
+            core[addr] = ((item & 0x0800) << 4) | (value & 0x7fff)  # DEF15, the X bit its sign
+        else:
+            core[addr] = (item & 0xf800) | (value & 0x7ff)          # DEF11
+        filled += 1
+    return filled
+
+
+def library(data, start):
+    """Place every module of a library from `start` on and fill their
+    references to each other: returns (core, symbols, modules), `symbols`
+    a dict of name to address and `modules` a list of (names, base, size)
+    in the order placed."""
+    # once through at word 0 for the sizes, and for which have byte
+    # references, which go first
+    found = []
+    text = Text(data)
+    while text.another():
+        codes = []
+        _, _, sizes, _ = load(text, [0], trace=codes, names={})
+        if len(sizes) != 1:
+            raise LoadError('a library module of more than one segment')
+        found.append((sizes[0], any(code >> 4 in (0xa, 0xb) for code, _ in codes)))
+    order = sorted(range(len(found)), key=lambda i: not found[i][1])
+    bases = {}
+    at = start
+    for i in order:
+        bases[i] = at
+        at += found[i][0]
+
+    core = {}
+    symbols = {}
+    placed = {}
+    text = Text(data)
+    for i in range(len(found)):
+        names = {}
+        module, _, _, _ = load(text, [bases[i]], names=names)
+        core.update(module)
+        for entry, addr in names['entries']:
+            if entry in symbols:
+                raise LoadError(f'{entry} is defined twice')
+            symbols[entry] = addr
+        placed[i] = (names, bases[i], found[i][0])
+    for names, _, _ in placed.values():
+        for external, head in names['externals']:
+            if external not in symbols:
+                raise LoadError(f'{external} is defined nowhere on the tape')
+            if head is not None:
+                string11(core, head, symbols[external], external)
+    return core, symbols, [placed[i] for i in order]
 
 
 def dump(data):
@@ -253,10 +414,36 @@ def main():
                     help='compare the placed module against an "addr word" map, '
                          'as asm703.py -m writes for an absolute build at the same base')
     ap.add_argument('--dump', action='store_true', help='print the stream as codes')
+    ap.add_argument('--library', metavar='ADDR',
+                    help='the object is a library, on paper tape or not: place every module '
+                         'from this word address on and fill the references between them')
+    ap.add_argument('--image', help='with --library, write a core image from word 0')
+    ap.add_argument('--symbols', help='with --library, write the names as "addr name" lines')
     args = ap.parse_args()
 
     with open(args.object, 'rb') as f:
         data = f.read()
+    if args.library:
+        try:
+            core, symbols, modules = library(unframe(data), int(args.library, 0))
+        except LoadError as e:
+            print(f'{args.object}: {e}', file=sys.stderr)
+            return 1
+        for names, base, size in modules:
+            print(f'{base:04X} {size:4} {"/".join(names["library"])}')
+        print(f'{args.object}: {len(modules)} modules, {len(core)} words at '
+              f'{min(core):#x}-{max(core):#x}, {len(symbols)} names')
+        if args.image:
+            image = bytearray(2 * (max(core) + 1))
+            for addr, word in core.items():
+                image[2 * addr:2 * addr + 2] = word.to_bytes(2, 'big')
+            with open(args.image, 'wb') as f:
+                f.write(image)
+        if args.symbols:
+            with open(args.symbols, 'w', encoding='utf-8') as f:
+                for sym, addr in sorted(symbols.items(), key=lambda kv: (kv[1], kv[0])):
+                    f.write(f'{addr:04X} {sym}\n')
+        return 0
     bases = [int(base, 0) for base in args.base.split(',')]
     try:
         if args.dump:
