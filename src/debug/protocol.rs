@@ -74,6 +74,24 @@ pub fn parse(line: &str) -> Result<Command, String> {
             return Ok(Command::Machine(op(std::path::PathBuf::from(path))));
         }
     }
+    // and `savetape`, and `tape` after its reader
+    if let Some(rest) = line.strip_prefix("savetape").filter(|r| r.starts_with(char::is_whitespace)) {
+        let path = rest.trim();
+        if path.is_empty() {
+            return Err("savetape takes a path".into());
+        }
+        return Ok(Command::Machine(DebugOp::SaveTape(path.into())));
+    }
+    if let Some(rest) = line.strip_prefix("tape ") {
+        let rest = rest.trim_start();
+        let (reader, path) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let path = path.trim();
+        if path.is_empty() {
+            return Err("tape takes a reader and a path".into());
+        }
+        let reader = reader.parse().map_err(|_| format!("'{reader}' is not a reader"))?;
+        return Ok(Command::Machine(DebugOp::LoadTape { reader, path: path.into() }));
+    }
     // as do `disk` and `savedisk`, after the drive
     if let Some(rest) = line.strip_prefix("savedisk ") {
         let rest = rest.trim_start();
@@ -216,6 +234,8 @@ pub fn parse(line: &str) -> Result<Command, String> {
         "disk" => return Err("disk takes a drive and a path".into()),
         "snapshot" | "restore" => return Err(format!("{verb} takes a path")),
         "savedisk" => return Err("savedisk takes a drive and a path".into()),
+        "tape" => return Err("tape takes a reader and a path".into()),
+        "savetape" => return Err("savetape takes a path".into()),
         "eject" => {
             arity(1)?;
             Command::Machine(DebugOp::ChangeDisk { drive: parse_drive(args[0])?, path: None })
@@ -397,6 +417,8 @@ pub const HELP: &[&str] = &[
     "disk DRIVE PATH        put the image at PATH in drive DRIVE (a letter, or a number)",
     "eject DRIVE            empty the drive",
     "savedisk DRIVE PATH    the disk in a drive to a new file",
+    "tape READER PATH       thread the file at PATH through paper tape reader READER (a number)",
+    "savetape PATH          tear off what the punch has punched, to a new file",
     "snapshot PATH          the whole machine into a file",
     "restore PATH           the machine back from a snapshot, halted",
     "backlog                the last 16 KiB of guest output",
@@ -453,6 +475,8 @@ mod tests {
             ("eject a", Command::Machine(DebugOp::ChangeDisk { drive: 0, path: None })),
             ("eject 1", Command::Machine(DebugOp::ChangeDisk { drive: 1, path: None })),
             ("savedisk a keep.img", Command::Machine(DebugOp::SaveDisk { drive: 0, path: "keep.img".into() })),
+            ("tape 0 tapes/a b.bin ", Command::Machine(DebugOp::LoadTape { reader: 0, path: "tapes/a b.bin".into() })),
+            ("savetape out.bin", Command::Machine(DebugOp::SaveTape("out.bin".into()))),
             ("snapshot /tmp/a b.snap", Command::Machine(DebugOp::Snapshot("/tmp/a b.snap".into()))),
             ("restore x.snap ", Command::Machine(DebugOp::Restore("x.snap".into()))),
             ("backlog", Command::Backlog),

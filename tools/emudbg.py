@@ -505,6 +505,15 @@ class Emu:
         """The disk in a drive to a new file at `path`, never over one."""
         self.command('savedisk %s %s' % (drive, path))
 
+    def tape(self, reader, path):
+        """Thread the file at `path` through a paper tape reader (a
+        number: the 703's high speed reader is 0, its teletype's 1)."""
+        self.command('tape %s %s' % (reader, path))
+
+    def save_tape(self, path):
+        """Tear off what the punch has punched, to a new file at `path`."""
+        self.command('savetape %s' % path)
+
     def snapshot(self, path):
         """The whole machine into the file at `path`."""
         self.command('snapshot %s' % path)

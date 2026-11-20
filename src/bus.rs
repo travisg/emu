@@ -229,6 +229,21 @@ pub trait Bus {
         Err("this machine has no disk to save".into())
     }
 
+    /// Thread a paper tape through one of the machine's readers, its
+    /// frames one byte each as punched. From the debug port's `tape`, over
+    /// the control channel like a disk. Which reader a number means is the
+    /// machine's to say, and a machine with none refuses.
+    fn load_tape(&mut self, _reader: usize, _frames: Vec<u8>) -> Result<(), String> {
+        Err("this machine has no paper tape reader".into())
+    }
+
+    /// Tear off what the paper tape punch has punched and write it to a new
+    /// file at `path`, never over an existing one. A tape that could not be
+    /// written stays in the punch.
+    fn save_tape(&mut self, _path: &std::path::Path) -> Result<(), String> {
+        Err("this machine has no paper tape punch".into())
+    }
+
     /// Memory and every device, into a snapshot; see `crate::snapshot`.
     fn save_state(&self, _w: &mut crate::snapshot::Writer) -> Result<(), String> {
         Err("this machine cannot save its state".into())

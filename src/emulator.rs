@@ -543,6 +543,11 @@ impl Emulator {
             }
             DebugOp::Disassemble { addr, count } => self.disassemble(addr, count),
             DebugOp::SaveDisk { drive, path } => self.bus.save_disk(drive, &path).map_or_else(DebugReply::Err, |_| DebugReply::Ok),
+            DebugOp::LoadTape { reader, path } => std::fs::read(&path)
+                .map_err(|e| format!("{}: {e}", path.display()))
+                .and_then(|frames| self.bus.load_tape(reader, frames))
+                .map_or_else(DebugReply::Err, |_| DebugReply::Ok),
+            DebugOp::SaveTape(path) => self.bus.save_tape(&path).map_or_else(DebugReply::Err, |_| DebugReply::Ok),
             DebugOp::Snapshot(path) => crate::snapshot::save_machine(&self.system, &*self.cpu, &*self.bus)
                 .and_then(|data| std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display())))
                 .map_or_else(DebugReply::Err, |_| DebugReply::Ok),

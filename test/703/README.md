@@ -178,18 +178,23 @@ address and object columns rather than pattern-match them.
 
 ### 5. Emulator gaps
 
-- **A punch (DIO device `C`).** PEAT names `M.THSPT` for it, the same driver
-  the teletype uses, so no new guest-side work would be needed. Raytheon's
-  punch and reader test (390444B, with the museum's other tapes) is a
-  program for X-RAY that wants a punch, and a way to feed the reader what
-  was punched.
-- **The status DIN, `DIN dev,0`.** The driver's shared-interrupt path reads one
-  and tests bit 7 for "IR OR NO", which pins that single bit and nothing else
-  about the layout — so nothing was invented. Only assembled when
-  `ISHARE=YES`, which this build has off.
-- **`tx_pending` is a flag, not a count**, so two writes with no poll between
-  them yield one completion. Nothing does that, and the comment at the field
-  says what to do if anything ever starts.
+- **Raytheon's punch and reader test, 390444B, is not run.** It is a program
+  for X-RAY's I/O entries -- `JSX` through 42, 44 and 46 with a file table,
+  logical unit 13 for the console, 5 to punch and 4 to read -- which prints
+  its name, halts for the operator, punches 256 frames, halts for the tape
+  to be moved to the reader, and reads it back. The reader and the punch it
+  wants are here (PTIOS and Conversational FORTRAN drive both); what it has
+  not had is an X-RAY to run under. The 1968 listing was assembled with no
+  punch, and PTIOS has no entry at 42. The museum's own X-RAY tape
+  (`XRAY.bin`, a later revision, not in the manifest) does run here --
+  written into core and started at 26A it answers `D 0040,0050` -- but
+  which devices it gives units 4 and 5 is not known, and the test has to be
+  loaded and started by X-RAY's own directives, which are in the listing's
+  untranscribed front matter: moving the program counter to the test while
+  X-RAY waited at its console got no further than X-RAY's own code.
+- **The punch and the readers take their tapes from the debug port only**
+  (`tape`, `savetape`); `ray703-ptb -r` is the one way onto the high speed
+  reader from the command line.
 
 ### 6. More listings
 

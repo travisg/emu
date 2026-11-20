@@ -159,6 +159,14 @@ impl Bus for WatchBus<'_> {
         self.inner.save_disk(drive, path)
     }
 
+    fn load_tape(&mut self, reader: usize, frames: Vec<u8>) -> Result<(), String> {
+        self.inner.load_tape(reader, frames)
+    }
+
+    fn save_tape(&mut self, path: &std::path::Path) -> Result<(), String> {
+        self.inner.save_tape(path)
+    }
+
     fn save_state(&self, w: &mut Writer) -> Result<(), String> {
         self.inner.save_state(w)
     }
@@ -253,6 +261,14 @@ mod tests {
             self.marks.push("change_disk");
             Ok(())
         }
+        fn load_tape(&mut self, _reader: usize, _frames: Vec<u8>) -> Result<(), String> {
+            self.marks.push("load_tape");
+            Ok(())
+        }
+        fn save_tape(&mut self, _path: &std::path::Path) -> Result<(), String> {
+            self.marks.push("save_tape");
+            Ok(())
+        }
         fn save_state(&self, w: &mut Writer) -> Result<(), String> {
             w.u8(0x5a);
             Ok(())
@@ -289,6 +305,8 @@ mod tests {
         assert_eq!(w.poll_interrupt_lines(1), 0x8000);
         w.set_device_pacing_hz(1);
         w.change_disk(0, None).unwrap();
+        w.load_tape(0, Vec::new()).unwrap();
+        w.save_tape(std::path::Path::new("x")).unwrap();
         let mut saved = Writer::new();
         w.save_state(&mut saved).unwrap();
         assert_eq!(saved.into_bytes(), [0x5a]);
@@ -300,8 +318,8 @@ mod tests {
             [
                 "read8", "write8", "poke8", "io_read8", "io_write8", "io_read16", "io_write16", "read16", "write16",
                 "read32", "write32", "poll_interrupts", "interrupt_acknowledge", "interrupt_return",
-                "poll_interrupt_lines", "set_device_pacing_hz", "change_disk", "load_state",
-                "commit_loaded_disks",
+                "poll_interrupt_lines", "set_device_pacing_hz", "change_disk", "load_tape", "save_tape",
+                "load_state", "commit_loaded_disks",
             ]
         );
     }

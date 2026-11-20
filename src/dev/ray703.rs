@@ -6,10 +6,11 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-//! Raytheon 703 DIO devices: the console teletype and the paper tape reader.
+//! Raytheon 703 DIO devices: the console teletype, the high speed paper tape
+//! reader and punch, and the line clock.
 //!
-//! Both hang off the 16-bit Direct Input/Output channel rather than the memory
-//! space, so neither is a `MemoryDevice`: the machine decodes the DIO address
+//! They hang off the 16-bit Direct Input/Output channel rather than the memory
+//! space, so none is a `MemoryDevice`: the machine decodes the DIO address
 //! and calls these directly, the way `Z80Sio` and `Wd1793` are driven from the
 //! z80 machines' port handlers.
 //!
@@ -25,10 +26,20 @@
 //!     DIN 13,13   collect the frame
 //! ```
 //!
-//! Neither device is polled. Both interrupt once per character, and the
-//! program collects the character with a DIN inside the service routine --
-//! which is why the 703 is the first machine in this tree that needs a working
-//! interrupt path at all.
+//! Both interrupt once per character, and the program collects the character
+//! with a DIN inside the service routine -- which is why the 703 is the first
+//! machine in this tree that needs a working interrupt path at all. A program
+//! that would rather not be interrupted asks the device's status word
+//! instead, `DIN dev,0`, whose bit 7 is the interrupt not yet serviced: the
+//! Paper Tape I/O System (DN 393954) runs every device that way with no level
+//! enabled.
+//!
+//! The function codes are the 706 User's Manual's (Tables 5-14 and 5-16),
+//! which lists them as bits. The 1968 listings set one more, the 8, in every
+//! code they use -- `DOT 13,9` where the table has D1, `DIN 13,13` for D5,
+//! `DOT 12,14` for C6 -- which on the teletype is the manual's ASCII bit
+//! and on the tape devices, which are binary, selects nothing: those take
+//! a code with it or without.
 //!
 //! Output works the same way, and the X-RAY executive listing (drawing 390779,
 //! transcribed as `test/703/390779_XRAY_listing.txt` on storage) shows the
@@ -78,6 +89,7 @@ use std::path::Path;
 /// DIO device codes (392292, "Individual Devices").
 pub const DEV_TTY: u8 = 0xe;
 pub const DEV_TAPE_READER: u8 = 0xd;
+pub const DEV_TAPE_PUNCH: u8 = 0xc;
 /// ...and the invented line clock's, which no Raytheon document assigns
 /// it. The 706 User's Manual gives 2 to the DMA magnetic tape controller
 /// (Table 5-1); this machine has none.
@@ -153,9 +165,18 @@ const STATUS_IRQ: u16 = 0x0100;
 /// The 703's software world is eight-bit ASCII with the high bit *set* -- the
 /// driver documentation spells out CR as 8D, LF as 8A, blank as A0 and RUBOUT
 /// as FF. A modern terminal wants seven, so the bit goes on at the keyboard
-/// and comes off at the printer.
+/// and comes off at the printer. A tape in the teletype's own reader is
+/// another matter: its eight channels come through as punched, which is
+/// what lets a binary tape load through the console.
 pub struct Tty703 {
     console: ConsoleEndpoint,
+    /// The tape in the ASR's reader and how far it has run. While there is
+    /// tape left the reader is what sends, at the keyboard's ten frames a
+    /// second, under either read function -- "data will also be accepted
+    /// from the paper tape reader if it is manually turned ON" (706 UM
+    /// 5-5.4.4) -- and the keyboard has the line again when it runs out.
+    tape: Vec<u8>,
+    tape_pos: usize,
     /// Which interrupt level this device signals.
     level: u8,
     /// Set by a read function or by a collecting DIN, cleared by anything
@@ -213,9 +234,11 @@ pub struct Tty703 {
 impl crate::snapshot::Snapshot for Tty703 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
         let Tty703 {
-            console: _session, level: _wiring, armed, echo, frame, tx_owed, tx_remaining, rx_credit,
-            char_cycles: _session_pacing, fast_io: _session_flag, irq,
+            console: _session, tape, tape_pos, level: _wiring, armed, echo, frame, tx_owed, tx_remaining,
+            rx_credit, char_cycles: _session_pacing, fast_io: _session_flag, irq,
         } = self;
+        w.bytes(tape);
+        w.u32(*tape_pos as u32);
         w.bool(*armed);
         w.bool(*echo);
         w.opt(frame, |w, f| w.u8(*f));
@@ -226,6 +249,8 @@ impl crate::snapshot::Snapshot for Tty703 {
     }
 
     fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.tape = r.bytes()?.to_vec();
+        self.tape_pos = r.u32()? as usize;
         self.armed = r.bool()?;
         self.echo = r.bool()?;
         self.frame = r.opt(|r| r.u8())?;
@@ -241,6 +266,8 @@ impl Tty703 {
     pub fn new(console: ConsoleEndpoint, level: u8) -> Self {
         Tty703 {
             console,
+            tape: Vec::new(),
+            tape_pos: 0,
             level,
             armed: false,
             echo: false,
@@ -260,6 +287,12 @@ impl Tty703 {
     /// built unplugged.
     pub fn set_console(&mut self, console: ConsoleEndpoint) {
         self.console = console;
+    }
+
+    /// Put a tape in the ASR's reader and set its lever to START.
+    pub fn load_tape(&mut self, frames: Vec<u8>) {
+        self.tape = frames;
+        self.tape_pos = 0;
     }
 
     /// Run at host speed instead of ten characters a second (`--fast-io`).
@@ -401,7 +434,16 @@ impl Tty703 {
         // character, so a burst cannot be delivered as a burst.
         self.rx_credit = self.rx_credit.saturating_add(elapsed).min(self.char_cycles);
         if self.armed && self.frame.is_none() && self.rx_credit >= self.char_cycles {
-            if let Some(c) = self.console.try_next_char() {
+            // The reader's frame as punched, or the keyboard's character
+            // with the eighth bit the Model 33 sends marking.
+            let next = match self.tape.get(self.tape_pos) {
+                Some(&frame) => {
+                    self.tape_pos += 1;
+                    Some(frame)
+                }
+                None => self.console.try_next_char().map(|c| c | 0x80),
+            };
+            if let Some(frame) = next {
                 // The credit is spent only when a character actually arrives,
                 // so a device that is armed with nobody typing keeps its
                 // standing credit and the next keystroke is not made to wait.
@@ -409,9 +451,8 @@ impl Tty703 {
                 // Carriage return and line feed reach the guest as themselves.
                 // A Model 33 has a key for each and the software tells them
                 // apart: X-RAY's driver opens every record on a line feed
-                // (8A) and closes it on a carriage return (8D), so folding one
-                // into the other -- which this did, to be kind to a script
-                // piped in with newline endings -- makes the executive
+                // (8A) and closes it on a carriage return (8D), so a device
+                // that folded one into the other would make the executive
                 // unreachable. A program that wants to be kind can do the
                 // folding itself; the demo does.
                 // Function B's echo is the Model 33 printing what its own
@@ -422,12 +463,13 @@ impl Tty703 {
                 // charging it again would let a typist block a program's
                 // output, which on a full duplex machine they cannot.
                 if self.echo {
+                    let c = frame & 0x7f;
                     self.console.put_char(c);
                     if c == 0x0d {
                         self.console.put_char(0x0a);
                     }
                 }
-                self.frame = Some(c | 0x80);
+                self.frame = Some(frame);
                 lines |= 1 << self.level;
             }
         }
@@ -437,6 +479,30 @@ impl Tty703 {
         lines
     }
 }
+
+/// The paper tape devices' functions (706 UM Table 5-16), less the 8 the
+/// 1968 listings carry in every code.
+const FN_TAPE_MASK: u8 = 0x7;
+/// The reader's two function bits. `DOT 13,1` is read forward; `DIN 13,4`
+/// transfers the character and disconnects, and `DIN 13,5` -- PTB's `DIN
+/// 13,13` -- transfers it and reads forward. They are taken as bits because
+/// the I/O software makes a device's function out of the caller's: "codes 9
+/// and B are equivalent for every device except the teletype" (706 UM
+/// 5-4.3), and a read with B reaches this reader as `DIN 13,15`, which is
+/// how Conversational FORTRAN's library reads a unit assigned to it.
+const FN_READ_FORWARD: u8 = 0x1;
+const FN_TRANSFER: u8 = 0x4;
+/// `DOT 12,2` and `DOT 12,3`, the punch's motor on and off...
+const FN_PUNCH_ON: u8 = 0x2;
+const FN_PUNCH_OFF: u8 = 0x3;
+/// ...and `DOT 12,6`, punch the character, turning the motor on if it is
+/// off: the 1968 driver's `DOT 12,14`.
+const FN_PUNCH: u8 = 0x6;
+
+/// The tape devices' status word (706 UM Table 5-17). Bits 0 and 1 are the
+/// opposite sense from the teletype's bit 0: true is *not* ready.
+const TAPE_STATUS_OFF_LINE: u16 = 0x8000;
+const TAPE_STATUS_NOT_READY: u16 = 0x4000;
 
 /// High speed paper tape reader, DIO device 13.
 ///
@@ -448,20 +514,25 @@ pub struct TapeReader703 {
     level: u8,
     frames: Vec<u8>,
     pos: usize,
-    /// Set by the start function. The real reader free-runs from there: PTB
-    /// issues its DOT once and never again.
+    /// Reading forward: set by the read forward function, as a DOT or with
+    /// a transfer, and cleared by a disconnect. PTB issues its DOT once and
+    /// keeps the tape moving with the DIN that takes each frame.
     running: bool,
     frame: Option<u8>,
+    /// The status word's bit 7, as the teletype's: set by the pulse, cleared
+    /// by the transfer that answers it or by a DOT.
+    irq: bool,
 }
 
 /// The tape is in the snapshot, as a disk is: it is what the reader holds.
 impl crate::snapshot::Snapshot for TapeReader703 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
-        let TapeReader703 { level: _wiring, frames, pos, running, frame } = self;
+        let TapeReader703 { level: _wiring, frames, pos, running, frame, irq } = self;
         w.bytes(frames);
         w.u32(*pos as u32);
         w.bool(*running);
         w.opt(frame, |w, f| w.u8(*f));
+        w.bool(*irq);
     }
 
     fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
@@ -469,13 +540,14 @@ impl crate::snapshot::Snapshot for TapeReader703 {
         self.pos = r.u32()? as usize;
         self.running = r.bool()?;
         self.frame = r.opt(|r| r.u8())?;
+        self.irq = r.bool()?;
         Ok(())
     }
 }
 
 impl TapeReader703 {
     pub fn new(level: u8) -> Self {
-        TapeReader703 { level, frames: Vec::new(), pos: 0, running: false, frame: None }
+        TapeReader703 { level, frames: Vec::new(), pos: 0, running: false, frame: None, irq: false }
     }
 
     /// Mount a tape image: one byte per frame, exactly as punched.
@@ -490,23 +562,52 @@ impl TapeReader703 {
         Ok(())
     }
 
+    /// Thread a tape through the reader, its first frame under the lamp.
+    /// The frame of the tape it replaces goes with that tape, and its
+    /// interrupt with it; what the program had the reader doing stays as it
+    /// was, the operator's hands being no DOT.
     pub fn load_tape(&mut self, frames: Vec<u8>) {
         self.frames = frames;
         self.pos = 0;
+        self.frame = None;
+        self.irq = false;
     }
 
+    /// Read forward or disconnect. Function 8 starts the reader as 9 does:
+    /// the 1968 driver's page for this device reads "Read a Record --
+    /// Function codes 8 or 9" (392292), the one code here that Table 5-16's
+    /// bits do not account for. Table 5-1 has a `DOT 13,3`, read reverse,
+    /// that Table 5-16 and the "unidirectional" reader of 5-6 do not; here
+    /// it stops the tape like any other code that is not read forward.
     pub fn dot(&mut self, function: u8, _val: u16) {
-        self.running = matches!(function, FN_READER_START | FN_READ);
+        self.irq = false;
+        self.running = function & FN_TAPE_MASK == FN_READ_FORWARD || function == FN_READER_START;
     }
 
-    /// Unlike the teletype's, this DIN does not start anything. `running` is a
-    /// motor -- "the RUN/LOAD switch is part of the tape guide mechanism" --
-    /// and a read of the frame register does not thread tape.
+    /// The status word, or the frame. A transfer says in the same code
+    /// whether the tape is to go on, and going on is all it takes to start:
+    /// "continuous data flow is accomplished by executing input instructions
+    /// (DIN) which simultaneously specify data transfer and read" (706 UM
+    /// 5-6.6), and PTIOS reads a tape with that DIN and no DOT.
     pub fn din(&mut self, function: u8) -> u16 {
-        match function {
-            FN_COLLECT => self.frame.take().unwrap_or(0) as u16,
-            _ => 0,
+        if function == FN_STATUS {
+            // Off line is both bits (5-6.4.1); on line, bit 1 is no
+            // character in the buffer to transfer.
+            let ready = if !self.running {
+                TAPE_STATUS_OFF_LINE | TAPE_STATUS_NOT_READY
+            } else if self.frame.is_none() {
+                TAPE_STATUS_NOT_READY
+            } else {
+                0
+            };
+            return ready | if self.irq { STATUS_IRQ } else { 0 };
         }
+        if function & FN_TRANSFER == 0 {
+            return 0;
+        }
+        self.running = function & FN_READ_FORWARD != 0;
+        self.irq = false;
+        self.frame.take().unwrap_or(0) as u16
     }
 
     /// Advance the tape by one frame and report the level to pulse. Running
@@ -524,6 +625,182 @@ impl TapeReader703 {
         }
         self.frame = Some(self.frames[self.pos]);
         self.pos += 1;
+        self.irq = true;
+        1 << self.level
+    }
+}
+
+/// Frames a second through the punch (706 UM 5-6.1), and the second its
+/// motor takes to come up to speed (5-6.5.2).
+const PUNCH_FRAMES_PER_SEC: u64 = 110;
+
+/// High speed paper tape punch, DIO device 12.
+///
+/// "Each character is eight data bits plus a sprocket hole", and "the
+/// controller contains a one-character buffer register" (392292): a `DOT
+/// 12,6` hands it a frame, and the interrupt that follows says the frame is
+/// punched and the buffer free for the next. The motor is the program's to
+/// run -- on with the first frame or by itself, and off only by its own
+/// function, a disconnect leaving it turning -- and takes a second to come
+/// up to speed, which a frame sent with the motor off waits out.
+///
+/// What is punched collects here until the operator tears it off
+/// (`take_tape`): the tape is the machine's, like a platter, and reaches a
+/// file only when someone asks for one.
+pub struct TapePunch703 {
+    level: u8,
+    /// What has been punched since the tape was last torn off.
+    tape: Vec<u8>,
+    /// On line: set by the motor-on and punch functions, cleared by a
+    /// disconnect, which also keeps a frame still being punched from
+    /// interrupting ("its interrupt capability is inhibited", 5-6.5.1).
+    on_line: bool,
+    motor: bool,
+    /// Cycles until the motor is up to speed.
+    spin_up: u32,
+    /// A frame is in the buffer, and the cycles until it is punched once
+    /// the motor is up.
+    busy: bool,
+    remaining: u32,
+    irq: bool,
+    /// Cycles to a frame and to the motor's second, at the pacing rate;
+    /// both zero under `--fast-io`.
+    frame_cycles: u32,
+    spin_up_cycles: u32,
+    fast_io: bool,
+}
+
+impl crate::snapshot::Snapshot for TapePunch703 {
+    fn save(&self, w: &mut crate::snapshot::Writer) {
+        let TapePunch703 {
+            level: _wiring, tape, on_line, motor, spin_up, busy, remaining, irq,
+            frame_cycles: _session_pacing, spin_up_cycles: _session_spin_up, fast_io: _session_flag,
+        } = self;
+        w.bytes(tape);
+        w.bool(*on_line);
+        w.bool(*motor);
+        w.u32(*spin_up);
+        w.bool(*busy);
+        w.u32(*remaining);
+        w.bool(*irq);
+    }
+
+    fn load(&mut self, r: &mut crate::snapshot::Reader) -> Result<(), String> {
+        self.tape = r.bytes()?.to_vec();
+        self.on_line = r.bool()?;
+        self.motor = r.bool()?;
+        self.spin_up = r.u32()?;
+        self.busy = r.bool()?;
+        self.remaining = r.u32()?;
+        self.irq = r.bool()?;
+        Ok(())
+    }
+}
+
+impl TapePunch703 {
+    pub fn new(level: u8) -> Self {
+        let mut punch = TapePunch703 {
+            level,
+            tape: Vec::new(),
+            on_line: false,
+            motor: false,
+            spin_up: 0,
+            busy: false,
+            remaining: 0,
+            irq: false,
+            frame_cycles: 0,
+            spin_up_cycles: 0,
+            fast_io: false,
+        };
+        punch.set_pacing_hz(CLOCK_HZ);
+        punch
+    }
+
+    /// Punch at host speed (`--fast-io`).
+    pub fn set_fast_io(&mut self) {
+        self.fast_io = true;
+        self.frame_cycles = 0;
+        self.spin_up_cycles = 0;
+    }
+
+    /// Keep 110 frames a second, and the motor's second, of wall clock at
+    /// whatever rate machine time is paced; `--fast-io` outranks it.
+    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        if self.fast_io {
+            return;
+        }
+        self.frame_cycles = (pacing_hz / PUNCH_FRAMES_PER_SEC) as u32;
+        self.spin_up_cycles = pacing_hz as u32;
+    }
+
+    /// The tape punched so far.
+    pub fn tape(&self) -> &[u8] {
+        &self.tape
+    }
+
+    /// Tear the tape off: what was punched, the punch left with none.
+    pub fn take_tape(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.tape)
+    }
+
+    fn start_motor(&mut self) {
+        if !self.motor {
+            self.motor = true;
+            self.spin_up = self.spin_up_cycles;
+        }
+    }
+
+    pub fn dot(&mut self, function: u8, val: u16) {
+        self.irq = false;
+        match function & FN_TAPE_MASK {
+            FN_PUNCH => {
+                self.on_line = true;
+                self.start_motor();
+                // The frame is on the tape now and reported punched a frame
+                // time later, as the teletype prints. One buffer: a frame
+                // sent over one still being punched takes its place in the
+                // timing and both are on the tape, a thing no driver does.
+                self.tape.push(val as u8);
+                self.busy = true;
+                self.remaining = self.frame_cycles;
+            }
+            FN_PUNCH_ON => {
+                self.on_line = true;
+                self.start_motor();
+            }
+            FN_PUNCH_OFF => self.motor = false,
+            _ => self.on_line = false,
+        }
+    }
+
+    /// The status word; the punch has nothing else to read. Bit 4, tape
+    /// supply low, is never true: the reel here does not run out.
+    pub fn din(&mut self, function: u8) -> u16 {
+        if function != FN_STATUS {
+            return 0;
+        }
+        (if self.on_line { 0 } else { TAPE_STATUS_OFF_LINE })
+            | (if self.motor && self.spin_up == 0 { 0 } else { TAPE_STATUS_NOT_READY })
+            | (if self.irq { STATUS_IRQ } else { 0 })
+    }
+
+    /// Spend `elapsed` cycles bringing the motor up and then punching the
+    /// frame in the buffer, and report the level to pulse when it is done.
+    pub fn poll(&mut self, elapsed: u32) -> u16 {
+        let left = elapsed.saturating_sub(self.spin_up);
+        self.spin_up = self.spin_up.saturating_sub(elapsed);
+        if !self.busy || !self.motor || self.spin_up > 0 {
+            return 0;
+        }
+        self.remaining = self.remaining.saturating_sub(left);
+        if self.remaining > 0 {
+            return 0;
+        }
+        self.busy = false;
+        if !self.on_line {
+            return 0;
+        }
+        self.irq = true;
         1 << self.level
     }
 }
@@ -1035,6 +1312,23 @@ mod tests {
         assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "and the completion is not raised twice");
     }
 
+    /// A tape in the teletype's reader comes through as punched, all eight
+    /// channels, and the keyboard has the line again when it runs out.
+    #[test]
+    fn the_teletypes_reader_sends_frames_as_punched() {
+        let (mut tty, printed) = tty_capturing(b"K");
+        tty.set_fast_io();
+        tty.load_tape(vec![0x00, 0x7f, 0x8a]);
+        tty.dot(FN_READ, 0);
+        for frame in [0x00, 0x7f, 0x8a] {
+            assert_eq!(tty.poll(0), 1);
+            assert_eq!(tty.din(FN_COLLECT), frame);
+        }
+        tty.poll(0);
+        assert_eq!(tty.din(FN_COLLECT), 0x80 | b'K' as u16, "the keyboard, marking");
+        assert!(printed.0.lock().unwrap().is_empty(), "function 9 does not print what it reads");
+    }
+
     /// Function B collects with F, not D -- see the FN_ constants above.
     #[test]
     fn the_keyboard_read_collects_with_its_own_function() {
@@ -1114,6 +1408,153 @@ mod tests {
         let mut reader = TapeReader703::new(0);
         reader.dot(FN_READ, 0);
         assert_eq!(reader.poll(0), 0);
+    }
+
+    /// Table 5-16's codes, the 1968 listings', and the keyboard read's
+    /// that the I/O software sends any device are the same functions.
+    #[test]
+    fn the_reader_takes_the_tables_codes_and_the_listings() {
+        for (forward, transfer) in [(0x1, 0x5), (0x9, 0xd), (0x9, 0xf)] {
+            let mut reader = TapeReader703::new(0);
+            reader.load_tape(vec![0x11, 0x22]);
+            reader.dot(forward, 0);
+            assert_eq!(reader.poll(0), 1);
+            assert_eq!(reader.din(transfer), 0x11);
+            assert_eq!(reader.poll(0), 1, "the transfer read forward");
+            assert_eq!(reader.din(transfer), 0x22);
+        }
+    }
+
+    /// Table 5-1's `DOT 13,3`, read reverse, moves no tape here.
+    #[test]
+    fn the_reader_does_not_read_in_reverse() {
+        let mut reader = TapeReader703::new(0);
+        reader.load_tape(vec![0x11]);
+        reader.dot(0x3, 0);
+        assert_eq!(reader.poll(0), 0);
+        assert_eq!(reader.din(FN_STATUS), 0xc000);
+    }
+
+    /// Table 5-17: off line is bits 0 and 1, on line with nothing read is
+    /// bit 1, and bit 7 is a frame the program has not yet taken.
+    #[test]
+    fn the_readers_status_says_off_line_not_ready_and_interrupting() {
+        let mut reader = TapeReader703::new(0);
+        reader.load_tape(vec![0x11, 0x22]);
+        assert_eq!(reader.din(FN_STATUS), 0xc000, "never selected");
+        reader.dot(FN_READ_FORWARD, 0);
+        assert_eq!(reader.din(FN_STATUS), 0x4000, "moving, nothing read yet");
+        reader.poll(0);
+        assert_eq!(reader.din(FN_STATUS), 0x0100);
+        assert_eq!(reader.din(FN_STATUS), 0x0100, "asking twice changes nothing");
+        assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x11);
+        assert_eq!(reader.din(FN_STATUS), 0x4000);
+        reader.poll(0);
+        reader.dot(FN_DISCONNECT, 0);
+        assert_eq!(reader.din(FN_STATUS), 0xc000, "5-6.4.1: bits 0 and 1 become true");
+    }
+
+    /// `DIN 13,4` takes the frame and stops the tape; `DIN 13,5` with the
+    /// reader stopped starts it, the DIN-only read X-RAY's driver makes.
+    #[test]
+    fn a_transfer_says_whether_the_tape_goes_on() {
+        let mut reader = TapeReader703::new(0);
+        reader.load_tape(vec![0x11, 0x22, 0x33]);
+        reader.dot(FN_READ_FORWARD, 0);
+        reader.poll(0);
+        assert_eq!(reader.din(FN_TRANSFER), 0x11);
+        assert_eq!(reader.poll(0), 0, "stopped");
+        assert_eq!(reader.din(FN_STATUS), 0xc000);
+        assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0, "nothing in the buffer, and the tape moves");
+        assert_eq!(reader.poll(0), 1);
+        assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x22);
+    }
+
+    /// A tape changed under a running reader reads from its first frame.
+    #[test]
+    fn a_new_tape_reads_from_its_start() {
+        let mut reader = TapeReader703::new(0);
+        reader.load_tape(vec![0x11, 0x22]);
+        reader.dot(FN_READ_FORWARD, 0);
+        reader.poll(0);
+        reader.load_tape(vec![0x77]);
+        assert_eq!(reader.din(FN_STATUS), 0x4000, "the old tape's frame went with it, and its interrupt");
+        reader.poll(0);
+        assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x77);
+    }
+
+    // -- the punch ---------------------------------------------------------
+
+    fn punch_at_host_speed() -> TapePunch703 {
+        let mut punch = TapePunch703::new(0);
+        punch.set_fast_io();
+        punch
+    }
+
+    /// A frame is all eight bits of the accumulator's low half, and each
+    /// raises one interrupt when it is punched.
+    #[test]
+    fn the_punch_punches_eight_bits_and_interrupts_per_frame() {
+        for function in [FN_PUNCH, 0xe] {
+            let mut punch = punch_at_host_speed();
+            for frame in [0x00u16, 0x8a, 0x12ff] {
+                punch.dot(function, frame);
+                assert_eq!(punch.poll(0), 1);
+                assert_eq!(punch.poll(0), 0, "one interrupt a frame");
+            }
+            assert_eq!(punch.tape(), [0x00, 0x8a, 0xff]);
+        }
+    }
+
+    /// Table 5-17 for the punch: bit 0 off line, bit 1 the motor not up to
+    /// speed, bit 7 the interrupt not serviced.
+    #[test]
+    fn the_punchs_status_follows_the_motor_and_the_select() {
+        let mut punch = punch_at_host_speed();
+        assert_eq!(punch.din(FN_STATUS), 0xc000, "off line, motor off");
+        punch.dot(FN_PUNCH_ON, 0);
+        assert_eq!(punch.din(FN_STATUS), 0);
+        assert_eq!(punch.poll(0), 0, "5-6.5.2: no interrupt for the motor");
+        punch.dot(FN_PUNCH, 0x55);
+        punch.poll(0);
+        assert_eq!(punch.din(FN_STATUS), 0x0100);
+        punch.dot(FN_DISCONNECT, 0);
+        assert_eq!(punch.din(FN_STATUS), 0x8000, "5-6.5.1: a disconnect leaves the motor on");
+        punch.dot(FN_PUNCH_OFF, 0);
+        assert_eq!(punch.din(FN_STATUS), 0xc000);
+    }
+
+    /// The motor takes a second to come up, a frame sent with it off waits
+    /// that second out, and frames after it are a hundred and ten to the
+    /// second.
+    #[test]
+    fn a_cold_punch_takes_a_second_and_then_110_frames_a_second() {
+        let hz = CLOCK_HZ as u32;
+        let frame = (CLOCK_HZ / 110) as u32;
+        let mut punch = TapePunch703::new(0);
+        punch.dot(FN_PUNCH, 0x01);
+        assert_eq!(punch.din(FN_STATUS), 0x4000, "not up to speed");
+        assert_eq!(punch.poll(hz - 1), 0);
+        assert_eq!(punch.poll(1), 0, "up to speed, the frame not yet punched");
+        assert_eq!(punch.din(FN_STATUS), 0);
+        assert_eq!(punch.poll(frame - 1), 0);
+        assert_eq!(punch.poll(1), 1);
+        punch.dot(FN_PUNCH, 0x02);
+        assert_eq!(punch.poll(frame - 1), 0);
+        assert_eq!(punch.poll(1), 1, "no second wait with the motor running");
+    }
+
+    /// 5-6.5.1: a disconnected punch does not interrupt, though the frame
+    /// it was handed is on the tape.
+    #[test]
+    fn a_disconnect_keeps_a_frame_from_interrupting() {
+        let mut punch = punch_at_host_speed();
+        punch.dot(FN_PUNCH, 0x41);
+        punch.dot(FN_DISCONNECT, 0);
+        assert_eq!(punch.poll(0), 0);
+        assert_eq!(punch.din(FN_STATUS) & STATUS_IRQ, 0);
+        assert_eq!(punch.take_tape(), [0x41]);
+        assert!(punch.tape().is_empty(), "torn off");
     }
 
     // -- the line clock ----------------------------------------------------

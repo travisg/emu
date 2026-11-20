@@ -9,8 +9,9 @@
 //! Raytheon 703 (1967).
 //!
 //! Not a port of anything -- the C++ tree never had this machine. It is a
-//! fully populated 703: 32K words of core, a console teletype and a high speed
-//! paper tape reader on the DIO channel, and a 74601 disc controller whose
+//! fully populated 703: 32K words of core, a console teletype and the high
+//! speed paper tape reader and punch on the DIO channel, and a 74601 disc
+//! controller whose
 //! four drive bays mount whatever `ray703-disc{0..3}.img` files the current
 //! directory holds (the Kaypro floppy convention: a file that is not there is
 //! a drive that was never installed). Plus two things Raytheon did not
@@ -42,7 +43,10 @@ use crate::bus::{Bus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
 use crate::dev::disc74601::{Disc74601, DEV_DISC};
 use crate::dev::memory::Memory;
-use crate::dev::ray703::{LineClock703, TapeReader703, Tty703, DEV_LINE_CLOCK, DEV_TAPE_READER, DEV_TERMINALS};
+use crate::dev::ray703::{
+    LineClock703, TapePunch703, TapeReader703, Tty703, DEV_LINE_CLOCK, DEV_TAPE_PUNCH, DEV_TAPE_READER,
+    DEV_TERMINALS,
+};
 use crate::rom;
 use std::io;
 use std::path::Path;
@@ -102,6 +106,7 @@ pub struct Ray703 {
     /// The console first, then the extra terminals in `DEV_TERMINALS` order.
     ttys: [Tty703; TERMINALS],
     reader: TapeReader703,
+    punch: TapePunch703,
     disc: Disc74601,
     line_clock: LineClock703,
 }
@@ -133,6 +138,7 @@ impl Ray703 {
                 Tty703::new(unplugged(), 0),
             ],
             reader: TapeReader703::new(0),
+            punch: TapePunch703::new(0),
             disc: Disc74601::new(1),
             line_clock: LineClock703::new(2),
         };
@@ -198,13 +204,14 @@ impl Ray703 {
         Ok(sys)
     }
 
-    /// `--fast-io`: run the teletype and the disc at host speed instead of
-    /// ten characters a second and half a revolution per transfer. The tape
-    /// reader already free-runs.
+    /// `--fast-io`: run the teletype, the punch and the disc at host speed
+    /// instead of ten characters a second, a hundred and ten frames and half
+    /// a revolution per transfer. The tape reader already free-runs.
     pub fn set_fast_io(&mut self) {
         for tty in &mut self.ttys {
             tty.set_fast_io();
         }
+        self.punch.set_fast_io();
         self.disc.set_fast_io();
         // Not the line clock: a periodic interrupt with no period never
         // returns. That is what lets a test run --fast-io for an instant
@@ -253,20 +260,37 @@ impl Bus for Ray703 {
         self.core.write_byte(addr & 0xffff, val);
     }
 
-    /// Every device is on the DIO channel, so all of core is peekable.
     fn save_disk(&self, unit: usize, path: &Path) -> Result<(), String> {
         let platter = self.disc.platter(unit).ok_or_else(|| format!("no platter on disc unit {unit}"))?;
         crate::snapshot::write_new_file(path, platter)
     }
 
+    /// Reader 0 is the high speed reader, reader 1 the console teletype's
+    /// own.
+    fn load_tape(&mut self, reader: usize, frames: Vec<u8>) -> Result<(), String> {
+        match reader {
+            0 => self.reader.load_tape(frames),
+            1 => self.ttys[0].load_tape(frames),
+            n => return Err(format!("no paper tape reader {n}: 0 is the high speed reader, 1 the teletype's")),
+        }
+        Ok(())
+    }
+
+    fn save_tape(&mut self, path: &Path) -> Result<(), String> {
+        crate::snapshot::write_new_file(path, self.punch.tape())?;
+        self.punch.take_tape();
+        Ok(())
+    }
+
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
         use crate::snapshot::Snapshot;
-        let Ray703 { core, ttys, reader, disc, line_clock } = self;
+        let Ray703 { core, ttys, reader, punch, disc, line_clock } = self;
         w.section(b"CORE", |w| core.save(w));
         for (tty, tag) in ttys.iter().zip(TTY_SECTIONS) {
             w.section(tag, |w| tty.save(w));
         }
         w.section(b"PTR ", |w| reader.save(w));
+        w.section(b"PTP ", |w| punch.save(w));
         w.section(b"CLK ", |w| line_clock.save(w));
         // the disc last: nothing after it can fail once its platters are on
         w.section(b"DISC", |w| disc.save(w));
@@ -280,6 +304,7 @@ impl Bus for Ray703 {
             r.section(tag, |r| tty.load(r))?;
         }
         r.section(b"PTR ", |r| self.reader.load(r))?;
+        r.section(b"PTP ", |r| self.punch.load(r))?;
         r.section(b"CLK ", |r| self.line_clock.load(r))?;
         r.section(b"DISC", |r| self.disc.load(r))
     }
@@ -288,6 +313,7 @@ impl Bus for Ray703 {
         self.disc.commit_loaded();
     }
 
+    /// Every device is on the DIO channel, so all of core is peekable.
     fn peek8(&self, addr: u32) -> Option<u8> {
         Some(self.core.peek(addr & 0xffff))
     }
@@ -302,6 +328,7 @@ impl Bus for Ray703 {
         }
         match device {
             DEV_TAPE_READER => self.reader.din(function),
+            DEV_TAPE_PUNCH => self.punch.din(function),
             DEV_DISC => self.disc.din(function),
             _ => 0,
         }
@@ -314,6 +341,7 @@ impl Bus for Ray703 {
         }
         match device {
             DEV_TAPE_READER => self.reader.dot(function, val),
+            DEV_TAPE_PUNCH => self.punch.dot(function, val),
             DEV_DISC => self.disc.dot(function, val),
             // no read arm anywhere for the clock: it has no readable
             // register, so its DIN is the open-bus default below on purpose
@@ -325,20 +353,21 @@ impl Bus for Ray703 {
     /// Every device gets the same elapsed cycle count, which is how they
     /// share one clock without sharing any state: the teletypes spend it
     /// running its character at ten a second, the reader ignores it, the
-    /// disc counts down its transfer in flight, and the line clock banks it
-    /// toward the next tick. The disc alone is handed the core -- it is the
+    /// punch and the disc count down what they have in flight, and the line
+    /// clock banks it toward the next tick. The disc alone is handed the core -- it is the
     /// machine's one DMA device, and this poll is the one place the memory
     /// and the devices meet.
     fn poll_interrupt_lines(&mut self, elapsed_cycles: u32) -> u16 {
         let ttys = self.ttys.iter_mut().fold(0, |lines, tty| lines | tty.poll(elapsed_cycles));
         ttys | self.reader.poll(elapsed_cycles)
+            | self.punch.poll(elapsed_cycles)
             | self.disc.poll(elapsed_cycles, &mut self.core)
             | self.line_clock.poll(elapsed_cycles)
     }
 
     /// Hand the pacing rate to the devices whose periods are I/O completions:
-    /// the teletype's character time and the disc's access. The reader takes
-    /// no time at all -- it free-runs by design.
+    /// the teletype's character time, the punch's frame and the disc's
+    /// access. The reader takes no time at all -- it free-runs by design.
     ///
     /// The line clock takes it too: the mains does not slow down because the
     /// cpu did. It sits out only `--fast-io`, which is the other axis --
@@ -348,6 +377,7 @@ impl Bus for Ray703 {
         for tty in &mut self.ttys {
             tty.set_pacing_hz(hz);
         }
+        self.punch.set_pacing_hz(hz);
         self.disc.set_pacing_hz(hz);
         self.line_clock.set_pacing_hz(hz);
     }
@@ -450,6 +480,53 @@ mod tests {
         for (port, dev) in SERIAL_PORTS.iter().zip(&DEV_TERMINALS[1..]) {
             assert!(port.ends_with(&format!("DIO device {dev:X}")), "{port}");
         }
+    }
+
+    /// The punch answers device 12 and the reader device 13, each with its
+    /// own status word, and neither is a teletype.
+    #[test]
+    fn the_punch_and_the_reader_answer_their_own_codes() {
+        let rom = scratch_file("tapes-dio", &[0x01, 0x00]);
+        let mut sys = machine("", &rom).unwrap();
+        sys.set_fast_io();
+        assert_eq!(sys.io_read16(0xc0), 0xc000, "punch: off line, motor off");
+        assert_eq!(sys.io_read16(0xd0), 0xc000, "reader: off line");
+        sys.io_write16(0xce, 0x8a); // DOT 12,14
+        assert_eq!(sys.poll_interrupt_lines(0), 1, "punched, on level 0");
+        assert_eq!(sys.io_read16(0xc0), 0x0100);
+        for &dev in &DEV_TERMINALS {
+            assert_eq!(sys.io_read16(dev << 4), 0, "no teletype stirred");
+        }
+    }
+
+    /// The port's `tape` and `savetape`: reader 0 is the high speed reader
+    /// and 1 the console's own, and the punched tape goes to a new file
+    /// once, torn off.
+    #[test]
+    fn tapes_go_in_the_readers_and_come_off_the_punch() {
+        let rom = scratch_file("tapes", &[0x01, 0x00]);
+        let mut sys = machine("", &rom).unwrap();
+        sys.set_fast_io();
+        sys.load_tape(0, vec![0x11]).unwrap();
+        sys.load_tape(1, vec![0x22]).unwrap();
+        assert!(sys.load_tape(2, vec![]).is_err());
+        sys.io_write16(0xd1, 0); // DOT 13,1
+        sys.io_write16(0xe9, 0); // DOT 14,9
+        sys.poll_interrupt_lines(0);
+        assert_eq!(sys.io_read16(0xd5), 0x11);
+        assert_eq!(sys.io_read16(0xed), 0x22, "as punched, no eighth bit added");
+
+        sys.io_write16(0xc6, 0x1ff); // DOT 12,6
+        let out = std::env::temp_dir().join(format!("emu-ray703-{}-punched", std::process::id()));
+        std::fs::remove_file(&out).ok();
+        sys.save_tape(&out).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), [0xff]);
+        sys.io_write16(0xc6, 0x01);
+        assert!(sys.save_tape(&out).is_err(), "never over a file that is there");
+        std::fs::remove_file(&out).unwrap();
+        sys.save_tape(&out).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), [0x01], "the refused tape was still in the punch");
+        std::fs::remove_file(&out).ok();
     }
 
     /// A plugged-in line whose keys are `input`, and what it prints.
