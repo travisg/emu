@@ -132,7 +132,7 @@ taking up where it was.
 | `LOAD name` | load it stopped, and say its job number |
 | `START name` | load it and run it behind the prompt |
 | `START n` | let a stopped task run behind the prompt, by job number |
-| `STOP n` | stop a task |
+| `STOP n` | stop a task; one in front of a terminal's shell is stopped as Ctrl-Z there would |
 | `ATTACH n` | give one of this terminal's tasks the console, as `RUN` does |
 | `KILL n` | end it, whatever it was doing |
 | `@name` | take the shell's lines from the command file `name.CM` |

@@ -116,7 +116,9 @@ word X'4000' so that the core below is left to BASIC, and the two
 shells run side by side: a BLIP behind each prompt prints on its own
 terminal's paper and never on the other's, STAT on the console shows the
 other terminal's shell and its task, a second Ctrl-C there ends only the
-program in front of it, a Ctrl-C while it prints -- the set's BREAK --
+program in front of it, a STOP from the console of that program is a
+Ctrl-Z at teletype 1 -- its shell says JOB n STOPPED -- and a START of
+one with a console is refused, a Ctrl-C while it prints -- the set's BREAK --
 stops a dump, teletype 3 gets a shell of its own, and teletype 1's BYE
 leaves the pool as it was before the terminal had a shell -- after which
 a key brings up another. Then, with
@@ -182,6 +184,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   shlow    SHELL.RX put on the platter as a module that has to load
            below word X'4000'
   conbye   the console's shell taking BYE as a terminal's does
+  nostopcon  STOP of a task that has a console doing nothing, so teletype
+           1's program goes on holding it
   nobootmsg  the boot's message that there is no shell never printed
   nobackoff  a task that cannot come back until the one in its way has had
            its time tried for on every pass of the swapper meanwhile
@@ -1465,7 +1469,7 @@ def make_platter(workdir, log, swap=False, boot=False, shell=True):
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
                      'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec', 'nobackoff', 'shlow',
-                     'conbye', 'nobootmsg', 'nokehlk'):
+                     'conbye', 'nobootmsg', 'nostopcon', 'nokehlk'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         jobs += [('LOOP.BA', LOOP)] if swap else []
@@ -1665,6 +1669,10 @@ def terminals_session(emu, t1, t2, t3):
     emu.run()
     con, term = Session(emu), Session(t1)
     con.wait(b'REX 703 UP')
+    if CONTROL == 'nostopcon':
+        # the console's STOP of a task with a console: the STW *TM.KIL that
+        # is the Ctrl-Z at its terminal
+        patch_shell(emu, 'STW     *TM.KIL', 'SHSSET          JSX', NOP)
     emu.wait_quiet()
     con.say('MEM')
     free = con.wait(re.compile(rb'FREE (\d+) LOW')).group(1)
@@ -1751,6 +1759,30 @@ def terminals_session(emu, t1, t2, t3):
     term.wait(b'KILLED\r\n')
     con.say('ECHO STILL HERE')
     con.wait(b'STILL HERE\r\n')
+
+    # STOP from the console of the program in front of teletype 1 is a
+    # Ctrl-Z at teletype 1: its shell stops it and takes the console back,
+    # and says so there
+    term.say('RUN NAP')
+    deadline = time.time() + 120
+    while not jobs_of(emu, 'NA'):
+        if time.time() > deadline:
+            raise AssertionError('the NAP to stop never came')
+        time.sleep(0.05)
+    wait_held(emu, held_at, 'the NAP to stop never had teletype 1')
+    ((nap, _),) = jobs_of(emu, 'NA')
+    con.say('START %d' % nap)
+    con.wait(b'JOB %d HAS A CONSOLE\r\n' % nap)
+    con.say('STOP %d' % nap)
+    term.wait(b'JOB %d STOPPED\r\n' % nap, timeout=120)
+    con.say('STAT')
+    con.wait(re.compile(rb'^%d NA OFF  T1\r' % nap, re.M))
+    con.say('KILL %d' % nap)
+    deadline = time.time() + 120
+    while jobs_of(emu, 'NA'):
+        if time.time() > deadline:
+            raise AssertionError('the stopped NAP was never killed')
+        time.sleep(0.05)
 
     # and a KILL from the console of the program in front of teletype 1
     # hands that terminal's console back: its shell's prompt comes again

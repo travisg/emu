@@ -26,7 +26,8 @@
 ;                sleeper has left, what a waiter waits for (DSK, COR, PRT
 ;                or KBD), CON for its terminal's console's holder, OUT for
 ;                one that is on the disc, and its terminal
-;   STOP n       suspend a loaded task, by job number
+;   STOP n       suspend a loaded task, by job number -- one holding
+;                its terminal's console as a Ctrl-Z there would
 ;   START n      let one run, behind the prompt
 ;   ATTACH n     give one of this terminal's the console, running, and
 ;                wait for it to be handed back, as after RUN

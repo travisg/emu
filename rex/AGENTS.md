@@ -32,7 +32,7 @@ depend on nothing here but the snapshot harness's REX case.
   arena; `build/rex.lst` shows where each ends. Running over one fails the
   build -- "assembled twice" at `rexload.asm`'s `ORG` for page 0, a `RES`
   below zero at the end of `rexrec.asm` for page 1 or of `rexname.asm`
-  for the top of core. `SHELL.RX` has 257 words of its one page left and
+  for the top of core. `SHELL.RX` has 223 words of its one page left and
   BASIC's module 88 (see Modules).
 - **`shell.asm` is every terminal's shell,** the module `SHELL.RX`: the
   kernel loads the console's into `SHTCB` as it comes up (`SHBOOT` in
@@ -174,9 +174,11 @@ Terminals and the console:
   flag at its `READY` loop, once the line is in, so one typed while the
   prompt was up is not kept for whatever runs next.
 - **`STOP`/`START` take a loaded task by its job number**, never the
-  shell -- which has none -- and never a task that has a console --
-  stopping another terminal's console's holder would leave its shell
-  waiting on a hand-back nobody can make. `ATTACH` takes only a task of
+  shell, which has none. A task that has its terminal's console has that
+  terminal's shell waiting for it to be handed back, so `STOP` of one is
+  a Ctrl-Z at its terminal -- `TM.KIL` raised to 2 and the shell woken,
+  which stops the task, takes the console back and says so there -- and
+  `START` of one is refused. `ATTACH` takes only a task of
   the shell's own terminal, since a task prints on and reads its
   `T.TTY`. On teletypes 1-3 a channel that is printing passes only
   BREAK, so a Ctrl-Z reaches the program there when its printing pauses.

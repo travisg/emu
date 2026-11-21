@@ -405,11 +405,13 @@ SHWHY           SUBR
 
 ; STOP n and START n differ only in the state they store, into the task
 ; with that job number: one the shell loaded, since no other has a
-; number.  Not one that has a console, which would leave a shell waiting
-; on a hand-back nobody could make; and the state goes in with the disc
-; claimed, so that it is never a task part way through a transfer that is
-; left standing.  START with a name rather than a number loads that
-; program and starts it at once, with no console.
+; number.  The state goes in with the disc claimed, so that it is never a
+; task part way through a transfer that is left standing.  A task that
+; has its terminal's console is another matter, its shell waiting for it
+; to be handed back: STOP is then a Ctrl-Z at that terminal -- its shell
+; is told as SERV would tell it, and stops the task and takes the console
+; back itself -- and START is refused.  START with a name rather than a
+; number loads that program and starts it at once, with no console.
 SHSTOP          LDW     =SOFF
                 STW     SHNST
                 JMP     SHSSET
@@ -435,8 +437,28 @@ SHSSET          JSX     SHJOB
                 STW     *T.STA
                 JSX     SHIOR
                 JMP     SHLOOP
-.OBD            LDW     =SHNOT
+.OBD            LDW     SHNST
+                JNZ     .ZR             ; STOP?
+                JSX     SHJBN           ; START: not of one in front of a
+                LDW     =SHHCN          ; shell
                 JSX     SHMSG
+                JMP     SHLOOP
+.ZR             MSK                     ; TM.KIL 2, unless a kill or a stop
+                LDX     SHKN            ; is asked for already, and the
+                LDW     *T.TTY          ; terminal's shell woken out of its
+                CAX                     ; wait for the console
+                LDW     *TM.KIL
+                JNZ     .ZX
+                LDW     =2
+                STW     *TM.KIL
+                LDW     *TM.SH
+                CAX
+                LDW     *T.STA
+                CMW     =SWAI
+                JNE     .ZX
+                CLR
+                STW     *T.STA
+.ZX             UNM
                 JMP     SHLOOP
 
 ; KILL n: the task with that job number is over, whatever it was doing.
@@ -1350,6 +1372,7 @@ SHIDM           MSG     "IDLE "
 SHSEC           MSG     " SEC\r\n"
 SHDWN           MSG     "REX 703 DOWN\r\n"
 SHNOT           MSG     "NO SUCH TASK\r\n"
+SHHCN           MSG     " HAS A CONSOLE\r\n"
 SHKIL           MSG     "KILLED\r\n"
 SHJOBM          MSG     "JOB "
 SHSTP           MSG     " STOPPED\r\n"
