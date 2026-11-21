@@ -2,31 +2,20 @@
 ;
 ; NAP -- a task that never ends, for the shell to end.
 ;
-; A test module.  Started by LOAD, with no console, it first asks the
-; console's queue for a character -- which the kernel must refuse, since
-; a second reader there would take the shell's place -- and says which
-; happened.  Then, however it was started, it sleeps a second at a time
-; for ever and ignores Ctrl-C: KILL, or a second Ctrl-C, is the only way
-; out of it.
+; A test module.  It first reads a character from the console, and says
+; so when it has one -- which behind the prompt, without the console, it
+; must not have until it is given it, since a second reader there would
+; take the shell's place.  Then it sleeps a second at a time for ever and
+; ignores Ctrl-C: KILL, or a second Ctrl-C, is the only way out of it.
 
-NAP             SMB     CURT
-                LDX     CURT
-                LDW     *T.CON
-                JNZ     .LOOP           ; the console is ours?  then no test
-                SMB     KCONSQ
+NAP             SMB     KCONSQ
                 LDW     KCONSQ
                 CALL    K.QGET
-                CMW     =X'FFFF'
-                JNE     .READ
-                LDW     =NREF
-                JSX     L.MSG
-                JMP     .LOOP
-.READ           LDW     =NBAD
+                LDW     =NREAD
                 JSX     L.MSG
 .LOOP           LDW     =50
                 JSX     L.SLEEP
                 JMP     .LOOP
 
-NREF            MSG     "NAP: THE CONSOLE WAS REFUSED\r\n"
-NBAD            MSG     "NAP: READ THE CONSOLE\r\n"
+NREAD           MSG     "NAP: READ THE CONSOLE\r\n"
                 END     NAP

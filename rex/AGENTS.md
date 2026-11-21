@@ -27,11 +27,11 @@ depend on nothing here but the snapshot harness's REX case.
   X'800', the pool from X'1000' to X'6FFF' with its fence at X'4000', the
   filesystem from X'7000', the swapper and `K.NAME` from X'7800', and
   the node arena from X'7E00'.
-- **The pages are nearly full.** Page 0 has 190 words left and the
-  console's shell 171 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
+- **The pages are nearly full.** Page 0 has 158 words left and the
+  console's shell 32 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
   fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
   `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
-  is within a few words of its one page (see Modules).
+  has 88 words of its one page left (see Modules).
 - **`shell.asm` is assembled twice** and a change has to work both ways.
   In the kernel's deck (`SHMOD=0`) it is the console's shell in page 1:
   it reads `INIT.CM`, gives the other terminals their shells and has
@@ -63,7 +63,7 @@ holds; the machine comes up quiet, with nothing else running. Tiny BASIC
 is a module behind the `brex.asm` glue, which pays bcore's wrapper debts
 with the executive's services: a workspace from the pool at entry, output
 through the task's own mailbox, input through the console queue, the
-break taken from the kernel's flag while the task has the console, `SAVE`
+break taken from the kernel's flag, which is the console's holder's, `SAVE`
 and `OLD` through the file calls, `BYE` routed to `K.EXIT`. The idle
 task is a third node, off the ring, the scans' explicit fallback.
 
@@ -133,35 +133,45 @@ Terminals and the console:
   while one prints wait in its line -- all but a Ctrl-C, which is the
   set's BREAK there and raises the break flag like any other.
 - **A console has one reader at a time**, named by its terminal's
-  `TM.BSY` cell: `RUN` raises it in the masked window that clears the
-  break flag, then waits on it -- reading no queue -- until the task's
-  `K.EXIT` clears it and wakes the shell. The kernel holds the one-reader
-  rule itself as well: `Q.GET` on the console's queue answers the shell
-  and the task whose node says it has the console, and tells anybody else
-  no at once.
-- **Only a task `RUN` started may read the console**, for the same
-  reason: `LOAD` grants nothing and leaves the shell in `Q.GET`, so a
-  module that read the queue behind the prompt would put its own
-  registration in the queue's one waiter slot on top of the shell's. A
-  module that needs the console tests its node's `T.CON` at entry and
-  says so if it is clear, which is what `brex.asm` does when it has no
-  program to run instead; `hello.asm` only prints, which is what `LOAD`
-  is for.
+  `TM.BSY` cell and the holder's `T.CON`: `RUN` or `ATTACH` raises both
+  in the masked window that clears the break flag, then the shell waits
+  on the cell -- reading no queue -- until it comes down: the task's
+  `K.EXIT`, a `KILL` from any terminal, both of which hand it back
+  through `CONBK` and wake the shell, or the shell's own Ctrl-Z.
+- **The right is live, and a reader without it parks.** `Q.GET` looks
+  at it every time round its wait, not once at entry: a terminal's queue
+  answers its shell and the console's holder, and any other task of the
+  terminal's marks itself `SCON` and waits for `ATTACH`, which is the
+  only thing that wakes it -- so a module that reads the console behind
+  the prompt never puts its registration in the queue's one waiter slot
+  on top of the shell's, and needs no test of its own. `STAT` shows such
+  a task as `TTY`.
+- **`LOAD` loads stopped.** It makes the node `SOFF` under the mask it
+  calls `SPAWN` with, so the task is never on the ring in any other
+  state, and prints its job number; `START n` lets it run behind the
+  prompt and `START name` loads and runs in one step. `SPAWN` leaves the
+  state to its caller for that reason.
 - **Ctrl-C never enters the queue** at all: the service routine raises
   the terminal's break flag instead, so a running program that reads
-  nothing can still be broken.
-- **The break is the console's**: BASIC's check between statements goes
-  through the wrapper, which asks the kernel (`K.BRKQ`) only while its
-  task has the console, so a BASIC running behind the prompt neither
-  stops for a Ctrl-C nor takes one that was meant for the program in
-  front; `TYPE` and `DUMP` ask through `rexlib.asm`'s `L.BRK`, which
-  answers the same way. A break belongs to a run: the interpreter spends
-  the flag at its `READY` loop, once the line is in, so one typed while
-  the prompt was up is not kept for whatever runs next.
+  nothing can still be broken. **Ctrl-Z does not either**: it raises
+  `TM.KIL` to 2, if it is down, and wakes the shell, which -- with the
+  disc claimed, as `STOP` claims it -- stops the holder, takes its
+  `T.CON` away and lowers `TM.BSY`.
+- **The break is the console's holder's**, by the kernel's own test:
+  `K.BRKQ` and `K.BRKC` answer zero, and spend nothing, for a task
+  without `T.CON`, so a BASIC running behind the prompt neither stops for
+  a Ctrl-C nor takes one that was meant for the program in front, and
+  `brex.asm`'s hooks and `rexlib.asm`'s `L.BRK` are the kernel's entries
+  and nothing more. A break belongs to a run: the interpreter spends the
+  flag at its `READY` loop, once the line is in, so one typed while the
+  prompt was up is not kept for whatever runs next.
 - **`STOP`/`START` take a loaded task by its job number**, never the
-  shell -- which has none -- and never the task that has the console --
-  stopping the console's owner would leave the shell waiting on a
-  hand-back nobody can make.
+  shell -- which has none -- and never a task that has a console --
+  stopping another terminal's console's holder would leave its shell
+  waiting on a hand-back nobody can make. `ATTACH` takes only a task of
+  the shell's own terminal, since a task prints on and reads its
+  `T.TTY`. On teletypes 1-3 a channel that is printing passes only
+  BREAK, so a Ctrl-Z reaches the program there when its printing pauses.
 
 Tasks and the pool:
 
@@ -215,19 +225,24 @@ directory, driving the emulator over its debug port (`../tools/emudbg.py`).
 Its module doc says the same of each machine at more length. There are
 seven:
 
-- **The main session.** Boot, `STAT`, three copies of `blip.asm` loaded
+- **The main session.** Boot, `STAT`, three copies of `blip.asm` started
   behind the prompt, each printing a mark of its own at an interval of its
-  own, watched until they have interleaved and then killed, the rest of the
+  own, watched until they have interleaved and then killed; a fourth
+  `LOAD`ed, which prints nothing until `START`, then `ATTACH`ed and stopped
+  with Ctrl-Z; the rest of the
   commands, hello both ways with `MEM` reading the same after each, then two
   BASIC sessions -- a program entered and RUN, a silent `GOTO` loop broken
   with Ctrl-C through the kernel's flag, the program saved, `BYE` handing
   the console and the memory back, and a second session starting afresh,
-  with nothing to list until `OLD` brings the program back -- then a host's
-  program run by name, one run behind the prompt until it ends, and one that
-  never ends left running behind the prompt through a Ctrl-C and then killed
-  -- and `HALT`, typed with a task still loaded, whose node has to say
-  stopped once the machine has. The saved programs are among the files the
-  host reads back afterwards.
+  with nothing to list until `OLD` brings the program back, and a loop that
+  prints stopped with Ctrl-Z, started behind the prompt, where a Ctrl-C at
+  the shell does not break it, and attached again for one that does --
+  then a host's program run by name, one run behind the prompt until it
+  ends, one that never ends left running behind the prompt through a
+  Ctrl-C and then killed, and one with no program, which waits for its
+  console until it is attached -- and `HALT`, typed with a task still
+  loaded, whose node has to say stopped once the machine has. The saved
+  programs are among the files the host reads back afterwards.
 
   In between it runs `fst.asm` twice, which makes, reads back, replaces,
   renames and deletes files through the vector and checks every answer; afterwards the harness reads the platter the
@@ -241,8 +256,11 @@ seven:
   `PUT` and typed back, copied, renamed, deleted and dumped, a command file,
   `INIT.CM` at start-up, a file deleted from in front of every module and
   `SQUISH` moving the lot down -- after which the next program has to load
-  from where it was moved to -- and a task that never ends stopped, started
-  and killed by job number and then, in the foreground, by two Ctrl-Cs.
+  from where it was moved to -- and a task that never ends, and reads the
+  console once, started behind the prompt, where it waits for its console
+  (`TTY`) while the shell goes on reading, stopped and started by job
+  number, attached and given a key, stopped with Ctrl-Z and killed, and
+  then, in the foreground, ended by two Ctrl-Cs.
 
   Where things are loaded is looked at directly, through the port, in the
   pool's own block headers: a module marked for it has to be above word
@@ -276,8 +294,11 @@ seven:
   the host's tools have to refuse the same of a system file.
 - **A sixth machine** has the three multiplexer teletypes on localhost
   sockets: a key at each brings it a shell, a blip behind each prompt prints
-  on its own terminal's paper alone, a second Ctrl-C there ends only its own
-  program, a Ctrl-C while one prints -- the set's BREAK -- stops a dump,
+  on its own terminal's paper alone, `ATTACH` from the console of teletype
+  1's job is refused, a second Ctrl-C there ends only its own program, a
+  `KILL` from the console of the program in front of teletype 1 brings
+  that terminal's prompt back, a Ctrl-C while one prints -- the set's
+  BREAK -- stops a dump,
   `BYE` gives the pool back, and a terminal's shell waiting for a key is put
   out and comes back for one.
 - **A seventh machine** has a data platter on unit 1 made with `fs703.py
@@ -457,16 +478,17 @@ in the loop. `far.asm` gets the same with a base for each of its two
 segments, once in neighbouring pages and once with the fence between them,
 and the scripted session runs it: each half is over half a page, so the
 loader cannot put both in one. BASIC is checked at the first word of a
-page and the second, the only two bases a module that size has, and the
-shell's module at a page's first word and further in.
+page and the second, and the shell's module at a page's first word and
+further in.
 
 Modules are files of type `RX`, on unit 0 unless a name says otherwise
 (`fs703.py --add`, which `make -C rex bootdisc` runs; `DIR
 0:` lists them). The shell's `LOAD` finds
 one by name, runs its text into a block from the kernel's pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields
-need -- gives it a task node and links it into the ring; `RUN` does the
-same and hands it the console until it exits. A task ends through
+need -- gives it a task node and links it into the ring, stopped; `START`
+does the same and lets it run, and `RUN` hands it the console until it
+exits. A task ends through
 `K.EXIT`, which gives back every block in the pool tagged with its node,
 the module included, and then the node; `MEM` prints the free words,
 below the fence and above it, and reads the same before and after. What followed the module's name on
@@ -490,8 +512,10 @@ two statements the standalone interpreter has not: `SAVE name` lists the
 program down a file channel instead of to the printer, and `OLD name`
 empties the program and reads it back in from one, both as `name.BA`. A
 name on the command line -- `BASIC PROG` -- is `OLD PROG` and then `RUN`,
-and `LOAD BASIC PROG` runs it behind the prompt with no console: what the
-program prints is printed, nothing else is, and the task is over when the
-program ends or asks for input. A file that is not there is the
-interpreter's `HOW?`, and so is a `SAVE` the disc has no room for. The
-module is 2,045 words of its 2,048-word page.
+and `START BASIC PROG` runs it behind the prompt with no console: what the
+program prints is printed, nothing else is, an `INPUT` waits for the
+console to be given it, and the task is over when the program ends;
+`START BASIC` with no program is a session that waits at its first read
+until it is attached. A file that is not there is the interpreter's
+`HOW?`, and so is a `SAVE` the disc has no room for. The module is 1,960
+words of its 2,048-word page.

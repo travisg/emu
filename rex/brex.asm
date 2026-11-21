@@ -18,15 +18,15 @@
 ;     it printed -- the same dance as the shell's SHPUTC.  The old
 ;     driver's column count for PRINT's comma zones lives in T.PUTC here.
 ;   - input takes characters from the console queue with K.QGET, which
-;     parks this task in the kernel until the teletype has one.  The
+;     parks this task in the kernel until the teletype has one -- and,
+;     while the task does not have the console, until ATTACH gives it.  The
 ;     Model 33 is armed for hardware echo, so nothing here echoes an
 ;     ordinary character; the rubout's backslash still prints, because
 ;     only the buffer can take a character back, not the paper.
 ;   - the break flag is the kernel's, one to a terminal: SERV sniffs
 ;     Ctrl-C out of the input stream and raises it.  It is the flag of
-;     whoever has the console, so the core asks through T.BRKQ and
-;     T.BRKC, which answer through K.BRKQ and K.BRKC when this task has
-;     the console and say "no break" when it has not.
+;     whoever has the console, so the core's T.BRKQ and T.BRKC are
+;     K.BRKQ and K.BRKC, which answer "no break" to a task without it.
 ;   - BYE is K.EXIT: the kernel hands the console back to the shell and
 ;     gives back the module, its node and the workspace, so the next RUN
 ;     BASIC starts afresh.
@@ -37,9 +37,10 @@
 ;     keyboard, in silence, until the file runs out.  A name without a
 ;     type is NAME.BA.
 ;   - a name on the command line -- BASIC PROG -- is OLD PROG and then
-;     RUN.  Started that way by LOAD, with no console, the program runs
-;     behind the prompt: only what it PRINTs reaches the printer, and the
-;     task is over when the program ends or asks for input.
+;     RUN.  Started that way with no console (START BASIC PROG), the
+;     program runs behind the prompt: only what it PRINTs reaches the
+;     printer, an INPUT waits to be given the console, and the task is
+;     over when the program ends.
 ;   - a file that is not there, or a disc that says no, is the core's
 ;     HOW?, there being no room in the page for a message of this file's.
 ;
@@ -71,23 +72,19 @@ W.HEAPTOP       EQU     W.HEAP+W.HEAPSZ
 W.SIZE          EQU     W.HEAPTOP       ; the block
 
 ; ---------------------------------------------------------------- entry
-; The console first, because the console has one reader at a time.  RUN
-; grants it and fills in the node's T.CON; LOAD grants nothing.  Without
-; it this task can only run a program it was given by name, so with
-; neither it says so and goes.  The message goes out before the workspace
-; exists, which is the same ground BKNOCA's does.
+; Started without the console and given a program by name, this task is
+; that program's alone (BNOC); started without it and without one, it is
+; a session like any other, which waits in the kernel at its first read
+; for somebody to ATTACH it.
 BASENT          SMB     CURT
                 LDX     CURT
                 LDW     *T.CON
                 SAZ                     ; the console?
                 JMP     BECON
-                LDW     BK1
-                STW     BNOC
                 LDW     *T.ARG
                 SAZ                     ; without it, a program to run?
-                JMP     BECON
-                LDW     BKNCON
-                JMP     BEMSG
+                LDW     BK1
+                STW     BNOC
 
 ; Take the workspace, point the core's address cells at it -- the word
 ; cells get the block's address, the byte cells twice that -- print the
@@ -255,8 +252,9 @@ T.CRLF          SUBR
 ; T.GETL: collect a line into W.LBUF, CR-terminated, leaving T.INPP the
 ; byte address of that CR.  The line comes from the file OLD opened while
 ; there is one; then, if the program was named on the command line, the
-; wait for a line is where it is set running; and a task with no console
-; that gets as far as wanting the keyboard is over.  Characters are stored as they come, bit 7
+; wait for a line is where it is set running; and a task that was started
+; for that program alone is over once it is, when the READY loop asks for
+; a line.  Characters are stored as they come, bit 7
 ; set and case untouched -- folding is the interpreter's business, where
 ; letters are recognized.  What a line is belongs here: a carriage
 ; return or a line feed ends it, a rubout or Ctrl-H backs up over a
@@ -271,13 +269,17 @@ BGL             LDW     BIN
                 SAZ                     ; in, and to be run?
                 JMP     BGLRUN
                 LDW     BNOC
-                SAZ                     ; no console: nothing more can come
-                JMP     B.BYEX
-                SMB     KCONSQ          ; a character from the console
+                SAZ                     ; started for a program alone?
+                JMP     BGLNC
+BGLK            SMB     KCONSQ          ; a character from the console
                 LDW     KCONSQ          ; queue, parked in the kernel until
                 SMB     K.QGET          ; the teletype has one
                 JSX     K.QGET
                 JMP     BGLC
+BGLNC           LDW     S.RUNMOD
+                SAZ                     ; then over with it, unless it is
+                JMP     BGLK            ; running and its INPUT wants a line
+                JMP     B.BYEX
 BGLRUN          CLR
                 STW     BAUTO
                 JMP     S.RUN
@@ -356,23 +358,12 @@ B.BYEX          SMB     K.EXIT
 
 ; ---------------------------------------------------------------- the break
 ; The flag is the console's, so it is this task's only while the console
-; is: T.BRKQ answers whether a break is waiting, T.BRKC spends it.
-T.BRKQ          SUBR
-                LDW     BNOC
-                SAZ
-                JMP     BBQZ
-                SMB     K.BRKQ
-                JSX     K.BRKQ
-BBQX            EXIT    T.BRKQ
-BBQZ            CLR
-                JMP     BBQX
-T.BRKC          SUBR
-                LDW     BNOC
-                SAZ                     ; ACR is zero where it is wanted
-                JMP     BBCX
-                SMB     K.BRKC
-                JSX     K.BRKC
-BBCX            EXIT    T.BRKC
+; is, which the kernel sees to: T.BRKQ answers whether a break is
+; waiting, T.BRKC spends it, each returning through the core's own link.
+T.BRKQ          SMB     K.BRKQ
+                JMP     K.BRKQ
+T.BRKC          SMB     K.BRKC
+                JMP     K.BRKC
 
 ; ---------------------------------------------------------------- files
 ; SAVE name: the listing, down a channel.  LIST comes back through
@@ -459,7 +450,7 @@ BCH2            WORD    0               ; T.GETL's character
 BIN             WORD    0               ; the channel a program is coming in by
 BOUT            WORD    0               ; the one SAVE lists down, times 256
 BAUTO           WORD    0               ; RUN, once the program is in
-BNOC            WORD    0               ; this task has no console
+BNOC            WORD    0               ; started for a program alone
 BSIL            WORD    0               ; ...and so only a running program prints
 BFN             WORD    0,0,0,0,0       ; a file's name, type and mode
 BNP             WORD    0               ; BNAME's source, a byte address,
@@ -480,7 +471,6 @@ BKWTAB          WORD    BWWTAB          ; the fix-up tables' addresses
 BKBTAB          WORD    BWBTAB
 BKBANP          WORD    BKBAND
 BKNOCA          WORD    BKNOCD
-BKNCON          WORD    BKNCOD
 
 ; The core's address cells that hold word addresses into the workspace,
 ; and those that hold byte addresses -- the wrapper's own among them.
@@ -495,9 +485,6 @@ BKBANE          EQU     $
 BKNOCD          WORD    BKNOCT*2,BKNOCE*2
 BKNOCT          TEXT    "NO CORE LEFT"
 BKNOCE          EQU     $
-BKNCOD          WORD    BKNCOT*2,BKNCOE*2
-BKNCOT          TEXT    "NEEDS THE CONSOLE: USE RUN BASIC"
-BKNCOE          EQU     $
 
 ; The core follows the glue, in the same module.
 B.CORE          EQU     $

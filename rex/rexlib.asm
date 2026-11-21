@@ -29,7 +29,7 @@
 ;            Zero if the tail has run out, else not
 ;   L.ERR    what a file call answered, ACR an E. value, said in words
 ;   L.BRK    nonzero if a Ctrl-C is waiting for this task: the flag is the
-;            console's, so a task without the console is never told of one
+;            console's, so the kernel never tells a task without it of one
 ;   L.EXIT   the task is over
 
 L.KCR           EQU     X'008D'         ; carriage return and line feed, as
@@ -256,15 +256,8 @@ L.E9T           TEXT    "NOT ONE PLATTER "
 L.E9E           EQU     $
 
                 LIBR    L.BRK
-L.BRK           SUBR
-                SMB     CURT
-                LDX     CURT
-                LDW     *T.CON
-                JNZ     L.BRK1          ; the console's holder?
-                EXIT    L.BRK
-L.BRK1          SMB     K.BRKQ
-                JSX     K.BRKQ
-                EXIT    L.BRK
+L.BRK           SMB     K.BRKQ          ; which returns through the caller's
+                JMP     K.BRKQ          ; link
 
                 LIBR    L.EXIT
 L.EXIT          SMB     K.EXIT

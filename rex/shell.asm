@@ -336,14 +336,23 @@ SHSTLN          SUBR
 
 ; STOP n and START n differ only in the state they store, into the task
 ; with that job number: one the shell loaded, since no other has a
-; number.  Not one that has the console, which would leave the shell
-; waiting on a hand-back nobody could make; and the state goes in with
-; the disc claimed, so that it is never a task part way through a
-; transfer that is left standing.
+; number.  Not one that has a console, which would leave a shell waiting
+; on a hand-back nobody could make; and the state goes in with the disc
+; claimed, so that it is never a task part way through a transfer that is
+; left standing.  START with a name rather than a number loads that
+; program and starts it at once, with no console.
 SHSTOP          LDW     =SOFF
                 STW     SHNST
                 JMP     SHSSET
-SHSTRT          CLR
+SHSTRT          JSX     SHSKB
+                LDX     SHCUR
+                CLR
+                LDB     *0
+                SUB     ='0'
+                JMI     SHSTNM          ; a digit first: a job number
+                CMW     =10
+                JGE     SHSTNM
+                CLR
                 STW     SHNST
 SHSSET          JSX     SHJOB
                 JNZ     .J1
@@ -470,15 +479,15 @@ SHECHO          JSX     SHSKB
 ; Wait for the console to come back: masked look, SWAI, SWTCH, look
 ; again -- reading no queue, which is what keeps the terminal's queue to
 ; its one reader.  The console's reader is the shell exactly when the
-; terminal's TM.BSY is clear, and the task RUN loaded exactly when it is
-; set.
+; terminal's TM.BSY is clear, and the task RUN or ATTACH gave it to
+; exactly when it is set.
 SHBWT           MSK
                 LDX     SHTM
                 LDW     *TM.BSY
                 JNZ     .B              ; handed back yet?
                 JMP     .D
 .B              LDW     *TM.KIL
-                JNZ     .K              ; a second Ctrl-C nobody took?
+                JNZ     .K              ; a second Ctrl-C, or a Ctrl-Z?
                 TRUE    SHMOD=0
                 SMB     GETTY
                 LDW     GETTY
@@ -498,10 +507,53 @@ SHBWT           MSK
                 ENDC
 
 ; Two Ctrl-Cs and the program took neither: it is not listening, and the
-; task that has the console is ended from here.
-.K              CLR
+; task that has the console is ended from here.  A Ctrl-Z (2): it is
+; stopped and keeps its place, and the console is the shell's again --
+; with the disc claimed, as STOP claims it, and the holder looked at once
+; more under the mask, since it may have gone of its own accord since it
+; was found.
+.K              STW     SHW2
+                CLR
                 STW     *TM.KIL
                 UNM
+                JSX     SHFGD
+                JNZ     .G
+                JMP     SHBWT           ; it went of its own accord
+.G              LDW     SHW2
+                CMW     =2
+                JEQ     .Z
+                JSX     SHKDO
+                LDW     =SHKIL
+                JSX     SHMSG
+                JMP     SHLOOP
+.Z              JSX     SHIOC
+                MSK
+                LDX     SHKN
+                LDW     *T.STA
+                CMW     =SFREE
+                JEQ     .ZG             ; still there,
+                LDW     *T.CON
+                JNZ     .ZS             ; and still holding it?
+.ZG             UNM
+                JSX     SHIOR
+                JMP     SHBWT
+.ZS             CLR
+                STW     *T.CON
+                LDW     =SOFF
+                STW     *T.STA
+                LDX     SHTM
+                CLR
+                STW     *TM.BSY
+                UNM
+                JSX     SHIOR
+                JSX     SHNL
+                JSX     SHJBN
+                LDW     =SHSTP
+                JSX     SHMSG
+                JMP     SHLOOP
+
+; This terminal's console's holder: its node in SHKN, or zero.
+SHFGD           SUBR
                 LDW     =NARB
                 STW     SHKN
                 LDW     =NARN
@@ -522,24 +574,78 @@ SHBWT           MSK
                 SUB     =1
                 STW     SHTI
                 JNZ     .F
-                JMP     SHBWT           ; it went of its own accord
-.G              JSX     SHKDO
-                LDW     =SHKIL
+                CLR
+.G              EXIT    SHFGD
+
+; "JOB n" for the node in SHKN.
+SHJBN           SUBR
+                LDW     =SHJOBM
+                JSX     SHMSG
+                LDX     SHKN
+                LDW     *T.ID
+                JSX     SHDEC
+                EXIT    SHJBN
+
+; ATTACH n: this terminal's task with that number is given the console,
+; running unless it is asleep or waiting, and the shell waits for it to
+; be handed back, as after RUN.
+SHATT           JSX     SHJOB
+                JNZ     .A1
+                JMP     SHLOOP
+.A1             CAX
+                LDW     *T.TTY
+                CMW     SHTM
+                JEQ     .A2             ; a task of this terminal's?
+                LDW     =SHNOT
                 JSX     SHMSG
                 JMP     SHLOOP
+.A2             MSK
+                JSX     SHGRT
+                UNM
+                JMP     SHBWT
 
-; LOAD name and RUN name: a module off the disc, started as a task.  RUN
-; hands it the console and waits for it to be over -- the break flag
-; cleared and TM.BSY raised in one masked window, as the grant to BASIC
-; is made, then SHBWT's wait -- and LOAD leaves it to run behind the
-; prompt.  The task's node is linked in by SPAWN under its own mask,
-; after the grant: the task cannot run before it is on the ring, and
-; nothing but a task that holds the console can lower TM.BSY.
+; The console to the node in SHKN, in the caller's masked window: the
+; break and the kill forgotten, so that one aimed at nobody cannot land
+; on the session that follows, TM.BSY raised, the node's T.CON set, and
+; its state runnable unless it is asleep or waiting, so that a task
+; running behind the prompt has its sleep out.
+SHGRT           SUBR
+                LDX     SHTM
+                CLR
+                STW     *TM.BRK
+                STW     *TM.KIL
+                LDW     =1
+                STW     *TM.BSY
+                LDX     SHKN
+                STW     *T.CON
+                LDW     *T.STA
+                CMW     =SSLP
+                JEQ     .X
+                CMW     =SWAI
+                JEQ     .X
+                CLR
+                STW     *T.STA
+.X              EXIT    SHGRT
+
+; LOAD name, RUN name and START name: a module off the disc, made a
+; task.  RUN hands it the console and waits for it to be over -- the
+; grant made in one masked window with the SPAWN that puts the node on
+; the ring (SHGRT), then SHBWT's wait; LOAD leaves it stopped, for START
+; or ATTACH, and says its number; START runs it behind the prompt.  The
+; node's state goes in in the same window as the SPAWN, so the task is
+; never on the ring in any other, and nothing but a task that holds the
+; console can lower TM.BSY.
 SHRUN           LDW     =1
+                STW     LDCON
                 JMP     SHLD0
 SHLOAD          CLR
-SHLD0           STW     LDCON
-                CLR
+                STW     LDCON
+                LDW     =SOFF
+                JMP     SHLDS
+SHSTNM          CLR
+                STW     LDCON
+SHLDS           STW     LDSTA
+SHLD0           CLR
                 STW     SHIMPL
                 LDW     =SHKRX
                 STW     SHDTY
@@ -551,27 +657,32 @@ SHLD1           JSX     SHIOC           ; the disc, for the whole load
                 LDW     SHW2
                 JNZ     .D2             ; a node, or an error already named?
                 JMP     SHLOOP
-.D2             LDW     LDCON
+.D2             LDW     LDNODE
+                STW     SHKN
+                LDW     LDCON
                 JNZ     .DRN
-                LDW     LDNODE
+                MSK                     ; SPAWN unmasks
+                LDX     SHKN
+                LDW     LDSTA
+                STW     *T.STA
+                LDW     SHKN
                 CALL    SPAWN
+                LDW     LDSTA
+                JNZ     .DJB            ; LOAD's?  then its number
+                JMP     SHLOOP
+.DJB            JSX     SHJBN
+                JSX     SHNL
                 JMP     SHLOOP
 .DRN            MSK
-                LDX     SHTM
-                CLR
-                STW     *TM.BRK
-                STW     *TM.KIL
-                LDW     =1
-                STW     *TM.BSY
-                UNM
-                LDW     LDNODE
+                JSX     SHGRT
+                LDW     SHKN
                 CALL    SPAWN
                 JMP     SHBWT
 
                 TRUE    SHMOD=0
 ; Give every terminal that has asked for one a shell.  SERV raises
 ; GETTY, and the terminal's TM.REQ, when a key is typed at a terminal
-; that has none; this loads SHELL.RX as LOAD would load a module, gives
+; that has none; this loads SHELL.RX as START would load a module, gives
 ; it the terminal, makes it the terminal's shell -- which is what lets it
 ; read the terminal's queue -- and starts it.  The key that asked is in
 ; that queue for it.  GETTY goes down first, so a request raised while
@@ -618,12 +729,14 @@ SHGTY           SUBR
 .S              LDX     LDNODE
                 LDW     SHGT
                 STW     *T.TTY
-                MSK
+                MSK                     ; SPAWN unmasks
                 LDX     SHGT
                 LDW     LDNODE
                 STW     *TM.SH
-                UNM
-                LDW     LDNODE
+                CAX
+                CLR
+                STW     *T.STA
+                CXA
                 CALL    SPAWN
                 JMP     .X
 .N              UNM
@@ -1511,7 +1624,8 @@ SHW2            WORD    0               ; scratch
 SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
 SHMTOT          WORD    0               ; MEM's running totals, below the
 SHMHI           WORD    0               ; fence and above it
-LDCON           WORD    0               ; the loader's: RUN (1) or LOAD (0)
+LDCON           WORD    0               ; the loader's: RUN (1), or not (0)
+LDSTA           WORD    0               ; and the state LOAD or START gives
 LDKSEG          EQU     4               ; the segments a module may have
 LDNSG           WORD    0               ; how many segments have a block,
 LDSGB           RES     LDKSEG+LDKSEG   ; each one's block and, LDKSEG on, its size
@@ -1558,9 +1672,11 @@ SHALW           WORD    ALLOCW,ALLCHW   ; the allocator's page entries, for an
 SHALB           WORD    ALLOCB,ALLCHB   ; indexed JSX: each with its twin above
                                         ; the fence after it
 
-; Four characters a state, indexed by the state doubled.  The last is a
-; node that went back to the arena while its line was being printed.
+; Four characters a state, indexed by the state doubled.  GONE is a node
+; that went back to the arena while its line was being printed, and TTY
+; a task waiting to be given its console.
 SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT','GO','NE'
+                WORD    'TT','Y '
 
                 TRUE    SHMOD=1         ; the console's are in page 0 (rex.asm)
 LBUF            RES     32              ; the line the shell is reading
@@ -1581,6 +1697,7 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'ST','AR',SHSTRT
                 WORD    'EC','HO',SHECHO
                 WORD    'KI','LL',SHKILL
+                WORD    'AT','TA',SHATT
                 WORD    'M','EM',SHMEM
                 WORD    'LO','AD',SHLOAD
                 WORD    'R','UN',SHRUN
@@ -1606,12 +1723,12 @@ SHHNT           MSG     "TYPE HELP FOR THE COMMANDS\r\n"
 SHPRM           MSG     "REX>  "
 SHWHT           MSG     "WHAT\r\n"
                 TRUE    SHMOD=0
-SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME STOP START KILL ECHO MEM LOAD RUN HALT\r\n"
+SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME ECHO MEM RUN LOAD START HALT\r\n"
                 ENDC
                 TRUE    SHMOD=1
-SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME STOP START KILL ECHO MEM LOAD RUN BYE \r\n"
+SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME ECHO MEM RUN LOAD START BYE \r\n"
                 ENDC
-SHHL2           MSG     "STOP, START AND KILL TAKE A JOB NUMBER. @NAME RUNS A FILE OF COMMANDS.\r\n"
+SHHL2           MSG     "STOP, START, ATTACH AND KILL TAKE A JOB NUMBER; CTRL-Z STOPS A RUN.\r\n@NAME RUNS A FILE OF COMMANDS.\r\n"
 SHFRE           MSG     "FREE "
 SHNOF           MSG     "NO SUCH FILE\r\n"
 SHSWP           MSG     "SWAPS "
@@ -1629,6 +1746,8 @@ SHSEC           MSG     " SEC\r\n"
 SHDWN           MSG     "REX 703 DOWN\r\n"
 SHNOT           MSG     "NO SUCH TASK\r\n"
 SHKIL           MSG     "KILLED\r\n"
+SHJOBM          MSG     "JOB "
+SHSTP           MSG     " STOPPED\r\n"
 SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. DIR 0: LISTS THEM.\r\n"
 
                 TRUE    SHMOD=0         ; the rest of page 1, which is where

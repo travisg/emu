@@ -121,8 +121,7 @@ $(BUILD)/basic.obj: $(API) brex.asm $(BCORE) $(ASM703)
 # agree. Hello's bases are one in each half of a word page, so a loader
 # that took the byte page from >>11 instead of >>10 would be caught on
 # the second, below word X'4000' and above it, where a byte address has
-# its top bit set; BASIC fills its page to the last word,
-# so its two are the only ones it has, the page's first word and second.
+# its top bit set; BASIC's are the page's first word and second.
 # Far has a base for each of its segments: neighbouring pages, and the
 # second segment below the first with the fence between them. The shell
 # is placed at a page's first word and further in.

@@ -6,16 +6,23 @@
 # Use of this source code is governed by a MIT-style
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
-"""End-to-end test for REX, the 703 executive: boot it, load three
+"""End-to-end test for REX, the 703 executive: boot it, start three
 copies of blip.asm behind the prompt, each printing a mark of its own and
 sleeping an interval of its own, and watch them run -- the scheduler, the
 clock's tick, the context switch, the sleeps and the mailbox teletype
 driver all at once -- load the
 hello module off a scratch platter both ways (RUN, which waits for it, and
-LOAD, which leaves it running behind the prompt) and see the pool's free
+START, which leaves it running behind the prompt) and see the pool's free
 words come back, run two Tiny BASIC sessions with a silent loop broken by
 Ctrl-C, then drive the rest of the commands and shut the machine down
 with HALT, a task still loaded, which HALT has to leave stopped.
+
+Job control: LOAD leaves a program stopped and says its number, and
+nothing of it runs until START; ATTACH gives a task the console and
+Ctrl-Z takes it back, the task stopped -- a BLIP, a BASIC whose loop then
+runs behind the prompt, deaf to the Ctrl-C typed there until it is
+attached again, and a NAP, which reads the console and so waits for it
+behind the prompt (STAT's TTY) without taking the shell's keys.
 
 The emulator is driven over its debug port (tools/emudbg.py), started
 halted so no output is missed: keys go in as `key` commands, the paper is
@@ -118,12 +125,13 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nolock   the kernel's wait for the disc patched out, so a task that
            finds it taken goes in anyway
   nosave   the directory never written back to the disc
-  noguard  the kernel's refusal of a console read by a task that does
-           not have the console patched out
+  noguard  the kernel's test of a console read by a task that does not
+           have the console patched out, so it reads the shell's keys
   noswapin a task's blocks cut out of the free list where they were, but
            never read back into them
   nosys    a boot sector that was never told where the kernel is
-  nopark   HALT's stopping of the loaded tasks patched out
+  nopark   HALT's stopping of the loaded tasks patched out, so a NAP
+           waiting for its console is left waiting
   nolatch  a channel forgetting that it refused a character, so the
            close makes a file of what did go in
   sysopen  a file opened for writing under a system file's name
@@ -143,6 +151,15 @@ REX_CONTROL names a negative control, each of which must FAIL:
            is never ended: the clock stands still, and the tick with it
   nobreak  a multiplexer set's BREAK, its Ctrl-C while it prints, never
            passed on, so a dump on teletype 1 cannot be stopped
+  noloadstop  LOAD giving the task it loads a running state, so it runs at
+           once and is never numbered
+  nodetach a Ctrl-Z queued like any other key, so it never stops the
+           console's program
+  nobrkq   K.BRKQ answering a task without the console, so a BASIC behind
+           the prompt takes the Ctrl-C typed there
+  nokillwake  KILLT handing nothing back, so a KILL from the console of
+           teletype 1's foreground program leaves that terminal's shell
+           waiting for good
 """
 
 import contextlib
@@ -181,7 +198,7 @@ LOW_ONLY = ('BASIC', 'SHELL')
 
 # The pool and the node arena, as rex.asm lays them out.
 POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
-NARB, NARN, T_LEN, T_STA, T_NAM, SOFF, SFREE = 0x7e00, 24, 19, 0, 8, 2, 4
+NARB, NARN, T_LEN, T_STA, T_NAM, SOFF, SFREE, SCON = 0x7e00, 24, 19, 0, 8, 2, 4, 5
 T_ID, T_TTY = 10, 18
 
 
@@ -391,11 +408,19 @@ def session(emu):
         symbols.load(REX_LST)
         emu.writew(symbols.value('FDSAVE') + 2, [CLR])
     if CONTROL == 'noguard':
-        # Q.GET is MSK / STX / STW / CMW KCONSQ / SEQ / JMP .IN: without
-        # the skip every caller is let in
+        # Q.GET's loop asks CMW *T.KAR / SEQ / JMP .R: without the skip
+        # every caller is let in
+        emu.writew(listing_word('CMW     *T.KAR', 'Q.GET           MSK') + 1, [NOP])
+    if CONTROL == 'noloadstop':
+        emu.writew(listing_word('LDW     =SOFF', 'SHLOAD          CLR'), [CLR])
+    if CONTROL == 'nodetach':
+        # SVPOST's CLB X'9A' / SNE / JMP .DET
+        emu.writew(listing_word("CLB     X'9A'", 'SVPOST          SUBR') + 2, [NOP])
+    if CONTROL == 'nobrkq':
+        # BRKQ is MSK / STX / LDX CURT / LDW *T.CON / SAZ / JMP .Q
         symbols = Symbols()
         symbols.load(REX_LST)
-        emu.writew(symbols.value('Q.GET') + 4, [NOP])
+        emu.writew(symbols.value('BRKQ') + 4, [NOP])
     if CONTROL == 'noseg':
         # LDSEGR is JSX LDGETW / JSX LDSEGB / STW LDBASE: without the
         # store the base stays the segment's own
@@ -405,6 +430,9 @@ def session(emu):
     if CONTROL == 'nohold':
         # TIME's last read is the one that ends the hold
         emu.writew(listing_word('DIN     11,3', 'SHTIME          MSK'), [NOP])
+    symbols = Symbols()
+    symbols.load(REX_LST)
+    held_at = symbols.value('TMT') + symbols.value('TM.BSY')
     emu.run()
     s.wait(b'REX 703 UP')
 
@@ -425,7 +453,7 @@ def session(emu):
     s.wait(PROMPT)
     emu.wait_quiet()
     mark = len(emu.output)
-    lines = ['LOAD BLIP %c' % c for c in MARKS]
+    lines = ['START BLIP %c' % c for c in MARKS]
     emu.key(''.join(line + '\r' for line in lines))
     after = emu.wait_for_output(lines[-1].encode(), start=mark).end()
     deadline = time.monotonic() + 30
@@ -440,12 +468,35 @@ def session(emu):
     stat_until_gone(emu, s, b'BL')
     s.at = len(emu.output)
     emu.key('STAT\r')
+
+    # LOAD leaves a program stopped and says its number, and nothing of it
+    # prints until START lets it run. ATTACH gives it the console and the
+    # shell waits; Ctrl-Z stops it again and gives the console back.
+    s.say('LOAD BLIP +')
+    job = s.wait(re.compile(rb'^JOB (\d+)\r', re.M)).group(1).decode()
+    s.say('STAT')
+    s.wait(re.compile(rb'^' + job.encode() + rb' BL OFF', re.M))
+    after = s.say('UPTIME')
+    emu.wait_for_output(PROMPT, start=after)
+    emu.wait_quiet(idle=1.0)
+    if b'+' in s.since(after):
+        raise AssertionError('a LOADed blip printed before START: %r' % s.since(after))
+    s.say('START ' + job)
+    s.wait(re.compile(rb'\+[^+]*\+'))
+    emu.key('ATTACH %s\r' % job)
+    wait_held(emu, held_at, 'the attached blip never had the console')
+    s.wait(re.compile(rb'\+[^+]*\+'))
+    emu.key('\x1a')
+    s.wait(b'JOB %s STOPPED\r\n' % job.encode())
+    mark = s.say('STAT')
+    s.wait(re.compile(rb'^' + job.encode() + rb' BL OFF', re.M))
+    s.say('KILL ' + job)
     s.say('HELP')
     s.say('ECHO SHELL OUTPUT OK')
     s.say('FROB')
 
     # The hello module, both ways. RUN waits for it, so its line is clean
-    # and the free words are back by the next prompt; LOAD leaves it to run
+    # and the free words are back by the next prompt; START leaves it to run
     # behind the prompt, where a STAT typed at once finds it on the ring,
     # and STAT is repeated until it has gone before the pool is counted
     # again. A name not in the catalogue is refused.
@@ -459,7 +510,7 @@ def session(emu):
     s.say('RUN FAR')
     s.wait(re.compile(rb'FAR (OK|BAD \d+)'))
     s.say('MEM')
-    s.say('LOAD HELLO')
+    s.say('START HELLO')
     mark = s.say('STAT', quiet=False)
     seen = False
     for _ in range(40):
@@ -491,7 +542,7 @@ def session(emu):
     s.wait(b'HELLO FROM WORD')
     s.say('TYPE MSG')
     s.say('PUT NOTE')
-    emu.key(NOTE_KEYS + '\x1a')        # the shell's queue holds it for PUT
+    emu.key(NOTE_KEYS + '\x1b')        # the shell's queue holds it for PUT
     s.say('TYPE NOTE')
     s.say('COPY NOTE COPY2')
     s.say('REN COPY2 THIRD')
@@ -517,21 +568,34 @@ def session(emu):
     s.wait(b'HELLO FROM WORD')
     s.say('MEM')
 
-    # Jobs. NAP never ends: started behind the prompt it first tries to
-    # read the console, which the kernel refuses, and then sleeps for
-    # ever. STOP, START and KILL take its number, as STAT gives it.
-    mark = s.say('LOAD NAP')
-    emu.wait_for_output(b'THE CONSOLE WAS REFUSED', start=mark)
-    emu.wait_quiet()
+    # Jobs. NAP reads the console once and then sleeps for ever. Started
+    # behind the prompt it has no console, so its read waits for one --
+    # STAT says TTY -- and the keys typed after it are still the shell's.
+    # STOP, START, ATTACH and KILL take its number, as STAT gives it.
+    nap_from = s.say('START NAP')
+    mark = s.say('STAT')
+    job = emu.wait_for_output(re.compile(rb'^(\d+) NA TTY', re.M), start=mark).group(1).decode()
+    s.say('ECHO STILL THE SHELL')
+    s.wait(re.compile(rb'^STILL THE SHELL\r', re.M))
     held = blocks_of(emu, 'NA')
     if not held or any(first < POOLH for first, _ in held):
         raise AssertionError('a module marked for it was not loaded high: %r' % held)
-    mark = s.say('STAT')
-    job = emu.wait_for_output(re.compile(rb'^(\d+) NA ', re.M), start=mark).group(1).decode()
     s.say('STOP ' + job)
     mark = s.say('STAT')
     emu.wait_for_output(re.compile(rb'^' + job.encode() + rb' NA OFF', re.M), start=mark)
     s.say('START ' + job)
+    mark = s.say('STAT')
+    emu.wait_for_output(re.compile(rb'^' + job.encode() + rb' NA TTY', re.M), start=mark)
+    emu.wait_quiet()
+    if b'NAP:' in s.since(nap_from):
+        raise AssertionError('NAP read the console behind the prompt: %r' % s.since(nap_from))
+    s.say('ATTACH ' + job)
+    wait_held(emu, held_at, 'the attached NAP never had the console')
+    emu.key('X')
+    s.wait(b'NAP: READ THE CONSOLE\r\n')
+    emu.wait_quiet()
+    emu.key('\x1a')
+    s.wait(b'JOB %s STOPPED\r\n' % job.encode())
     s.say('KILL ' + job)
     mark = s.say('STAT')
     emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark)
@@ -617,6 +681,35 @@ def session(emu):
     s.basic('10 PRINT "LP"\r')
     s.basic('20 GOTO 20\r')
     s.basic('SAVE LP\r')
+
+    # A loop that prints, stopped with Ctrl-Z: it keeps its place and the
+    # shell has the console. START runs it behind the prompt, where the
+    # Ctrl-C typed at the shell is not its to take; ATTACH gives it back
+    # the console, and the next Ctrl-C breaks it.
+    s.basic('NEW\r')
+    s.basic('10 FOR I=1 TO 300\r')
+    s.basic('20 NEXT I\r')
+    s.basic('30 PRINT "ZZ"\r')
+    s.basic('40 GOTO 10\r')
+    s.basic('RUN\r')
+    s.wait(b'ZZ\r\nZZ\r\n')
+    emu.key('\x1a')
+    job = s.wait(re.compile(rb'JOB (\d+) STOPPED\r\n')).group(1).decode()
+    mark = s.say('STAT')
+    s.wait(re.compile(rb'^' + job.encode() + rb' BA OFF', re.M))
+    s.say('START ' + job)
+    s.wait(b'ZZ\r\nZZ\r\n')
+    mark = len(emu.output)
+    emu.key('\x03')
+    time.sleep(0.5)
+    emu.wait_for_output(b'ZZ\r\nZZ\r\n', start=len(emu.output))
+    if b'BREAK' in s.since(mark):
+        raise AssertionError('a BASIC behind the prompt took the console\'s break: %r' % s.since(mark))
+    emu.key('ATTACH %s\r' % job)
+    wait_held(emu, held_at, 'the attached BASIC never had the console')
+    s.at = len(emu.output)
+    emu.key('\x03')
+    s.wait(re.compile(rb'BREAK AT \d0'))
     mark = len(emu.output)
     s.basic('OLD NOPE\r')
     s.basic('BYE\r')
@@ -625,12 +718,13 @@ def session(emu):
 
     # A program named on the command line is loaded and run. In the
     # foreground the session stays at READY afterwards -- this one is a
-    # host's file, with bare newlines -- and behind the prompt the task
-    # prints what the program prints and is gone when the program ends.
+    # host's file, with bare newlines -- and behind the prompt (START) the
+    # task prints what the program prints and is gone when the program
+    # ends.
     s.say('BASIC SQ')
     s.wait(b'FROM A HOST FILE\r\n1\r\n4\r\n9\r\n')
     s.basic('BYE\r')
-    mark = s.say('LOAD BASIC BG')
+    mark = s.say('START BASIC BG')
     emu.wait_for_output(b'BG3', start=mark)
     for _ in range(40):
         s.wait(PROMPT)
@@ -647,7 +741,7 @@ def session(emu):
     # The break is the console's. A BASIC behind the prompt does not have
     # the console, so a Ctrl-C typed at the shell is not its to take: the
     # loop is still running afterwards, and KILL is what ends it.
-    mark = s.say('LOAD BASIC LP')
+    mark = s.say('START BASIC LP')
     emu.wait_for_output(b'LP', start=mark)
     emu.wait_quiet()
     emu.key('\x03')
@@ -659,15 +753,17 @@ def session(emu):
     s.say('KILL ' + job)
     s.say('MEM')
 
-    # The console has one reader, and LOAD grants it to nobody, so a module
-    # that reads it refuses rather than registering over the shell's place
-    # in the queue. The shell must still be answering afterwards, and the
-    # MEM is what says the refusal gave its memory back.
-    # The refusal prints behind the prompt LOAD returns to, so
-    # the cursor stays where it is for the MEM to find that prompt.
-    mark = s.say('LOAD BASIC')
-    emu.wait_for_output(b'THE CONSOLE: USE RUN BASIC', start=mark)
+    # A BASIC started behind the prompt with no program is a session
+    # waiting for its console: up to its READY, then TTY. ATTACH is what
+    # lets it read, and its BYE gives the memory back.
+    mark = s.say('START BASIC')
+    emu.wait_for_output(READY, start=mark)
     emu.wait_quiet()
+    mark = s.say('STAT')
+    job = emu.wait_for_output(re.compile(rb'^(\d+) BA TTY', re.M), start=mark).group(1).decode()
+    s.say('ATTACH ' + job)
+    wait_held(emu, held_at, 'the attached BASIC never had the console')
+    emu.key('BYE\r')
     s.say('MEM')
 
     # HALT with a task loaded: it has to be left stopped, which is what
@@ -679,9 +775,9 @@ def session(emu):
         emu.halt()
         emu.writew(symbols.value('SHHD0') + 6, [NOP])
         emu.run()
-    mark = s.say('LOAD NAP')
-    emu.wait_for_output(b'THE CONSOLE WAS REFUSED', start=mark)
-    emu.wait_quiet()
+    mark = s.say('START NAP')
+    s.say('STAT')
+    s.wait(re.compile(rb'^\d+ NA TTY', re.M))
     s.say('TIME')
     s.say('HALT')
     s.wait(b'REX 703 DOWN')
@@ -691,6 +787,21 @@ def session(emu):
     _, node = node_of(emu, 'NA')
     if node[T_STA] != SOFF:
         raise AssertionError('HALT left NAP in state %d' % node[T_STA])
+
+
+def wait_held(emu, held_at, why, timeout=120):
+    """Until a terminal's TM.BSY, at held_at, says a task has its console:
+    a grant made, so what is typed next is the task's."""
+    deadline = time.time() + timeout
+    while True:
+        emu.halt()
+        held = emu.memw(held_at, 1)[0]
+        emu.run()
+        if held:
+            return
+        if time.time() > deadline:
+            raise AssertionError(why)
+        time.sleep(0.05)
 
 
 # dskt.asm's constants, and the platter's geometry.
@@ -764,7 +875,7 @@ def disc_session(emu, image):
     s.wait(PROMPT)
     emu.wait_quiet()
     mark = len(emu.output)
-    emu.key('LOAD DSKT\r' * DSKT_COPIES + 'STAT\r')
+    emu.key('START DSKT\r' * DSKT_COPIES + 'STAT\r')
     idle_line = re.compile(rb'^0 ID RUN', re.M)
     emu.wait_for_output(idle_line, start=mark, timeout=120)
     together = len(re.findall(rb'^\d+ DS ', s.since(mark), re.M)) == DSKT_COPIES
@@ -809,7 +920,7 @@ def disc_session(emu, image):
     size = fs703.Platter(bytearray(platter)).find('HELLO', 'RX').size
     last = b'%04X ' % ((size - 1) // 16 * 16)
     mark = len(emu.output)
-    emu.key('LOAD DUMP HELLO.RX\r')
+    emu.key('START DUMP HELLO.RX\r')
     # its second line: the prompt prints into the first
     emu.wait_for_output(b'\n0010 ', start=mark, timeout=120)
     emu.key('NAP\r')
@@ -880,7 +991,7 @@ def swap_session(emu, image):
     # is the machine's time the hogs' ten seconds are measured against,
     # and the STAT at the end lists them as the fourth load leaves them.
     first, second = FIRST_JOB, FIRST_JOB + 1
-    load = 'LOAD HOG %d\r' % HOG_WORDS
+    load = 'START HOG %d\r' % HOG_WORDS
     mark = len(emu.output)
     emu.key(load * 2 + 'STOP %d\rSTOP %d\r' % (first, second) + load * 2 + 'STAT\r')
     emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark, timeout=300)
@@ -910,7 +1021,7 @@ def swap_session(emu, image):
     # the prompt and one in front.
     emu.wait_quiet()
     s.at = len(emu.output)
-    emu.key(''.join('LOAD BASIC JOB%d\r' % n for n in range(1, JOBS + 1)) + 'BASIC\r')
+    emu.key(''.join('START BASIC JOB%d\r' % n for n in range(1, JOBS + 1)) + 'BASIC\r')
     s.wait(b'TINY BASIC UNDER REX', timeout=300)
     s.basic('10 FOR I=1 TO 3\r')
     s.basic('20 PRINT "FG";I\r')
@@ -1049,7 +1160,7 @@ def verdict(paper):
         return len(re.findall(pattern, text, re.M))
 
     free = re.findall(rb'^FREE (\d+ LOW \d+ HIGH)$', text, re.M)
-    # hello's line whole on a line of its own: the one LOAD started prints
+    # hello's line whole on a line of its own: the one START started prints
     # into whatever else is printing and may not be
     hellos = [int(n) for n in re.findall(rb'^HELLO FROM WORD (\d+)$', text, re.M)]
     checks = [
@@ -1064,7 +1175,7 @@ def verdict(paper):
         ('directory: hello', line(rb'^HELLO\.RX \d+$')),
         ('directory: basic', line(rb'^BASIC\.RX \d+$')),
         ('directory: the free sectors', line(rb'^\d+ SECTORS FREE')),
-        # RUN's hello has the printer to itself. LOAD's prints behind the
+        # RUN's hello has the printer to itself. START's prints behind the
         # prompt, a character at a time into whatever else is printing, so
         # it is taken from STAT's ring and the pool instead (session).
         ('hello ran under RUN', line(rb'^HELLO FROM WORD \d')),
@@ -1112,7 +1223,8 @@ def make_platter(workdir, log, swap=False, boot=False):
         pass
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
-                     'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak'):
+                     'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
+                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
@@ -1158,7 +1270,7 @@ def platters_session(emu):
     s.wait(re.compile(rb'^INIT RAN\r', re.M))   # INIT.CM, off unit 0
     emu.wait_quiet()
     s.say('PUT NOTE')                   # no unit: the data unit's
-    emu.key(NOTE_KEYS + '\x1a')
+    emu.key(NOTE_KEYS + '\x1b')
     mark = s.say('TYPE NOTE')
     s.wait(PROMPT)
     if b'LINE ONE\r\nLINE TWO' not in s.since(mark):
@@ -1288,6 +1400,11 @@ def terminals_session(emu, t1, t2, t3):
         emu.writew(listing_word("this terminal's task?", 'KICK            SUBR') + 1, [NOP])
     if CONTROL == 'nogetty':
         emu.writew(listing_word('STW     *TM.REQ', 'SERV            SMB'), [NOP])
+    if CONTROL == 'nokillwake':
+        # KILLT is the SUBR's STX, then STW XDEAD / JSX CONBK / JSX REAP
+        symbols = Symbols()
+        symbols.load(REX_LST)
+        emu.writew(symbols.value('KILLT') + 2, [NOP])
     emu.run()
     con, term = Session(emu), Session(t1)
     con.wait(b'REX 703 UP')
@@ -1309,8 +1426,8 @@ def terminals_session(emu, t1, t2, t3):
         raise AssertionError("teletype 1's shell is on terminal block %04X, not %04X" % (tty, tm1))
 
     # a BLIP behind each prompt, each printing on its own paper
-    con.say('LOAD BLIP #')
-    term.say('LOAD BLIP ~')
+    con.say('START BLIP #')
+    term.say('START BLIP ~')
     con_mark, t1_mark = len(emu.output), len(t1.output)
     deadline = time.time() + 120
     while (emu.output[con_mark:].count(b'#') < 3 or t1.output[t1_mark:].count(b'~') < 3):
@@ -1334,6 +1451,11 @@ def terminals_session(emu, t1, t2, t3):
     have = set(re.findall(rb'(\d+ (?:SH|BL)) [^\r\n]* T1\r\n', stat))
     if have != want:
         raise AssertionError("STAT does not show teletype 1's shell and blip: %r" % stat)
+
+    # ATTACH is of a task of the shell's own terminal only
+    mark = len(emu.output)
+    emu.key('ATTACH %d\r' % t1_blip)
+    wait_without(emu, re.compile(rb'NO SUCH TASK\r\n'), mark, b'#')
 
     # KILL on the console reaches either terminal's task
     emu.key('KILL %d\r' % con_blip)
@@ -1366,6 +1488,19 @@ def terminals_session(emu, t1, t2, t3):
     con.say('ECHO STILL HERE')
     con.wait(b'STILL HERE\r\n')
 
+    # and a KILL from the console of the program in front of teletype 1
+    # hands that terminal's console back: its shell's prompt comes again
+    term.say('RUN NAP')
+    deadline = time.time() + 120
+    while not jobs_of(emu, 'NA'):
+        if time.time() > deadline:
+            raise AssertionError('the second NAP never came')
+        time.sleep(0.05)
+    wait_held(emu, held_at, 'the second NAP never had teletype 1')
+    ((nap, _),) = jobs_of(emu, 'NA')
+    con.say('KILL %d' % nap)
+    term.at = term.wait(PROMPT, timeout=120).start()     # the next say's prompt
+
     # a Ctrl-C while teletype 1 prints: its channel is not listening, so
     # the key is the set's BREAK, which stops a dump that has twenty
     # minutes of printing left in it
@@ -1391,7 +1526,7 @@ def terminals_session(emu, t1, t2, t3):
     # and a file typed out on teletype 1, three times over, which has to
     # come out there whole -- a printer that took the other terminal's
     # characters would leave holes in it
-    con.say('LOAD DUMP BASIC.RX')
+    con.say('START DUMP BASIC.RX')
     con_mark = len(emu.output)
     emu.wait_for_output(b'\n0010 ', start=con_mark)
     t1_mark = len(t1.output)
@@ -1459,7 +1594,7 @@ def terminals_session(emu, t1, t2, t3):
     # one the swapper may put out, and a key at its terminal brings it in
     emu.wait_quiet(timeout=120)
     con.at = len(emu.output)
-    emu.key('LOAD HOG %d\r' % 6000 * 4)
+    emu.key('START HOG %d\r' % 6000 * 4)
     out = None
     deadline = time.monotonic() + 300
     while out is None:

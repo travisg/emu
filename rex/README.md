@@ -56,13 +56,15 @@ TYPE HELP FOR THE COMMANDS
 REX>  RUN HELLO
 HELLO FROM WORD 16386
 REX>  LOAD HELLO
-REX>  HELLO FROM WORD 16386
-STAT
-UPTIME 3 SEC
+JOB 1
+REX>  START 1
+RHELLO FROM WORD 16386
+EX>  STAT
+UPTIME 5 SEC
 SWAPS 0 OUT 0 IN
 0 SH RUN
 0 SW WAIT
-1 HE SLP 83
+1 HE SLP 62
 0 ID RUN
 REX>  BASIC
 TINY BASIC UNDER REX
@@ -83,6 +85,16 @@ RUN
 READY
 SAVE SQ
 READY
+
+JOB 2 STOPPED
+REX>  STAT
+UPTIME 12 SEC
+SWAPS 0 OUT 0 IN
+0 SH RUN
+0 SW WAIT
+2 BA OFF
+0 ID RUN
+REX>  ATTACH 2
 BYE
 REX>  TYPE SQ.BA
 10 FOR I=1 TO 5
@@ -92,11 +104,14 @@ REX>  HALT
 REX 703 DOWN
 ```
 
-`RUN` gives a program the console until it exits. `LOAD` starts it behind
-the prompt, which is why the second `HELLO` prints after the prompt has
-come back, and why `STAT` finds it as job 1, asleep (`SLP`) with 83 ticks
+`RUN` gives a program the console until it exits. `LOAD` loads it
+stopped and says its job number, and `START` lets it run behind the
+prompt, which is why the second `HELLO` prints into the prompt that has
+come back, and why `STAT` finds it as job 1, asleep (`SLP`) with 62 ticks
 to go. The other lines of `STAT` are the shell, the swapper and the idle
-task.
+task. The Ctrl-Z typed at BASIC's `READY` prints nothing; it stops BASIC
+and gives the shell the console, and `ATTACH` gives it back, BASIC
+taking up where it was.
 
 ## The shell
 
@@ -108,10 +123,12 @@ task.
 | `TIME` | the time of day, off the clock (`HH:MM:SS`) |
 | `MEM` | free words in the pool, below word X'4000' and above it |
 | `ECHO text` | print the rest of the line |
-| `LOAD name` | load the program `name.RX` and run it behind the prompt |
-| `RUN name` | the same, but give it the console until it exits |
-| `STOP n` | suspend a loaded task, by job number |
-| `START n` | release it |
+| `RUN name` | load the program `name.RX` and give it the console until it exits |
+| `LOAD name` | load it stopped, and say its job number |
+| `START name` | load it and run it behind the prompt |
+| `START n` | let a stopped task run behind the prompt, by job number |
+| `STOP n` | stop a task |
+| `ATTACH n` | give one of this terminal's tasks the console, as `RUN` does |
 | `KILL n` | end it, whatever it was doing |
 | `@name` | take the shell's lines from the command file `name.CM` |
 | `HALT` | stop every task, let the printers finish and stop the machine (console only) |
@@ -119,8 +136,8 @@ task.
 
 Any other word is a program to `RUN`: `BASIC` is `RUN BASIC`, and
 whatever follows the name on the line is the program's to read. A program
-that reads the keyboard has to be started with `RUN`, or by its bare
-name; `LOAD` gives it no console.
+behind the prompt has no console: if it reads the keyboard it waits,
+and `STAT` shows it as `TTY`, until `ATTACH` gives it the console.
 
 The utilities are programs on the disc:
 
@@ -128,7 +145,7 @@ The utilities are programs on the disc:
 |---|---|
 | `DIR [unit:]` | a platter's directory: name, type, sectors, then what is free |
 | `TYPE name` | print a file |
-| `PUT name` | the keyboard into a file, until Ctrl-Z |
+| `PUT name` | the keyboard into a file, until ESC (the Model 33's ALT MODE) |
 | `COPY from to` | copy a file |
 | `REN old new` | rename one |
 | `DEL name` | delete one |
@@ -139,7 +156,14 @@ The utilities are programs on the disc:
 at length do: Tiny BASIC stops the program it is running, `TYPE` and
 `DUMP` stop printing, and a command file (`@name`) is closed. A second
 Ctrl-C while the first is still untaken ends whatever program has the
-console, which is the way out of one that is not listening.
+console, which is the way out of one that is not listening. A program
+behind the prompt never sees a Ctrl-C; it is for the one with the
+console.
+
+**Ctrl-Z** stops the program that has the console and gives the console
+back to the shell, which says `JOB n STOPPED`. The program keeps its
+place: `START n` lets it go on behind the prompt, and `ATTACH n` brings
+it back to the front.
 
 **Background tasks** keep running behind whatever is typed, a BASIC
 session included, and print on the same paper. Every terminal prints its
@@ -208,9 +232,10 @@ and `BYE` to return to the shell. Under REX it has two statements more:
 - `SAVE name` writes the program to the file `name.BA`
 - `OLD name` empties the program and reads `name.BA` back in
 
-`BASIC PROG` loads `PROG.BA` and runs it. `LOAD BASIC PROG` runs it behind
-the prompt with no console: what the program prints is printed, and the
-task is over when the program ends or asks for input.
+`BASIC PROG` loads `PROG.BA` and runs it. `START BASIC PROG` runs it behind
+the prompt with no console: what the program prints is printed, an
+`INPUT` waits until the task is attached, and the task is over when the
+program ends.
 
 ## More terminals
 
@@ -227,10 +252,15 @@ brings it a shell (the console's shell loads `SHELL.RX` for it), so the
 first Return gets a banner naming the terminal and a prompt.
 
 Each shell runs the same commands. A task belongs to the terminal of the
-shell that started it: it prints there, and `RUN` gives it that
-terminal's console. `STAT`, `KILL`, `STOP` and `START` reach every task,
+shell that started it: it prints there, and `RUN` or `ATTACH` gives it
+that terminal's console, so `ATTACH` takes only the shell's own
+terminal's tasks. `STAT`, `KILL`, `STOP` and `START` reach every task,
 and `STAT` marks another terminal's (`T1`). `BYE` ends a terminal's
 shell, and the next key there brings a new one.
+
+A multiplexer channel goes one way at a time, and while one is printing
+only its BREAK -- Ctrl-C -- gets through, so a Ctrl-Z reaches a program
+there when its printing pauses. Two Ctrl-Cs end one that never pauses.
 
 A shell costs about 2,000 words of core, and an idle one waiting for a key
 is the first thing swapped out when core runs short.

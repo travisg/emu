@@ -327,7 +327,7 @@ def ray703_demo(workdir, log):
 
 
 def rex(workdir, log):
-    """REX with three blips loaded and printing, stopped between ticks:
+    """REX with three blips started and printing, stopped between ticks:
     the clock part way to its next interval, the scheduler's slices
     and the tasks' sleeps in flight. Needs make -C rex all modules."""
     build = os.path.join(ROOT, 'rex', 'build')
@@ -343,7 +343,7 @@ def rex(workdir, log):
     # Typed ahead: the shell's queue holds what it has not read yet. The
     # first two are printing by the time the third line is echoed, so
     # the wait is for the third's own mark, several times over.
-    emu.key('LOAD BLIP A\rLOAD BLIP B\rLOAD BLIP C\r')
+    emu.key('START BLIP A\rSTART BLIP B\rSTART BLIP C\r')
     emu.wait_for_output(re.compile(rb'C[^C]*C[^C]*C[^C]*C'))
     time.sleep(1)
     emu.halt()

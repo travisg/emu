@@ -1,21 +1,14 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; PUT name -- the keyboard into a file, until Ctrl-Z.
+; PUT name -- the keyboard into a file, until ESC (ALT MODE).
 ;
 ; What is typed goes in as it is typed -- there is no line to edit, and a
 ; rubout is a character like another -- except that a carriage return is
 ; followed into the file by a line feed, as the teletype's own echo of
-; the key follows it on the paper.  It reads the console, so it has to
-; have been run in the foreground.
+; the key follows it on the paper.  It reads the console, so behind the
+; prompt it waits in the kernel to be given it.
 
-PUT             SMB     CURT
-                LDX     CURT
-                LDW     *T.CON
-                JNZ     .ARGS             ; the console?
-                LDW     =PNCON
-                JSX     L.MSG
-                JMP     L.EXIT
-.ARGS             JSX     L.ARGS
+PUT             JSX     L.ARGS
                 LDW     =PNAM
                 JSX     L.NAME
                 JNZ     .OPEN
@@ -35,7 +28,7 @@ PUT             SMB     CURT
                 CALL    K.QGET
                 AND     =X'00FF'
                 STW     PC
-                CMW     =PKCTLZ
+                CMW     =PKESC
                 JEQ     .DONE
                 ORI     PCH
                 CALL    K.PUTC
@@ -60,7 +53,6 @@ PUT             SMB     CURT
 PNAM            WORD    0,0,0,0,0
 PCH             WORD    0               ; the channel, times 256
 PC              WORD    0               ; the character
-PKCTLZ          EQU     X'009A'         ; Ctrl-Z
+PKESC           EQU     X'009B'         ; ESC, the Model 33's ALT MODE
 PUSE            MSG     "PUT NAME\r\n"
-PNCON           MSG     "PUT NEEDS THE CONSOLE\r\n"
                 END     PUT

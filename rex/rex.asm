@@ -11,7 +11,7 @@
 ; as a task of its own, printing through an interrupt-driven teletype
 ; driver they all share: Tiny BASIC, the interpreter of
 ; test/703/bcore.asm behind the glue of brex.asm, is one, and RUN BASIC
-; hands it the console until its BYE -- or LOAD BASIC PROG runs a saved
+; hands it the console until its BYE -- or START BASIC PROG runs a saved
 ; program behind the prompt.  The other is the swapper (rexswap.asm),
 ; asleep until more is loaded than core holds.
 ;
@@ -24,11 +24,15 @@
 ;                sleeper has left, and OUT for one that is on the disc;
 ;                and, with a swap file, how many have gone out and come in
 ;   STOP n       suspend a loaded task, by job number
-;   START n      release one
+;   START n      let one run, behind the prompt
+;   ATTACH n     give one of this terminal's the console, running, and
+;                wait for it to be handed back, as after RUN
 ;   KILL n       end one
 ;   ECHO text    print the rest of the line
 ;   MEM          the words free in the pool
-;   LOAD name    a module off the disc -- name.RX -- run behind the prompt
+;   LOAD name    a module off the disc -- name.RX -- made a task, stopped,
+;                and its job number said
+;   START name   the same, running behind the prompt
 ;   RUN  name    the same, given the console until it exits
 ;   @name        the shell's lines from name.CM until it runs out; INIT.CM
 ;                is read this way when the machine comes up
@@ -40,7 +44,9 @@
 ; programs on the disc, not commands here.  What follows a program's name
 ; on the line is its command tail, which the loader leaves in a block of
 ; the task's own for it to read (T.ARG).  A second Ctrl-C, with the first
-; still untaken by the program that has the console, ends that program.
+; still untaken by the program that has the console, ends that program;
+; a Ctrl-Z stops it and hands the console back to the shell, the task
+; keeping its place for START or ATTACH.
 ;
 ; The console's shell is built in; every other terminal gets one when a
 ; key is first typed at it -- shell.asm assembled again as SHELL.RX, which
@@ -153,19 +159,24 @@
 ;   table (TMT), and every task has its terminal (T.TTY): what it prints
 ;   goes to that one's printer, and its console is that one's.  The
 ;   block's TM.BSY says who reads it: the terminal's shell when it is
-;   clear, the task RUN loaded when it is set.  RUN raises it in the same
-;   masked window that clears the break flag, then waits on the cell
-;   itself -- reading no queue -- until the task's K.EXIT clears it and
-;   wakes the shell under SERV's guard.  Q.GET holds everybody else to
-;   it: a terminal's queue answers its shell and a task of the terminal's
-;   whose node says it has the console, and tells any other caller no.
+;   clear, the task RUN or ATTACH gave it to, whose T.CON is set, when it
+;   is set.  The grant raises it in the same masked window that clears
+;   the break flag, then the shell waits on the cell itself -- reading no
+;   queue -- until it comes down: the task's K.EXIT, a KILL from any
+;   terminal (CONBK), or the shell's own Ctrl-Z.  Q.GET holds everybody
+;   else to it, every time round its wait: a terminal's queue answers its
+;   shell and the console's holder, and any other task of the terminal's
+;   waits for the console in state SCON, which only ATTACH ends.
 ;   Ctrl-C never enters the queue at all: SERV raises the terminal's
 ;   TM.BRK instead, so a running program that reads no input can still
 ;   be broken, and the grant clears the flag so a break aimed at nobody
-;   cannot land on the session that follows it.  A second Ctrl-C that
-;   finds the first still there raises TM.KIL and wakes the shell out of
-;   its wait, and the shell ends the task that has the console: the way
-;   out of a program that is not listening.
+;   cannot land on the session that follows it.  The flag is the
+;   holder's alone: K.BRKQ and K.BRKC answer zero to anybody else.  A
+;   second Ctrl-C that finds the first still there raises TM.KIL and
+;   wakes the shell out of its wait, and the shell ends the task that has
+;   the console: the way out of a program that is not listening.  A
+;   Ctrl-Z raises TM.KIL to 2 instead, if it is down, and the shell stops
+;   that task and takes the console back.
 ;
 ; * SHUTDOWN ORDERING.  HALT claims the disc, so no task is part way
 ;   through a transfer, and then stops every loaded task under the mask.
@@ -437,10 +448,11 @@ K.ALHIW         JMP     ALLCHW          ; compares no byte addresses in what it
                                         ; is still reached through the index.
 K.BRKQ          JMP     BRKQ            ; -> ACR = nonzero if a Ctrl-C is waiting on
                                         ; this task's terminal.  The flag is the
-                                        ; terminal's, so it is this task's to
-                                        ; read only while it holds the console
-                                        ; (T.CON)
-K.BRKC          JMP     BRKC            ; spend it: the flag cleared
+                                        ; terminal's, so it is this task's only
+                                        ; while it holds the console (T.CON):
+                                        ; any other task is told zero
+K.BRKC          JMP     BRKC            ; spend it: the flag cleared, by the
+                                        ; console's holder alone
 K.DIRNT         JMP     KDIRNT          ; ACR = ten words: a unit word, as a
                                         ; name's fifth (see K.OPEN), an entry's
                                         ; index from 0, and eight for the entry
@@ -459,14 +471,12 @@ CURT            WORD    SHTCB           ; the running task's node
 KCONSQ          WORD    QCONS           ; the console queue's descriptor address,
                                         ; which K.QGET takes to mean the queue
                                         ; of the caller's own terminal.  It is
-                                        ; for the console's owner alone: a
-                                        ; queue holds one waiter.  RUN grants
-                                        ; the console and fills in T.CON; LOAD
-                                        ; grants nothing, and a task without it
-                                        ; gets X'FFFF' from K.QGET at once.  A
-                                        ; module that reads the console tests
-                                        ; T.CON at entry and says so when it is
-                                        ; clear.
+                                        ; for the console's holder alone: a
+                                        ; queue holds one waiter.  RUN and
+                                        ; ATTACH grant the console and set
+                                        ; T.CON; a task without it waits in
+                                        ; K.QGET, in state SCON, until it is
+                                        ; given it
 
 ; Files: the vector goes on at X'28'-X'2F'.  A name is four words as the
 ; directory holds one -- six characters and then two of type, bit 7 set,
@@ -536,9 +546,9 @@ T.MBX           EQU     7               ; the task's printer mailbox, one
                                         ; character; zero means empty
 T.NAM           EQU     8               ; two characters, for STAT
 T.CON           EQU     9               ; nonzero: this task holds the console --
-                                        ; RUN set it, LOAD did not, and it is
-                                        ; what says whether reading KCONSQ is
-                                        ; this task's to do
+                                        ; RUN or ATTACH gave it, and it is what
+                                        ; says whether reading KCONSQ, and the
+                                        ; break, are this task's to do
 T.ID            EQU     10              ; the job number, fixed for the node;
                                         ; zero for the tasks that are here
                                         ; from power-on, which no command
@@ -566,12 +576,14 @@ T.TTY           EQU     18              ; the task's terminal: its block in the
 T.LEN           EQU     19              ; words in a node
 
 ; What T.STA holds.
-                NTRY    SRUN,SSLP,SOFF,SWAI
+                NTRY    SRUN,SSLP,SOFF,SWAI,SCON
 SRUN            EQU     0
 SSLP            EQU     1
-SOFF            EQU     2               ; suspended by the shell's STOP
+SOFF            EQU     2               ; suspended: LOAD, STOP, Ctrl-Z
 SWAI            EQU     3               ; blocked on a queue or a device
 SFREE           EQU     4               ; an arena node nobody is using
+SCON            EQU     5               ; reading its terminal without its
+                                        ; console: until ATTACH gives it
 
 ; A queue: a ring of words, a count, and the one task waiting on it.
 ; Words rather than characters because the next thing to go through one
@@ -972,9 +984,14 @@ SVPOST          SUBR
                 CLB     X'83'           ; Ctrl-C is a flag, not a queued
                 JEQ     .BRK            ; character: nothing reads the queue
                                         ; while a program holds the console,
-                LDX     SVTM            ; so an in-band break could never be
-                LDW     *TM.Q           ; seen.  Whoever consumes the flag
-                JSX     Q.PUT           ; clears it.
+                                        ; so an in-band break could never be
+                                        ; seen.  Whoever consumes the flag
+                                        ; clears it.
+                CLB     X'9A'           ; Ctrl-Z is the shell's: the
+                JEQ     .DET            ; console's program is to be stopped
+                LDX     SVTM            ; and the console handed back
+                LDW     *TM.Q
+                JSX     Q.PUT
                 LDX     SVTM
                 LDW     *TM.SH
                 JNZ     .X              ; and the terminal has no shell?
@@ -1006,6 +1023,13 @@ SVPOST          SUBR
                 STW     RESCHD
                 JMP     .X
 .BRK            JSX     SVBRK
+                JMP     .X
+.DET            LDX     SVTM            ; unless a kill is asked for already
+                LDW     *TM.KIL
+                JNZ     .X
+                LDW     =2
+                STW     *TM.KIL
+                JSX     SVWSH
 .X              EXIT    SVPOST
 
 ; A Ctrl-C, or a multiplexer set's BREAK, at the terminal in SVTM.  The
@@ -1020,18 +1044,25 @@ SVBRK           SUBR
                 JMP     .X
 .KIL            LDW     =1
                 STW     *TM.KIL
+                JSX     SVWSH
+.X              EXIT    SVBRK
+
+; Wake the shell of the terminal in SVTM, if it has one, for TM.KIL --
+; only out of a wait, like any wake.
+SVWSH           SUBR
+                LDX     SVTM
                 LDW     *TM.SH
-                JNZ     .K1             ; a shell to tell?
+                JNZ     .S              ; a shell to tell?
                 JMP     .X
-.K1             CAX
+.S              CAX
                 LDW     *T.STA
                 CMW     =SWAI
-                JNE     .X              ; only out of a wait, like any wake
+                JNE     .X
                 CLR
                 STW     *T.STA
                 LDW     =1
                 STW     RESCHD
-.X              EXIT    SVBRK
+.X              EXIT    SVWSH
 
 ; The block of the terminal on multiplexer channel ACR into SVTM, and ACR
 ; not zero; zero if no terminal is on it.
@@ -1683,27 +1714,33 @@ DXFER           SUBR
                 EXIT    DXFER
 
 ; K.BRKQ and K.BRKC: the running task's terminal's break flag, read and
-; spent.  Any task may call them, so masked from the first instruction,
-; and the link loaded back before the mask comes off.
+; spent -- by the task that holds that console, and by nobody else, who
+; is answered zero and spends nothing.  Any task may call them, so masked
+; from the first instruction, and the link loaded back before the mask
+; comes off.
 BRKQ            MSK
                 STX     BKRET
                 LDX     CURT
-                LDW     *T.TTY
+                LDW     *T.CON
+                JNZ     .Q              ; the console's holder?
+                JMP     BKX
+.Q              LDW     *T.TTY
                 CAX
                 LDW     *TM.BRK
-                LDX     BKRET
+BKX             LDX     BKRET
                 UNM
                 JSX     *0
 BRKC            MSK
                 STX     BKRET
                 LDX     CURT
-                LDW     *T.TTY
+                LDW     *T.CON
+                JNZ     .C              ; the console's holder?
+                JMP     BKX
+.C              LDW     *T.TTY
                 CAX
                 CLR
                 STW     *TM.BRK
-                LDX     BKRET
-                UNM
-                JSX     *0
+                JMP     BKX
 
 ; What the machine runs when every task is asleep.  A branch to self is a
 ; legal idle here -- the levels are enabled and unmasked, so the tick that
@@ -1720,9 +1757,12 @@ BRKC            MSK
 ; One waiter to a queue, so one reader to a queue -- a second task
 ; blocking here would displace the first, which would then never wake.
 ; A terminal's queue is therefore read only by whoever has that console,
-; its shell or the task RUN gave it to, and any other caller gets minus
-; one back instead of a place in the queue.  KCONSQ, the one queue a
-; module knows of, stands for the caller's own terminal's.
+; its shell or the task it was given to, and any other task of the
+; terminal's waits for it instead of taking a place in the queue: marked
+; SCON, which nothing but ATTACH undoes.  The right is looked at every
+; time round, so a task that lost the console while it waited -- Ctrl-Z
+; -- waits again.  KCONSQ, the one queue a module knows of, stands for
+; the caller's own terminal's.
 ; Tasks reading different queues may be in here together, so the link and
 ; the queue are kept in the caller's node across the wait, not in a slot
 ; of this routine's: masked from its first instruction, and the static
@@ -1732,27 +1772,37 @@ Q.GET           MSK
                 STW     QGD
                 CMW     KCONSQ
                 JNE     .IN             ; the console's queue?
-                LDX     CURT            ; then the caller's own terminal's:
+                LDX     CURT            ; then the caller's own terminal's
                 LDW     *T.TTY
                 CAX
                 LDW     *TM.Q
                 STW     QGD
-                LDW     *TM.SH
-                CMW     CURT
-                JEQ     .IN             ; its shell reads it by right,
-                LDX     CURT
-                LDW     *T.CON
-                JNZ     .IN             ; and so does the task RUN gave it to;
-                LDW     =X'FFFF'        ; anybody else is told no, at once
-                LDX     QGLNK
-                UNM
-                JSX     *0
 .IN             LDX     CURT
                 LDW     QGD
                 STW     *T.KAR
                 LDW     QGLNK
                 STW     *T.KLK
 .L              LDX     CURT
+                LDW     *T.TTY
+                STW     QGD
+                CAX
+                LDW     *TM.Q
+                LDX     CURT
+                CMW     *T.KAR
+                JNE     .R              ; its terminal's queue?
+                LDX     QGD
+                LDW     *TM.SH
+                CMW     CURT
+                JEQ     .R              ; its shell reads it by right,
+                LDX     CURT
+                LDW     *T.CON
+                JNZ     .R              ; and so does the console's holder;
+                LDW     =SCON           ; anybody else waits for the console
+                STW     *T.STA
+                JSX     SWTCH
+                MSK
+                JMP     .L
+.R              LDX     CURT
                 LDW     *T.KAR
                 STW     QGD
                 CAX
@@ -2257,17 +2307,20 @@ KPOOLN          EQU     FENCE-POOLB-2   ; the pool's two parts, below the fence
 KPOOHN          EQU     POOLE-POOLH-2   ; and above it, as free blocks' payloads
 
 ; ---------------------------------------------------------------- tasks
-; SPAWN: ACR is a node of T.LEN words with T.PCR, T.NAM, T.CON and T.TTY
-; filled in.  The rest is set here -- the status is what SWTCH builds for
-; any resume, the entry's page and global -- and the node is linked into
-; the ring after the running task, so the next pick finds it first.  Every
-; shell calls it, so masked from the first instruction.
+; SPAWN: ACR is a node of T.LEN words with T.STA, T.PCR, T.NAM, T.CON
+; and T.TTY filled in.  The rest is set here -- the status is what SWTCH
+; builds for any resume, the entry's page and global -- and the node is
+; linked into the ring after the running task, so the next pick finds it
+; first.  Every shell calls it, so masked from the first instruction; and
+; the caller stores the state under the mask it then calls this with,
+; which this ends: a task loaded stopped is never runnable for an
+; instruction, and a node is never in use to a walk of the arena before
+; it is on the ring.
 SPAWN           MSK
                 STX     SPRET
                 STW     SPNOD
                 CAX
                 CLR
-                STW     *T.STA
                 STW     *T.ACR
                 STW     *T.IXR
                 STW     *T.DLY
@@ -2295,9 +2348,8 @@ SPAWN           MSK
 
 ; TEXIT: the running task is over, and takes everything with it.  Its
 ; last character is waited out, since a terminal's owner must never name a
-; node that is gone; the console is handed back if it held it -- the
-; terminal's TM.BSY down, and its shell woken out of its wait, only out of
-; that; REAP takes the rest;
+; node that is gone; the console is handed back if it held it (CONBK);
+; REAP takes the rest;
 ; and the processor goes to whoever PICK finds, through the second half
 ; of SWTCH with nothing parked.  Masked throughout: the one unmasked
 ; instruction on the way out is SWTCH's INR 3, inside the range.
@@ -2312,24 +2364,32 @@ TEXIT           MSK
                 JMP     TEXIT
 .GO             LDW     CURT
                 STW     XDEAD
+                JSX     CONBK
+                JSX     REAP
+                JMP     SWRES           ; on to whoever can run
+
+; The console comes back from the task XDEAD names, if it held it: its
+; terminal's TM.BSY down, and the terminal's shell, if it has one, woken
+; out of its wait -- only out of that.  Masked, for TEXIT and KILLT.
+CONBK           SUBR
+                LDX     XDEAD
                 LDW     *T.CON
-                JNZ     .CON            ; the console's?
-                JMP     .RING
-.CON            LDW     *T.TTY          ; its terminal's, which comes back
+                JNZ     .C              ; the console's?
+                JMP     .X
+.C              LDW     *T.TTY
                 CAX
                 CLR
                 STW     *TM.BSY
                 LDW     *TM.SH
-                JNZ     .CON1           ; to the terminal's shell, if it has
-                JMP     .RING           ; one
-.CON1           CAX
+                JNZ     .S              ; a shell to give it to?
+                JMP     .X
+.S              CAX
                 LDW     *T.STA
                 CMW     =SWAI
-                JNE     .RING           ; waiting on the hand-back?
+                JNE     .X              ; waiting on the hand-back?
                 CLR
                 STW     *T.STA
-.RING           JSX     REAP
-                JMP     SWRES           ; on to whoever can run
+.X              EXIT    CONBK
 
 ; The task XDEAD names is over, and everything it had goes: the node off
 ; the ring and counted off, its terminal's TM.LST -- where KICK's scan
@@ -2413,18 +2473,12 @@ REAP            SUBR
 ; End the task ACR names, which is not the one running: the shell's KILL.
 ; The caller holds the mask and the disc -- so the task is in no transfer
 ; and no file call -- has stopped it, and has seen that the printer is
-; not on a character of its.
+; not on a character of its.  A console it held comes back as from TEXIT,
+; to whichever terminal's it was.
 KILLT           SUBR
                 STW     XDEAD
-                CAX
-                LDW     *T.CON
-                JNZ     .CON            ; the console's?  it comes back
-                JMP     .REAP
-.CON            LDW     *T.TTY
-                CAX
-                CLR
-                STW     *TM.BSY
-.REAP           JSX     REAP
+                JSX     CONBK
+                JSX     REAP
                 EXIT    KILLT
 
 ; A node from the arena, or zero when every one is in use; and a node
