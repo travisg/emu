@@ -84,7 +84,10 @@ core below word X'4000', which holds two: three run a program behind
 the prompt that counts and then saves itself under another name, and
 one is typed at in front of them. The saved listings are read back on
 the host -- a program that came through being put out and brought back
-with a word wrong would not list as it was written.
+with a word wrong would not list as it was written. Last, three BASICs
+that never end take turns in the room for two: the one that is out has
+to wait for one in core to have had its time without having its list
+read off the disc again on every pass of the swapper.
 
 A fourth machine is given no core image at all, only a platter and the
 disc controller's LOAD button (-s ray703-load): the boot sector has to
@@ -166,6 +169,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   onesec   the loader's reader asking for a block of no sectors, so a
            program comes in a sector at a time
   nowake   the disc given up without waking whoever waits for it
+  nobackoff  a task that cannot come back until the one in its way has had
+           its time tried for on every pass of the swapper meanwhile
   spin     the shell's wait for a character to print never marking it
            waiting, so it spins through every character it prints
   nokillwake  KILLT handing nothing back, so a KILL from the console of
@@ -284,6 +289,11 @@ HOG_SECTOR = 4200
 HOG_GOOD = 0x600d
 JOBS = 3
 JOB_COUNT = 3000
+# And a program that never ends, for as many BASICs as will not all fit,
+# and how long their changing places is watched.
+LOOP = b'10 GOTO 10\n'
+LOOPERS = 3
+LOOP_SECS = 10
 
 
 def job_lines(n):
@@ -1066,6 +1076,10 @@ def swap_session(emu, image):
         # SWIRL is LDW / CMW / SLS / JMP / JSX SWITEM / CLR / JSX SWXFER:
         # without the last a block comes back as whatever is lying there
         emu.writew(symbols.value('SWIRL') + 6, [NOP])
+    if CONTROL == 'nobackoff':
+        # the STW *T.RES that has a task wait for the one in its way to
+        # have had its time
+        emu.writew(listing_word('STW     *T.RES', 'tried for again until it has'), [NOP])
     s = Session(emu)
     emu.run()
     s.wait(b'REX 703 UP')
@@ -1124,6 +1138,47 @@ def swap_session(emu, image):
     swaps2 = re.search(rb'^SWAPS (\d+) OUT (\d+) IN', listings[-1], re.M)
     if not swaps2 or int(swaps2.group(1)) <= int(swaps.group(1)) or swaps2.group(1) != swaps2.group(2):
         raise AssertionError('four BASICs, and the swap counts: %r' % (swaps2 and swaps2.group(0)))
+    s.at = len(emu.output)
+    emu.key('MEM\r')
+    emu.wait_for_output(b'FREE ' + before, start=s.at, timeout=60)
+
+    # Three BASICs that never end, where two fit, so they take turns. The
+    # one that is out cannot come back until one in core has had its
+    # time, and is tried for once meanwhile, its list read off the disc
+    # once -- not on every pass of the swapper. The swapper's transfers
+    # are counted for LOOP_SECS of machine time: a list read for each one
+    # brought back, and one more for a try that found it too soon.
+    emu.wait_quiet()
+    emu.key('START BASIC LOOP\r' * LOOPERS)
+    deadline = time.monotonic() + 300
+    while len(jobs_of(emu, 'BA')) < LOOPERS:
+        if time.monotonic() > deadline:
+            raise AssertionError('the looping BASICs never all started')
+        time.sleep(0.5)
+    swxfer, swhdi, secs = (symbols.value(n) for n in ('SWXFER', 'SWHDI', 'SECS'))
+    emu.halt()
+    began = emu.memw(secs, 1)[0]
+    ins0 = emu.memw(symbols.value('SWINS'), 1)[0]
+    emu.add_break(swxfer)
+    emu.run()
+    reads = 0
+    while True:
+        emu.wait_stopped(timeout=120)
+        if emu.memw(secs, 1)[0] - began >= LOOP_SECS:
+            break
+        if emu.reg('AC') == 0 and emu.memw(symbols.value('SWADR'), 1)[0] == swhdi:
+            reads += 1
+        emu.run()
+    emu.remove_break(swxfer)
+    ins = emu.memw(symbols.value('SWINS'), 1)[0] - ins0
+    emu.run()
+    if ins < 2:
+        raise AssertionError('the looping BASICs took no turns: %d brought back' % ins)
+    if reads > 2 * ins + 2:
+        raise AssertionError('%d lists read for %d brought back' % (reads, ins))
+    emu.wait_quiet()
+    emu.key(''.join('KILL %d\r' % job for job, _ in jobs_of(emu, 'BA')))
+    stat_until_gone(emu, s, b'BA')
     s.at = len(emu.output)
     emu.key('MEM\r')
     emu.wait_for_output(b'FREE ' + before, start=s.at, timeout=60)
@@ -1314,9 +1369,10 @@ def make_platter(workdir, log, swap=False, boot=False):
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
-                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec'):
+                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec', 'nobackoff'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
+        jobs += [('LOOP.BA', LOOP)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),
                            ('SQ.BA', SQ)] + jobs:
             files.append((name, os.path.join(workdir, name)))

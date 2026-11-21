@@ -592,7 +592,9 @@ T.MW            EQU     16              ; the kernel's, while the task waits for
                                         ; core: 1 asking, 2 told there is
                                         ; nobody to put out, 3 told to try
                                         ; again
-T.RES           EQU     17              ; the second its blocks last arrived
+T.RES           EQU     17              ; the second its blocks last arrived;
+                                        ; while they are out, the second the
+                                        ; swapper next tries for them from
 T.TTY           EQU     18              ; the task's terminal: its block in the
                                         ; kernel's terminal table, which is
                                         ; where what it prints goes and what

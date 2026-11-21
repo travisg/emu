@@ -34,7 +34,9 @@
 ; that is stopped, asleep or waiting goes before one that could run; one
 ; that could run goes only when it has been in core through the second
 ; it arrived in and the next, which is what stops two tasks that want
-; the same core from spending all their time changing places.
+; the same core from spending all their time changing places -- and a
+; task waiting to come back in, finding one that new in its way, waits
+; for that second whatever the other does meanwhile.
 ;
 ; The disc is claimed like anybody's (IOLOCK), with one exception: a
 ; shell's loader holds the disc for a whole load, and may be the task
@@ -518,13 +520,22 @@ SWBRNG          SUBR
 ; block is cut out of the free list where it was.  If one cannot be --
 ; something is there -- the ones already cut are given back, and whoever
 ; owns what is in the way is put out, if it may be, and the cutting tried
-; again; if it may not be, the task waits for another pass.  With every
-; block cut, each is read back into its place, and the task can run.
+; again; if it may not be, the task waits for another pass -- or, if what
+; is in the way could run and has not had its time, until the second it
+; will have, which an out task's T.RES then holds, so its list is not read
+; again every pass meanwhile.  With every block cut, each is read back
+; into its place, and the task can run.
 SWIN            SUBR
                 LDW     SWP
                 STW     SWT2
                 CAX
-                LDW     *T.SWP
+                SMB     SECS
+                LDW     SECS
+                SUB     *T.RES
+                JPL     .TRY
+                ADD     =2              ; a second or two early -- anything
+                JPL     SWINX           ; further off is a count that wrapped
+.TRY            LDW     *T.SWP
                 SUB     =1
                 STW     SWIST
                 ADD     SWBASE
@@ -602,6 +613,11 @@ SWIN            SUBR
                 JNZ     .O3             ; it could run: has it had its time?
                 JSX     SWAGED
                 JNZ     .O3
+                LDX     SWQ             ; not yet: nor is the task coming in
+                LDW     *T.RES          ; tried for again until it has
+                ADD     =2
+                LDX     SWT2
+                STW     *T.RES
                 JMP     SWINX
 .O3             LDW     SWLIST          ; SWOUT's list is not this one
                 STW     SWLSAV

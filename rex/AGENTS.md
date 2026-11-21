@@ -30,7 +30,7 @@ depend on nothing here but the snapshot harness's REX case.
   the node arena from X'7E00'.
 - **The pages are nearly full.** Page 0 has 44 words left, the console's
   shell 1 before X'1000', where the pool begins -- its line buffer and
-  the last of HELP's lines live in page 0 for want of room -- and the top of core 20
+  the last of HELP's lines live in page 0 for want of room -- and the top of core 7
   in front of the node arena; `build/rex.lst` shows where each ends. Running over either
   fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
   `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
@@ -303,7 +303,10 @@ seven:
   BASICs want the core below X'4000', which holds two: three run a program
   behind the prompt that counts and then saves itself under another name,
   one is typed at in front of them, and the saved listings are read back on
-  the host.
+  the host. Last, three BASICs that never end take turns in that room for
+  ten seconds, and the one that is out may have its list of blocks read off
+  the swap file at most twice for each time it comes back: once when it
+  comes back, and once for a try that found the task in its way too new.
 - **A fourth machine** is given no core image, only a platter and the LOAD
   button, and has to come up, list its directory and run a program.
 - **A fifth machine** has a platter with two sectors free: a `SAVE` too long
@@ -394,7 +397,11 @@ is out can run. It puts out a task that cannot run for choice. One that
 can run goes only once it has been in core through the second it arrived
 in and the next, which is what stops two tasks that want the same core
 from spending all their time changing places; if the only candidates are
-that new, the asker waits for one to age rather than fail. A task that is
+that new, the asker waits for one to age rather than fail. The same holds
+coming back: a task that is out and can run, and finds one that new
+where its blocks go, is not tried for again until that one has had its
+time -- even if it goes to sleep meanwhile -- so its list is read once,
+not on every pass of the swapper. A task that is
 itself waiting for core, or has the disc, is never put out. A loader that
 holds the disc and is waiting for core does not stand in the swapper's
 way: the swapper borrows the disc for that request, as the disc's rule
