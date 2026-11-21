@@ -13,7 +13,9 @@ clock's tick, the context switch, the sleeps and the mailbox teletype
 driver all at once -- load the
 hello module off a scratch platter both ways (RUN, which waits for it, and
 START, which leaves it running behind the prompt) and see the pool's free
-words come back, run two Tiny BASIC sessions with a silent loop broken by
+words come back -- the first RUN costing the disc exactly two transfers,
+the first record and the rest of the module -- run two Tiny BASIC
+sessions with a silent loop broken by
 Ctrl-C, then drive the rest of the commands and shut the machine down
 with HALT, a task still loaded, which HALT has to leave stopped.
 
@@ -160,6 +162,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
            console's program
   nobrkq   K.BRKQ answering a task without the console, so a BASIC behind
            the prompt takes the Ctrl-C typed there
+  onesec   the loader's reader asking for a block of no sectors, so a
+           program comes in a sector at a time
   nowake   the disc given up without waking whoever waits for it
   spin     the shell's wait for a character to print never marking it
            waiting, so it spins through every character it prints
@@ -422,6 +426,10 @@ def session(emu):
     if CONTROL == 'nodetach':
         # SVPOST's CLB X'9A' / SNE / JMP .DET
         emu.writew(listing_word("CLB     X'9A'", 'SVPOST          SUBR') + 2, [NOP])
+    if CONTROL == 'onesec':
+        # the reader's LDW LRNSEC / .TRY STW LRCAP: a CLR, and the block it
+        # asks for is of no sectors
+        emu.writew(listing_word('LDW     LRNSEC          ; for all the rest', 'LDREC           SUBR'), [CLR])
     if CONTROL == 'nobrkq':
         # BRKQ is MSK / STX / LDX CURT / LDW *T.CON / SAZ / JMP .Q
         symbols = Symbols()
@@ -508,8 +516,24 @@ def session(emu):
     # again. A name not in the catalogue is refused.
     s.say('MEM')
     s.say('DIR')
+    # A program is two transfers: its first record, and the rest of it in
+    # one go into a block the loader is lent for the purpose. The
+    # directory is in core already, DIR having read it.
+    xfers = symbols.value('DXFERS')
+    emu.wait_for_output(PROMPT, start=s.at)
+    emu.wait_quiet()
+    emu.halt()
+    before = emu.memw(xfers, 1)[0]
+    emu.run()
     s.say('RUN HELLO')
     s.wait(b'HELLO FROM WORD')
+    emu.wait_for_output(PROMPT, start=s.at)
+    emu.wait_quiet()
+    emu.halt()
+    spent = emu.memw(xfers, 1)[0] - before
+    emu.run()
+    if spent != 2:
+        raise AssertionError('RUN HELLO took %d transfers' % spent)
     s.say('MEM')
     # A module of two segments, which cannot share a page: each calls
     # into the other, and says whether it got there.
@@ -1280,7 +1304,7 @@ def make_platter(workdir, log, swap=False, boot=False):
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
-                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake'):
+                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),

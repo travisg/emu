@@ -128,8 +128,3 @@ QCONSB          RES     QCONSN
 TMQ1B           RES     TMQN
 TMQ2B           RES     TMQN
 TMQ3B           RES     TMQN
-KNEND           EQU     $
-
-                TRUE    KNEND>NARB      ; into the node arena: a negative RES,
-                RES     NARB-KNEND      ; which the assembler refuses
-                ENDC

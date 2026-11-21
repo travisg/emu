@@ -65,7 +65,7 @@ IDLE 5 SEC
 SWAPS 0 OUT 0 IN
 0 SH RUN
 0 SW WAIT
-1 HE SLP 61
+1 HE SLP 62
 0 ID RUN
 REX>  BASIC
 TINY BASIC UNDER REX
@@ -89,8 +89,8 @@ READY
 
 JOB 2 STOPPED
 REX>  STAT
-UPTIME 12 SEC
-IDLE 11 SEC
+UPTIME 11 SEC
+IDLE 10 SEC
 SWAPS 0 OUT 0 IN
 0 SH RUN
 0 SW WAIT
@@ -109,7 +109,7 @@ REX 703 DOWN
 `RUN` gives a program the console until it exits. `LOAD` loads it
 stopped and says its job number, and `START` lets it run behind the
 prompt, which is why the second `HELLO` prints after the prompt has come
-back, and why `STAT` finds it as job 1, asleep (`SLP`) with 61 ticks to
+back, and why `STAT` finds it as job 1, asleep (`SLP`) with 62 ticks to
 go. `STAT` begins with how long REX has been up and how much of that the
 machine was idle; the other lines are the shell, the swapper and the idle
 task. The Ctrl-Z typed at BASIC's `READY` prints nothing; it stops BASIC
@@ -277,6 +277,7 @@ is the first thing swapped out when core runs short.
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
     rexname.asm        K.NAME, the one reading of a file name, unit and all
+    rexrec.asm         the loader's record reader, every shell's
     rexmac.asm         the macros a deck is written with: conditional jumps, CALL, MSG
     rexlib.asm         a library for a module's deck: the printer, the command line
     brex.asm           the wrapper that makes Tiny BASIC a module

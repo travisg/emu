@@ -770,7 +770,8 @@ SHNHLT          LDW     =SHNHM
 
 ; ---------------------------------------------------------------- the loader
 ; Load the module SHFN names: find it in the directory and run its
-; object text into a block from the pool, one record to a sector.  The
+; object text into a block from the pool, a record at a time from the
+; kernel's reader (K.LDREC, rexrec.asm), which reads them off the disc.  The
 ; text is the 1968 relocating loader's (tools/asm703.py's docstring lists
 ; the codes, tools/reload703.py is the reference reading of them): the
 ; SIZE code comes first and sizes the block, whose address is the
@@ -819,8 +820,8 @@ LDFND           MSK                     ; a node from the arena
                 JNZ     .F1
                 JMP     LDEMX
 .F1             STW     LDNODE
-                LDW     =SHKDBL         ; on the checksum byte: the first
-                STW     LDBP            ; GETBYTE reads the first record
+                LDW     =LDUNI          ; the file begun, its first record
+                JSX     LDNREC          ; read
 
 ; The text: a code byte, then what it says follows.  The byte arrives
 ; zero-extended, so its lead bit is tested against X'80', not the sign.
@@ -834,36 +835,26 @@ LDPROC          JSX     LDGETB
                 CMW     =4
                 JLE     .R1
                 JMP     LDELC
-.R1             STW     LDCLS
+.R1             ADD     =.RTAB          ; the class's handler, once a run
+                CAX
+                LDW     *0
+                STW     LDCLS
                 LDW     LDCODE
                 AND     =X'000F'
                 STW     LDREP           ; n: n+1 words follow
 .RGO            JSX     LDGETW
-                STW     LDW1
-                LDW     LDCLS
-                JNZ     .RC1
-                LDW     LDW1            ; RELW11
-                JSX     LDRL11
+                LDX     LDCLS
+                JMP     *0
+.R11            JSX     LDRL11          ; RELW11
                 JMP     .RST
-.RC1            CMW     =1
-                JEQ     .RW15
-                CMW     =2
-                JEQ     .RB16
-                CMW     =3
-                JEQ     .RB11
-                LDW     LDW1            ; ABSO
+.RW15           ADD     LDBASE
                 JMP     .RST
-.RW15           LDW     LDW1
+.RB16           ADD     LDBASE          ; a byte address: the base twice
                 ADD     LDBASE
                 JMP     .RST
-.RB16           LDW     LDW1            ; a byte address: the base twice
-                ADD     LDBASE
-                ADD     LDBASE
-                JMP     .RST
-.RB11           LDW     LDW1            ; RELO11 twice, for the same reason
+.RB11           JSX     LDRL11          ; RELO11 twice, for the same reason
                 JSX     LDRL11
-                JSX     LDRL11
-.RST            JSX     LDSTOR
+.RST            JSX     LDSTOR          ; ABSO comes straight here
                 LDW     LDREP
                 JNZ     .RMO            ; the last of the run?
                 JMP     LDPROC
@@ -880,6 +871,7 @@ LDPROC          JSX     LDGETB
                 LDW     *0
                 CAX
                 JMP     *0
+.RTAB           WORD    .R11,.RW15,.RB16,.RB11,.RST     ; the classes, 8n..Cn
 LDCTAB          WORD    LDPROC,LDNAME,LDELC,LDSMB,LDILOC,LDELC
                 WORD    LDEND,LDELC,LDNAME,LDSIZW,LDSIZW,LDSIZB
                 WORD    LDSEGS,LDSEGR
@@ -977,9 +969,12 @@ LDEND           JSX     LDGETW          ; END: the entry, relocated
                 JNZ     .DONE           ; without a SIZE first?
                 JMP     LDELC
 
-; Loaded: fill the node, and tag each segment's block as the new task's
-; own, so that its exit finds them.
-.DONE           LDX     LDNODE
+; Loaded: the reader's block given back, the node filled, and each
+; segment's block tagged as the new task's own, so that its exit finds
+; them.
+.DONE           LDW     =1
+                CALL    K.LDREC
+                LDX     LDNODE
                 LDW     LDEXEC
                 STW     *T.PCR
                 LDW     SHFN            ; the name's first two characters
@@ -1072,6 +1067,8 @@ LDELC           LDW     =SHELC
                 JMP     LDERR
 LDEMX           LDW     =SHEMX
 LDERR           JSX     SHMSG           ; name it, and give back what was taken:
+                LDW     =1              ; the reader's block,
+                CALL    K.LDREC
 .R0             LDW     LDNSG           ; each segment that got a block
                 JNZ     .R1
                 JMP     .R2
@@ -1119,10 +1116,30 @@ LDSTOR          SUBR
                 STW     LDPTR
                 EXIT    LDSTOR
 
-; A word of text, high byte first; a byte, from the sector buffer, the
-; next record read in when the pointer stands on the checksum byte.
+; A word of text, high byte first, and a byte: from the record the
+; kernel's reader last handed over, which is LDLFT bytes from LDBP on --
+; counted, not compared, since it may lie above word X'4000' -- and the
+; next asked for when it runs out.  Both bytes of a word at once while
+; the record has them.
 LDGETW          SUBR
-                JSX     LDGETB
+                LDW     LDLFT
+                CMW     =2
+                JLT     .SL             ; both in this record?
+                LDX     LDBP
+                CLR
+                LDB     *0
+                SLL     8
+                LDB     *1              ; LDB fills the low half alone
+                STW     LDW2
+                LDW     LDBP
+                ADD     =2
+                STW     LDBP
+                LDW     LDLFT
+                SUB     =2
+                STW     LDLFT
+                LDW     LDW2
+                EXIT    LDGETW
+.SL             JSX     LDGETB
                 SLL     8
                 STW     LDW2
                 JSX     LDGETB
@@ -1130,10 +1147,12 @@ LDGETW          SUBR
                 EXIT    LDGETW
 
 LDGETB          SUBR
-                LDW     LDBP
-                CMW     =SHKDBL
-                SNE                     ; on the checksum byte?
-                JSX     LDGCRD
+                LDW     LDLFT
+                JNZ     .B              ; anything left of the record?
+                JSX     LDNREC          ; ACR zero: the next
+.B              LDW     LDLFT
+                SUB     =1
+                STW     LDLFT
                 LDX     LDBP
                 CLR
                 LDB     *0
@@ -1144,61 +1163,23 @@ LDGETB          SUBR
                 LDW     LDBV
                 EXIT    LDGETB
 
-; The next record: the next sector of the file, opening on a zero marker
-; and closing on the folded byte sum -- (sum >> 8) + sum -- of everything
-; before it.  Leaves the pointer on the first byte of text.
-LDGCRD          SUBR
-                LDW     LDNSEC
-                JNZ     .GC1            ; the file ran out first
+; The next record from the kernel's reader -- ACR zero -- or ACR the
+; address of the file's unit, first sector and count, to begin it: its
+; text then from LDBP on.  A record failing its checksum (CK), the file
+; running out first (LC) or the disc saying no (DE) is an error.
+LDNREC          SUBR
+                CALL    K.LDREC
+                JNZ     .E
+                SMB     LRBP
+                LDW     LRBP
+                STW     LDBP
+                LDW     =LRKTXT
+                STW     LDLFT
+                EXIT    LDNREC
+.E              JMI     LDEDE
+                CMW     =1
+                JEQ     LDECK
                 JMP     LDELC
-.GC1            SUB     =1
-                STW     LDNSEC
-                LDW     =LDBUF
-                SMB     DXBUF
-                STW     DXBUF
-                LDW     LDUNI
-                SMB     DXUNI
-                STW     DXUNI
-                LDW     LDSEC
-                CALL    DRD1
-                JNZ     LDEDE
-                LDW     LDSEC
-                ADD     =1
-                STW     LDSEC
-                LDX     =SHKDBB
-                CLR
-                LDB     *0
-                JNZ     LDECK           ; the marker
-                STW     LDSUM
-                LDW     =SHKDBB
-                ADD     =1
-                STW     LDBP
-.CKL            LDW     LDBP
-                CMW     =SHKDBL
-                JGE     .CKT
-                CAX
-                CLR
-                LDB     *0
-                ADD     LDSUM
-                STW     LDSUM
-                LDW     LDBP
-                ADD     =1
-                STW     LDBP
-                JMP     .CKL
-.CKT            LDW     LDSUM
-                SRL     8
-                ADD     LDSUM
-                AND     =X'00FF'
-                STW     LDCKV           ; its own cell: a refill can come
-                LDX     LDBP            ; between the two halves of a word
-                CLR                     ; LDGETW is holding in LDW2
-                LDB     *0
-                CMW     LDCKV
-                JNE     LDECK           ; the checksum byte agrees?
-                LDW     =SHKDBB
-                ADD     =1
-                STW     LDBP
-                EXIT    LDGCRD
 
 ; The disc for the shell, and the disc given up: the claim every user of
 ; DXFER makes, waiting in IOWT until it succeeds, and IOREL, which wakes
@@ -1637,14 +1618,13 @@ LDPTR           WORD    0               ; where the next word goes, and the limi
 LDLIM           WORD    0
 LDSIZE          WORD    0               ; the SIZE code's word
 LDEXEC          WORD    0               ; the entry
-LDUNI           WORD    0               ; the unit the module is on,
-LDSEC           WORD    0               ; the next sector, and how many are left
-LDNSEC          WORD    0
-LDBP            WORD    0               ; the byte pointer into the sector buffer
-LDBV            WORD    0               ; the byte it fetched
-LDSUM           WORD    0               ; the record's byte sum, and its fold
-LDCKV           WORD    0
-LDCODE          WORD    0               ; the code, its class and its count
+LDUNI           WORD    0               ; the unit the module is on, its first
+LDSEC           WORD    0               ; sector and how many it has: in this
+LDNSEC          WORD    0               ; order, for K.LDREC
+LDBP            WORD    0               ; the byte pointer into the record,
+LDLFT           WORD    0               ; the bytes of it left,
+LDBV            WORD    0               ; and the byte it fetched
+LDCODE          WORD    0               ; the code, its class's handler and its count
 LDCLS           WORD    0
 LDREP           WORD    0
 LDCNT           WORD    0               ; ILOC's count
@@ -1668,8 +1648,6 @@ SHKUPM          EQU     X'FFDF'         ; folds a letter to upper case
 SHKLBB          EQU     LBUF*2          ; the line, and the last byte its
 SHKLBE          EQU     LBUF*2+62       ; zero terminator may need
 SHKDBE          EQU     SHDB*2+5        ; the last byte of the digit buffer
-SHKDBB          EQU     LDBUF*2         ; the loader's sector: its first byte,
-SHKDBL          EQU     LDBUF*2+93      ; the marker, and its last, the checksum
 SHALW           WORD    ALLOCW,ALLCHW   ; the allocator's page entries, for an
 SHALB           WORD    ALLOCB,ALLCHB   ; indexed JSX: each with its twin above
                                         ; the fence after it
@@ -1680,9 +1658,8 @@ SHALB           WORD    ALLOCB,ALLCHB   ; indexed JSX: each with its twin above
 SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT','GO','NE'
                 WORD    'TT','Y '
 
-                TRUE    SHMOD=1         ; the console's are in page 0 (rex.asm)
+                TRUE    SHMOD=1         ; the console's is in page 0 (rex.asm)
 LBUF            RES     32              ; the line the shell is reading
-LDBUF           RES     47              ; the loader's sector
                 ENDC
 
 ; The commands: four characters of name, packed as SHTOK packs a word --

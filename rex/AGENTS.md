@@ -25,10 +25,12 @@ depend on nothing here but the snapshot harness's REX case.
   In short: the interrupt blocks and the kernel's vector at the bottom,
   the kernel in page 0 from X'40', the console's shell in page 1 from
   X'800', the pool from X'1000' to X'6FFF' with its fence at X'4000', the
-  filesystem from X'7000', the swapper and `K.NAME` from X'7800', and
+  filesystem from X'7000', the swapper, `K.NAME` and the loader's record
+  reader from X'7800', and
   the node arena from X'7E00'.
-- **The pages are nearly full.** Page 0 has 101 words left and the
-  console's shell 25 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
+- **The pages are nearly full.** Page 0 has 79 words left, the console's
+  shell 47 before X'1000', where the pool begins, and the top of core 20
+  in front of the node arena; `build/rex.lst` shows where each ends. Running over either
   fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
   `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
   has 88 words of its one page left (see Modules).
@@ -271,7 +273,9 @@ seven:
   Where things are loaded is looked at directly, through the port, in the
   pool's own block headers: a module marked for it has to be above word
   X'4000', hello has to print an address up there every time it runs, and
-  BASIC's module and workspace both have to be below.
+  BASIC's module and workspace both have to be below, and `RUN HELLO`
+  has to cost the disc exactly two transfers: its first record, and the
+  rest.
 - **A second machine**, without `--fast-io` so that a disc transfer takes
   its half revolution, runs three copies of `dskt.asm` at once: each writes
   and reads back a sector of its own 250 times, leaves its verdict on the
@@ -498,7 +502,16 @@ one by name, runs its text into a block from the kernel's pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields
 need -- gives it a task node and links it into the ring, stopped; `START`
 does the same and lets it run, and `RUN` hands it the console until it
-exits. A task ends through
+exits. The text comes off the disc through the kernel's record reader,
+`K.LDREC` (`rexrec.asm`), one copy for every shell, since a loader holds
+the disc for the whole of a load: the first record on its own, so that
+its `SIZE` codes take the module's blocks first, then the rest of the
+file in one transfer into a block the pool lends it for the load --
+anywhere, never waited for (`ALLOCT`), half as big while that fails, and
+a sector at a time only if there is no block at all. That block may lie
+above word X'4000', so neither the reader nor the shell's walk of a
+record compares a byte address: what is left of a record is counted. The
+shell keeps the placing and the relocation. A task ends through
 `K.EXIT`, which gives back every block in the pool tagged with its node,
 the module included, and then the node; `MEM` prints the free words,
 below the fence and above it, and reads the same before and after. What followed the module's name on

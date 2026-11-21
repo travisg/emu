@@ -350,12 +350,13 @@
 ;              itself
 ;   7800-7BDC  the swapper (rexswap.asm): its task, its table of extents
 ;              in the swap file, and two sectors of block lists
-;   7BDD-7D37  K.NAME's parser (rexname.asm, the last), then the
-;              terminals' queues' rings
+;   7BDD-      K.NAME's parser (rexname.asm), then the terminals'
+;              queues' rings, then the loader's record reader
+;              (rexrec.asm, the last)
 ;   7E00-7FC7  the node arena
 ;
 ; Build with make -C rex: asm703.py over rexmac.asm, this file, shell.asm,
-; rexfs.asm, rexswap.asm and rexname.asm, as one deck, into rex/build, with rexapi.asm, the
+; rexfs.asm, rexswap.asm, rexname.asm and rexrec.asm, as one deck, into rex/build, with rexapi.asm, the
 ; interface the modules are assembled against, and the modules beside it
 ; -- brex.asm over test/703/bcore.asm is basic.obj, the module RUN BASIC
 ; loads.  make -C rex bootdisc puts the kernel, behind boot.asm, and the
@@ -527,6 +528,15 @@ K.SQUSH         JMP     KSQUSH          ; ACR = a unit word -> zero, or E.: on
                                         ; that platter, every file moved down
                                         ; over the hole in front of it.  E.CHN
                                         ; while any channel is open.
+
+; The shells' loader's record reader, at X'30'-X'31', the one entry of
+; the vector that is two words: the page selection and the jump to
+; rexrec.asm, which holds what it takes and gives.  A shell's alone, with
+; the disc claimed for the whole of a load.
+                NTRY    K.LDREC
+                ORG     X'30'
+K.LDREC         SMB     LDREC
+                JMP     LDREC
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
@@ -1412,6 +1422,7 @@ DBUSY           WORD    0               ; a transfer is in flight
 DWTR            WORD    X'FFFF'         ; the node whose transfer it is; -1 = none
 IOLOCK          WORD    X'FFFF'         ; the node that has the disc; -1 = free
 IOWAITS         WORD    0               ; times a task found it taken
+DXFERS          WORD    0               ; transfers started
 IOWFL           WORD    0               ; somebody waits in IOWT
 IOWLK           WORD    0               ; IOWT's caller, until the switch
 IOWOK           WORD    0               ; IOREL woke somebody
@@ -1782,7 +1793,10 @@ DXFER           SUBR
                 JMP     .WT
 .WR             LDW     DXTS
                 DOT     1,4             ; ...write
-.WT             LDW     DBUSY
+.WT             LDW     DXFERS          ; counted, for the session's sake
+                ADD     =1
+                STW     DXFERS
+.WTL            LDW     DBUSY
                 JNZ     .BLK            ; over?
                 JMP     .DN
 .BLK            LDX     CURT
@@ -1790,7 +1804,7 @@ DXFER           SUBR
                 STW     *T.STA
                 JSX     SWTCH           ; until DSERV says so
                 MSK
-                JMP     .WT
+                JMP     .WTL
 .DN             LDW     DSTAT
                 STW     DXRES
                 LDW     =X'FFFF'
@@ -1960,6 +1974,7 @@ ALLOC           MSK
 ALCOM           STW     ALMSK           ; the window less one, or zero for any
                 STX     ALRET
                 CLR
+                STW     ALNWT
                 STW     ALHIQ           ; below the fence, and nowhere else
                 JMP     ALBEG
 ALLCHW          MSK
@@ -1975,9 +1990,23 @@ ALLOCH          MSK
                 CLR
 ALCOMH          STW     ALMSK
                 STX     ALRET
+                CLR
+                STW     ALNWT
                 LDW     =1
                 STW     ALHIQ           ; above the fence, and below it if
                                         ; there is nothing there
+                JMP     ALBEG
+; ALLOCT: K.ALLHI's search for a block that is wanted for a while only
+; and is not worth waiting for -- the loader's -- so nothing fitting is
+; zero at once, swap file or not.
+ALLOCT          MSK
+                STW     ALSIZ
+                CLR
+                STW     ALMSK
+                STX     ALRET
+                LDW     =1
+                STW     ALHIQ
+                STW     ALNWT
 ALBEG           LDW     ALSIZ           ; an even number of words, always:
                 ADD     =1              ; every block then starts on an even
                 AND     =X'FFFE'        ; word, which is what lets one that
@@ -2143,8 +2172,10 @@ ALGO            CLR
                 JMP     ALOUT
 .NONE           LDW     ALHI
                 JNZ     ALAGN           ; a second try to make, below the fence?
+                LDW     ALNWT
+                JNZ     ALFAIL          ; nothing fits.  Not to be waited for?
                 LDW     SWSECS
-                JNZ     ALWAIT          ; nothing fits.  Is there a swap file?
+                JNZ     ALWAIT          ; is there a swap file?
 ALFAIL          LDX     CURT
                 CLR
                 STW     *T.MW
@@ -2199,6 +2230,8 @@ ALWAIT          LDX     CURT
                 LDW     *T.KDS
                 AND     =X'8000'
                 STW     ALHIQ
+                CLR                     ; a caller that waits, whatever the
+                STW     ALNWT           ; cells were left saying
                 JMP     ALBEG
 
 ; Cut the words [H, H+n) out of the free list as an allocated block: ACR
@@ -2372,6 +2405,7 @@ ALFLO           WORD    0               ; the search's floor and ceiling:
 ALCEI           WORD    0               ; a free block's header lies between
 ALHI            WORD    0               ; nothing above the fence fits: try below
 ALHIQ           WORD    0               ; the caller will take core above the fence
+ALNWT           WORD    0               ; and will not wait for core
 ATH             WORD    0               ; ALLOCAT's block, where it ends,
 ATE             WORD    0
 ATN             WORD    0               ; its length and its owner tag
@@ -2618,7 +2652,7 @@ LDBUF           RES     47              ; the loader's sector
 ; nothing in front of them to keep them where they are.
                 NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY
                 NTRY    SECS,IDSECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,DXUNI,FSUNI
-                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,IOWT,IOREL,FSFND,DRD1
+                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,IOWT,IOREL,FSFND,DRD1,LRBP,LRKTXT
                 NTRY    ALLOCW,ALLCHW,ALLOCB,ALLCHB
 
 SHMOD           EQU     0               ; shell.asm, next, as the console's shell
