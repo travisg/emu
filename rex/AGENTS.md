@@ -28,8 +28,9 @@ depend on nothing here but the snapshot harness's REX case.
   filesystem from X'7000', the swapper, `K.NAME` and the loader's record
   reader from X'7800', and
   the node arena from X'7E00'.
-- **The pages are nearly full.** Page 0 has 79 words left, the console's
-  shell 47 before X'1000', where the pool begins, and the top of core 20
+- **The pages are nearly full.** Page 0 has 44 words left, the console's
+  shell 1 before X'1000', where the pool begins -- its line buffer and
+  the last of HELP's lines live in page 0 for want of room -- and the top of core 20
   in front of the node arena; `build/rex.lst` shows where each ends. Running over either
   fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
   `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
@@ -280,7 +281,8 @@ seven:
   its half revolution, runs three copies of `dskt.asm` at once: each writes
   and reads back a sector of its own 250 times, leaves its verdict on the
   platter where the harness reads it, and the kernel's count of tasks that
-  found the disc taken has to be more than zero, and none of the three may
+  found the disc taken has to be more than zero, `STAT` has to show one
+  waiting for the disc (`DSK`), and none of the three may
   be seen asleep in a thousand looks, which is what a claim that polled
   the lock would be. Across a line the shell
   then prints, at ten characters a second, at most one tick in twenty may
@@ -309,7 +311,9 @@ seven:
 - **A sixth machine** has the three multiplexer teletypes on localhost
   sockets: a key at each brings it a shell, a blip behind each prompt prints
   on its own terminal's paper alone, `ATTACH` from the console of teletype
-  1's job is refused, a second Ctrl-C there ends only its own program, a
+  1's job is refused, the console's `STAT` shows teletype 1's shell
+  waiting for a key and a program there holding its console, a second
+  Ctrl-C there ends only its own program, a
   `KILL` from the console of the program in front of teletype 1 brings
   that terminal's prompt back, a Ctrl-C while one prints -- the set's
   BREAK -- stops a dump,

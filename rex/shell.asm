@@ -258,7 +258,9 @@ SHSTAT          JSX     SHPUP
                 JSX     SHDEC
                 LDW     =SHSWI
                 JSX     SHMSG
-.T0             LDW     =SHTCB
+.T0             LDW     =SHSTH
+                JSX     SHMSG
+                LDW     =SHTCB
                 STW     SHTO
                 LDW     =2
                 STW     SHTI
@@ -291,8 +293,12 @@ SHSTAT          JSX     SHPUP
                 JSX     SHSTLN
                 JMP     SHLOOP
 
-; One line of it, for the node in SHTO.  The state is read once: the task
-; may change it between the name and the number.
+; One line of it, for the node in SHTO: its job number, its name, its
+; state -- read once, since the task may change it between the name and
+; the number -- then for a sleeper how long it has left, and for a waiter
+; what it waits for, where that is known; CON for its terminal's
+; console's holder, OUT for a task whose blocks are on the disc, and its
+; terminal.
 SHSTLN          SUBR
                 LDX     SHTO
                 LDW     *T.ID
@@ -309,6 +315,43 @@ SHSTLN          SUBR
                 STW     SHSS
                 SLL     1
                 ADD     =SHSTA
+                JSX     SHP4
+                LDW     SHSS
+                CMW     =SSLP
+                JNE     .W              ; asleep?  then for how long
+                LDX     SHTO
+                LDW     *T.DLY
+                JSX     SHDEC
+.W              LDW     SHSS
+                CMW     =SWAI
+                JNE     .C              ; waiting?  then on what
+                JSX     SHWHY
+                SAZ
+                JSX     SHP4
+.C              LDX     SHTO            ; each of these four characters
+                LDW     *T.CON          ; where it applies
+                SAZ
+                LDW     =SHCONW
+                SAZ
+                JSX     SHP4
+                LDX     SHTO
+                LDW     *T.SWP
+                SAZ
+                LDW     =SHOUTW
+                SAZ
+                JSX     SHP4
+                LDW     =SHTTY          ; and the terminal
+                JSX     SHMSG
+                LDX     SHTO
+                LDW     *T.TTY
+                CAX
+                LDW     *TM.NO
+                JSX     SHDEC
+                JSX     SHNL
+                EXIT    SHSTLN
+
+; The four characters packed in the two words ACR addresses.
+SHP4            SUBR
                 STW     SHSA
                 CAX
                 LDW     *0
@@ -316,31 +359,43 @@ SHSTLN          SUBR
                 LDX     SHSA
                 LDW     *1
                 JSX     SHPW2
-                LDW     SHSS
-                CMW     =SSLP           ; asleep? then say for how long
-                JNE     .N
+                EXIT    SHP4
+
+; What the waiting task in SHTO waits for, as four characters' address,
+; or zero for none of these: the disc -- its lock, or a transfer of its
+; -- core, the printer, its terminal's keyboard.  The shell waiting for
+; its console back, and the swapper for work, are none of them.
+SHWHY           SUBR
                 LDX     SHTO
                 LDW     *T.DLY
-                JSX     SHDEC
-.N              LDX     SHTO
-                LDW     *T.SWP
-                JNZ     .O
-                JMP     .E
-.O              LDW     =SHOUT
-                JSX     SHMSG
-.E              LDX     SHTO
-                LDW     *T.TTY
-                CMW     =TMT
-                JEQ     .E2             ; another terminal's? then which
-                LDW     =SHTTY
-                JSX     SHMSG
+                CMW     =X'FFFF'
+                JEQ     .D              ; waiting for the disc's lock,
+                SMB     DWTR
+                LDW     DWTR
+                CMW     SHTO
+                JEQ     .D              ; or on a transfer?
                 LDX     SHTO
+                LDW     *T.MW
+                JNZ     .M              ; for core?
+                LDW     *T.MBX
+                JNZ     .P              ; for the printer?
                 LDW     *T.TTY
                 CAX
-                LDW     *TM.NO
-                JSX     SHDEC
-.E2             JSX     SHNL
-                EXIT    SHSTLN
+                LDW     *TM.Q
+                CAX
+                LDW     *Q.WTR
+                CMW     SHTO
+                JEQ     .K              ; for a key?
+                CLR
+                JMP     .X
+.D              LDW     =SHWDSK
+                JMP     .X
+.M              LDW     =SHWCOR
+                JMP     .X
+.P              LDW     =SHWPRT
+                JMP     .X
+.K              LDW     =SHWKBD
+.X              EXIT    SHWHY
 
 ; STOP n and START n differ only in the state they store, into the task
 ; with that job number: one the shell loaded, since no other has a
@@ -1657,6 +1712,12 @@ SHALB           WORD    ALLOCB,ALLCHB   ; indexed JSX: each with its twin above
 ; a task waiting to be given its console.
 SHSTA           WORD    'RU','N ','SL','P ','OF','F ','WA','IT','GO','NE'
                 WORD    'TT','Y '
+SHWDSK          WORD    ' D','SK'       ; what a waiter waits for,
+SHWCOR          WORD    ' C','OR'
+SHWPRT          WORD    ' P','RT'
+SHWKBD          WORD    ' K','BD'
+SHCONW          WORD    ' C','ON'       ; the console's holder,
+SHOUTW          WORD    ' O','UT'       ; and a task out on the disc
 
                 TRUE    SHMOD=1         ; the console's is in page 0 (rex.asm)
 LBUF            RES     32              ; the line the shell is reading
@@ -1713,7 +1774,6 @@ SHNOF           MSG     "NO SUCH FILE\r\n"
 SHSWP           MSG     "SWAPS "
 SHSWO           MSG     " OUT "
 SHSWI           MSG     " IN\r\n"
-SHOUT           MSG     " OUT"
 SHLOW           MSG     " LOW "
 SHHIG           MSG     " HIGH\r\n"
 SHEDE           MSG     "LOAD ERROR: DE\r\n"
@@ -1728,7 +1788,10 @@ SHNOT           MSG     "NO SUCH TASK\r\n"
 SHKIL           MSG     "KILLED\r\n"
 SHJOBM          MSG     "JOB "
 SHSTP           MSG     " STOPPED\r\n"
+                TRUE    SHMOD=1         ; the console's is in page 0 (rex.asm)
 SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. DIR 0: LISTS THEM.\r\n"
+                ENDC
+SHSTH           MSG     "JOB NM STATE TERMINAL\r\n"
 
                 TRUE    SHMOD=0         ; the rest of page 1, which is where
                 RES     X'1000'-$       ; the console's shell must end: past

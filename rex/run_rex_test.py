@@ -917,6 +917,7 @@ def disc_session(emu, image):
     idle_line = re.compile(rb'^0 ID RUN', re.M)
     emu.wait_for_output(idle_line, start=mark, timeout=120)
     together = len(re.findall(rb'^\d+ DS ', s.since(mark), re.M)) == DSKT_COPIES
+    at_disc = re.search(rb'^\d+ DS WAIT DSK T0\r', s.since(mark), re.M) is not None
 
     # A claim that finds the disc taken waits to be woken when it is given
     # up, rather than sleeping a tick and looking again. dskt.asm never
@@ -941,6 +942,7 @@ def disc_session(emu, image):
         mark = len(emu.output)
         emu.key('STAT\r')
         emu.wait_for_output(idle_line, start=mark, timeout=120)
+        at_disc |= re.search(rb'^\d+ DS WAIT DSK T0\r', s.since(mark), re.M) is not None
         if not re.search(rb'^\d+ DS ', s.since(mark), re.M):
             break
     else:
@@ -988,6 +990,8 @@ def disc_session(emu, image):
     # above say so more plainly than this would.
     if not together:
         raise AssertionError('STAT never showed the three exercisers on the ring together')
+    if not at_disc:
+        raise AssertionError('STAT never showed an exerciser waiting for the disc')
     if looks < 200:
         raise AssertionError('only %d looks at the exercisers while all three were there' % looks)
     if asleep:
@@ -1077,7 +1081,7 @@ def swap_session(emu, image):
     emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark, timeout=300)
     listed = s.since(mark)
     for job in (first, second):
-        if not re.search(rb'^%d HO OFF +OUT\r' % job, listed, re.M):
+        if not re.search(rb'^%d HO OFF +OUT T0\r' % job, listed, re.M):
             raise AssertionError('hog %d was not stopped and out: %r' % (job, listed))
     if len(re.findall(rb'^\d+ HO ', listed, re.M)) != HOG_COPIES:
         raise AssertionError('not four hogs: %r' % listed)
@@ -1245,7 +1249,8 @@ def verdict(paper):
     hellos = [int(n) for n in re.findall(rb'^HELLO FROM WORD (\d+)$', text, re.M)]
     checks = [
         ('uptime', line(rb'UPTIME \d+ SEC')),
-        ('shell running', line(rb'^0 SH RUN')),
+        ('shell running', line(rb'^0 SH RUN +T0$')),
+        ('a STAT header', line(rb'^JOB NM STATE TERMINAL$')),
         ('idle listed', line(rb'^0 ID RUN')),
         ('help: what is built in', line(rb'^BUILT IN: HELP STAT UPTIME')),
         # every one of them, eight to a line
@@ -1531,6 +1536,8 @@ def terminals_session(emu, t1, t2, t3):
     have = set(re.findall(rb'(\d+ (?:SH|BL)) [^\r\n]* T1\r\n', stat))
     if have != want:
         raise AssertionError("STAT does not show teletype 1's shell and blip: %r" % stat)
+    if not re.search(rb'^%d SH WAIT KBD T1\r' % shell, stat, re.M):
+        raise AssertionError("STAT does not have teletype 1's shell waiting for a key: %r" % stat)
 
     # ATTACH is of a task of the shell's own terminal only
     mark = len(emu.output)
@@ -1578,6 +1585,8 @@ def terminals_session(emu, t1, t2, t3):
         time.sleep(0.05)
     wait_held(emu, held_at, 'the second NAP never had teletype 1')
     ((nap, _),) = jobs_of(emu, 'NA')
+    con.say('STAT')
+    con.wait(re.compile(rb'^%d NA WAIT KBD CON T1\r' % nap, re.M))
     con.say('KILL %d' % nap)
     term.at = term.wait(PROMPT, timeout=120).start()     # the next say's prompt
 
@@ -1682,7 +1691,7 @@ def terminals_session(emu, t1, t2, t3):
         mark = len(emu.output)
         emu.key('STAT\r')
         emu.wait_for_output(re.compile(rb'^0 ID RUN', re.M), start=mark, timeout=120)
-        out = re.search(rb'^\d+ SH \w+ +OUT T([12])\r', bytes(emu.output[mark:]), re.M)
+        out = re.search(rb'^\d+ SH [^\r\n]*OUT T([12])\r', bytes(emu.output[mark:]), re.M)
         if time.monotonic() > deadline:
             raise AssertionError('no shell was put out: %r' % bytes(emu.output[mark:]))
     paper = {b'1': (t1, term), b'2': (t2, term2)}[out.group(1)][1]

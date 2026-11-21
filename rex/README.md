@@ -63,10 +63,11 @@ STAT
 UPTIME 5 SEC
 IDLE 5 SEC
 SWAPS 0 OUT 0 IN
-0 SH RUN
-0 SW WAIT
-1 HE SLP 62
-0 ID RUN
+JOB NM STATE TERMINAL
+0 SH RUN  T0
+0 SW WAIT T0
+1 HE SLP 60 T0
+0 ID RUN  T0
 REX>  BASIC
 TINY BASIC UNDER REX
 
@@ -92,10 +93,11 @@ REX>  STAT
 UPTIME 11 SEC
 IDLE 10 SEC
 SWAPS 0 OUT 0 IN
-0 SH RUN
-0 SW WAIT
-2 BA OFF
-0 ID RUN
+JOB NM STATE TERMINAL
+0 SH RUN  T0
+0 SW WAIT T0
+2 BA OFF  T0
+0 ID RUN  T0
 REX>  ATTACH 2
 BYE
 REX>  TYPE SQ.BA
@@ -109,10 +111,10 @@ REX 703 DOWN
 `RUN` gives a program the console until it exits. `LOAD` loads it
 stopped and says its job number, and `START` lets it run behind the
 prompt, which is why the second `HELLO` prints after the prompt has come
-back, and why `STAT` finds it as job 1, asleep (`SLP`) with 62 ticks to
+back, and why `STAT` finds it as job 1, asleep (`SLP`) with 60 ticks to
 go. `STAT` begins with how long REX has been up and how much of that the
 machine was idle; the other lines are the shell, the swapper and the idle
-task. The Ctrl-Z typed at BASIC's `READY` prints nothing; it stops BASIC
+task, each ending with its terminal (`T0` is the console). The Ctrl-Z typed at BASIC's `READY` prints nothing; it stops BASIC
 and gives the shell the console, and `ATTACH` gives it back, BASIC
 taking up where it was.
 
@@ -121,7 +123,7 @@ taking up where it was.
 | command | what it does |
 |---|---|
 | `HELP` or `?` | the commands, and where the programs are listed |
-| `STAT` | the uptime and how much of it was idle, then every task: job number, name, state, how long a sleeper has left, `OUT` for one swapped to disc |
+| `STAT` | the uptime and how much of it was idle, then every task: job number, name, state, how long a sleeper has left, what a waiter waits for, `CON` for one holding its terminal's console, `OUT` for one swapped to disc, and its terminal |
 | `UPTIME` or `UP` | seconds since REX came up |
 | `TIME` | the time of day, off the clock (`HH:MM:SS`) |
 | `MEM` | free words in the pool, below word X'4000' and above it |
@@ -141,6 +143,11 @@ Any other word is a program to `RUN`: `BASIC` is `RUN BASIC`, and
 whatever follows the name on the line is the program's to read. A program
 behind the prompt has no console: if it reads the keyboard it waits,
 and `STAT` shows it as `TTY`, until `ATTACH` gives it the console.
+
+`STAT`'s states are `RUN`; `SLP` with the ticks left; `OFF`, stopped;
+`TTY`, waiting for its console; and `WAIT`, followed by what for where
+that is known: `DSK` the disc, `COR` core, `PRT` the printer, `KBD` a
+key. `CON` marks the task holding its terminal's console.
 
 The utilities are programs on the disc:
 

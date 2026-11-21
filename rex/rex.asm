@@ -20,10 +20,12 @@
 ;   HELP or ?    these, and where the programs are listed (DIR 0:)
 ;   UPTIME, UP   seconds since the executive came up
 ;   TIME         the time of day, off the clock (HH:MM:SS)
-;   STAT         every task's job number, name and state, how long each
-;                sleeper has left, and OUT for one that is on the disc;
-;                how many seconds' ticks found the machine idle; and, with
-;                a swap file, how many have gone out and come in
+;   STAT         how many seconds' ticks found the machine idle; with a
+;                swap file, how many tasks have gone out and come in; and
+;                every task's job number, name and state, how long a
+;                sleeper has left, what a waiter waits for (DSK, COR, PRT
+;                or KBD), CON for its terminal's console's holder, OUT for
+;                one that is on the disc, and its terminal
 ;   STOP n       suspend a loaded task, by job number
 ;   START n      let one run, behind the prompt
 ;   ATTACH n     give one of this terminal's the console, running, and
@@ -1462,7 +1464,7 @@ QCONSN          EQU     128
 ; multiplexer's channels 0 to 2, one block each.  The other three
 ; terminals' queues are shallower than the console's: they are typed at
 ; by a person, not by a command file run ahead of the shell.
-                NTRY    TM.OWN,TM.BSY,TM.BRK,TM.KIL,TM.SH,TM.REQ,TM.NO,TM.LEN,TMT,TMTE
+                NTRY    TM.Q,TM.OWN,TM.BSY,TM.BRK,TM.KIL,TM.SH,TM.REQ,TM.NO,TM.LEN,TMT,TMTE
 TM.CHN          EQU     0               ; the multiplexer channel; minus one is
                                         ; the console's teletype
 TM.PND          EQU     1               ; a character KICK claimed for the
@@ -2638,11 +2640,14 @@ XB              WORD    0               ; sweep's cursor
 XTM             WORD    0               ; and its terminal
                 LPOOL                   ; what this page's code writes as literals
 
-; The console's shell's line and its loader's sector, which page 1 has no
-; room for.  The shell reaches both through byte and word addresses only,
-; so they may be anywhere below X'4000'; SHELL.RX keeps its own.
+; The console's shell's line, the loader's sector and the last of HELP's
+; lines, which page 1 has no room for.  The shell reaches them through
+; byte and word addresses only, so they may be anywhere below X'4000';
+; SHELL.RX keeps its own line and text, and shares the sector, which the
+; kernel's record reader fills (rexrec.asm).
 LBUF            RES     32              ; the line the shell is reading
 LDBUF           RES     47              ; the loader's sector
+SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. DIR 0: LISTS THEM.\r\n"
 
 ; What the shell reaches inside the kernel.  shell.asm is assembled twice,
 ; once here as the console's shell and once as SHELL.RX, every other
@@ -2652,7 +2657,7 @@ LDBUF           RES     47              ; the loader's sector
 ; nothing in front of them to keep them where they are.
                 NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY
                 NTRY    SECS,IDSECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,DXUNI,FSUNI
-                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,IOWT,IOREL,FSFND,DRD1,LRBP,LRKTXT
+                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,IOWT,IOREL,FSFND,DRD1,LRBP,LRKTXT,DWTR
                 NTRY    ALLOCW,ALLCHW,ALLOCB,ALLCHB
 
 SHMOD           EQU     0               ; shell.asm, next, as the console's shell
