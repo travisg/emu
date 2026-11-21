@@ -246,9 +246,12 @@
 ;   that blocks cannot hold the mask across its wait, so what it needs
 ;   afterwards -- the link, the argument -- lives in the caller's node
 ;   (T.KLK, T.KAR, T.KDS), and the static cells are scratch that is good
-;   only until the processor is handed on: Q.GET and KENTER.  Routines
-;   only one task runs at a time -- the loader and the rest behind the
-;   disc's claim, below -- need none of this.
+;   only until the processor is handed on: Q.GET, the allocator's wait
+;   for core and KENTER.  Routines only one task runs at a time -- the
+;   loader and the rest behind the disc's claim, below -- need none of
+;   this for their own cells, but one that blocks in the allocator writes
+;   those node cells over KENTER's, so KENTER keeps its link in a cell of
+;   its own while the body runs.
 ;
 ; * THE DISC HAS ONE USER AT A TIME, and IOLOCK names it.  A task's call
 ;   comes through KENTER, which claims the disc and gives it up when the
@@ -1457,6 +1460,7 @@ DINT            DIN     1,0             ; each unit's status, by unit: the unit
 KELNK           WORD    0               ; KENTER's scratch: good under the mask
 KEARG           WORD    0               ; and no further, like every cell a
 KEBDY           WORD    0               ; blocking routine shares
+KEHLK           WORD    0               ; the disc's holder's link, across its body
 QGLNK           WORD    0               ; Q.GET's, on the same terms
 NFREH           WORD    0               ; the first free node; zero: none
 NACNT           WORD    0               ; start-up's count over the arena
@@ -1618,8 +1622,11 @@ IOREL           SUBR
 ; returns its answer here, kept in the node as well; then the disc is
 ; given up, and if that woke anybody the processor is handed on once
 ; before the answer goes back to the caller, or the caller, at the disc
-; again at once, would take it before any waiter ran.  A task is in at
-; most one such call, so one set of node cells serves them all.
+; again at once, would take it before any waiter ran.  The body may block
+; in a routine that keeps its own wait in the same node cells -- K.LOAD's
+; allocations wait for core in ALWAIT -- so the link is held in KEHLK
+; while the body runs and put back after: between the claim and IOREL
+; only the disc's holder is here, which makes the cell one task's.
 KENTER          STW     KEARG
                 LDW     *0              ; the body
                 LDX     CURT
@@ -1631,6 +1638,8 @@ KENTER          STW     KEARG
 KECLM           JSX     IOTRY
                 JNZ     .WAIT           ; ours?
                 LDX     CURT
+                LDW     *T.KLK
+                STW     KEHLK
                 LDW     *T.KDS
                 STW     KEBDY
                 LDW     *T.KAR
@@ -1640,6 +1649,8 @@ KECLM           JSX     IOTRY
                 MSK
                 LDX     CURT
                 STW     *T.KAR          ; the answer
+                LDW     KEHLK
+                STW     *T.KLK
                 JSX     IOREL
                 JNZ     .YLD            ; anybody woken?
 .RET            LDX     CURT

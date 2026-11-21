@@ -89,7 +89,11 @@ the host -- a program that came through being put out and brought back
 with a word wrong would not list as it was written. Last, three BASICs
 that never end take turns in the room for two: the one that is out has
 to wait for one in core to have had its time without having its list
-read off the disc again on every pass of the swapper.
+read off the disc again on every pass of the swapper. And a hog stopped
+with all but a little of that core leaves BASIC's module no room, so
+the load waits for core inside K.LOAD, holding the disc: it has to come
+back to the shell with BASIC ready and the pool whole once the hog is
+put out.
 
 A fourth machine is given no core image at all, only a platter and the
 disc controller's LOAD button (-s ray703-load): the boot sector has to
@@ -181,6 +185,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nobootmsg  the boot's message that there is no shell never printed
   nobackoff  a task that cannot come back until the one in its way has had
            its time tried for on every pass of the swapper meanwhile
+  nokehlk  KENTER not putting its link back after the body, so a load
+           that waited for core returns into the loader, not the shell
   spin     the shell's wait for a character to print never marking it
            waiting, so it spins through every character it prints
   nokillwake  KILLT handing nothing back, so a KILL from the console of
@@ -306,6 +312,9 @@ JOB_COUNT = 3000
 LOOP = b'10 GOTO 10\n'
 LOOPERS = 3
 LOOP_SECS = 10
+# And a hog that leaves too little below word X'4000' for BASIC's module,
+# so a load has to wait for core.
+LOADWAIT_HOG = 11000
 
 
 def job_lines(n):
@@ -1206,6 +1215,56 @@ def swap_session(emu, image):
     emu.key('MEM\r')
     emu.wait_for_output(b'FREE ' + before, start=s.at, timeout=60)
 
+    # A load that waits for core: a stopped hog holds all but a little of
+    # the core below word X'4000', so BASIC's module, which loads nowhere
+    # else, has no room until the hog goes out. The load waits inside
+    # K.LOAD, holding the disc -- seen at ALWAIT -- and has to come back to
+    # the shell that asked for it with BASIC ready and the pool whole.
+    if CONTROL == 'nokehlk':
+        # KENTER's STW *T.KLK that puts its link back after the body
+        emu.writew(listing_word('STW     *T.KLK', 'LDW     KEHLK'), [NOP])
+    emu.wait_quiet()
+    s.say('START HOG %d' % LOADWAIT_HOG)
+    s.wait(PROMPT, timeout=60)
+    emu.wait_quiet()
+    (hog, _), = jobs_of(emu, 'HO')
+    emu.key('STOP %d\r' % hog)
+    s.wait(PROMPT, timeout=60)
+    emu.wait_quiet()
+    held = blocks_of(emu, 'HO')
+    if not any(end <= POOLH and end - start >= LOADWAIT_HOG for start, end in held):
+        raise AssertionError('the hog did not take its core below the fence: %r' % held)
+    alwait, iolock, curt = (symbols.value(n) for n in ('ALWAIT', 'IOLOCK', 'CURT'))
+    emu.halt()
+    emu.add_break(alwait)
+    emu.run()
+    mark = len(emu.output)
+    emu.key('BASIC\r')
+    holder_waits = 0
+    deadline = time.monotonic() + 120
+    while not READY.search(bytes(emu.output), mark):
+        if time.monotonic() > deadline:
+            raise AssertionError('no READY from a load that waited for core (%d waits by the '
+                                 'disc\'s holder): %r' % (holder_waits, s.since(mark)[-300:]))
+        try:
+            ev = emu.wait_stopped(timeout=0.5)
+        except TimeoutError:
+            continue
+        if ev.pc == alwait:
+            if emu.memw(iolock, 1)[0] == emu.memw(curt, 1)[0]:
+                holder_waits += 1
+            emu.run()
+    emu.remove_break(alwait)
+    if not holder_waits:
+        raise AssertionError('BASIC\'s load never waited for core holding the disc')
+    s.at = mark
+    s.basic('BYE\r')
+    s.say('KILL %d' % hog)
+    stat_until_gone(emu, s, b'HO')
+    s.at = len(emu.output)
+    emu.key('MEM\r')
+    emu.wait_for_output(b'FREE ' + before, start=s.at, timeout=60)
+
     emu.key('HALT\r')
     s.wait(b'REX 703 DOWN', timeout=120)
     stopped = emu.wait_stopped()
@@ -1406,7 +1465,7 @@ def make_platter(workdir, log, swap=False, boot=False, shell=True):
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
                      'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec', 'nobackoff', 'shlow',
-                     'conbye', 'nobootmsg'):
+                     'conbye', 'nobootmsg', 'nokehlk'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         jobs += [('LOOP.BA', LOOP)] if swap else []

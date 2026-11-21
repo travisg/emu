@@ -27,7 +27,7 @@ depend on nothing here but the snapshot harness's REX case.
   page 1 from X'800', the pool from X'1000' to X'6FFF' with its fence at
   X'4000', the filesystem from X'7000', the swapper and `K.NAME` from
   X'7800', and the node arena from X'7E00'.
-- **Room.** Page 0 has 154 words left, page 1 1,255 before X'1000',
+- **Room.** Page 0 has 149 words left, page 1 1,255 before X'1000',
   where the pool begins, and the top of core 190 in front of the node
   arena; `build/rex.lst` shows where each ends. Running over one fails the
   build -- "assembled twice" at `rexload.asm`'s `ORG` for page 0, a `RES`
@@ -213,8 +213,11 @@ Many tasks in one kernel:
   subroutines each have one static slot for the return address. So **a
   routine any task may call holds the mask from its first instruction**
   -- the allocator -- and one that blocks keeps what it needs afterwards
-  in the caller's node rather than in cells of its own, which is `Q.GET`
-  and `KENTER`.
+  in the caller's node rather than in cells of its own, which is `Q.GET`,
+  the allocator's wait for core and `KENTER`. They share the node's
+  cells, and `K.LOAD`'s allocations wait for core inside `KENTER`'s
+  body, so `KENTER` holds its link in a cell of its own while the body
+  runs -- one task's, since only the disc's holder is there.
 - **The disc has one user at a time**, named by `IOLOCK`: a task's
   `K.DREAD`, `K.DWRIT` or `K.LOAD` waits its turn in `KENTER` -- a load
   holding it throughout -- so the driver behind the claim is written
@@ -311,6 +314,9 @@ eight:
   ten seconds, and the one that is out may have its list of blocks read off
   the swap file at most twice for each time it comes back: once when it
   comes back, and once for a try that found the task in its way too new.
+  And a hog stopped holding all but a little of that core leaves BASIC's
+  module no room, so its load waits for core inside `K.LOAD`, holding
+  the disc, and has to come back with BASIC ready and the pool whole.
 - **A fourth machine** is given no core image, only a platter and the LOAD
   button, and has to come up, list its directory and run a program.
 - **A fifth machine** has a platter with two sectors free: a `SAVE` too long
