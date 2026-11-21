@@ -12,7 +12,10 @@
 ; reaches in the kernel it reaches as a module does, through the names
 ; the kernel exports.  What only the console's shell does -- INIT.CM,
 ; giving the other terminals their shells, HALT -- is under SHMOD=0, and
-; what only a terminal's does -- BYE -- under SHMOD=1.
+; what only a terminal's does -- BYE -- under SHMOD=1.  SHELL.RX loads
+; above word X'4000', where its byte addresses are negative, so nothing
+; here compares two byte addresses but for equal: a buffer is walked to
+; its exact end or to a zero, and a record's bytes are counted.
 ;
 ; ---------------------------------------------------------------- the shell
 ; Prints the banner and then reads a line and runs it, forever.

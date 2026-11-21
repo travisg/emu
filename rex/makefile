@@ -83,7 +83,7 @@ $(BUILD)/far.obj: $(FAR) $(ASM703)
 	$(ASM) $(FAR) --object $@ -l $(BUILD)/far.lst
 
 # The shell of every terminal but the console's: the console's own shell,
-# assembled again as a module. It keeps byte addresses, so it loads low.
+# assembled again as a module.
 SHELLMOD := $(API) rexmac.asm shellmod.asm shell.asm
 
 $(BUILD)/shell.obj: $(SHELLMOD) $(ASM703)
@@ -125,11 +125,12 @@ $(BUILD)/basic.obj: $(API) brex.asm $(BCORE) $(ASM703)
 # its top bit set; BASIC's are the page's first word and second.
 # Far has a base for each of its segments: neighbouring pages, and the
 # second segment below the first with the fence between them. The shell
-# is placed at a page's first word and further in.
+# is placed at a page's first word and further in, below the fence and
+# above it.
 HELLO_BASES := 0x1080 0x1C40 0x4080 0x5C40
 BASIC_BASES := 0x1000 0x1001
 FAR_BASES   := 0x1000,0x1800 0x4100,0x1040
-SHELL_BASES := 0x1000 0x1022
+SHELL_BASES := 0x1000 0x1022 0x4000 0x5022
 
 reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/far.obj $(BUILD)/shell.obj
 	@for base in $(HELLO_BASES); do \
@@ -153,9 +154,8 @@ reloc-check: $(BUILD)/hello.obj $(BUILD)/basic.obj $(BUILD)/far.obj $(BUILD)/she
 SWAP_SECTORS := 1024
 
 # A platter that is the whole system: the boot sector, the kernel as
-# REX.SY, a swap file and the modules -- every one but BASIC and the shell
-# marked as loadable above word X'4000', which leaves the core below it to
-# what has to be there. From the repo root,
+# REX.SY, a swap file and the modules -- every one but BASIC marked as
+# loadable above word X'4000', which leaves the core below it to BASIC. From the repo root,
 #     ./target/debug/emu -s ray703-load -r rex/build/rex.img --fast-io
 # presses LOAD on it. A build product, made afresh each time: nothing
 # written to it outlives the next build, and the build writes nothing
@@ -163,7 +163,7 @@ SWAP_SECTORS := 1024
 bootdisc: $(BUILD)/rex.bin $(BUILD)/boot.bin modules
 	$(MKDISC703) $(BUILD)/rex.img --force --boot $(BUILD)/boot.bin
 	$(FS703) $(BUILD)/rex.img --sys $(BUILD)/rex.bin --swap $(SWAP_SECTORS) \
-	    --add BASIC $(BUILD)/basic.obj --add SHELL $(BUILD)/shell.obj \
+	    --add BASIC $(BUILD)/basic.obj --add-high SHELL $(BUILD)/shell.obj \
 	    --add-high HELLO $(BUILD)/hello.obj \
 	    $(foreach u,$(UTILS),--add-high $(u) $(BUILD)/$(u).obj)
 

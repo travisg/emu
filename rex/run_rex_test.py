@@ -105,7 +105,8 @@ ASCII in a name.
 A sixth machine has teletypes 1, 2 and 3 on the Teletype Multiplexer's
 channels 0-2, each on a localhost socket (--serial tcp:0), which the
 harness types at and reads as it does the console. The first key at
-teletype 1 has to bring up a shell of that terminal's own, and the two
+teletype 1 has to bring up a shell of that terminal's own, loaded above
+word X'4000' so that the core below is left to BASIC, and the two
 shells run side by side: a BLIP behind each prompt prints on its own
 terminal's paper and never on the other's, STAT on the console shows the
 other terminal's shell and its task, a second Ctrl-C there ends only the
@@ -169,6 +170,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   onesec   the loader's reader asking for a block of no sectors, so a
            program comes in a sector at a time
   nowake   the disc given up without waking whoever waits for it
+  shlow    SHELL.RX put on the platter as a module that has to load
+           below word X'4000'
   nobackoff  a task that cannot come back until the one in its way has had
            its time tried for on every pass of the swapper meanwhile
   spin     the shell's wait for a character to print never marking it
@@ -208,9 +211,9 @@ MODULES = (('HELLO', HELLO_OBJ), ('BASIC', BASIC_OBJ), ('DSKT', DSKT_OBJ), ('FST
     (name, os.path.join(BUILD, name.lower() + '.obj'))
     for name in ('TYPE', 'COPY', 'DEL', 'REN', 'SQUISH', 'DUMP', 'PUT', 'DIR', 'NAP', 'HOG', 'BLIP', 'FAR', 'PLAT',
                  'SHELL'))
-# Every module but BASIC and the shell goes on the platter marked as
-# loadable above word X'4000', where the kernel then puts it.
-LOW_ONLY = ('BASIC', 'SHELL')
+# Every module but BASIC goes on the platter marked as loadable above
+# word X'4000', where the kernel then puts it.
+LOW_ONLY = ('BASIC',)
 
 # The pool and the node arena, as rex.asm lays them out.
 POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
@@ -1369,7 +1372,7 @@ def make_platter(workdir, log, swap=False, boot=False):
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
-                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec', 'nobackoff'):
+                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec', 'nobackoff', 'shlow'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         jobs += [('LOOP.BA', LOOP)] if swap else []
@@ -1380,7 +1383,7 @@ def make_platter(workdir, log, swap=False, boot=False):
                 f.write(data)
         for name, path in files[:1] + list(MODULES) + files[1:]:
             if (CONTROL, name) != ('nohello', 'HELLO'):
-                high = (name, path) in MODULES and name not in LOW_ONLY
+                high = (name, path) in MODULES and name not in LOW_ONLY + (('SHELL',) if CONTROL == 'shlow' else ())
                 cmd += ['--add-high' if high else '--add', name, path]
     else:
         sys.exit('REX_CONTROL=%s: not a control this harness has' % CONTROL)
@@ -1570,6 +1573,11 @@ def terminals_session(emu, t1, t2, t3):
     ((shell, tty),) = jobs_of(emu, 'SH')
     if tty != tm1:
         raise AssertionError("teletype 1's shell is on terminal block %04X, not %04X" % (tty, tm1))
+    # SHELL.RX compares no byte addresses, so it is loaded above the fence,
+    # leaving the core below it to BASIC
+    low = [b for b in blocks_of(emu, 'SH') if b[0] < POOLH]
+    if low:
+        raise AssertionError("teletype 1's shell has blocks below word X'4000': %r" % low)
 
     # a BLIP behind each prompt, each printing on its own paper
     con.say('START BLIP #')

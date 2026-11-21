@@ -41,8 +41,9 @@ depend on nothing here but the snapshot harness's REX case.
   `HALT`. Behind `shellmod.asm` (`SHMOD=1`) it is the module `SHELL.RX`,
   a copy loaded for each other terminal: it has `BYE` instead, names its
   node and terminal only through `SHME` and `SHTM`, and reaches the
-  kernel only through the exported names. It keeps byte addresses, so it
-  is loaded below the fence.
+  kernel only through the exported names. It is loaded above the fence,
+  so it compares no two byte addresses but for equal (see the pool's
+  rule below).
 - **The session** is `make -C rex test`, which builds the kernel and the
   modules and makes its own platters, so it does not need or remake
   `build/rex.img`. `EMU_BIN` names another emulator binary, the
@@ -201,8 +202,8 @@ Tasks and the pool:
   addresses in what it gets. A module is loaded above the fence only if
   its directory entry says it may be (`fs703.py --add-high`): everything
   here but BASIC, whose interpreter walks its own tables and its workspace
-  by byte address, and `SHELL.RX`, which keeps byte addresses too, so
-  those two have the core below the fence to themselves.
+  by byte address, so BASIC has the core below the fence to itself and two
+  sessions fit there beside each other.
 
 Many tasks in one kernel:
 
@@ -314,7 +315,8 @@ seven:
   left as it was, a `COPY` onto the swap file's name refused outright, and
   the host's tools have to refuse the same of a system file.
 - **A sixth machine** has the three multiplexer teletypes on localhost
-  sockets: a key at each brings it a shell, a blip behind each prompt prints
+  sockets: a key at each brings it a shell, loaded above word X'4000', a
+  blip behind each prompt prints
   on its own terminal's paper alone, `ATTACH` from the console of teletype
   1's job is refused, the console's `STAT` shows teletype 1's shell
   waiting for a key and a program there holding its console, a second
