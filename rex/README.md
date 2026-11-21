@@ -54,19 +54,19 @@ though a teletype cannot unprint it, so the paper still shows it.
 REX 703 UP
 TYPE HELP FOR THE COMMANDS
 REX>  RUN HELLO
-HELLO FROM WORD 16386
+HELLO FROM WORD 18180
 REX>  LOAD HELLO
 JOB 1
 REX>  START 1
-REX>  HELLO FROM WORD 16386
+REX>  HELLO FROM WORD 18180
 STAT
 UPTIME 5 SEC
-IDLE 5 SEC
+IDLE 4 SEC
 SWAPS 0 OUT 0 IN
 JOB NM STATE TERM
 0 SH RUN  T0
 0 SW WAIT T0
-1 HE SLP 60 T0
+1 HE SLP 63 T0
 0 ID RUN  T0
 REX>  BASIC
 TINY BASIC UNDER REX
@@ -137,7 +137,7 @@ taking up where it was.
 | `KILL n` | end it, whatever it was doing |
 | `@name` | take the shell's lines from the command file `name.CM` |
 | `HALT` | stop every task, let the printers finish and stop the machine (console only) |
-| `BYE` | end this shell (the other terminals only) |
+| `BYE` | end this shell (the other terminals only: the console always has one) |
 
 Any other word is a program to `RUN`: `BASIC` is `RUN BASIC`, and
 whatever follows the name on the line is the program's to read. A program
@@ -272,19 +272,23 @@ A multiplexer channel goes one way at a time, and while one is printing
 only its BREAK -- Ctrl-C -- gets through, so a Ctrl-Z reaches a program
 there when its printing pauses. Two Ctrl-Cs end one that never pauses.
 
-A shell costs about 2,000 words of core, and an idle one waiting for a key
-is the first thing swapped out when core runs short.
+Every shell is a copy of `SHELL.RX`, the console's too: the kernel loads
+that one off unit 0 as it comes up, and without `SHELL.RX` there the
+console says `NO SHELL.RX` and the machine stops. A shell costs about
+1,800 words of core above word X'4000'. A terminal's shell waiting for a
+key is the first thing swapped out when core runs short; the console's
+is never swapped.
 
 ## What is in this directory
 
     rex.asm            the executive: scheduler, drivers, queues
-    shell.asm          the shell, and the loader it runs modules with
-    shellmod.asm       the front of the shell's deck as SHELL.RX, every other terminal's
+    rexload.asm        the loader: a module off the disc into the pool, and the console's shell at start-up
+    shell.asm          the shell, SHELL.RX: every terminal's, the console's included
     boot.asm           the boot sector: reads the kernel in off the platter
     rexfs.asm          the filesystem: the directory, channels, the file calls
     rexswap.asm        the swapper: tasks out to the disc and back
     rexname.asm        K.NAME, the one reading of a file name, unit and all
-    rexrec.asm         the loader's record reader, every shell's
+    rexrec.asm         the loader's record reader
     rexmac.asm         the macros a deck is written with: conditional jumps, CALL, MSG
     rexlib.asm         a library for a module's deck: the printer, the command line
     brex.asm           the wrapper that makes Tiny BASIC a module

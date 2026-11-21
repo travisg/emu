@@ -1,6 +1,6 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; REX's filesystem -- the file of the kernel's deck after shell.asm.
+; REX's filesystem -- the file of the kernel's deck after rexrec.asm.
 ;
 ; Files are contiguous runs of sectors on a platter under a directory
 ; in sectors 1-8, which fs703.py describes word for word and writes

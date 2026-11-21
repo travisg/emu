@@ -22,7 +22,7 @@ all: $(BUILD)/rex.bin $(BUILD)/boot.bin modules bootdisc
 # REX itself, one deck: the kernel and the shell in pages 0 and 1, and
 # the filesystem, the swapper, the name parser and the loader's record
 # reader at the top of core.
-KERNEL := rexmac.asm rex.asm shell.asm rexfs.asm rexswap.asm rexname.asm rexrec.asm
+KERNEL := rexmac.asm rex.asm rexload.asm rexrec.asm rexfs.asm rexswap.asm rexname.asm
 
 $(BUILD)/rex.bin: $(KERNEL) $(ASM703)
 	@mkdir -p $(BUILD)
@@ -82,9 +82,9 @@ $(BUILD)/far.obj: $(FAR) $(ASM703)
 	@mkdir -p $(BUILD)
 	$(ASM) $(FAR) --object $@ -l $(BUILD)/far.lst
 
-# The shell of every terminal but the console's: the console's own shell,
-# assembled again as a module.
-SHELLMOD := $(API) rexmac.asm shellmod.asm shell.asm
+# The shell, SHELL.RX: every terminal's, the console's included, which
+# the kernel loads off unit 0 as it comes up.
+SHELLMOD := $(API) rexmac.asm shell.asm
 
 $(BUILD)/shell.obj: $(SHELLMOD) $(ASM703)
 	@mkdir -p $(BUILD)

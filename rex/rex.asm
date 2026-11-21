@@ -51,9 +51,10 @@
 ; a Ctrl-Z stops it and hands the console back to the shell, the task
 ; keeping its place for START or ATTACH.
 ;
-; The console's shell is built in; every other terminal gets one when a
-; key is first typed at it -- shell.asm assembled again as SHELL.RX, which
-; the console's shell loads for it and makes that terminal's (SHGTY).  A
+; Every terminal's shell is a copy of SHELL.RX: the kernel loads the
+; console's into SHTCB as it comes up (SHBOOT, rexload.asm), and every
+; other terminal gets one when a key is first typed at it, which the
+; console's shell loads for it and makes that terminal's (SHGTY).  A
 ; task belongs to the terminal of the shell that started it: it prints
 ; there, and that is the console RUN gives it.
 ;
@@ -225,8 +226,8 @@
 ;   is the indexed displacement off it, and every scan is a walk of the
 ;   T.NXT links, counted or bounded by coming back around.  So a node may
 ;   live anywhere in core, and adding a task is linking a node in under
-;   MSK.  SPAWN is that doorway, and the shell's loader goes through
-;   it.  The shell does not walk the ring to find a task: STAT prints at
+;   MSK.  SPAWN is that doorway, and every task a shell loads goes
+;   through it.  The shell does not walk the ring to find a task: STAT prints at
 ;   the teletype's pace, and a task leaving the ring under it would send
 ;   the walk astray, so it and the commands that take a job number go
 ;   through the nodes where they lie.
@@ -246,11 +247,12 @@
 ;   afterwards -- the link, the argument -- lives in the caller's node
 ;   (T.KLK, T.KAR, T.KDS), and the static cells are scratch that is good
 ;   only until the processor is handed on: Q.GET and KENTER.  Routines
-;   only one task runs -- the shell's own -- need none of this.
+;   only one task runs at a time -- the loader and the rest behind the
+;   disc's claim, below -- need none of this.
 ;
 ; * THE DISC HAS ONE USER AT A TIME, and IOLOCK names it.  A task's call
 ;   comes through KENTER, which claims the disc and gives it up when the
-;   body returns; the shell's loader makes the same claim for itself.  A
+;   body returns -- K.LOAD's for the whole of a load.  A
 ;   claim that finds it taken waits in IOWT, marked waiting with a delay
 ;   of X'FFFF', which nothing else stores, and IOREL, the one way the disc
 ;   is given up, wakes every task so marked.  Everything behind the claim
@@ -338,27 +340,26 @@
 ;              the console queue's descriptor, the terminal table and the
 ;              other terminals' queues' descriptors, the nodes of the tasks
 ;              that are here from power-on, the disc -- IOTRY, KENTER, DXFER -- Q.GET,
-;              the idle task, the allocator, the node arena's two doors,
-;              and the console's shell's line and loader sector
-;   0800-      page 1: the shell (shell.asm, the next file of this deck)
-;              -- banner, prompt, commands, line buffer -- and its
-;              loader, with the sector it reads
-;   1000-6FFF  the pool, which the allocator hands out: what the shell
-;              loads and its workspaces live there.  The fence is the
-;              two words below 4000
-;   7000-77AC  the filesystem (rexfs.asm, the next file of this deck):
+;              the idle task, the allocator and the node arena's two doors
+;   0800-      page 1: the loader (rexload.asm, the next file of this
+;              deck) -- the boot, which loads the console's shell, and
+;              K.LOAD's body -- then its record reader, with the sector it
+;              reads (rexrec.asm); the rest of the page is room
+;   1000-6FFF  the pool, which the allocator hands out: what the shells
+;              load, every shell itself included, and their workspaces
+;              live there.  The fence is the two words below 4000
+;   7000-77A9  the filesystem (rexfs.asm, after rexrec.asm in the deck):
 ;              the directory's routines, the channels and the bodies of
 ;              the file calls, then the four channels and the directory
 ;              itself
-;   7800-7BDC  the swapper (rexswap.asm): its task, its table of extents
+;   7800-7BE6  the swapper (rexswap.asm): its task, its table of extents
 ;              in the swap file, and two sectors of block lists
-;   7BDD-      K.NAME's parser (rexname.asm), then the terminals'
-;              queues' rings, then the loader's record reader
-;              (rexrec.asm, the last)
+;   7BE7-7D41  K.NAME's parser (rexname.asm, the last), then the
+;              terminals' queues' rings
 ;   7E00-7FC7  the node arena
 ;
-; Build with make -C rex: asm703.py over rexmac.asm, this file, shell.asm,
-; rexfs.asm, rexswap.asm, rexname.asm and rexrec.asm, as one deck, into rex/build, with rexapi.asm, the
+; Build with make -C rex: asm703.py over rexmac.asm, this file,
+; rexload.asm, rexrec.asm, rexfs.asm, rexswap.asm and rexname.asm, as one deck, into rex/build, with rexapi.asm, the
 ; interface the modules are assembled against, and the modules beside it
 ; -- brex.asm over test/703/bcore.asm is basic.obj, the module RUN BASIC
 ; loads.  make -C rex bootdisc puts the kernel, behind boot.asm, and the
@@ -479,7 +480,8 @@ K.NAME          JMP     KNAME           ; ACR = three words: a byte cursor, a
 ; The cells, at X'20'-X'23', the block of level 8.
                 NTRY    CURT,KCONSQ
                 ORG     X'20'
-; CURT starts on the shell's node, since the kernel becomes the shell.
+; CURT starts on the console's node, whose task the kernel becomes to
+; load the console's shell into it (SHBOOT).
 CURT            WORD    SHTCB           ; the running task's node
                 WORD    0,0
 KCONSQ          WORD    QCONS           ; the console queue's descriptor address,
@@ -531,14 +533,13 @@ K.SQUSH         JMP     KSQUSH          ; ACR = a unit word -> zero, or E.: on
                                         ; over the hole in front of it.  E.CHN
                                         ; while any channel is open.
 
-; The shells' loader's record reader, at X'30'-X'31', the one entry of
-; the vector that is two words: the page selection and the jump to
-; rexrec.asm, which holds what it takes and gives.  A shell's alone, with
-; the disc claimed for the whole of a load.
-                NTRY    K.LDREC
+; The loader, at X'30': its body (LDMOD, rexload.asm) says what it takes
+; and gives.  It runs with the disc claimed for the whole of a load.
+                NTRY    K.LOAD
                 ORG     X'30'
-K.LDREC         SMB     LDREC
-                JMP     LDREC
+K.LOAD          JMP     KLOAD           ; ACR = eight words: a name, the tail's
+                                        ; byte address, the terminal, a node
+                                        ; or zero -> the node, or LE.
 
 L0PC            EQU     0               ; the level 0 block words SERV edits
 L0ST            EQU     2               ; when it returns as another task
@@ -656,6 +657,7 @@ DF.SYS          EQU     X'0200'         ; never moved, renamed or deleted
 
 ; What a file call answers when it cannot do what was asked: all minus.
                 NTRY    E.NOF,E.CHN,E.DFUL,E.FULL,E.DISC,E.NDIR,E.PROT,E.EXST,E.UNIT
+                NTRY    LE.NOF,LE.DE,LE.CK,LE.LC,LE.MX
 E.NOF           EQU     X'FFFF'         ; no such file; K.GETC's end of file
 E.CHN           EQU     X'FFFE'         ; no channel free, or not this task's, or the wrong way
 E.DFUL          EQU     X'FFFD'         ; the directory is full
@@ -666,6 +668,14 @@ E.PROT          EQU     X'FFF9'         ; a system file
 E.EXST          EQU     X'FFF8'         ; the new name is taken
 E.UNIT          EQU     X'FFF7'         ; a rename from one platter to another
 
+; And what K.LOAD answers when it cannot load: minus too.
+LE.NOF          EQU     X'FFFF'         ; no such file
+LE.DE           EQU     X'FFFE'         ; the disc said no, or it has no directory
+LE.CK           EQU     X'FFFD'         ; a record failed its checksum
+LE.LC           EQU     X'FFFC'         ; a code the loader does not take, or
+                                        ; text out of order
+LE.MX           EQU     X'FFFB'         ; no room
+
 SWAPST          EQU     X'F080'         ; the swapper's first status: global,
                                         ; and the page it starts in, X'7800'
 NARB            EQU     X'7E00'         ; the node arena: NARN nodes for what
@@ -675,13 +685,14 @@ NARID           EQU     1               ; the first one's job number
 ; ---------------------------------------------------------------- start up
                 ORG     X'40'
 
-; Connect the keyboard and start the clock, then *become* the shell: its
-; block is left blank and the first tick fills it in.  ENB before UNM
+; Connect the keyboard and start the clock, then *become* the console's
+; task, which loads the console's shell (SHBOOT): its block is left blank
+; and the first tick fills it in.  ENB before UNM
 ; because a masked signal is held where a disabled one is dropped, so a
 ; tick that comes before the UNM waits for it; one from before the ENB is
 ; dropped, which costs nothing.  A tick that lands on the two
-; instructions after the UNM parks this tail in the shell's block, which
-; is exactly right.
+; instructions after the UNM parks this tail in SHTCB's block, which is
+; exactly right.
 START           MSK
                 SGM                     ; flat addressing, everywhere, always
                 LDW     =POOLB          ; the pool: a free block below the
@@ -743,8 +754,8 @@ START           MSK
                 ENB     2
                 DOT     11,6            ; start the clock, if it was not
                 UNM
-                SMB     SHELL
-                JMP     SHELL           ; the kernel becomes the shell
+                SMB     SHBOOT
+                JMP     SHBOOT          ; the kernel becomes the console's task
 
 ; ------------------------------------------------------- level 2 service
 ; The scheduler.  Everything from ISRBEG to ISREND runs at interrupt level
@@ -1508,9 +1519,9 @@ KGLB            EQU     X'0080'         ; and a status word's global bit
 
 ; The task control nodes that are here from power-on: SH -> SW and round
 ; again, with idle off the ring and its link re-entering it, which is
-; what lets every walk start uniformly at *T.NXT.  The shell's context
-; is blank because the kernel becomes the shell and the first tick fills
-; it in.  A status is GLB (X'80') plus the entry page in the EXR field:
+; what lets every walk start uniformly at *T.NXT.  SHTCB's context is
+; blank because the kernel becomes its task and the first tick fills it
+; in.  A status is GLB (X'80') plus the entry page in the EXR field:
 ; IDLE lives in page 0, so its is plain zero; the swapper's is its own
 ; page's; SPAWN builds one for whatever the loader brings in.  A zero
 ; status word would resume a task in local mode pointed at page 0.
@@ -1526,7 +1537,7 @@ IDTCB           WORD SRUN, SHTCB,0,  0,  IDLE,  X'80', 0,  0,  'ID',0
 
 ; The disc has one user at a time, and IOLOCK says who.  Everything that
 ; starts a transfer holds it first -- a task's call through the vector,
-; the shell's loader -- so DXFER and whatever is built on it run one
+; a load among them -- so DXFER and whatever is built on it run one
 ; activation at a time and may keep their state in static cells like any
 ; other routine here, across the wait for the completion too.  IOTRY is
 ; the claim, for a caller that holds the mask: zero and the disc is the
@@ -1656,6 +1667,12 @@ KDWRIT          MSK
                 STX     KELNK
                 JSX     KENTER
                 WORD    KDWB
+
+; K.LOAD: to its body in rexload.asm.
+KLOAD           MSK
+                STX     KELNK
+                JSX     KENTER
+                WORD    LDMOD
 
 ; The file calls: each to its body in rexfs.asm.
 KLOOK           MSK
@@ -2642,24 +2659,11 @@ XB              WORD    0               ; sweep's cursor
 XTM             WORD    0               ; and its terminal
                 LPOOL                   ; what this page's code writes as literals
 
-; The console's shell's line, the loader's sector and the last of HELP's
-; lines, which page 1 has no room for.  The shell reaches them through
-; byte and word addresses only, so they may be anywhere below X'4000';
-; SHELL.RX keeps its own line and text, and shares the sector, which the
-; kernel's record reader fills (rexrec.asm).
-LBUF            RES     32              ; the line the shell is reading
-LDBUF           RES     47              ; the loader's sector
-SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. DIR 0: LISTS THEM.\r\n"
-
-; What the shell reaches inside the kernel.  shell.asm is assembled twice,
-; once here as the console's shell and once as SHELL.RX, every other
-; terminal's, which knows the kernel only through rexapi.asm as any module
-; does -- so these go out too, though they are no module's business but
-; the shell's: they are the kernel's own routines, cells and layout, with
-; nothing in front of them to keep them where they are.
-                NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY
-                NTRY    SECS,IDSECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,DXUNI,FSUNI
-                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,IOWT,IOREL,FSFND,DRD1,LRBP,LRKTXT,DWTR
-                NTRY    ALLOCW,ALLCHW,ALLOCB,ALLCHB
-
-SHMOD           EQU     0               ; shell.asm, next, as the console's shell
+; What the shell reaches inside the kernel.  SHELL.RX knows the kernel
+; only through rexapi.asm, as any module does -- so these go out too,
+; though they are no module's business but the shell's: they are the
+; kernel's own routines, cells and layout, with nothing in front of them
+; to keep them where they are.
+                NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY,KNUDGE
+                NTRY    SECS,IDSECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,SHENT
+                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,IOWT,IOREL,DWTR

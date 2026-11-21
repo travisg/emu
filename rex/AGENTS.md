@@ -23,27 +23,28 @@ depend on nothing here but the snapshot harness's REX case.
   `build/rexapi.asm`, so a change to the kernel assembles them all again.
 - **Where things are in core** is the memory map in `rex.asm`'s header.
   In short: the interrupt blocks and the kernel's vector at the bottom,
-  the kernel in page 0 from X'40', the console's shell in page 1 from
-  X'800', the pool from X'1000' to X'6FFF' with its fence at X'4000', the
-  filesystem from X'7000', the swapper, `K.NAME` and the loader's record
-  reader from X'7800', and
-  the node arena from X'7E00'.
-- **The pages are nearly full.** Page 0 has 44 words left, the console's
-  shell 1 before X'1000', where the pool begins -- its line buffer and
-  the last of HELP's lines live in page 0 for want of room -- and the top of core 7
-  in front of the node arena; `build/rex.lst` shows where each ends. Running over either
-  fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
-  `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
-  has 88 words of its one page left (see Modules).
-- **`shell.asm` is assembled twice** and a change has to work both ways.
-  In the kernel's deck (`SHMOD=0`) it is the console's shell in page 1:
-  it reads `INIT.CM`, gives the other terminals their shells and has
-  `HALT`. Behind `shellmod.asm` (`SHMOD=1`) it is the module `SHELL.RX`,
-  a copy loaded for each other terminal: it has `BYE` instead, names its
-  node and terminal only through `SHME` and `SHTM`, and reaches the
-  kernel only through the exported names. It is loaded above the fence,
-  so it compares no two byte addresses but for equal (see the pool's
-  rule below).
+  the kernel in page 0 from X'40', the loader and its record reader in
+  page 1 from X'800', the pool from X'1000' to X'6FFF' with its fence at
+  X'4000', the filesystem from X'7000', the swapper and `K.NAME` from
+  X'7800', and the node arena from X'7E00'.
+- **Room.** Page 0 has 154 words left, page 1 1,255 before X'1000',
+  where the pool begins, and the top of core 190 in front of the node
+  arena; `build/rex.lst` shows where each ends. Running over one fails the
+  build -- "assembled twice" at `rexload.asm`'s `ORG` for page 0, a `RES`
+  below zero at the end of `rexrec.asm` for page 1 or of `rexname.asm`
+  for the top of core. `SHELL.RX` has 257 words of its one page left and
+  BASIC's module 88 (see Modules).
+- **`shell.asm` is every terminal's shell,** the module `SHELL.RX`: the
+  kernel loads the console's into `SHTCB` as it comes up (`SHBOOT` in
+  `rexload.asm`), and the console's shell loads a copy for each other
+  terminal. It names its node and terminal only through `SHME` and
+  `SHTM` and reaches the kernel only through the exported names, and what
+  is the console's alone -- `INIT.CM`, giving the other terminals their
+  shells, `HALT` -- or a terminal's alone -- `BYE` -- it decides at run
+  time by whether its node is `SHTCB` (`SHCON`). It is loaded above the
+  fence, so it compares no two byte addresses but for equal (see the
+  pool's rule below). Without it on unit 0 the console says `NO SHELL.RX`
+  and the machine stops.
 - **The session** is `make -C rex test`, which builds the kernel and the
   modules and makes its own platters, so it does not need or remake
   `build/rex.img`. `EMU_BIN` names another emulator binary, the
@@ -61,8 +62,9 @@ of linked nodes, and whatever the shell loads joins them: everything that
 names a task -- the current-task cell, the printer's owner, a queue's
 waiter -- holds a node's address, a field is the indexed displacement off
 it, every scan walks the `T.NXT` links, and adding a task is linking a
-node in under `MSK`, which is what the loader does through `SPAWN`. One
-is the shell, and one the swapper, asleep until more is loaded than core
+node in under `MSK`, which is what a shell does through `SPAWN` with
+what it loads. One is the console's, whose task loads the console's
+shell into it, and one the swapper, asleep until more is loaded than core
 holds; the machine comes up quiet, with nothing else running. Tiny BASIC
 is a module behind the `brex.asm` glue, which pays bcore's wrapper debts
 with the executive's services: a workspace from the pool at entry, output
@@ -214,14 +216,14 @@ Many tasks in one kernel:
   in the caller's node rather than in cells of its own, which is `Q.GET`
   and `KENTER`.
 - **The disc has one user at a time**, named by `IOLOCK`: a task's
-  `K.DREAD` or `K.DWRIT` waits its turn in `KENTER`, and the shell's
-  loader makes the same claim, so the driver behind the claim is written
+  `K.DREAD`, `K.DWRIT` or `K.LOAD` waits its turn in `KENTER` -- a load
+  holding it throughout -- so the driver behind the claim is written
   like any single-task routine. A claim that finds it taken waits in
   `IOWT`, marked waiting with `T.DLY` at X'FFFF', and `IOREL` -- the one
   way the disc is given up -- wakes every task so marked; `KENTER` then
   hands the processor on once, so the waiter gets the disc before the
   releaser can take it again. The swapper claims
-  it like anybody, with one exception: a shell's loader holds the disc
+  it like anybody, with one exception: a task in `K.LOAD` holds the disc
   for a whole load and may be the task waiting for core, and a holder
   that is waiting for core is not using the disc, so the swapper uses it
   then without the claim -- for that one task's request only -- and wakes
@@ -233,9 +235,10 @@ Many tasks in one kernel:
 `make -C rex test` runs `run_rex_test.py` on a platter it makes in a scratch
 directory, driving the emulator over its debug port (`../tools/emudbg.py`).
 Its module doc says the same of each machine at more length. There are
-seven:
+eight:
 
-- **The main session.** Boot, `STAT`, three copies of `blip.asm` started
+- **The main session.** Boot -- the console's shell loaded off the
+  platter, above X'4000', and `BYE` refused there -- `STAT`, three copies of `blip.asm` started
   behind the prompt, each printing a mark of its own at an interval of its
   own, watched until they have interleaved and then killed; a fourth
   `LOAD`ed, which prints nothing until `START`, then `ATTACH`ed and stopped
@@ -335,6 +338,8 @@ seven:
   `1:HI`, and BASIC saves to unit 1 and runs from it; the host then reads
   both platters back, unit 0 as it was made but for the one file copied onto
   it.
+- **An eighth machine** has a platter without `SHELL.RX`: the console has
+  to say `NO SHELL.RX` and the machine stop.
 
 The main session runs `--fast-io` (the slices stay real machine time; the
 clock ignores the flag), walks the paper with a cursor so each wait finds
@@ -512,21 +517,22 @@ further in.
 
 Modules are files of type `RX`, on unit 0 unless a name says otherwise
 (`fs703.py --add`, which `make -C rex bootdisc` runs; `DIR
-0:` lists them). The shell's `LOAD` finds
-one by name, runs its text into a block from the kernel's pool -- first fit,
+0:` lists them). The kernel's loader, `K.LOAD` (`rexload.asm`), finds
+one by name, runs its text into a block from the pool -- first fit,
 word-granular, with the page containment a module's page-offset M fields
-need -- gives it a task node and links it into the ring, stopped; `START`
-does the same and lets it run, and `RUN` hands it the console until it
-exits. The text comes off the disc through the kernel's record reader,
-`K.LDREC` (`rexrec.asm`), one copy for every shell, since a loader holds
-the disc for the whole of a load: the first record on its own, so that
+need -- and gives it a task node; the shell's `LOAD` then links it into
+the ring stopped, `START` does the same and lets it run, and `RUN` hands
+it the console until it exits. A load holds the disc throughout, so one
+copy of the loader serves every shell, and the console's own shell is
+the first thing it loads. The text comes off the disc through its record
+reader (`rexrec.asm`): the first record on its own, so that
 its `SIZE` codes take the module's blocks first, then the rest of the
 file in one transfer into a block the pool lends it for the load --
 anywhere, never waited for (`ALLOCT`), half as big while that fails, and
 a sector at a time only if there is no block at all. That block may lie
-above word X'4000', so neither the reader nor the shell's walk of a
-record compares a byte address: what is left of a record is counted. The
-shell keeps the placing and the relocation. A task ends through
+above word X'4000', so neither the reader nor the loader's walk of a
+record compares a byte address: what is left of a record is counted. A
+task ends through
 `K.EXIT`, which gives back every block in the pool tagged with its node,
 the module included, and then the node; `MEM` prints the free words,
 below the fence and above it, and reads the same before and after. What followed the module's name on

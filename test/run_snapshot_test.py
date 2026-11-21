@@ -334,6 +334,7 @@ def rex(workdir, log):
     os.makedirs(os.path.join(workdir, 'disks'), exist_ok=True)
     subprocess.run([sys.executable, os.path.join(ROOT, 'rex', 'fs703.py'),
                     os.path.join(workdir, 'disks', 'ray703-disc0.img'),
+                    '--add-high', 'SHELL', os.path.join(build, 'shell.obj'),
                     '--add-high', 'BLIP', os.path.join(build, 'blip.obj')], check=True, stdout=log)
     with cwd(workdir):
         emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', os.path.join(build, 'rex.bin'), '--no-throttle'], log=log)

@@ -1,21 +1,19 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; REX's shell, assembled twice.  In the kernel's deck, the file after
-; rex.asm, it is the console's shell in page 1: the kernel becomes it at
-; start-up, its node is SHTCB, and it reads INIT.CM.  Assembled as a
-; module of its own after shellmod.asm (SHMOD=1) it is SHELL.RX, which the
-; console's shell loads for each of the other terminals the first time a
-; key is typed there (SHGTY): a copy for each, since every routine here
-; has one link slot and keeps its work in cells of its own.  So nothing
-; here names the shell's node or its terminal but through SHME and SHTM,
-; which the module fills in from its node as it starts, and whatever it
-; reaches in the kernel it reaches as a module does, through the names
-; the kernel exports.  What only the console's shell does -- INIT.CM,
-; giving the other terminals their shells, HALT -- is under SHMOD=0, and
-; what only a terminal's does -- BYE -- under SHMOD=1.  SHELL.RX loads
-; above word X'4000', where its byte addresses are negative, so nothing
-; here compares two byte addresses but for equal: a buffer is walked to
-; its exact end or to a zero, and a record's bytes are counted.
+; REX's shell, SHELL.RX: a copy for each terminal, since every routine
+; here has one link slot and keeps its work in cells of its own.  The
+; kernel loads the console's into SHTCB as it comes up (SHBOOT,
+; rexload.asm); the console's shell loads one for each of the other
+; terminals the first time a key is typed there (SHGTY).  So nothing here
+; names the shell's node or its terminal but through SHME and SHTM, which
+; it fills in from its node as it starts, and whatever it reaches in the
+; kernel it reaches as a module does, through the names the kernel
+; exports.  What only the console's shell does -- INIT.CM, giving the
+; other terminals their shells, HALT -- and what only a terminal's does
+; -- BYE -- it decides as it goes, by whether its node is SHTCB (SHCON).
+; It loads above word X'4000', where its byte addresses are negative, so
+; nothing here compares two byte addresses but for equal: a buffer is
+; walked to its exact end or to a zero.
 ;
 ; ---------------------------------------------------------------- the shell
 ; Prints the banner and then reads a line and runs it, forever.
@@ -23,36 +21,34 @@
 ; time like any other task's, so a command's output and what a task
 ; behind the prompt prints interleave on the printer exactly as two users'
 ; output did.
-                TRUE    SHMOD=0
-                ORG     X'800'
-
-; The console's: the only task running when the machine comes up.
-SHELL           LDW     =SHBAN
+;
+; Its node and its terminal, then the banner -- the console's, then
+; INIT.CM if the disc has one, read before the keyboard is; a terminal's,
+; which says which.
+SHELL           SMB     CURT
+                LDX     CURT
+                STX     SHME
+                LDW     *T.TTY
+                STW     SHTM
+                JSX     SHCON
+                JNZ     .T              ; the console's?
+                LDW     =SHBAN
                 JSX     SHMSG
                 LDW     =SHHNT
                 JSX     SHMSG
-                LDW     =SHKIN0         ; INIT.CM, if the disc has one, is
-                STW     SHFN            ; read before the keyboard is
+                LDW     =SHKIN0         ; INIT.CM, on unit 0, the system's
+                STW     SHFN            ; platter
                 LDW     ='IT'
                 STW     SHFN+1
                 CLR
                 STW     SHFN+2
                 LDW     ='CM'
                 STW     SHFN+3
-                CLR                     ; on unit 0, the system's platter
+                CLR
                 STW     SHFN+4
                 JSX     SHCMOP
-                ENDC
-
-                TRUE    SHMOD=1
-; A terminal's: its node and its terminal from the node the console's
-; shell spawned it in, then the banner, which says which terminal.
-SHELL           SMB     CURT
-                LDX     CURT
-                STX     SHME
-                LDW     *T.TTY
-                STW     SHTM
-                LDW     =SHBAN
+                JMP     SHLOOP
+.T              LDW     =SHBNT
                 JSX     SHMSG
                 LDX     SHTM
                 LDW     *TM.NO
@@ -60,7 +56,6 @@ SHELL           SMB     CURT
                 JSX     SHNL
                 LDW     =SHHNT
                 JSX     SHMSG
-                ENDC
 
 SHLOOP          CLR                     ; a kill aimed at nobody is forgotten
                 LDX     SHTM
@@ -156,8 +151,12 @@ SHCMCL          SUBR
 ; ---------------------------------------------------------------- commands
 ; HELP: the commands that are in the shell, and a word on the ones that
 ; are not.
-SHHELP          LDW     =SHHL1
-                JSX     SHMSG
+SHHELP          JSX     SHCON
+                JNZ     .T
+                LDW     =SHHL1
+                JMP     .P
+.T              LDW     =SHHL1T
+.P              JSX     SHMSG
                 LDW     =SHHL2
                 JSX     SHMSG
                 LDW     =SHHL3
@@ -558,23 +557,21 @@ SHBWT           MSK
                 JMP     .D
 .B              LDW     *TM.KIL
                 JNZ     .K              ; a second Ctrl-C, or a Ctrl-Z?
-                TRUE    SHMOD=0
+                JSX     SHCON
+                JNZ     .W              ; the console's shell:
                 SMB     GETTY
                 LDW     GETTY
                 JNZ     .Y              ; a terminal waiting for a shell?
-                ENDC
-                LDW     =SWAI
+.W              LDW     =SWAI
                 LDX     SHME
                 STW     *T.STA
                 CALL    K.SWTCH
                 JMP     SHBWT
 .D              UNM
                 JMP     SHLOOP
-                TRUE    SHMOD=0
 .Y              UNM
                 JSX     SHGTY
                 JMP     SHBWT
-                ENDC
 
 ; Two Ctrl-Cs and the program took neither: it is not listening, and the
 ; task that has the console is ended from here.  A Ctrl-Z (2): it is
@@ -720,15 +717,15 @@ SHLD0           CLR
                 LDW     =SHKRX
                 STW     SHDTY
                 JSX     SHNAME          ; the name
-SHLD1           JSX     SHIOC           ; the disc, for the whole load
-                JSX     LDMOD
-                STW     SHW2
-                JSX     SHIOR
-                LDW     SHW2
+SHLD1           JSX     SHSKB           ; the rest of the line its tail
+                LDW     SHCUR
+                STW     SHLDA
+                LDW     SHTM            ; and this terminal its
+                STW     SHLDT
+                JSX     SHLDM
                 JNZ     .D2             ; a node, or an error already named?
                 JMP     SHLOOP
-.D2             LDW     LDNODE
-                STW     SHKN
+.D2             STW     SHKN
                 LDW     LDCON
                 JNZ     .DRN
                 MSK                     ; SPAWN unmasks
@@ -749,7 +746,6 @@ SHLD1           JSX     SHIOC           ; the disc, for the whole load
                 CALL    SPAWN
                 JMP     SHBWT
 
-                TRUE    SHMOD=0
 ; Give every terminal that has asked for one a shell.  SERV raises
 ; GETTY, and the terminal's TM.REQ, when a key is typed at a terminal
 ; that has none; this loads SHELL.RX as START would load a module, gives
@@ -785,23 +781,17 @@ SHGTY           SUBR
                 STW     SHFN+3
                 CLR
                 STW     SHFN+4          ; unit 0's
-                STW     LDCON           ; given no console: it is the
-                STW     SHIMPL          ; terminal's shell instead
-                LDW     =SHKZB          ; and no command tail
-                STW     SHCUR
-                JSX     SHIOC
-                JSX     LDMOD
-                STW     SHW2
-                JSX     SHIOR
-                LDW     SHW2
-                JNZ     .S              ; loaded?  if not, the loader has
-                JMP     .X              ; said why
-.S              LDX     LDNODE
-                LDW     SHGT
-                STW     *T.TTY
+                STW     SHIMPL
+                STW     SHLDA           ; no command tail
+                LDW     SHGT            ; the terminal it is for
+                STW     SHLDT
+                JSX     SHLDM
+                JNZ     .S              ; loaded?  if not, why has been said
+                JMP     .X
+.S              STW     SHW2
                 MSK                     ; SPAWN unmasks
                 LDX     SHGT
-                LDW     LDNODE
+                LDW     SHW2
                 STW     *TM.SH
                 CAX
                 CLR
@@ -816,438 +806,52 @@ SHGTY           SUBR
                 JEQ     .D              ; the last terminal?
                 JMP     .T
 .D              EXIT    SHGTY
-                ENDC
 
-                TRUE    SHMOD=1
 ; BYE: this terminal's shell is over.  The terminal has none until a key
-; is typed at it again.
-SHBYE           SMB     K.EXIT
-                JMP     K.EXIT
-
-; HALT is the console's: stopping every task would stop this one too.
-SHNHLT          LDW     =SHNHM
+; is typed at it again -- but the console is never without one.
+SHBYE           JSX     SHCON
+                JNZ     .B              ; a terminal's?
+                LDW     =SHNBYM
                 JSX     SHMSG
                 JMP     SHLOOP
-                ENDC
+.B              SMB     K.EXIT
+                JMP     K.EXIT
 
-; ---------------------------------------------------------------- the loader
-; Load the module SHFN names: find it in the directory and run its
-; object text into a block from the pool, a record at a time from the
-; kernel's reader (K.LDREC, rexrec.asm), which reads them off the disc.  The
-; text is the 1968 relocating loader's (tools/asm703.py's docstring lists
-; the codes, tools/reload703.py is the reference reading of them): the
-; SIZE code comes first and sizes the block, whose address is the
-; relocation base; each repeatable code carries a run of words that are
-; stored as they are, or with the base added into the 11-bit M field,
-; the whole word, or twice for a byte address; a page selection is built
-; here from the final address; END names the entry, which gets the base
-; too.  A module of several segments has a SIZE code and a block for each,
-; up to LDKSEG of them, and two codes to say whose text is being stored
-; and whose base added.  Returns the node, with its entry, name and console flag filled
-; in and each block tagged as the task's own, ready for SPAWN -- or
-; zero, an error having been named: no such file, the disc's status or
-; no directory on it (DE), a record failing its checksum (CK), a code
-; this loader does not take or text out of order (LC), no room (MX).  An
-; error path jumps straight out of whatever routine it was in, as
-; RELOADB's does.  The caller has claimed the disc.
-LDMOD           SUBR
-                LDW     SHFN            ; a name at all?
-                JNZ     .M1
-                JMP     LDNOF
-.M1             CLR
-                STW     LDNSG
-                STW     LDNODE
-                STW     LDBASE
-                STW     LDPTR
-                STW     LDLIM
+; Zero if this is the console's shell.
+SHCON           SUBR
+                LDW     SHME
+                SUB     =SHTCB
+                EXIT    SHCON
+
+; K.LOAD of the module SHFN names, the command tail SHLDA and the
+; terminal SHLDT after it: the node -- or zero, the failure named.  A
+; word that was neither a command nor a program is WHAT.
+SHLDM           SUBR
                 LDW     =SHFN
-                CALL    FSFND
-                JNZ     .M2             ; no such file?
-                JMP     LDNOF
-.M2             JMI     LDEDE           ; an error is minus
-                SMB     FSUNI           ; the unit it was found on
-                LDX     FSUNI
-                STX     LDUNI
-                CAX
-                LDW     *DE.SEC         ; where it starts...
-                STW     LDSEC
-                LDW     *DE.CNT         ; ...and how many sectors
-                STW     LDNSEC
-                LDW     *DE.FLG         ; and whether it may load high
-                AND     =DF.HIGH
-                STW     LDHIGH
-LDFND           MSK                     ; a node from the arena
-                CALL    NALLOC
-                UNM
-                JNZ     .F1
-                JMP     LDEMX
-.F1             STW     LDNODE
-                LDW     =LDUNI          ; the file begun, its first record
-                JSX     LDNREC          ; read
-
-; The text: a code byte, then what it says follows.  The byte arrives
-; zero-extended, so its lead bit is tested against X'80', not the sign.
-LDPROC          JSX     LDGETB
-                STW     LDCODE
-                CMW     =X'0080'
-                JGE     .RPT            ; below X'80': a control code
-                JMP     .CTL
-.RPT            SRL     4               ; the class: 8n..Cn
-                SUB     =8
-                CMW     =4
-                JLE     .R1
-                JMP     LDELC
-.R1             ADD     =.RTAB          ; the class's handler, once a run
+                CALL    K.LOAD
+                JMI     .E
+                EXIT    SHLDM
+.E              STW     SHW2
+                CMW     =LE.NOF
+                JNE     .M
+                LDW     SHIMPL
+                JNZ     .W
+.M              CLR                     ; LE.n is minus n: the nth message
+                SUB     SHW2
+                ADD     =SHLET-1
                 CAX
                 LDW     *0
-                STW     LDCLS
-                LDW     LDCODE
-                AND     =X'000F'
-                STW     LDREP           ; n: n+1 words follow
-.RGO            JSX     LDGETW
-                LDX     LDCLS
-                JMP     *0
-.R11            JSX     LDRL11          ; RELW11
-                JMP     .RST
-.RW15           ADD     LDBASE
-                JMP     .RST
-.RB16           ADD     LDBASE          ; a byte address: the base twice
-                ADD     LDBASE
-                JMP     .RST
-.RB11           JSX     LDRL11          ; RELO11 twice, for the same reason
-                JSX     LDRL11
-.RST            JSX     LDSTOR          ; ABSO comes straight here
-                LDW     LDREP
-                JNZ     .RMO            ; the last of the run?
-                JMP     LDPROC
-.RMO            SUB     =1
-                STW     LDREP
-                JMP     .RGO
-
-; The control codes, through a table of where each goes.
-.CTL            LDW     LDCODE
-                CMW     =SHK0C
-                JGE     LDELC           ; past the table?
-                ADD     =LDCTAB
-                CAX
-                LDW     *0
-                CAX
-                JMP     *0
-.RTAB           WORD    .R11,.RW15,.RB16,.RB11,.RST     ; the classes, 8n..Cn
-LDCTAB          WORD    LDPROC,LDNAME,LDELC,LDSMB,LDILOC,LDELC
-                WORD    LDEND,LDELC,LDNAME,LDSIZW,LDSIZW,LDSIZB
-                WORD    LDSEGS,LDSEGR
-
-LDNAME          JSX     LDGETW          ; a name: four words, not wanted
-                JSX     LDGETW
-                JSX     LDGETW
-                JSX     LDGETW
-                JMP     LDPROC
-LDSMB           JSX     LDGETW          ; SMB: the instruction, from the
-                ADD     LDBASE          ; final address -- RELOADB's own
-                SRL     10              ; ADD BASE / SRL 10 / ORI X'80'
-                ORI     =X'0080'
-                JSX     LDSTOR
-                JMP     LDPROC
-LDILOC          JSX     LDGETW          ; ILOC: that many zeros
-                STW     LDCNT
-.L1             LDW     LDCNT
-                JNZ     .L2
-                JMP     LDPROC
-.L2             SUB     =1
-                STW     LDCNT
-                CLR
-                JSX     LDSTOR
-                JMP     .L1
-LDSIZW          LDW     =SHALW          ; SIZE: the block, from the allocator
-                JMP     LDSIZ           ; entry the code names -- or the one
-LDSIZB          LDW     =SHALB          ; after it in the table, its twin
-LDSIZ           STW     LDALE           ; for a module that may load high
-                LDW     LDHIGH
-                JNZ     .SIZH
-                JMP     .SIZG
-.SIZH           LDW     LDALE
-                ADD     =1
-                STW     LDALE
-.SIZG           LDX     LDALE
-                LDW     *0
-                STW     LDALE
-                LDW     LDNSG           ; one more than the table holds?
-                CMW     =LDKSEG
-                JGE     LDELC
-                JSX     LDGETW
-                STW     LDSIZE
-                LDX     LDALE
-                JSX     *0
-                JNZ     .S1
-                JMP     LDEMX
-.S1             STW     LDW1            ; the segment's block into the table,
-                LDW     LDNSG           ; and its size LDKSEG further on
-                ADD     =LDSGB
-                CAX
-                LDW     LDW1
-                STW     *0
-                LDW     LDSIZE
-                STW     *LDKSEG
-                LDW     LDNSG
-                ADD     =1
-                STW     LDNSG
-                SUB     =1
-                JNZ     LDPROC          ; the first is where the text begins
-                JMP     LDSEGG
-
-; The two codes a module of several segments has.  0C: the text from
-; here on is this segment's, stored from its first word and relocated by
-; its base.  0D: the words from here on hold addresses in this segment,
-; and take its base instead.
-LDSEGS          JSX     LDGETW
-LDSEGG          JSX     LDSEGB
-                STW     LDBASE
-                STW     LDPTR
-                LDX     LDW1
-                ADD     *LDKSEG
-                STW     LDLIM
-                JMP     LDPROC
-LDSEGR          JSX     LDGETW
-                JSX     LDSEGB
-                STW     LDBASE
-                JMP     LDPROC
-
-; The block of the segment ACR numbers, LDW1 left addressing its place
-; in the table.
-LDSEGB          SUBR
-                JMI     LDELC           ; one the text gave a SIZE for?
-                CMW     LDNSG
-                JGE     LDELC
-                ADD     =LDSGB
-                STW     LDW1
-                CAX
-                LDW     *0
-                EXIT    LDSEGB
-LDEND           JSX     LDGETW          ; END: the entry, relocated
-                ADD     LDBASE
-                STW     LDEXEC
-                LDW     LDNSG
-                JNZ     .DONE           ; without a SIZE first?
-                JMP     LDELC
-
-; Loaded: the reader's block given back, the node filled, and each
-; segment's block tagged as the new task's own, so that its exit finds
-; them.
-.DONE           LDW     =1
-                CALL    K.LDREC
-                LDX     LDNODE
-                LDW     LDEXEC
-                STW     *T.PCR
-                LDW     SHFN            ; the name's first two characters
-                STW     *T.NAM
-                LDW     LDCON
-                STW     *T.CON
-                LDW     SHTM            ; and the shell's terminal is its
-                STW     *T.TTY
-                LDW     LDNODE
-                ORI     =X'8000'
-                STW     LDTAG
-                LDW     LDNSG
-                STW     LDW1
-.TG             LDW     LDW1            ; the last segment first
-                ADD     =LDSGB-1
-                CAX
-                LDW     *0
-                SUB     =1
-                CAX
-                LDW     LDTAG
-                STW     *0
-                LDW     LDW1
-                SUB     =1
-                STW     LDW1
-                JNZ     .TG
-
-; The command tail: what is left of the line past the name, blanks
-; skipped, in a block of the task's own with a zero after it.  T.ARG
-; stays zero when there is nothing.
-                JSX     SHSKB
-                LDW     SHCUR
-                STW     LDTP
-.TL             LDX     LDTP
-                CLR
-                LDB     *0
-                JNZ     .TN
-                JMP     .TE
-.TN             LDW     LDTP
-                ADD     =1
-                STW     LDTP
-                JMP     .TL
-.TE             LDW     LDTP
-                SUB     SHCUR
-                JNZ     .TA             ; anything?
-                JMP     .TX
-.TA             ADD     =2              ; its bytes and the zero, in words
-                SRL     1
-                CALL    K.ALLOC
-                JNZ     .TB
-                JMP     LDEMX
-.TB             STW     LDARG
-                SUB     =1
-                CAX
-                LDW     LDTAG
-                STW     *0
-                LDW     LDARG
-                SLL     1
-                STW     LDTP
-.TC             LDX     SHCUR
-                CLR
-                LDB     *0
-                STW     LDW1
-                LDX     LDTP
-                STB     *0
-                LDW     SHCUR
-                ADD     =1
-                STW     SHCUR
-                LDW     LDTP
-                ADD     =1
-                STW     LDTP
-                LDW     LDW1
-                JNZ     .TC             ; the zero went across too
-                LDX     LDNODE
-                LDW     LDARG
-                STW     *T.ARG
-.TX             LDW     LDNODE
-                EXIT    LDMOD
-
-LDNOF           LDW     SHIMPL          ; a word that was neither a command
-                JNZ     .W              ; nor a program
-                LDW     =SHNOF
-                JMP     LDERR
+                JMP     .P
 .W              LDW     =SHWHT
-                JMP     LDERR
-LDEDE           LDW     =SHEDE
-                JMP     LDERR
-LDECK           LDW     =SHECK
-                JMP     LDERR
-LDELC           LDW     =SHELC
-                JMP     LDERR
-LDEMX           LDW     =SHEMX
-LDERR           JSX     SHMSG           ; name it, and give back what was taken:
-                LDW     =1              ; the reader's block,
-                CALL    K.LDREC
-.R0             LDW     LDNSG           ; each segment that got a block
-                JNZ     .R1
-                JMP     .R2
-.R1             SUB     =1
-                STW     LDNSG
-                ADD     =LDSGB
-                CAX
-                LDW     *0
-                CALL    K.FREE
-                JMP     .R0
-.R2             LDW     LDNODE
-                JNZ     .R3
-                JMP     .R4
-.R3             MSK
-                CALL    NFREE
-                UNM
-.R4             CLR
-                EXIT    LDMOD
-
-; RELO11: the base added into the M field, the opcode and index bit kept.
-LDRL11          SUBR
-                STW     LDW3
-                ADD     LDBASE
-                AND     =X'07FF'
-                STW     LDW4
-                LDW     LDW3
-                AND     =X'F800'
-                ORI     LDW4
-                EXIT    LDRL11
-
-; Store the next word of the module, inside the block the SIZE declared.
-LDSTOR          SUBR
-                STW     LDW3
-                LDW     LDBASE
-                JNZ     .T1             ; text before the SIZE?
-                JMP     LDELC
-.T1             LDW     LDPTR
-                CMW     LDLIM
-                JGE     LDEMX           ; room?
-                CAX
-                LDW     LDW3
-                STW     *0
-                LDW     LDPTR
-                ADD     =1
-                STW     LDPTR
-                EXIT    LDSTOR
-
-; A word of text, high byte first, and a byte: from the record the
-; kernel's reader last handed over, which is LDLFT bytes from LDBP on --
-; counted, not compared, since it may lie above word X'4000' -- and the
-; next asked for when it runs out.  Both bytes of a word at once while
-; the record has them.
-LDGETW          SUBR
-                LDW     LDLFT
-                CMW     =2
-                JLT     .SL             ; both in this record?
-                LDX     LDBP
+.P              JSX     SHMSG
                 CLR
-                LDB     *0
-                SLL     8
-                LDB     *1              ; LDB fills the low half alone
-                STW     LDW2
-                LDW     LDBP
-                ADD     =2
-                STW     LDBP
-                LDW     LDLFT
-                SUB     =2
-                STW     LDLFT
-                LDW     LDW2
-                EXIT    LDGETW
-.SL             JSX     LDGETB
-                SLL     8
-                STW     LDW2
-                JSX     LDGETB
-                ORI     LDW2
-                EXIT    LDGETW
-
-LDGETB          SUBR
-                LDW     LDLFT
-                JNZ     .B              ; anything left of the record?
-                JSX     LDNREC          ; ACR zero: the next
-.B              LDW     LDLFT
-                SUB     =1
-                STW     LDLFT
-                LDX     LDBP
-                CLR
-                LDB     *0
-                STW     LDBV
-                LDW     LDBP
-                ADD     =1
-                STW     LDBP
-                LDW     LDBV
-                EXIT    LDGETB
-
-; The next record from the kernel's reader -- ACR zero -- or ACR the
-; address of the file's unit, first sector and count, to begin it: its
-; text then from LDBP on.  A record failing its checksum (CK), the file
-; running out first (LC) or the disc saying no (DE) is an error.
-LDNREC          SUBR
-                CALL    K.LDREC
-                JNZ     .E
-                SMB     LRBP
-                LDW     LRBP
-                STW     LDBP
-                LDW     =LRKTXT
-                STW     LDLFT
-                EXIT    LDNREC
-.E              JMI     LDEDE
-                CMW     =1
-                JEQ     LDECK
-                JMP     LDELC
+                EXIT    SHLDM
 
 ; The disc for the shell, and the disc given up: the claim every user of
 ; DXFER makes, waiting in IOWT until it succeeds, and IOREL, which wakes
 ; whoever waited.  A task's call through the vector makes it in KENTER;
-; this is the shell's own, for the loader and the directory's readers,
-; which read the disc from the shell's task.
+; this is the shell's own, for STOP, KILL, Ctrl-Z and HALT, which want
+; no task inside a transfer while they act.
 SHIOC           SUBR
 .L              MSK
                 CALL    IOTRY
@@ -1298,13 +902,18 @@ SHMEM           MSK
                 JSX     SHMSG
                 JMP     SHLOOP
 
-                TRUE    SHMOD=0
-; Shut the machine down.  The disc first, and kept: with it claimed here
-; no task is inside a transfer.  Then every loaded task is stopped, so
+; Shut the machine down -- the console's alone: on another terminal it
+; would stop that terminal's shell with everything else.  The disc
+; first, and kept: with it claimed here no task is inside a transfer.  Then every loaded task is stopped, so
 ; it deposits nothing more, and once their mailboxes are empty and the
 ; printer is idle nothing of theirs can appear inside the down-message.
 ; Each pass stops them over again, for one that something woke.
-SHHALT          JSX     SHIOC
+SHHALT          JSX     SHCON
+                JZ      .H              ; the console's?
+                LDW     =SHNHM
+                JSX     SHMSG
+                JMP     SHLOOP
+.H              JSX     SHIOC
 SHHDR           MSK
                 CLR
                 STW     SHW2            ; their mailboxes, ORed up
@@ -1349,7 +958,6 @@ SHHD0           LDX     SHTO
                 JPL     .DW
                 MSK                     ; the clock keeps the time
                 HLT
-                ENDC
 
 ; ---------------------------------------------------------------- parsing
 ; Step SHCUR over blanks.
@@ -1532,24 +1140,20 @@ SHGETL          SUBR
                 STW     SHLFF
 .L              LDW     SHCMCH
                 JNZ     .LF             ; a command file open?
-                TRUE    SHMOD=0
+                JSX     SHCON
+                JNZ     .LQ             ; the console's shell:
                 MSK                     ; a terminal waiting for a shell?
                 SMB     GETTY           ; Looked at in the same masked
                 LDW     GETTY           ; window as Q.GET's look at the
                 JNZ     .LG             ; queue, so that SERV either sees
-                ENDC                    ; this shell as the queue's waiter
-                LDW     =QCONS          ; and nudges it, or this sees GETTY
-                CALL    K.QGET
-                TRUE    SHMOD=0
+.LQ             LDW     =QCONS          ; this shell as the queue's waiter
+                CALL    K.QGET          ; and nudges it, or this sees GETTY
                 CMW     =KNUDGE
                 JEQ     .LH             ; the nudge SERV gave the queue?
-                ENDC
                 JMP     .LC
-                TRUE    SHMOD=0
 .LG             UNM
 .LH             JSX     SHGTY
                 JMP     .L
-                ENDC
 
 ; From the file: a character through its channel, given bit 7 in case
 ; the file came from a host that leaves it off.  A carriage return ends
@@ -1634,11 +1238,7 @@ SHGETL          SUBR
 
 ; ---------------------------------------------------------------- shell data
 
-                TRUE    SHMOD=0
 SHGT            WORD    0               ; the terminal SHGTY is serving
-SHZW            WORD    0               ; a zero byte, for no command tail
-SHKZB           EQU     SHZW*2
-                ENDC
 SHTM            WORD    TMT             ; the shell's terminal
 SHME            WORD    SHTCB           ; and its own node
 SHCUR           WORD    0               ; the cursor into the line, a byte
@@ -1653,7 +1253,10 @@ STOK0           WORD    0               ; the command word, four characters
 STOK1           WORD    0
 STKN            WORD    0               ; how many of them are still wanted
 SHFN            WORD    0,0,0,0,0       ; a file's name and type, as SHNAME leaves
-                                        ; them, and the mode K.OPEN wants after
+                                        ; them, and the mode K.OPEN wants after;
+SHLDA           WORD    0               ; and for K.LOAD, the command tail,
+SHLDT           WORD    0               ; the terminal,
+                WORD    0               ; and no node: one from the arena
 SHDTY           WORD    0               ; the type a name without one is given
 SHIMPL          WORD    0               ; the name was the command word itself
 SHCMCH          WORD    0               ; the command file's channel; zero: none
@@ -1661,41 +1264,13 @@ SHLFF           WORD    0               ; this line came from it
 SHKN            WORD    0               ; the node a job number named
 SHNV            WORD    0               ; the number
 SHSS            WORD    0               ; STAT's one reading of a state
-LDARG           WORD    0               ; the command tail's block
-LDHIGH          WORD    0               ; nonzero: the module may load high
-LDTP            WORD    0               ; and a byte pointer over the tail
 SHNB            WORD    0,0,SHFN        ; SHNAME's three words for K.NAME
 SHW2            WORD    0               ; scratch
 SHW2P           WORD    0               ; SHPW2's, which SHPUTC must not touch
 SHMTOT          WORD    0               ; MEM's running totals, below the
 SHMHI           WORD    0               ; fence and above it
-LDCON           WORD    0               ; the loader's: RUN (1), or not (0)
+LDCON           WORD    0               ; RUN (1), or not (0),
 LDSTA           WORD    0               ; and the state LOAD or START gives
-LDKSEG          EQU     4               ; the segments a module may have
-LDNSG           WORD    0               ; how many segments have a block,
-LDSGB           RES     LDKSEG+LDKSEG   ; each one's block and, LDKSEG on, its size
-LDNODE          WORD    0
-LDBASE          WORD    0               ; the relocation base: the block
-LDPTR           WORD    0               ; where the next word goes, and the limit
-LDLIM           WORD    0
-LDSIZE          WORD    0               ; the SIZE code's word
-LDEXEC          WORD    0               ; the entry
-LDUNI           WORD    0               ; the unit the module is on, its first
-LDSEC           WORD    0               ; sector and how many it has: in this
-LDNSEC          WORD    0               ; order, for K.LDREC
-LDBP            WORD    0               ; the byte pointer into the record,
-LDLFT           WORD    0               ; the bytes of it left,
-LDBV            WORD    0               ; and the byte it fetched
-LDCODE          WORD    0               ; the code, its class's handler and its count
-LDCLS           WORD    0
-LDREP           WORD    0
-LDCNT           WORD    0               ; ILOC's count
-LDALE           WORD    0               ; the allocator entry the SIZE code names
-LDTAG           WORD    0               ; the owner tag for the task's blocks
-LDW1            WORD    0               ; scratch
-LDW2            WORD    0
-LDW3            WORD    0
-LDW4            WORD    0
 SHSP            WORD    0               ; SHPRT's cursor and limit, bytes
 SHSE            WORD    0
 SHV             WORD    0               ; SHDEC's running value...
@@ -1704,15 +1279,12 @@ SHDB            RES     3               ; six digits, filled backwards
                 LPOOL                   ; what this page's code writes as literals
 
 SHKIN0          EQU     'IN'            ; INIT, as SHNAME leaves a name
-SHK0C           EQU     14              ; the control codes, 0..D
 SHKRX           EQU     'RX'            ; a module's type
 SHKUPM          EQU     X'FFDF'         ; folds a letter to upper case
 SHKLBB          EQU     LBUF*2          ; the line, and the last byte its
 SHKLBE          EQU     LBUF*2+62       ; zero terminator may need
 SHKDBE          EQU     SHDB*2+5        ; the last byte of the digit buffer
-SHALW           WORD    ALLOCW,ALLCHW   ; the allocator's page entries, for an
-SHALB           WORD    ALLOCB,ALLCHB   ; indexed JSX: each with its twin above
-                                        ; the fence after it
+SHLET           WORD    SHNOF,SHEDE,SHECK,SHELC,SHEMX   ; what LE.NOF..LE.MX say
 
 ; Four characters a state, indexed by the state doubled.  GONE is a node
 ; that went back to the arena while its line was being printed, and TTY
@@ -1726,9 +1298,7 @@ SHWKBD          WORD    ' K','BD'
 SHCONW          WORD    ' C','ON'       ; the console's holder,
 SHOUTW          WORD    ' O','UT'       ; and a task out on the disc
 
-                TRUE    SHMOD=1         ; the console's is in page 0 (rex.asm)
 LBUF            RES     32              ; the line the shell is reading
-                ENDC
 
 ; The commands: four characters of name, packed as SHTOK packs a word --
 ; a short one lands in the second word, zero-filled above -- then where
@@ -1748,33 +1318,21 @@ SHTAB           WORD    'HE','LP',SHHELP
                 WORD    'M','EM',SHMEM
                 WORD    'LO','AD',SHLOAD
                 WORD    'R','UN',SHRUN
-                TRUE    SHMOD=0
                 WORD    'HA','LT',SHHALT
-                ENDC
-                TRUE    SHMOD=1
-                WORD    'HA','LT',SHNHLT
                 WORD    'B','YE',SHBYE
-                ENDC
                 WORD    0,0,0
 
 
-                TRUE    SHMOD=0
 SHBAN           MSG     "REX 703 UP\r\n"
-                ENDC
-                TRUE    SHMOD=1
-SHBAN           MSG     "REX 703 TERMINAL "
+SHBNT           MSG     "REX 703 TERMINAL "
 SHNHM           MSG     "HALT IS THE CONSOLE'S\r\n"
-                ENDC
+SHNBYM          MSG     "BYE IS A TERMINAL'S\r\n"
 SHTTY           MSG     " T"
 SHHNT           MSG     "TYPE HELP FOR THE COMMANDS\r\n"
 SHPRM           MSG     "REX>  "
 SHWHT           MSG     "WHAT\r\n"
-                TRUE    SHMOD=0
 SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME ECHO MEM RUN LOAD START HALT\r\n"
-                ENDC
-                TRUE    SHMOD=1
-SHHL1           MSG     "BUILT IN: HELP STAT UPTIME TIME ECHO MEM RUN LOAD START BYE \r\n"
-                ENDC
+SHHL1T          MSG     "BUILT IN: HELP STAT UPTIME TIME ECHO MEM RUN LOAD START BYE \r\n"
 SHHL2           MSG     "STOP, START, ATTACH AND KILL TAKE A JOB NUMBER; CTRL-Z STOPS A RUN.\r\n@NAME RUNS A FILE OF COMMANDS.\r\n"
 SHFRE           MSG     "FREE "
 SHNOF           MSG     "NO SUCH FILE\r\n"
@@ -1795,15 +1353,7 @@ SHNOT           MSG     "NO SUCH TASK\r\n"
 SHKIL           MSG     "KILLED\r\n"
 SHJOBM          MSG     "JOB "
 SHSTP           MSG     " STOPPED\r\n"
-                TRUE    SHMOD=1         ; the console's is in page 0 (rex.asm)
 SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. DIR 0: LISTS THEM.\r\n"
-                ENDC
 SHSTH           MSG     "JOB NM STATE TERM\r\n"
 
-                TRUE    SHMOD=0         ; the rest of page 1, which is where
-                RES     X'1000'-$       ; the console's shell must end: past
-                ENDC                    ; it is the pool
-
-                TRUE    SHMOD=1         ; SHELL.RX's deck ends here
                 END     SHELL
-                ENDC

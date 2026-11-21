@@ -6,7 +6,9 @@
 # Use of this source code is governed by a MIT-style
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT
-"""End-to-end test for REX, the 703 executive: boot it, start three
+"""End-to-end test for REX, the 703 executive: boot it -- the console's
+shell is SHELL.RX off the platter, which has to be above word X'4000'
+and to refuse BYE, the console never being without one -- start three
 copies of blip.asm behind the prompt, each printing a mark of its own and
 sleeping an interval of its own, and watch them run -- the scheduler, the
 clock's tick, the context switch, the sleeps and the mailbox teletype
@@ -129,6 +131,9 @@ it, and SQUISH tidies unit 1. The host then reads both platters back:
 every file on the one it was meant for, and unit 0 as it was made but for
 the one file copied onto it.
 
+An eighth machine's platter has no SHELL.RX: the console has none to
+load, and has to say so before the machine stops.
+
 REX_CONTROL names a negative control, each of which must FAIL:
   blank    a platter with nothing on it (no catalogue lines, no modules)
   nohello  a platter without the hello module
@@ -172,6 +177,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
   nowake   the disc given up without waking whoever waits for it
   shlow    SHELL.RX put on the platter as a module that has to load
            below word X'4000'
+  conbye   the console's shell taking BYE as a terminal's does
+  nobootmsg  the boot's message that there is no shell never printed
   nobackoff  a task that cannot come back until the one in its way has had
            its time tried for on every pass of the swapper meanwhile
   spin     the shell's wait for a character to print never marking it
@@ -250,13 +257,15 @@ def jobs_of(emu, name):
             if arena[i * T_LEN + T_STA] != SFREE and arena[i * T_LEN + T_NAM] == packed]
 
 
-def blocks_of(emu, name):
+def blocks_of(emu, name, node=None):
     """The pool blocks of the loaded task whose two-character name this
-    is, as (first word, one past the last) of each payload. The machine
-    is halted for the look and set running again."""
+    is -- or of the node named, which need not be the arena's -- as (first
+    word, one past the last) of each payload. The machine is halted for
+    the look and set running again."""
     emu.halt()
     try:
-        node, _ = node_of(emu, name)
+        if node is None:
+            node, _ = node_of(emu, name)
         mine, at = [], POOLB
         while at < POOLE:
             size, tag = emu.memw(at, 2)     # a block's header: its size, its owner
@@ -306,6 +315,7 @@ def job_lines(n):
 NOTE_KEYS = 'LINE ONE\rLINE TWO\r'
 NOTE = bytes(c | 0x80 for c in b'LINE ONE\r\nLINE TWO\r\n')
 REX_LST = os.path.join(BUILD, 'rex.lst')
+SHELL_LST = os.path.join(BUILD, 'shell.lst')
 MKDISC = os.path.join(ROOT, 'tools', 'mkdisc703.py')
 FS703 = os.path.join(HERE, 'fs703.py')
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(BUILD, 'rex_test.log')
@@ -435,8 +445,6 @@ def session(emu):
         # Q.GET's loop asks CMW *T.KAR / SEQ / JMP .R: without the skip
         # every caller is let in
         emu.writew(listing_word('CMW     *T.KAR', 'Q.GET           MSK') + 1, [NOP])
-    if CONTROL == 'noloadstop':
-        emu.writew(listing_word('LDW     =SOFF', 'SHLOAD          CLR'), [CLR])
     if CONTROL == 'nodetach':
         # SVPOST's CLB X'9A' / SNE / JMP .DET
         emu.writew(listing_word("CLB     X'9A'", 'SVPOST          SUBR') + 2, [NOP])
@@ -455,18 +463,34 @@ def session(emu):
         symbols = Symbols()
         symbols.load(REX_LST)
         emu.writew(symbols.value('LDSEGR') + 2, [NOP])
-    if CONTROL == 'nohold':
-        # TIME's last read is the one that ends the hold
-        emu.writew(listing_word('DIN     11,3', 'SHTIME          MSK'), [NOP])
     symbols = Symbols()
     symbols.load(REX_LST)
     held_at = symbols.value('TMT') + symbols.value('TM.BSY')
     emu.run()
     s.wait(b'REX 703 UP')
+    if CONTROL == 'noloadstop':
+        patch_shell(emu, 'LDW     =SOFF', 'SHLOAD          CLR', CLR)
+    if CONTROL == 'nohold':
+        # TIME's last read is the one that ends the hold
+        patch_shell(emu, 'DIN     11,3', 'SHTIME          MSK', NOP)
+    if CONTROL == 'conbye':
+        # SHBYE's JNZ .B, SAZ / JMP .B: without the skip the console's
+        # shell takes BYE too
+        patch_shell(emu, 'JNZ     .B', 'SHBYE           JSX', NOP)
+
+    # The console's shell is SHELL.RX, loaded off the platter into the
+    # console's node, above the fence like every other terminal's
+    low = [b for b in blocks_of(emu, None, symbols.value('SHTCB')) if b[0] < POOLH]
+    if low:
+        raise AssertionError("the console's shell has blocks below word X'4000': %r" % low)
 
     # INIT.CM is read before the keyboard is: its one command, echoed as
     # if typed, and what the command printed.
     s.wait(re.compile(rb'^INIT RAN\r', re.M))
+
+    # BYE is a terminal's: the console is never left without a shell
+    s.say('BYE')
+    s.wait(b"BYE IS A TERMINAL'S\r\n")
 
     # Nothing is running yet, so these are quiet and exact.
     s.say('STAT')
@@ -813,12 +837,8 @@ def session(emu):
     # HALT with a task loaded: it has to be left stopped, which is what
     # keeps anything of its out of the down-message.
     if CONTROL == 'nopark':
-        # SHHD0 is LDX / LDW / CMW / SNE / JMP / LDW SHKOFF / STW *T.STA
-        symbols = Symbols()
-        symbols.load(REX_LST)
-        emu.halt()
-        emu.writew(symbols.value('SHHD0') + 6, [NOP])
-        emu.run()
+        # SHHD0 is LDX / LDW / CMW / SNE / JMP / LDW =SOFF / STW *T.STA
+        patch_shell(emu, 'STW     *T.STA', 'SHHD0           LDX', NOP)
     mark = s.say('START NAP')
     s.say('STAT')
     s.wait(re.compile(rb'^\d+ NA TTY', re.M))
@@ -908,13 +928,13 @@ def disc_session(emu, image):
         # IOREL's JNZ .W: SAZ / JMP .W -- without the jump nobody waiting
         # for the disc is ever woken
         emu.writew(listing_word('JNZ     .W', 'IOREL           SUBR') + 1, [NOP])
-    if CONTROL == 'spin':
-        # SHPUTC's wait marks the shell waiting before it hands the
-        # processor on: without the store it is picked again at once
-        emu.writew(listing_word('STW     *T.STA', 'SHPUTC          SUBR'), [NOP])
     s = Session(emu)
     emu.run()
     s.wait(b'REX 703 UP')
+    if CONTROL == 'spin':
+        # SHPUTC's wait marks the shell waiting before it hands the
+        # processor on: without the store it is picked again at once
+        patch_shell(emu, 'STW     *T.STA', 'SHPUTC          SUBR', NOP)
     # Typed ahead in one go, with the STAT behind them, so the three loads
     # follow each other as fast as the shell can make them and the STAT
     # finds the three on the ring together -- they are DS there until
@@ -1208,6 +1228,19 @@ def swap_session(emu, image):
         raise AssertionError('FG.BA is not the program that was typed')
 
 
+def noshell_session(emu):
+    """A platter without SHELL.RX: the console has no shell to load, and
+    says so before the machine stops."""
+    if CONTROL == 'nobootmsg':
+        # SHBOOT's STW *T.MBX: without it nothing reaches the printer
+        emu.writew(listing_word('STW     *T.MBX', 'SHBOOT          LDW'), [NOP])
+    emu.run()
+    emu.wait_for_output(b'NO SHELL.RX\r\n', timeout=60)
+    stopped = emu.wait_stopped()
+    if stopped.reason != 'hlt':
+        raise AssertionError('expected REX to halt the machine, got %r' % (stopped,))
+
+
 def boot_session(emu):
     """The kernel, read in by the boot sector."""
     s = Session(emu)
@@ -1358,7 +1391,7 @@ def clock_moved(text):
     return 0 < (second - first) % 86400 < 3600
 
 
-def make_platter(workdir, log, swap=False, boot=False):
+def make_platter(workdir, log, swap=False, boot=False, shell=True):
     os.makedirs(os.path.join(workdir, 'disks'))
     image = os.path.join(workdir, 'disks', 'ray703-disc0.img')
     blank = [sys.executable, MKDISC, image] + (['--boot', BOOT_BIN] if boot else [])
@@ -1372,7 +1405,8 @@ def make_platter(workdir, log, swap=False, boot=False):
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
-                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec', 'nobackoff', 'shlow'):
+                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake', 'onesec', 'nobackoff', 'shlow',
+                     'conbye', 'nobootmsg'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         jobs += [('LOOP.BA', LOOP)] if swap else []
@@ -1382,7 +1416,7 @@ def make_platter(workdir, log, swap=False, boot=False):
             with open(files[-1][1], 'wb') as f:
                 f.write(data)
         for name, path in files[:1] + list(MODULES) + files[1:]:
-            if (CONTROL, name) != ('nohello', 'HELLO'):
+            if (CONTROL, name) != ('nohello', 'HELLO') and (shell or name != 'SHELL'):
                 high = (name, path) in MODULES and name not in LOW_ONLY + (('SHELL',) if CONTROL == 'shlow' else ())
                 cmd += ['--add-high' if high else '--add', name, path]
     else:
@@ -1490,18 +1524,33 @@ def check_platters(unit0, made0, unit1):
         raise AssertionError('unit 0 changed: %r' % sorted(set(now.items()) ^ set(was.items())))
 
 
-def listing_word(source, after):
-    """The address of the first word assembled from the first line of
-    build/rex.lst past the line holding `after` whose text holds `source`
-    -- for a control that patches a word no label names."""
-    lines = open(REX_LST, encoding='latin-1').read().splitlines()
+def listing_word(source, after, listing=REX_LST):
+    """The address of the first word assembled from the first line of a
+    listing, build/rex.lst unless another is named, past the line holding
+    `after` whose text holds `source` -- for a control that patches a word
+    no label names."""
+    lines = open(listing, encoding='latin-1').read().splitlines()
     start = next(i for i, l in enumerate(lines) if after in l)
     at = next(i for i in range(start, len(lines)) if source in lines[i])
     for line in lines[at:]:
         m = re.match(r'([0-9A-F]{4})  [0-9A-F]{4}', line)
         if m:
             return int(m.group(1), 16)
-    raise AssertionError('no word for %r in %s' % (source, REX_LST))
+    raise AssertionError('no word for %r in %s' % (source, listing))
+
+
+def patch_shell(emu, source, after, word):
+    """A word of the console's shell -- SHELL.RX, which the kernel loaded
+    at start-up and entered at SHENT -- replaced, found as listing_word
+    finds it in the module's own listing, which is assembled from word 0.
+    For a machine whose banner has printed: it is halted to patch."""
+    symbols, shell = Symbols(), Symbols()
+    symbols.load(REX_LST)
+    shell.load(SHELL_LST)
+    emu.halt()
+    entry = emu.memw(symbols.value('SHENT'), 1)[0]
+    emu.writew(entry - shell.value('SHELL') + listing_word(source, after, SHELL_LST), [word])
+    emu.run()
 
 
 def terminal_port(log, n):
@@ -1834,6 +1883,16 @@ def main():
             boot_session(emu)
             finish(emu)
             log.write(b'\n--- paper, the boot session ---\n' + bytes(emu.output))
+
+            # And a platter with no shell on it for the console.
+            noshdir = os.path.join(workdir, 'noshell')
+            os.makedirs(noshdir)
+            make_platter(noshdir, log, shell=False)
+            with cwd(noshdir):
+                emu = Emu.spawn([EMU_BIN, '-s', 'ray703', '-r', ROM_FILE, '--fast-io', '--no-throttle'], log=log)
+            noshell_session(emu)
+            finish(emu)
+            log.write(b'\n--- paper, the platter with no shell ---\n' + bytes(emu.output))
 
             # And one with next to no room on it.
             fulldir = os.path.join(workdir, 'full')

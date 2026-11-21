@@ -1,11 +1,9 @@
 ; vim: ts=8:sw=8:expandtab:
 ;
-; The loader's record reader -- the last file of the kernel's deck, after
-; rexname.asm, in the rest of its page.  Every shell's loader reads a
-; module's object text through it (K.LDREC), a record at a time: one
-; copy for them all, since a loader holds the disc for the whole of a
-; load and so only one runs it at once.  Placing and relocating what it
-; reads stays the shell's.
+; The loader's record reader -- the file of the kernel's deck after
+; rexload.asm, in the rest of page 1.  The loader reads a module's object
+; text through it, a record at a time; a load holds the disc throughout,
+; so only one runs it at once.
 ;
 ; A record is a sector, 47 words: a zero marker byte, 92 bytes of text,
 ; and the folded byte sum -- (sum >> 8) + sum -- of everything before it.
@@ -16,7 +14,7 @@
 ; and half as much while that fails -- and the rest comes in one transfer,
 ; or as many as the block takes; with no block to be had at all, a
 ; sector at a time through LDBUF, as the first.  The block may lie above
-; word X'4000', so no byte address is compared here or in the shell's
+; word X'4000', so no byte address is compared here or in the loader's
 ; walk of a record: what is left of one is counted instead.
 ;
 ; ACR is zero for the next record, the address of three words -- the
@@ -183,9 +181,11 @@ LRBP            WORD    0               ; and its first byte of text
 LRSUM           WORD    0               ; its byte sum,
 LRCNT           WORD    0               ; the words left to add,
 LRCK            WORD    0               ; and the checksum byte
+LDBUF           RES     47              ; the first record's sector, and every
+                                        ; one's when the pool has no block
                 LPOOL
 LREND           EQU     $
 
-                TRUE    LREND>NARB      ; into the node arena: a negative RES,
-                RES     NARB-LREND      ; which the assembler refuses
+                TRUE    LREND>POOLB     ; into the pool: a negative RES, which
+                RES     POOLB-LREND     ; the assembler refuses
                 ENDC

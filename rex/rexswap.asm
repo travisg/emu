@@ -39,7 +39,7 @@
 ; for that second whatever the other does meanwhile.
 ;
 ; The disc is claimed like anybody's (IOLOCK), with one exception: a
-; shell's loader holds the disc for a whole load, and may be the task
+; task in K.LOAD holds the disc for a whole load, and may be the task
 ; waiting for core.  A holder that is waiting for core is not using the
 ; disc, so the swapper uses it then without the claim -- for that one
 ; task's request only, and wakes it last, when the disc is quiet again.
