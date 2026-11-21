@@ -284,9 +284,11 @@ seven:
   found the disc taken has to be more than zero, `STAT` has to show one
   waiting for the disc (`DSK`), and none of the three may
   be seen asleep in a thousand looks, which is what a claim that polled
-  the lock would be. Across a line the shell
-  then prints, at ten characters a second, at most one tick in twenty may
-  find a task running rather than idle. On the same machine, where
+  the lock would be. Across `HELP`, which the
+  shell then prints at ten characters a second, at most one tick in four
+  may find a task running rather than idle -- a character is five ticks
+  to the cycle, so the shell's work for each keeps one phase against the
+  tick, and at worst every character lands under one. On the same machine, where
   printing takes its time, `DUMP` then prints a file behind the prompt while
   a program that ignores Ctrl-C has the console and the key is struck: it
   has to reach the file's last line.

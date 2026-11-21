@@ -63,9 +63,10 @@ nothing; each leaves its verdict in a sector of its own, read here off
 the platter, and the kernel's count of tasks that found the disc taken
 must not be zero -- three tasks that never met at the disc prove nothing
 about the lock -- and none of them may ever be seen asleep, which is
-what a claim that polled the lock would be. Across a line the shell then prints there, at ten
-characters a second, nearly every tick has to find the machine idle,
-which a task spinning on the printer would not. The same machine, where a file takes minutes of its time
+what a claim that polled the lock would be. Across HELP, which the
+shell then prints there at ten characters a second, three ticks in four
+have to find the machine idle, which a shell spinning on the printer
+would not. The same machine, where a file takes minutes of its time
 to print, then has DUMP print one behind the prompt while a program that
 ignores Ctrl-C has the console and the key is struck: the break is the
 console holder's, and DUMP has to reach the file's last line.
@@ -956,10 +957,14 @@ def disc_session(emu, image):
     if waits == 0:
         raise AssertionError('no task ever found the disc taken: the lock was not exercised')
 
-    # The tick counts the ticks that find the machine idle. Across a line
-    # the shell prints at ten characters a second, asleep between them,
-    # nearly every tick does; a task that spun instead would be found
-    # running by nearly every one.
+    # The tick counts the ticks that find the machine idle. Across HELP,
+    # which the shell prints at ten characters a second, asleep between
+    # them, most ticks do; a shell that spun instead would be found running
+    # by nearly every one. A character takes five ticks to the cycle, so
+    # the shell's work for each keeps one phase against the tick for the
+    # whole of the text, and where that phase puts the work under a tick,
+    # every character is a busy tick: a fifth of them, which is the most
+    # there can be.
     def ticks():
         emu.halt()
         t, sec, it, isec = emu.memw(symbols.value('TICKS'), 4)
@@ -968,12 +973,12 @@ def disc_session(emu, image):
     emu.wait_quiet(timeout=120)
     first = ticks()
     mark = len(emu.output)
-    emu.key('ECHO ' + 'IDLE' * 14 + '\r')
-    emu.wait_for_output(re.compile(rb'^(IDLE){14}\r\n', re.M), start=mark, timeout=120)
+    emu.key('HELP\r')
+    emu.wait_for_output(re.compile(rb'^ANY OTHER WORD .* LISTS THEM\.\r\n', re.M), start=mark, timeout=120)
     emu.wait_quiet(timeout=120)
     last = ticks()
     spent, idle = last[0] - first[0], last[1] - first[1]
-    if spent < 100 or (spent - idle) * 20 > spent:
+    if spent < 1000 or (spent - idle) * 4 > spent:
         raise AssertionError('%d of %d ticks found a task running' % (spent - idle, spent))
     s.at = len(emu.output)
 
@@ -1250,7 +1255,7 @@ def verdict(paper):
     checks = [
         ('uptime', line(rb'UPTIME \d+ SEC')),
         ('shell running', line(rb'^0 SH RUN +T0$')),
-        ('a STAT header', line(rb'^JOB NM STATE TERMINAL$')),
+        ('a STAT header', line(rb'^JOB NM STATE TERM$')),
         ('idle listed', line(rb'^0 ID RUN')),
         ('help: what is built in', line(rb'^BUILT IN: HELP STAT UPTIME')),
         # every one of them, eight to a line

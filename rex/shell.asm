@@ -310,9 +310,11 @@ SHSTLN          SUBR
                 JSX     SHPW2
                 LDW     =' '
                 JSX     SHPUTC
-                LDX     SHTO            ; its state, as four characters
-                LDW     *T.STA
-                STW     SHSS
+                LDX     SHTO            ; its state, as four characters,
+                LDW     *T.STA          ; and what it waits for, looked at
+                STW     SHSS            ; with the state and before either
+                JSX     SHWHY           ; takes the printer's time
+                LDW     SHSS
                 SLL     1
                 ADD     =SHSTA
                 JSX     SHP4
@@ -322,13 +324,10 @@ SHSTLN          SUBR
                 LDX     SHTO
                 LDW     *T.DLY
                 JSX     SHDEC
-.W              LDW     SHSS
-                CMW     =SWAI
-                JNE     .C              ; waiting?  then on what
-                JSX     SHWHY
+.W              LDW     SHW2
                 SAZ
                 JSX     SHP4
-.C              LDX     SHTO            ; each of these four characters
+                LDX     SHTO            ; each of these four characters
                 LDW     *T.CON          ; where it applies
                 SAZ
                 LDW     =SHCONW
@@ -361,11 +360,15 @@ SHP4            SUBR
                 JSX     SHPW2
                 EXIT    SHP4
 
-; What the waiting task in SHTO waits for, as four characters' address,
-; or zero for none of these: the disc -- its lock, or a transfer of its
-; -- core, the printer, its terminal's keyboard.  The shell waiting for
-; its console back, and the swapper for work, are none of them.
+; What the task in SHTO, in state SHSS, waits for, as four characters'
+; address in SHW2, or zero for none of these: the disc -- its lock, or a
+; transfer of its -- core, the printer, its terminal's keyboard.  A task
+; that is not waiting, the shell waiting for its console back and the
+; swapper waiting for work are none of them.
 SHWHY           SUBR
+                LDW     SHSS
+                CMW     =SWAI
+                JNE     .Z              ; waiting?
                 LDX     SHTO
                 LDW     *T.DLY
                 CMW     =X'FFFF'
@@ -386,7 +389,7 @@ SHWHY           SUBR
                 LDW     *Q.WTR
                 CMW     SHTO
                 JEQ     .K              ; for a key?
-                CLR
+.Z              CLR
                 JMP     .X
 .D              LDW     =SHWDSK
                 JMP     .X
@@ -395,7 +398,8 @@ SHWHY           SUBR
 .P              LDW     =SHWPRT
                 JMP     .X
 .K              LDW     =SHWKBD
-.X              EXIT    SHWHY
+.X              STW     SHW2
+                EXIT    SHWHY
 
 ; STOP n and START n differ only in the state they store, into the task
 ; with that job number: one the shell loaded, since no other has a
@@ -1791,7 +1795,7 @@ SHSTP           MSG     " STOPPED\r\n"
                 TRUE    SHMOD=1         ; the console's is in page 0 (rex.asm)
 SHHL3           MSG     "ANY OTHER WORD RUNS THE PROGRAM OF THAT NAME. DIR 0: LISTS THEM.\r\n"
                 ENDC
-SHSTH           MSG     "JOB NM STATE TERMINAL\r\n"
+SHSTH           MSG     "JOB NM STATE TERM\r\n"
 
                 TRUE    SHMOD=0         ; the rest of page 1, which is where
                 RES     X'1000'-$       ; the console's shell must end: past
