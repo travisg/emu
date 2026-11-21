@@ -58,13 +58,14 @@ HELLO FROM WORD 16386
 REX>  LOAD HELLO
 JOB 1
 REX>  START 1
-RHELLO FROM WORD 16386
-EX>  STAT
+REX>  HELLO FROM WORD 16386
+STAT
 UPTIME 5 SEC
+IDLE 5 SEC
 SWAPS 0 OUT 0 IN
 0 SH RUN
 0 SW WAIT
-1 HE SLP 62
+1 HE SLP 61
 0 ID RUN
 REX>  BASIC
 TINY BASIC UNDER REX
@@ -85,10 +86,11 @@ RUN
 READY
 SAVE SQ
 READY
-
+
 JOB 2 STOPPED
 REX>  STAT
 UPTIME 12 SEC
+IDLE 11 SEC
 SWAPS 0 OUT 0 IN
 0 SH RUN
 0 SW WAIT
@@ -106,9 +108,10 @@ REX 703 DOWN
 
 `RUN` gives a program the console until it exits. `LOAD` loads it
 stopped and says its job number, and `START` lets it run behind the
-prompt, which is why the second `HELLO` prints into the prompt that has
-come back, and why `STAT` finds it as job 1, asleep (`SLP`) with 62 ticks
-to go. The other lines of `STAT` are the shell, the swapper and the idle
+prompt, which is why the second `HELLO` prints after the prompt has come
+back, and why `STAT` finds it as job 1, asleep (`SLP`) with 61 ticks to
+go. `STAT` begins with how long REX has been up and how much of that the
+machine was idle; the other lines are the shell, the swapper and the idle
 task. The Ctrl-Z typed at BASIC's `READY` prints nothing; it stops BASIC
 and gives the shell the console, and `ATTACH` gives it back, BASIC
 taking up where it was.
@@ -118,7 +121,7 @@ taking up where it was.
 | command | what it does |
 |---|---|
 | `HELP` or `?` | the commands, and where the programs are listed |
-| `STAT` | every task: job number, name, state, how long a sleeper has left, `OUT` for one swapped to disc |
+| `STAT` | the uptime and how much of it was idle, then every task: job number, name, state, how long a sleeper has left, `OUT` for one swapped to disc |
 | `UPTIME` or `UP` | seconds since REX came up |
 | `TIME` | the time of day, off the clock (`HH:MM:SS`) |
 | `MEM` | free words in the pool, below word X'4000' and above it |

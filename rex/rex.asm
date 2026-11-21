@@ -22,7 +22,8 @@
 ;   TIME         the time of day, off the clock (HH:MM:SS)
 ;   STAT         every task's job number, name and state, how long each
 ;                sleeper has left, and OUT for one that is on the disc;
-;                and, with a swap file, how many have gone out and come in
+;                how many seconds' ticks found the machine idle; and, with
+;                a swap file, how many have gone out and come in
 ;   STOP n       suspend a loaded task, by job number
 ;   START n      let one run, behind the prompt
 ;   ATTACH n     give one of this terminal's the console, running, and
@@ -121,6 +122,14 @@
 ;   it takes to return from the interrupt that carried it.  SERV holds
 ;   the mask across its switch, because the tick outranks level 0 and
 ;   would otherwise land in the middle of the scan they share.
+;
+; * RESCHD SAYS A WAKE WAS MADE AT INTERRUPT LEVEL SINCE THE LAST PICK.
+;   Every wake a service routine or the tick makes raises it, and PICK
+;   alone lowers it, as it begins.  A tick that finds the idle task
+;   running and RESCHD down therefore knows nothing can run and returns
+;   at once; a wake a task makes needs no flag, since the task gives the
+;   processor up through PICK before idle can run again.  A wake that
+;   finds no task's frame to switch from leaves RESCHD up for the tick.
 ;
 ; * THE SMB LEAD.  The entry sequence does not reload EXR, so a service
 ;   routine's first memory reference resolves in the page of whatever it
@@ -735,6 +744,8 @@ SCHED           SMB     S2SAVA          ; the SMB lead: EXR still holds the
 ; fiftieth of a second, and a sleep that skipped those would stretch by
 ; however long the driver happened to be busy.  A delay is never stored
 ; below one, so the count reaches zero exactly and never runs past it.
+; The walk is once round the ring from the shell's node, which is always
+; on it, and a sleep that ends is a wake like any other: RESCHD.
                 LDW     TICKS           ; uptime, for the shell to report
                 ADD     =1
                 CMW     =50
@@ -746,28 +757,43 @@ SCHED           SMB     S2SAVA          ; the SMB lead: EXR still holds the
                 LDW     SECS
                 ADD     =1
                 STW     SECS
-.TK0            LDW     =SHTCB          ; once round the ring
-                STW     SCIX
-                LDW     KNRING
-                STW     SCTRY
-.TKL            LDX     SCIX
-                LDW     *T.STA
+.TK0            LDX     =SHTCB          ; once round the ring
+.TKL            LDW     *T.STA
                 CMW     =SSLP
                 JNE     .TKN            ; asleep?
                 LDW     *T.DLY
                 SUB     =1
                 STW     *T.DLY
                 JNZ     .TKN            ; the last tick of the sleep?
-                CLR
-                STW     *T.STA          ; wake it
-.TKN            LDX     SCIX
-                LDW     *T.NXT
-                STW     SCIX
-                LDW     SCTRY
-                SUB     =1
-                STW     SCTRY
-                JNZ     .TKL            ; another node to visit?
-                JMP     .DEF
+                STW     *T.STA          ; wake it: ACR is zero
+                LDW     =1
+                STW     RESCHD
+.TKN            LDW     *T.NXT
+                CAX
+                CMW     =SHTCB
+                JNE     .TKL            ; round to the shell again?
+
+; A tick that finds the idle task running is counted, for STAT; and if
+; nothing has been woken at interrupt level since it was picked -- a wake
+; made by a task needs nothing, since a PICK runs before idle can be
+; current again -- nothing can run, and the tick goes back to it at once.
+                LDW     CURT
+                CMW     =IDTCB
+                JNE     .DEF            ; idle?
+                LDW     IDTKS
+                ADD     =1
+                CMW     =50
+                JGE     .ISC            ; a whole second of them?
+                STW     IDTKS
+                JMP     .IDL
+.ISC            CLR
+                STW     IDTKS
+                LDW     IDSECS
+                ADD     =1
+                STW     IDSECS
+.IDL            LDW     RESCHD
+                JNZ     .DEF            ; and nobody woken?
+                JMP     .RET
 
 .DEF            LDW     L2PC            ; where did the tick land?
                 CMW     =ISRBEG
@@ -776,7 +802,7 @@ SCHED           SMB     S2SAVA          ; the SMB lead: EXR still holds the
 .HI             CMW     =ISREND
                 JGE     .SW             ; inside [ISRBEG,ISREND): service code
                                         ; above it: task code
-                LDW     S2SAVA          ; defer -- restore untouched and let
+.RET            LDW     S2SAVA          ; defer -- restore untouched and let
                 LDX     S2SAVX          ; a later tick do the switch
                 INR     2
 
@@ -906,15 +932,14 @@ SERV            SMB     S0SAVA          ; the SMB lead again
 ; task's frame only when the saved program counter lies outside the
 ; range.  Inside it, level 0 interrupted a task that was midway through
 ; SWTCH, and parking that frame would write a half-made switch into the
-; block of the task it was switching to.  Masked from there on, so that
+; block of the task it was switching to; RESCHD is then left up, for the
+; next tick, since only PICK puts it down.  Masked from there on, so that
 ; the tick -- which outranks this level and would otherwise land in the
 ; middle of PICK -- is held until the UNM, where it defers.
 .EXIT           LDW     RESCHD
                 JNZ     .EXSW           ; anything newly runnable?
                 JMP     .EXPL
-.EXSW           CLR
-                STW     RESCHD
-                MSK
+.EXSW           MSK
                 LDW     L0PC
                 CMW     =ISRBEG
                 JGE     .EXHI
@@ -1139,42 +1164,46 @@ KICKC           SUBR
 
 ; Round robin over the ring, starting past the node running now, and
 ; leave the choice in CURT.  A task that is asleep, waiting or stopped is
-; simply skipped; the walk is bounded by a count of the nodes, and if
-; none of them can run the idle node -- off the ring, so the walk never
-; meets it -- always can.  Shared by the tick and by
+; simply skipped; the walk ends where it began, and if none of the nodes
+; can run the idle node -- off the ring, so the walk never meets it --
+; always can.  Shared by the tick and by
 ; SWTCH, which cannot overlap: a task inside SWTCH holds the mask, and a
 ; tick that lands in its one unmasked instruction defers before it gets
 ; here.
+;
+; RESCHD is PICK's: it goes down here, before the walk, so a wake made at
+; interrupt level from now on is news to the next tick -- which is what
+; lets a tick that finds idle running return at once when it is down.
+; The swapper woken here is such a wake, being one the walk may already
+; have passed.
 PICK            SUBR
-                LDW     KNRING
-                STW     SCTRY
+                CLR
+                STW     RESCHD
                 LDX     CURT            ; start past the one running now --
                 LDW     *T.NXT          ; idle's own link reenters the ring
+                STW     SCBEG
 .SCN            CAX
-                STW     SCIX
                 LDW     *T.STA
                 JNZ     .NRD            ; runnable?
                 LDW     *T.SWP
                 JNZ     .OUT            ; and its blocks in core?
-                JMP     .PIK
-.OUT            LDX     =SWTCB          ; no: that is the swapper's to mend,
-                LDW     *T.STA          ; so it is woken -- only out of its
-                CMW     =SWAI           ; wait -- and the scan goes on
-                JNE     .NRD
+                STX     CURT
+                EXIT    PICK
+.OUT            STX     SCIX            ; no: that is the swapper's to mend,
+                LDX     =SWTCB          ; so it is woken -- only out of its
+                LDW     *T.STA          ; wait -- and the scan goes on
+                CMW     =SWAI
+                JNE     .OU1
                 CLR
                 STW     *T.STA
-.NRD            LDW     SCTRY
-                SUB     =1
-                STW     SCTRY
-                JNZ     .NX2            ; any candidate left to look at?
-                LDW     =IDTCB          ; nobody can run: go idle
-                STW     SCIX
-                JMP     .PIK
-.NX2            LDX     SCIX
-                LDW     *T.NXT
-                JMP     .SCN
-.PIK            LDW     SCIX
-                STW     CURT
+                LDW     =1
+                STW     RESCHD
+.OU1            LDX     SCIX
+.NRD            LDW     *T.NXT
+                CMW     SCBEG
+                JNE     .SCN            ; round to where it began?
+                LDX     =IDTCB          ; nobody can run: go idle
+                STX     CURT
                 EXIT    PICK
 
 ; Give the processor up now instead of waiting for the tick to take it.
@@ -1307,9 +1336,7 @@ DSERV           SMB     S1SAVA          ; the SMB lead
 .EXIT           LDW     RESCHD
                 JNZ     .EXSW
                 JMP     .EXPL
-.EXSW           CLR
-                STW     RESCHD
-                MSK
+.EXSW           MSK
                 LDW     L1PC
                 CMW     =ISRBEG
                 JGE     .EXHI
@@ -1360,16 +1387,19 @@ KCH             WORD    0               ; its multiplexer channel
 KCAND           WORD    0               ; KICK's scan scratch
 KTRY            WORD    0
 BKRET           WORD    0               ; BRKQ's and BRKC's way back
-RESCHD          WORD    0               ; a wake happened: reschedule at the
-                                        ; next service routine exit that is
-                                        ; standing on a task's frame
-SCIX            WORD    0               ; the scans' walk over the ring
-SCTRY           WORD    0               ; candidates left in the scan
+RESCHD          WORD    0               ; a wake at interrupt level since the
+                                        ; last PICK, which alone clears it:
+                                        ; reschedule at the next service exit
+                                        ; standing on a task's frame, or tick
+SCIX            WORD    0               ; PICK's walk over the ring,
+SCBEG           WORD    0               ; and where it began
 SWRET           WORD    0               ; SWTCH's caller: where it resumes...
 SWACR           WORD    0               ; ...what it had in the accumulator
 SWIXR           WORD    0               ; ...and the index the next task wants
 TICKS           WORD    0               ; ticks into the current second...
 SECS            WORD    0               ; ...and seconds since REX came up
+IDTKS           WORD    0               ; the ticks that found idle running,
+IDSECS          WORD    0               ; the same way
 QITEM           WORD    0               ; what Q.PUT is to put
 QPD             WORD    0               ; and the queue it is putting it in
 QGD             WORD    0               ; Q.GET's queue...
@@ -2529,7 +2559,7 @@ LDBUF           RES     47              ; the loader's sector
 ; the shell's: they are the kernel's own routines, cells and layout, with
 ; nothing in front of them to keep them where they are.
                 NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY
-                NTRY    SECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,DXUNI,FSUNI
+                NTRY    SECS,IDSECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,DXUNI,FSUNI
                 NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,FSFND,DRD1
                 NTRY    ALLOCW,ALLCHW,ALLOCB,ALLCHB
 

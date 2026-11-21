@@ -228,12 +228,20 @@ SHTCOL          SUBR
 SHTW1           WORD    0               ; the clock's word 1
 SHTW2           WORD    0               ; and word 2
 
-; The tasks: job number, name, state, how much longer a sleeper has, and
-; OUT for one whose blocks are on the disc.  Not a walk of the ring,
+; The tasks: the uptime and the seconds' worth of ticks that found idle
+; running, then each task's job number, name, state, how much longer a
+; sleeper has, and OUT for one whose blocks are on the disc.  Not a walk of the ring,
 ; which a task leaving it part way through would send astray: the two
 ; nodes that are always here, in the order they lie in core, then every
 ; arena node that is in use, then idle.
 SHSTAT          JSX     SHPUP
+                LDW     =SHIDM          ; and how much of it was idle
+                JSX     SHMSG
+                SMB     IDSECS
+                LDW     IDSECS
+                JSX     SHDEC
+                LDW     =SHSEC
+                JSX     SHMSG
                 SMB     SWSECS
                 LDW     SWSECS
                 JNZ     .TSW            ; a swap file: then how busy it has been
@@ -1742,6 +1750,7 @@ SHECK           MSG     "LOAD ERROR: CK\r\n"
 SHELC           MSG     "LOAD ERROR: LC\r\n"
 SHEMX           MSG     "LOAD ERROR: MX\r\n"
 SHUPM           MSG     "UPTIME"
+SHIDM           MSG     "IDLE "
 SHSEC           MSG     " SEC\r\n"
 SHDWN           MSG     "REX 703 DOWN\r\n"
 SHNOT           MSG     "NO SUCH TASK\r\n"

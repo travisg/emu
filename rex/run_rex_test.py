@@ -60,7 +60,9 @@ runs three copies of the disc exerciser (dskt.asm) at once. They print
 nothing; each leaves its verdict in a sector of its own, read here off
 the platter, and the kernel's count of tasks that found the disc taken
 must not be zero -- three tasks that never met at the disc prove nothing
-about the lock. The same machine, where a file takes minutes of its time
+about the lock. Across a line the shell then prints there, at ten
+characters a second, nearly every tick has to find the machine idle,
+which a task spinning on the printer would not. The same machine, where a file takes minutes of its time
 to print, then has DUMP print one behind the prompt while a program that
 ignores Ctrl-C has the console and the key is struck: the break is the
 console holder's, and DUMP has to reach the file's last line.
@@ -157,6 +159,8 @@ REX_CONTROL names a negative control, each of which must FAIL:
            console's program
   nobrkq   K.BRKQ answering a task without the console, so a BASIC behind
            the prompt takes the Ctrl-C typed there
+  spin     the shell's wait for a character to print never marking it
+           waiting, so it spins through every character it prints
   nokillwake  KILLT handing nothing back, so a KILL from the console of
            teletype 1's foreground program leaves that terminal's shell
            waiting for good
@@ -860,6 +864,10 @@ def disc_session(emu, image):
         # KECLM is JSX IOTRY / SAZ / JMP .WAIT: without the jump a task
         # that finds the disc taken carries on into the body
         emu.writew(symbols.value('KECLM') + 2, [NOP])
+    if CONTROL == 'spin':
+        # SHPUTC's wait marks the shell waiting before it hands the
+        # processor on: without the store it is picked again at once
+        emu.writew(listing_word('STW     *T.STA', 'SHPUTC          SUBR'), [NOP])
     s = Session(emu)
     emu.run()
     s.wait(b'REX 703 UP')
@@ -898,6 +906,27 @@ def disc_session(emu, image):
     emu.run()
     if waits == 0:
         raise AssertionError('no task ever found the disc taken: the lock was not exercised')
+
+    # The tick counts the ticks that find the machine idle. Across a line
+    # the shell prints at ten characters a second, asleep between them,
+    # nearly every tick does; a task that spun instead would be found
+    # running by nearly every one.
+    def ticks():
+        emu.halt()
+        t, sec, it, isec = emu.memw(symbols.value('TICKS'), 4)
+        emu.run()
+        return sec * 50 + t, isec * 50 + it
+    emu.wait_quiet(timeout=120)
+    first = ticks()
+    mark = len(emu.output)
+    emu.key('ECHO ' + 'IDLE' * 14 + '\r')
+    emu.wait_for_output(re.compile(rb'^(IDLE){14}\r\n', re.M), start=mark, timeout=120)
+    emu.wait_quiet(timeout=120)
+    last = ticks()
+    spent, idle = last[0] - first[0], last[1] - first[1]
+    if spent < 100 or (spent - idle) * 20 > spent:
+        raise AssertionError('%d of %d ticks found a task running' % (spent - idle, spent))
+    s.at = len(emu.output)
 
     with open(image, 'rb') as f:
         platter = f.read()
@@ -1224,7 +1253,7 @@ def make_platter(workdir, log, swap=False, boot=False):
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
-                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake'):
+                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),

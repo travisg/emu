@@ -27,8 +27,8 @@ depend on nothing here but the snapshot harness's REX case.
   X'800', the pool from X'1000' to X'6FFF' with its fence at X'4000', the
   filesystem from X'7000', the swapper and `K.NAME` from X'7800', and
   the node arena from X'7E00'.
-- **The pages are nearly full.** Page 0 has 158 words left and the
-  console's shell 32 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
+- **The pages are nearly full.** Page 0 has 148 words left and the
+  console's shell 19 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
   fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
   `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
   has 88 words of its one page left (see Modules).
@@ -95,7 +95,9 @@ queue. So when every task is asleep or waiting the idle node -- a branch to
 self -- has the processor, which with three tasks printing and sleeping
 behind the prompt is ~98% of the time, sampled through the debug port, and
 the same ~98% whether or not `--fast-io` is on, which is the sign that
-nothing is spinning on I/O.
+nothing is spinning on I/O. A tick that finds idle running and nothing
+woken since the last pick returns at once, and counts itself, which is
+the `IDLE` line of `STAT`.
 
 ## The rules
 
@@ -270,7 +272,9 @@ seven:
   its half revolution, runs three copies of `dskt.asm` at once: each writes
   and reads back a sector of its own 250 times, leaves its verdict on the
   platter where the harness reads it, and the kernel's count of tasks that
-  found the disc taken has to be more than zero. On the same machine, where
+  found the disc taken has to be more than zero. Across a line the shell
+  then prints, at ten characters a second, at most one tick in twenty may
+  find a task running rather than idle. On the same machine, where
   printing takes its time, `DUMP` then prints a file behind the prompt while
   a program that ignores Ctrl-C has the console and the key is struck: it
   has to reach the file's last line.
