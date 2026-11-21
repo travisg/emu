@@ -1201,28 +1201,22 @@ LDGCRD          SUBR
                 EXIT    LDGCRD
 
 ; The disc for the shell, and the disc given up: the claim every user of
-; DXFER makes, a tick's sleep at a time until it succeeds.  A task's call
-; through the vector makes it in KENTER; this is the shell's own, for the
-; loader and the directory's readers, which read the disc from the
-; shell's task.
+; DXFER makes, waiting in IOWT until it succeeds, and IOREL, which wakes
+; whoever waited.  A task's call through the vector makes it in KENTER;
+; this is the shell's own, for the loader and the directory's readers,
+; which read the disc from the shell's task.
 SHIOC           SUBR
 .L              MSK
                 CALL    IOTRY
                 JNZ     .W              ; ours?
                 UNM
                 EXIT    SHIOC
-.W              LDW     =1
-                LDX     SHME
-                STW     *T.DLY
-                LDW     =SSLP
-                LDX     SHME
-                STW     *T.STA
-                CALL    K.SWTCH
+.W              CALL    IOWT
                 JMP     .L
 SHIOR           SUBR
-                LDW     =X'FFFF'
-                SMB     IOLOCK
-                STW     IOLOCK
+                MSK
+                CALL    IOREL
+                UNM
                 EXIT    SHIOR
 
 ; The words free in the pool, below the fence and above it: the free

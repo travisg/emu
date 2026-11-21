@@ -247,12 +247,14 @@
 ;   only one task runs -- the shell's own -- need none of this.
 ;
 ; * THE DISC HAS ONE USER AT A TIME, and IOLOCK names it.  A task's call
-;   comes through KENTER, which claims the disc a tick's sleep at a time
-;   and gives it up when the body returns; the shell's loader makes the
-;   same claim for itself.  Everything behind the claim -- DXFER, and
-;   whatever is built on it -- therefore runs one activation at a time,
-;   across the wait for a transfer's completion too, and is written like
-;   any single-task routine.
+;   comes through KENTER, which claims the disc and gives it up when the
+;   body returns; the shell's loader makes the same claim for itself.  A
+;   claim that finds it taken waits in IOWT, marked waiting with a delay
+;   of X'FFFF', which nothing else stores, and IOREL, the one way the disc
+;   is given up, wakes every task so marked.  Everything behind the claim
+;   -- DXFER, and whatever is built on it -- therefore runs one activation
+;   at a time, across the wait for a transfer's completion too, and is
+;   written like any single-task routine.
 ;
 ; * A BYTE ADDRESS ABOVE WORD X'4000' IS NEGATIVE, and this machine's
 ;   compares are signed.  So the pool is in two parts with a fence
@@ -550,7 +552,8 @@ T.ACR           EQU     2               ; the four words of context the
 T.IXR           EQU     3               ; hardware and the switch move
 T.PCR           EQU     4
 T.MST           EQU     5               ; machine status: EXR, indicators, mode
-T.DLY           EQU     6               ; ticks left, while sleeping
+T.DLY           EQU     6               ; ticks left, while sleeping; X'FFFF',
+                                        ; while waiting for the disc
 T.MBX           EQU     7               ; the task's printer mailbox, one
                                         ; character; zero means empty
 T.NAM           EQU     8               ; two characters, for STAT
@@ -1409,6 +1412,9 @@ DBUSY           WORD    0               ; a transfer is in flight
 DWTR            WORD    X'FFFF'         ; the node whose transfer it is; -1 = none
 IOLOCK          WORD    X'FFFF'         ; the node that has the disc; -1 = free
 IOWAITS         WORD    0               ; times a task found it taken
+IOWFL           WORD    0               ; somebody waits in IOWT
+IOWLK           WORD    0               ; IOWT's caller, until the switch
+IOWOK           WORD    0               ; IOREL woke somebody
 DXUNI           WORD    0               ; DXFER's: the unit, set before every call...
 DXOP            WORD    0               ; ...zero to read, else write...
 DXSEC           WORD    0               ; ...the first sector's index...
@@ -1425,7 +1431,6 @@ DINT            DIN     1,0             ; each unit's status, by unit: the unit
 KELNK           WORD    0               ; KENTER's scratch: good under the mask
 KEARG           WORD    0               ; and no further, like every cell a
 KEBDY           WORD    0               ; blocking routine shares
-KERES           WORD    0
 QGLNK           WORD    0               ; Q.GET's, on the same terms
 NFREH           WORD    0               ; the first free node; zero: none
 NACNT           WORD    0               ; start-up's count over the arena
@@ -1510,7 +1515,8 @@ IDTCB           WORD SRUN, SHTCB,0,  0,  IDLE,  X'80', 0,  0,  'ID',0
 ; activation at a time and may keep their state in static cells like any
 ; other routine here, across the wait for the completion too.  IOTRY is
 ; the claim, for a caller that holds the mask: zero and the disc is the
-; running task's, anything else and it is somebody's already.
+; running task's, anything else and it is somebody's already, and then
+; the caller waits in IOWT and tries again.  IOREL gives it up.
 IOTRY           SUBR
                 LDW     IOLOCK
                 JPL     .BSY            ; free?
@@ -1524,16 +1530,70 @@ IOTRY           SUBR
                 LDW     =1
                 EXIT    IOTRY
 
+; Wait for the disc to be given up: the running task marked waiting, with
+; X'FFFF' for its delay -- read only while a task sleeps, so free to say
+; what this wait is for -- and IOWFL raised, then the processor handed
+; on.  Called masked from task context, and returns masked, to try the
+; claim again; the way back rides in ACR across the switch, which keeps
+; it, since the cell here is the next caller's.
+IOWT            STX     IOWLK
+                LDX     CURT
+                LDW     =X'FFFF'
+                STW     *T.DLY
+                STW     IOWFL
+                LDW     =SWAI
+                STW     *T.STA
+                LDW     IOWLK
+                JSX     SWTCH
+                CAX
+                MSK
+                JMP     *0
+
+; Give the disc up, and wake every task waiting for it -- all of them,
+; so a waiter that was stopped or killed meanwhile needs nothing mended:
+; one stopped is passed over and tries again when it is started.  Called
+; masked from task context; ACR comes back nonzero if anybody was woken.
+IOREL           SUBR
+                LDW     =X'FFFF'
+                STW     IOLOCK
+                CLR
+                STW     IOWOK
+                LDW     IOWFL
+                JNZ     .W              ; anybody waiting?
+                JMP     .X
+.W              CLR
+                STW     IOWFL
+                LDX     =SHTCB          ; once round the ring
+.L              LDW     *T.STA
+                CMW     =SWAI
+                JNE     .N              ; waiting,
+                LDW     *T.DLY
+                CMW     =X'FFFF'
+                JNE     .N              ; and for the disc?
+                CLR
+                STW     *T.DLY
+                STW     *T.STA
+                LDW     =1
+                STW     IOWOK
+.N              LDW     *T.NXT
+                CAX
+                CMW     =SHTCB
+                JNE     .L
+.X              LDW     IOWOK
+                EXIT    IOREL
+
 ; A task's call into a routine that needs the disc.  The vector's stub
 ; arrives here masked, by a JSX whose link addresses the word after it,
 ; which is the body's address, with the caller's argument in ACR and its
-; link in KELNK.  All three go into the caller's node,
-; because the wait for the disc is a sleep and the static cells belong to
-; whoever comes through next; then the claim, a tick's sleep at a time
-; until it succeeds; then the body, unmasked, with the argument in ACR,
-; which returns its answer here; then the disc is given up and the answer
-; goes back to the caller.  A task is in at most one such call, so one
-; set of node cells serves them all.
+; link in KELNK.  All three go into the caller's node, because the wait
+; for the disc is a wait like any other and the static cells belong to
+; whoever comes through next; then the claim, waiting in IOWT until it
+; succeeds; then the body, unmasked, with the argument in ACR, which
+; returns its answer here, kept in the node as well; then the disc is
+; given up, and if that woke anybody the processor is handed on once
+; before the answer goes back to the caller, or the caller, at the disc
+; again at once, would take it before any waiter ran.  A task is in at
+; most one such call, so one set of node cells serves them all.
 KENTER          STW     KEARG
                 LDW     *0              ; the body
                 LDX     CURT
@@ -1552,23 +1612,21 @@ KECLM           JSX     IOTRY
                 UNM
                 JSX     *0              ; the body
                 MSK
-                STW     KERES
-                LDW     =X'FFFF'
-                STW     IOLOCK
                 LDX     CURT
+                STW     *T.KAR          ; the answer
+                JSX     IOREL
+                JNZ     .YLD            ; anybody woken?
+.RET            LDX     CURT
                 LDW     *T.KLK
                 STW     KELNK
-                LDW     KERES
+                LDW     *T.KAR
                 LDX     KELNK
                 UNM
                 JSX     *0              ; and home
-.WAIT           LDX     CURT            ; taken: sleep a tick and try again
-                LDW     =1
-                STW     *T.DLY
-                LDW     =SSLP
-                STW     *T.STA
-                JSX     SWTCH
+.YLD            JSX     SWTCH           ; still runnable: once round
                 MSK
+                JMP     .RET
+.WAIT           JSX     IOWT
                 JMP     KECLM
 
 ; K.DREAD and K.DWRIT: ACR addresses three words in the caller's own core
@@ -2560,7 +2618,7 @@ LDBUF           RES     47              ; the loader's sector
 ; nothing in front of them to keep them where they are.
                 NTRY    SHTCB,SWTCB,IDTCB,NARB,NARN,SFREE,POOLH,QCONS,GETTY
                 NTRY    SECS,IDSECS,SWSECS,SWOUTS,SWINS,FREHD,IOLOCK,DXBUF,DXUNI,FSUNI
-                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,FSFND,DRD1
+                NTRY    SPAWN,KILLT,NALLOC,NFREE,IOTRY,IOWT,IOREL,FSFND,DRD1
                 NTRY    ALLOCW,ALLCHW,ALLOCB,ALLCHB
 
 SHMOD           EQU     0               ; shell.asm, next, as the console's shell

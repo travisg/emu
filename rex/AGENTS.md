@@ -27,8 +27,8 @@ depend on nothing here but the snapshot harness's REX case.
   X'800', the pool from X'1000' to X'6FFF' with its fence at X'4000', the
   filesystem from X'7000', the swapper and `K.NAME` from X'7800', and
   the node arena from X'7E00'.
-- **The pages are nearly full.** Page 0 has 148 words left and the
-  console's shell 19 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
+- **The pages are nearly full.** Page 0 has 101 words left and the
+  console's shell 25 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
   fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
   `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
   has 88 words of its one page left (see Modules).
@@ -210,9 +210,13 @@ Many tasks in one kernel:
   in the caller's node rather than in cells of its own, which is `Q.GET`
   and `KENTER`.
 - **The disc has one user at a time**, named by `IOLOCK`: a task's
-  `K.DREAD` or `K.DWRIT` waits its turn in `KENTER`, a tick's sleep at a
-  time, and the shell's loader makes the same claim, so the driver behind
-  the claim is written like any single-task routine. The swapper claims
+  `K.DREAD` or `K.DWRIT` waits its turn in `KENTER`, and the shell's
+  loader makes the same claim, so the driver behind the claim is written
+  like any single-task routine. A claim that finds it taken waits in
+  `IOWT`, marked waiting with `T.DLY` at X'FFFF', and `IOREL` -- the one
+  way the disc is given up -- wakes every task so marked; `KENTER` then
+  hands the processor on once, so the waiter gets the disc before the
+  releaser can take it again. The swapper claims
   it like anybody, with one exception: a shell's loader holds the disc
   for a whole load and may be the task waiting for core, and a holder
   that is waiting for core is not using the disc, so the swapper uses it
@@ -272,7 +276,9 @@ seven:
   its half revolution, runs three copies of `dskt.asm` at once: each writes
   and reads back a sector of its own 250 times, leaves its verdict on the
   platter where the harness reads it, and the kernel's count of tasks that
-  found the disc taken has to be more than zero. Across a line the shell
+  found the disc taken has to be more than zero, and none of the three may
+  be seen asleep in a thousand looks, which is what a claim that polled
+  the lock would be. Across a line the shell
   then prints, at ten characters a second, at most one tick in twenty may
   find a task running rather than idle. On the same machine, where
   printing takes its time, `DUMP` then prints a file behind the prompt while

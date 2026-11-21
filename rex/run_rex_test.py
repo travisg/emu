@@ -60,7 +60,8 @@ runs three copies of the disc exerciser (dskt.asm) at once. They print
 nothing; each leaves its verdict in a sector of its own, read here off
 the platter, and the kernel's count of tasks that found the disc taken
 must not be zero -- three tasks that never met at the disc prove nothing
-about the lock. Across a line the shell then prints there, at ten
+about the lock -- and none of them may ever be seen asleep, which is
+what a claim that polled the lock would be. Across a line the shell then prints there, at ten
 characters a second, nearly every tick has to find the machine idle,
 which a task spinning on the printer would not. The same machine, where a file takes minutes of its time
 to print, then has DUMP print one behind the prompt while a program that
@@ -159,6 +160,7 @@ REX_CONTROL names a negative control, each of which must FAIL:
            console's program
   nobrkq   K.BRKQ answering a task without the console, so a BASIC behind
            the prompt takes the Ctrl-C typed there
+  nowake   the disc given up without waking whoever waits for it
   spin     the shell's wait for a character to print never marking it
            waiting, so it spins through every character it prints
   nokillwake  KILLT handing nothing back, so a KILL from the console of
@@ -202,7 +204,7 @@ LOW_ONLY = ('BASIC', 'SHELL')
 
 # The pool and the node arena, as rex.asm lays them out.
 POOLB, POOLH, POOLE = 0x1000, 0x4000, 0x7000
-NARB, NARN, T_LEN, T_STA, T_NAM, SOFF, SFREE, SCON = 0x7e00, 24, 19, 0, 8, 2, 4, 5
+NARB, NARN, T_LEN, T_STA, T_NAM, SSLP, SOFF, SFREE, SCON = 0x7e00, 24, 19, 0, 8, 1, 2, 4, 5
 T_ID, T_TTY = 10, 18
 
 
@@ -864,6 +866,10 @@ def disc_session(emu, image):
         # KECLM is JSX IOTRY / SAZ / JMP .WAIT: without the jump a task
         # that finds the disc taken carries on into the body
         emu.writew(symbols.value('KECLM') + 2, [NOP])
+    if CONTROL == 'nowake':
+        # IOREL's JNZ .W: SAZ / JMP .W -- without the jump nobody waiting
+        # for the disc is ever woken
+        emu.writew(listing_word('JNZ     .W', 'IOREL           SUBR') + 1, [NOP])
     if CONTROL == 'spin':
         # SHPUTC's wait marks the shell waiting before it hands the
         # processor on: without the store it is picked again at once
@@ -887,6 +893,23 @@ def disc_session(emu, image):
     idle_line = re.compile(rb'^0 ID RUN', re.M)
     emu.wait_for_output(idle_line, start=mark, timeout=120)
     together = len(re.findall(rb'^\d+ DS ', s.since(mark), re.M)) == DSKT_COPIES
+
+    # A claim that finds the disc taken waits to be woken when it is given
+    # up, rather than sleeping a tick and looking again. dskt.asm never
+    # sleeps of its own accord, so an exerciser seen asleep is one polling
+    # the lock. Looked at a thousand times while all three are there.
+    ds = ((ord('D') | 0x80) << 8) | (ord('S') | 0x80)
+    looks = asleep = 0
+    while looks < 1000:
+        time.sleep(0.002)
+        emu.halt()
+        nodes = emu.memw(NARB, DSKT_COPIES * T_LEN)
+        emu.run()
+        nodes = [nodes[i * T_LEN:(i + 1) * T_LEN] for i in range(DSKT_COPIES)]
+        if not all(n[T_STA] != SFREE and n[T_NAM] == ds for n in nodes):
+            break
+        looks += 1
+        asleep += any(n[T_STA] == SSLP for n in nodes)
 
     # ...and then none.
     for _ in range(400):
@@ -941,6 +964,10 @@ def disc_session(emu, image):
     # above say so more plainly than this would.
     if not together:
         raise AssertionError('STAT never showed the three exercisers on the ring together')
+    if looks < 200:
+        raise AssertionError('only %d looks at the exercisers while all three were there' % looks)
+    if asleep:
+        raise AssertionError('%d of %d looks found an exerciser asleep' % (asleep, looks))
 
     # A Ctrl-C is for the program that has the console. DUMP, behind the
     # prompt, has minutes of machine time's printing to do; NAP has the
@@ -1253,7 +1280,7 @@ def make_platter(workdir, log, swap=False, boot=False):
     elif CONTROL in ('', 'nohello', 'nolock', 'nosave', 'noguard', 'noswapin', 'nosys', 'nopark',
                      'nolatch', 'sysopen', 'noseg', 'onlycon', 'onetty', 'nogetty',
                      'nounit', 'dirunit', 'nodata', 'fcwho', 'nohold', 'nobreak',
-                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin'):
+                     'noloadstop', 'nodetach', 'nobrkq', 'nokillwake', 'spin', 'nowake'):
         files = []
         jobs = [('JOB%d.BA' % n, b'\n'.join(job_lines(n)) + b'\n') for n in range(1, JOBS + 1)] if swap else []
         for name, data in [('PAD.TX', PAD), ('MSG.TX', MSG), ('CMDS.CM', CMDS), ('INIT.CM', INIT),

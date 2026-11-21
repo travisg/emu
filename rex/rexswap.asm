@@ -71,9 +71,9 @@ SWAPR           JSX     SWINIT
                 LDW     SWBOR
                 JNZ     .NAP            ; on a borrowed disc, that was all
                 JSX     SWBRNG
-                LDW     =X'FFFF'
-                SMB     IOLOCK
-                STW     IOLOCK
+                MSK
+                CALL    IOREL
+                UNM
 ; What is left is waiting for something -- a task's second in core to
 ; run out, the disc to come free -- so a few ticks pass before the next
 ; look.
@@ -104,16 +104,11 @@ SWINIT          SUBR
                 LDW     *DE.CNT
                 SMB     SWSECS
                 STW     SWSECS
-.IX             LDW     =X'FFFF'
-                SMB     IOLOCK
-                STW     IOLOCK
+.IX             MSK
+                CALL    IOREL
+                UNM
                 EXIT    SWINIT
-.IW             LDX     =SWTCB
-                LDW     =1
-                STW     *T.DLY
-                LDW     =SSLP
-                STW     *T.STA
-                CALL    SWTCH
+.IW             CALL    IOWT
                 JMP     .IL
 
 ; Is there anything to do?  A task asking for core, or one that can run
