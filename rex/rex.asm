@@ -311,9 +311,9 @@
 ;              vector, then the exported cells
 ;   0040-      page 0: START; then ISRBEG..ISREND, which is SCHED, SERV,
 ;              KICK, PICK, SWTCH, Q.PUT and DSERV; then the kernel cells,
-;              the console queue, the terminal table and the other
-;              terminals' queues' descriptors, the nodes of the tasks that are here
-;              from power-on, the disc -- IOTRY, KENTER, DXFER -- Q.GET,
+;              the console queue's descriptor, the terminal table and the
+;              other terminals' queues' descriptors, the nodes of the tasks
+;              that are here from power-on, the disc -- IOTRY, KENTER, DXFER -- Q.GET,
 ;              the idle task, the allocator, the node arena's two doors,
 ;              and the console's shell's line and loader sector
 ;   0800-      page 1: the shell (shell.asm, the next file of this deck)
@@ -328,8 +328,8 @@
 ;              itself
 ;   7800-7BDC  the swapper (rexswap.asm): its task, its table of extents
 ;              in the swap file, and two sectors of block lists
-;   7BDD-7CB7  K.NAME's parser (rexname.asm, the last), then the
-;              other terminals' queues' rings
+;   7BDD-7D37  K.NAME's parser (rexname.asm, the last), then the
+;              terminals' queues' rings
 ;   7E00-7FC7  the node arena
 ;
 ; Build with make -C rex: asm703.py over rexmac.asm, this file, shell.asm,
@@ -1378,9 +1378,8 @@ K3FFF           EQU     X'3FFF'         ; a transfer's word count; the unit is a
 ; several typed lines, which is more than a Model 33 can deliver in the
 ; fiftieth of a second the shell waits to be picked.  Past that it drops,
 ; the way a teletype drops what nobody is reading.
-QCONS           WORD    0,0,0,QCONSN,QCONSB,X'FFFF'
+QCONS           WORD    0,0,0,QCONSN,QCONSB,X'FFFF' ; its ring is in rexname.asm's page
 QCONSN          EQU     128
-QCONSB          RES     QCONSN
 
 ; The terminals: the console's teletype, and three teletypes on the
 ; multiplexer's channels 0 to 2, one block each.  The other three
@@ -1465,15 +1464,18 @@ IOTRY           SUBR
                 EXIT    IOTRY
 
 ; A task's call into a routine that needs the disc.  The vector's stub
-; arrives here masked with the body's address in ACR and the caller's link
-; and argument in KELNK and KEARG.  All three go into the caller's node,
+; arrives here masked, by a JSX whose link addresses the word after it,
+; which is the body's address, with the caller's argument in ACR and its
+; link in KELNK.  All three go into the caller's node,
 ; because the wait for the disc is a sleep and the static cells belong to
 ; whoever comes through next; then the claim, a tick's sleep at a time
 ; until it succeeds; then the body, unmasked, with the argument in ACR,
 ; which returns its answer here; then the disc is given up and the answer
 ; goes back to the caller.  A task is in at most one such call, so one
 ; set of node cells serves them all.
-KENTER          LDX     CURT
+KENTER          STW     KEARG
+                LDW     *0              ; the body
+                LDX     CURT
                 STW     *T.KDS
                 LDW     KELNK
                 STW     *T.KLK
@@ -1514,62 +1516,51 @@ KECLM           JSX     IOTRY
 ; is the controller's status, zero for a clean transfer.
 KDREAD          MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =KDRB
-                JMP     KENTER
+                JSX     KENTER
+                WORD    KDRB
 KDWRIT          MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =KDWB
-                JMP     KENTER
+                JSX     KENTER
+                WORD    KDWB
 
 ; The file calls: each to its body in rexfs.asm.
 KLOOK           MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBLOOK
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBLOOK
 KOPEN           MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBOPEN
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBOPEN
 KGETC           MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBGETC
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBGETC
 KPUTC           MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBPUTC
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBPUTC
 KCLOSE          MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBCLOS
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBCLOS
 KDELET          MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBDELE
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBDELE
 KRENAM          MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBRENA
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBRENA
 
 KSQUSH          MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBSQSH
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBSQSH
 KDIRNT          MSK
                 STX     KELNK
-                STW     KEARG
-                LDW     =FBDIRN
-                JMP     KENTER
+                JSX     KENTER
+                WORD    FBDIRN
 
 ; K.NAME: no disc, so no claim -- masked from the first instruction to
 ; the last, which is what lets the parser keep cells of its own.

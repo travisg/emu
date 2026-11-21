@@ -27,9 +27,8 @@ depend on nothing here but the snapshot harness's REX case.
   X'800', the pool from X'1000' to X'6FFF' with its fence at X'4000', the
   filesystem from X'7000', the swapper and `K.NAME` from X'7800', and
   the node arena from X'7E00'.
-- **The pages are nearly full.** Page 0 has a few dozen words left and
-  the console's shell under two hundred before X'1000', where the pool
-  begins; `build/rex.lst` shows where each ends. Running over either
+- **The pages are nearly full.** Page 0 has 190 words left and the
+  console's shell 171 before X'1000', where the pool begins; `build/rex.lst` shows where each ends. Running over either
   fails the build -- "assembled twice" at the shell's `ORG` for page 0, a
   `RES` below zero at the end of `shell.asm` for page 1. BASIC's module
   is within a few words of its one page (see Modules).

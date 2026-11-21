@@ -121,9 +121,10 @@ KNN             WORD    0               ; how many more it will take,
 KNT             WORD    0               ; and the character in hand
                 LPOOL
 
-; The other terminals' input queues' rings, out of page 0, where their
+; The terminals' input queues' rings, out of page 0, where their
 ; descriptors are: Q.PUT and Q.GET reach a ring by its descriptor's word
 ; address, so it may be anywhere.
+QCONSB          RES     QCONSN
 TMQ1B           RES     TMQN
 TMQ2B           RES     TMQN
 TMQ3B           RES     TMQN
