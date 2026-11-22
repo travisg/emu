@@ -75,8 +75,12 @@ disks/cpm/zexall.com            6e2da55147a04f28d303d5da6a1e6b771557ac244653590a
 # tape as the diagnostics are; 393295B is the Conversational FORTRAN compiler
 # for a 4K machine and 394002B its run-time library, absolute tapes that load
 # under it (test/run_ray703_fortran_test.py); 392325 is the math library,
-# relocatable text (test/run_ray703_math_test.py).
+# relocatable text (test/run_ray703_math_test.py). 390470 is SYM I/PREP, the
+# one-pass assembler, and PTIOS_SYM the SYM source of PTIOS, which SYM I
+# assembles back into PTIOS.bin (test/run_ray703_sym_test.py).
 roms/703/tapes/PTIOS.bin        ee003d017ac22d90340e2c73e35088f7ff0d85b8f7029ca7722d405a1ff250c0  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/PTIOS.bin
 roms/703/tapes/393295B.bin      42630ce45c4ffec11366ac621a4f0831f3899e76f2dc86afce1d178313b2e6a5  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/393295B.bin
 roms/703/tapes/394002B.bin      27f694d68db6ccb21d045f97f7715c30a3181d380984cc78f437ef2e31d5f3fb  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/394002B.bin
 roms/703/tapes/392325.bin       4c45d4ff62a0eb602412e95076fbb6976236463754e342850bb4795b999b50db  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/392325.bin
+roms/703/tapes/390470.BIN       cc0df9070e4463359b14100161a05fef1264a11e24cc57248fe134adc736486b  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/390470.BIN
+roms/703/tapes/PTIOS_SYM.bin    034df3b3668b8796f2f8dd4ecc319a1c0d15e682295ac8e508beff2b6bedbf1a  ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/PTIOS_SYM.bin

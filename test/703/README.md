@@ -149,6 +149,45 @@ them, and `../run_ray703_math_test.py` calls the result routine by routine.
 Its module doc says which two routines the tape has at mismatched revisions
 and how each is run.
 
+## SYM I
+
+    make -C test ray703-sym-test
+
+`390470.BIN` is SYM I/PREP, Raytheon's one-pass assembler for a 4K machine
+(7/10/70), and `PTIOS_SYM.bin` the SYM source of PTIOS. SYM I assembles the
+source back into PTIOS's binary tape, frame for frame, the tape's last word
+included -- a check word that no card of the listing shows, which SYM I
+computes. It loads at 5B0-FF5, starts at 800, and brings its own
+interrupt-driven driver for the teletype, the reader and the punch; its
+symbol table grows down from 5AF.
+
+At its `??` it reads a line feed and two characters, no carriage return:
+`CH`, `CT` or `CK` takes the source from the high speed reader, the
+teletype's reader or the keyboard, `CJ` or `CP` punches the object on the
+high speed punch or the teletype's; `SA` assembles absolute and `S ` (a
+space) relocatable. It stops for the operator by rolling a code through the
+accumulator's lamps until SENSE 3 goes up and comes down: 1 to ready the
+source, 2 to ready the punch once the listing is done, 3 when it has
+punched; a code above F00 is fatal, and the card goes to the teletype with
+a letter in front. `../run_ray703_sym_test.py` drives it and is the
+reference.
+
+SENSE 0 is the listing. SYM I assembles into core and lists afterwards,
+walking what it made, one line per word, and tests SENSE 0 before each:
+up, the listing stops there and the punch is wanted; down, it goes on. So
+the operator can skip a listing or cut one short, at ten characters a
+second worth having. With the source at the keyboard, SENSE 0 down also
+has each card answered as it is typed, one card behind: the previous
+card's address and word, `*` in front when it holds a forward reference
+not yet resolved (`* 0100 87FF` for `LDW ONE` before `ONE` is defined; the
+final listing has it as `0100 8102`). SENSE 1 and 2 and the external sense
+line are tested nowhere in SYM I; SENSE 3 is the operator's continue.
+
+`S ` lists the program from word 0 and punches relocatable text in the 1968
+loader's records, which `tools/reload703.py` decodes, but the run stops
+short of the last record and its END code: what that wants is not yet
+known. `P` (PREP) and `X` (a bootstrap) have not been tried.
+
 ## Where things stand
 
 Both listings are transcribed in full and reconcile against their own trailers.

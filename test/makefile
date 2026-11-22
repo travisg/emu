@@ -113,7 +113,7 @@ MKDISC703    := ../tools/mkdisc703.py
 RAY703_ROMS  := ../roms/703
 RAY703_DISKS := ../disks
 
-.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-dis-test ray703-asm-test ray703-diag-test ray703-math-test ray703-fortran-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
+.PHONY: ray703 ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-test ray703-basic-test ray703-disc-test ray703-boot-test ray703-dis-test ray703-asm-test ray703-diag-test ray703-math-test ray703-fortran-test ray703-sym-test ray703-listings ray703-verify ray703-boot-disc ray703-blank-disc
 
 ray703: ray703-demo ray703-tape ray703-basic ray703-disc ray703-boot ray703-listings
 
@@ -247,3 +247,8 @@ ray703-math-test:
 # the reader and the punch.
 ray703-fortran-test:
 	./run_ray703_fortran_test.py
+
+# SYM I assembles PTIOS's source off the reader, and what it punches has to
+# be PTIOS's binary tape.
+ray703-sym-test:
+	./run_ray703_sym_test.py
