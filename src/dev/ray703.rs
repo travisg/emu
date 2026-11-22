@@ -489,12 +489,26 @@ const FN_PUNCH: u8 = 0x6;
 const TAPE_STATUS_OFF_LINE: u16 = 0x8000;
 const TAPE_STATUS_NOT_READY: u16 = 0x4000;
 
+/// Frames a second through the reader (706 UM 5-6.1).
+const READER_FRAMES_PER_SEC: u64 = 300;
+
 /// High speed paper tape reader, DIO device 13.
 ///
 /// Read-only and one frame at a time, which is all the hardware was: "a
 /// unidirectional photoelectric reader capable of reading 300 characters per
 /// second". A tape is small enough to hold in memory outright -- the whole
 /// point of an absolute paper tape is that it fits in the machine it loads.
+///
+/// Each frame comes a frame time after the read that asked for it (5-6.9:
+/// "the first interrupt will occur within 3.3 milliseconds", the rest at
+/// that rate), and a disconnect in the meantime means it never comes
+/// ("its interrupt capability is inhibited", 5-6.4.1). A driver that reads a
+/// record with `DIN 13,5` and disconnects on its carriage return depends on
+/// both: SYM I's does, and with the next frame raising the level before the
+/// disconnect, that pulse waits in the cpu's latch and is taken by the next
+/// request the driver makes, which loses a record. So the frame time is kept
+/// under `--fast-io`, as the Kaypro's floppy keeps its byte time; under
+/// `--no-throttle` it is only cycles.
 pub struct TapeReader703 {
     level: u8,
     frames: Vec<u8>,
@@ -503,19 +517,24 @@ pub struct TapeReader703 {
     /// a transfer, and cleared by a disconnect. PTB issues its DOT once and
     /// keeps the tape moving with the DIN that takes each frame.
     running: bool,
+    /// Cycles until the moving tape brings the next frame to the lamp.
+    remaining: u32,
     frame: Option<u8>,
     /// The status word's bit 7, as the teletype's: set by the pulse, cleared
     /// by the transfer that answers it or by a DOT.
     irq: bool,
+    /// Cycles to a frame at the pacing rate.
+    frame_cycles: u32,
 }
 
 /// The tape is in the snapshot, as a disk is: it is what the reader holds.
 impl crate::snapshot::Snapshot for TapeReader703 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
-        let TapeReader703 { level: _wiring, frames, pos, running, frame, irq } = self;
+        let TapeReader703 { level: _wiring, frames, pos, running, remaining, frame, irq, frame_cycles: _session_pacing } = self;
         w.bytes(frames);
         w.u32(*pos as u32);
         w.bool(*running);
+        w.u32(*remaining);
         w.opt(frame, |w, f| w.u8(*f));
         w.bool(*irq);
     }
@@ -524,6 +543,7 @@ impl crate::snapshot::Snapshot for TapeReader703 {
         self.frames = r.bytes()?.to_vec();
         self.pos = r.u32()? as usize;
         self.running = r.bool()?;
+        self.remaining = r.u32()?;
         self.frame = r.opt(|r| r.u8())?;
         self.irq = r.bool()?;
         Ok(())
@@ -532,7 +552,32 @@ impl crate::snapshot::Snapshot for TapeReader703 {
 
 impl TapeReader703 {
     pub fn new(level: u8) -> Self {
-        TapeReader703 { level, frames: Vec::new(), pos: 0, running: false, frame: None, irq: false }
+        let mut reader = TapeReader703 {
+            level,
+            frames: Vec::new(),
+            pos: 0,
+            running: false,
+            remaining: 0,
+            frame: None,
+            irq: false,
+            frame_cycles: 0,
+        };
+        reader.set_pacing_hz(CLOCK_HZ);
+        reader
+    }
+
+    /// Keep 300 frames a second of wall clock at whatever rate machine time
+    /// is paced. There is no `set_fast_io`: see the type's doc.
+    pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        self.frame_cycles = (pacing_hz / READER_FRAMES_PER_SEC) as u32;
+    }
+
+    /// Start the tape toward the next frame, unless it is already moving.
+    fn read_forward(&mut self) {
+        if !self.running {
+            self.running = true;
+            self.remaining = self.frame_cycles;
+        }
     }
 
     /// Mount a tape image: one byte per frame, exactly as punched.
@@ -556,6 +601,7 @@ impl TapeReader703 {
         self.pos = 0;
         self.frame = None;
         self.irq = false;
+        self.remaining = self.frame_cycles;
     }
 
     /// Read forward or disconnect. Function 8 starts the reader as 9 does:
@@ -566,7 +612,11 @@ impl TapeReader703 {
     /// it stops the tape like any other code that is not read forward.
     pub fn dot(&mut self, function: u8, _val: u16) {
         self.irq = false;
-        self.running = function & FN_TAPE_MASK == FN_READ_FORWARD || function == FN_READER_START;
+        if function & FN_TAPE_MASK == FN_READ_FORWARD || function == FN_READER_START {
+            self.read_forward();
+        } else {
+            self.running = false;
+        }
     }
 
     /// The status word, or the frame. A transfer says in the same code
@@ -590,22 +640,26 @@ impl TapeReader703 {
         if function & FN_TRANSFER == 0 {
             return 0;
         }
-        self.running = function & FN_READ_FORWARD != 0;
+        // The frame taken, the tape goes on to the next one from here.
+        self.running = false;
+        if function & FN_READ_FORWARD != 0 {
+            self.read_forward();
+        }
         self.irq = false;
         self.frame.take().unwrap_or(0) as u16
     }
 
-    /// Advance the tape by one frame and report the level to pulse. Running
-    /// off the end simply stops interrupting, which is what an operator sees
-    /// when the tape runs out of the reader.
-    ///
-    /// The one device here that free-runs instead of keeping its real rate,
-    /// though `elapsed` is here for the day it should take its 300 frames a
-    /// second. Nothing watches a tape go by: the reader has no output, so its
-    /// rate decides only how long a load takes, where the teletype's rate is
-    /// the whole character-by-character texture of using the machine.
-    pub fn poll(&mut self, _elapsed: u32) -> u16 {
+    /// Spend `elapsed` cycles moving the tape, and when the next frame is
+    /// under the lamp, buffer it and report the level to pulse. A frame the
+    /// program has not taken stops the tape on it (5-6.4.3). Running off the
+    /// end simply stops interrupting, which is what an operator sees when the
+    /// tape runs out of the reader.
+    pub fn poll(&mut self, elapsed: u32) -> u16 {
         if !self.running || self.frame.is_some() || self.pos >= self.frames.len() {
+            return 0;
+        }
+        self.remaining = self.remaining.saturating_sub(elapsed);
+        if self.remaining > 0 {
             return 0;
         }
         self.frame = Some(self.frames[self.pos]);
@@ -1781,15 +1835,62 @@ mod tests {
         assert!(out.0.lock().unwrap().is_empty());
     }
 
+    /// One frame time, unpaced.
+    const READER_FRAME: u32 = (CLOCK_HZ / READER_FRAMES_PER_SEC) as u32;
+
+    /// 5-6.9: each frame a frame time after the read that asked for it.
+    #[test]
+    fn the_reader_reads_300_frames_a_second() {
+        let mut reader = TapeReader703::new(0);
+        reader.load_tape(vec![0x11, 0x22]);
+        reader.dot(FN_READ_FORWARD, 0);
+        assert_eq!(reader.poll(READER_FRAME - 1), 0, "the tape is still moving");
+        assert_eq!(reader.poll(1), 1);
+        assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x11);
+        assert_eq!(reader.poll(READER_FRAME - 1), 0);
+        assert_eq!(reader.poll(1), 1);
+        assert_eq!(reader.din(FN_TRANSFER), 0x22);
+    }
+
+    /// 5-6.4.1: a disconnect inhibits the interrupt of the frame on its way,
+    /// which is what lets a driver take a record's carriage return with a
+    /// reading transfer and disconnect after it, as SYM I's does. The next
+    /// read forward reads the frame after the one taken.
+    #[test]
+    fn a_disconnect_stops_the_frame_on_its_way() {
+        let mut reader = TapeReader703::new(0);
+        reader.load_tape(vec![0x8d, 0xa0, 0x8a]);
+        reader.dot(FN_READ_FORWARD, 0);
+        reader.poll(READER_FRAME);
+        assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x8d);
+        reader.poll(10);
+        reader.dot(FN_DISCONNECT, 0);
+        assert_eq!(reader.poll(10 * READER_FRAME), 0, "no interrupt after a disconnect");
+        reader.dot(FN_READ_FORWARD, 0);
+        assert_eq!(reader.poll(READER_FRAME), 1);
+        assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0xa0);
+    }
+
+    /// The frame time follows the pacing rate, as the punch's does.
+    #[test]
+    fn the_readers_frame_follows_the_pacing() {
+        let mut reader = TapeReader703::new(0);
+        reader.set_pacing_hz(3000);
+        reader.load_tape(vec![0x11]);
+        reader.dot(FN_READ_FORWARD, 0);
+        assert_eq!(reader.poll(9), 0);
+        assert_eq!(reader.poll(1), 1);
+    }
+
     #[test]
     fn a_tape_reader_needs_starting() {
         let mut reader = TapeReader703::new(0);
         reader.load_tape(vec![0x01, 0x02]);
-        assert_eq!(reader.poll(0), 0);
+        assert_eq!(reader.poll(READER_FRAME), 0);
         reader.dot(FN_READ, 0);
-        assert_eq!(reader.poll(0), 1);
+        assert_eq!(reader.poll(READER_FRAME), 1);
         assert_eq!(reader.din(FN_COLLECT), 0x01);
-        assert_eq!(reader.poll(0), 1);
+        assert_eq!(reader.poll(READER_FRAME), 1);
         assert_eq!(reader.din(FN_COLLECT), 0x02);
     }
 
@@ -1798,9 +1899,9 @@ mod tests {
         let mut reader = TapeReader703::new(3);
         reader.load_tape(vec![0xff]);
         reader.dot(FN_READER_START, 0);
-        assert_eq!(reader.poll(0), 1 << 3, "the level is configurable");
+        assert_eq!(reader.poll(READER_FRAME), 1 << 3, "the level is configurable");
         reader.din(FN_COLLECT);
-        assert_eq!(reader.poll(0), 0);
+        assert_eq!(reader.poll(READER_FRAME), 0);
         assert_eq!(reader.din(FN_COLLECT), 0);
     }
 
@@ -1808,7 +1909,7 @@ mod tests {
     fn an_empty_tape_never_interrupts() {
         let mut reader = TapeReader703::new(0);
         reader.dot(FN_READ, 0);
-        assert_eq!(reader.poll(0), 0);
+        assert_eq!(reader.poll(READER_FRAME), 0);
     }
 
     /// Table 5-16's codes, the 1968 listings', and the keyboard read's
@@ -1819,9 +1920,9 @@ mod tests {
             let mut reader = TapeReader703::new(0);
             reader.load_tape(vec![0x11, 0x22]);
             reader.dot(forward, 0);
-            assert_eq!(reader.poll(0), 1);
+            assert_eq!(reader.poll(READER_FRAME), 1);
             assert_eq!(reader.din(transfer), 0x11);
-            assert_eq!(reader.poll(0), 1, "the transfer read forward");
+            assert_eq!(reader.poll(READER_FRAME), 1, "the transfer read forward");
             assert_eq!(reader.din(transfer), 0x22);
         }
     }
@@ -1832,7 +1933,7 @@ mod tests {
         let mut reader = TapeReader703::new(0);
         reader.load_tape(vec![0x11]);
         reader.dot(0x3, 0);
-        assert_eq!(reader.poll(0), 0);
+        assert_eq!(reader.poll(READER_FRAME), 0);
         assert_eq!(reader.din(FN_STATUS), 0xc000);
     }
 
@@ -1845,12 +1946,12 @@ mod tests {
         assert_eq!(reader.din(FN_STATUS), 0xc000, "never selected");
         reader.dot(FN_READ_FORWARD, 0);
         assert_eq!(reader.din(FN_STATUS), 0x4000, "moving, nothing read yet");
-        reader.poll(0);
+        reader.poll(READER_FRAME);
         assert_eq!(reader.din(FN_STATUS), 0x0100);
         assert_eq!(reader.din(FN_STATUS), 0x0100, "asking twice changes nothing");
         assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x11);
         assert_eq!(reader.din(FN_STATUS), 0x4000);
-        reader.poll(0);
+        reader.poll(READER_FRAME);
         reader.dot(FN_DISCONNECT, 0);
         assert_eq!(reader.din(FN_STATUS), 0xc000, "5-6.4.1: bits 0 and 1 become true");
     }
@@ -1862,12 +1963,12 @@ mod tests {
         let mut reader = TapeReader703::new(0);
         reader.load_tape(vec![0x11, 0x22, 0x33]);
         reader.dot(FN_READ_FORWARD, 0);
-        reader.poll(0);
+        reader.poll(READER_FRAME);
         assert_eq!(reader.din(FN_TRANSFER), 0x11);
-        assert_eq!(reader.poll(0), 0, "stopped");
+        assert_eq!(reader.poll(READER_FRAME), 0, "stopped");
         assert_eq!(reader.din(FN_STATUS), 0xc000);
         assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0, "nothing in the buffer, and the tape moves");
-        assert_eq!(reader.poll(0), 1);
+        assert_eq!(reader.poll(READER_FRAME), 1);
         assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x22);
     }
 
@@ -1877,10 +1978,10 @@ mod tests {
         let mut reader = TapeReader703::new(0);
         reader.load_tape(vec![0x11, 0x22]);
         reader.dot(FN_READ_FORWARD, 0);
-        reader.poll(0);
+        reader.poll(READER_FRAME);
         reader.load_tape(vec![0x77]);
         assert_eq!(reader.din(FN_STATUS), 0x4000, "the old tape's frame went with it, and its interrupt");
-        reader.poll(0);
+        reader.poll(READER_FRAME);
         assert_eq!(reader.din(FN_TRANSFER | FN_READ_FORWARD), 0x77);
     }
 

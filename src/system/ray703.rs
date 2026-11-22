@@ -200,7 +200,8 @@ impl Ray703 {
 
     /// `--fast-io`: run the teletype, the punch and the disc at host speed
     /// instead of ten characters a second, a hundred and ten frames and half
-    /// a revolution per transfer. The tape reader already free-runs.
+    /// a revolution per transfer. Not the tape reader, whose frame time is
+    /// what lets a driver disconnect between records (`TapeReader703`).
     pub fn set_fast_io(&mut self) {
         self.tty.set_fast_io();
         self.mux.set_fast_io();
@@ -363,7 +364,7 @@ impl Bus for Ray703 {
 
     /// Hand the pacing rate to the devices whose periods are I/O completions:
     /// the teletype's character time, the punch's frame and the disc's
-    /// access. The reader takes no time at all -- it free-runs by design.
+    /// access, and the reader's frame.
     ///
     /// The clock takes it too: its crystal does not slow down because the
     /// cpu did. It sits out only `--fast-io`, which is the other axis --
@@ -373,6 +374,7 @@ impl Bus for Ray703 {
         self.tty.set_pacing_hz(hz);
         self.mux.set_pacing_hz(hz);
         self.punch.set_pacing_hz(hz);
+        self.reader.set_pacing_hz(hz);
         self.disc.set_pacing_hz(hz);
         self.tod.set_pacing_hz(hz);
     }
@@ -506,7 +508,8 @@ mod tests {
         assert!(sys.load_tape(2, vec![]).is_err());
         sys.io_write16(0xd1, 0); // DOT 13,1
         sys.io_write16(0xe9, 0); // DOT 14,9
-        sys.poll_interrupt_lines(0);
+        // a reader frame's time; fast-io leaves the reader its 300 a second
+        sys.poll_interrupt_lines((crate::cpu::ray703::CLOCK_HZ / 300) as u32);
         assert_eq!(sys.io_read16(0xd5), 0x11);
         assert_eq!(sys.io_read16(0xed), 0x22, "as punched, no eighth bit added");
 
@@ -655,7 +658,9 @@ mod tests {
         cpu.set_index(Ray703::ptb_index("ptb").unwrap());
         cpu.reset(&mut sys);
 
-        for _ in 0..10000 {
+        // 31 frames at 300 a second is some 59,000 cycles, nearly all of
+        // them spent a step at a time in PTB's wait.
+        for _ in 0..100000 {
             assert_eq!(cpu.step(&mut sys), StepResult::Ok);
         }
 

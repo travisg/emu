@@ -45,7 +45,7 @@ use crate::bus::Bus;
 use crate::cpu::Cpu;
 
 pub const MAGIC: &[u8; 8] = b"EMUSNAP\0";
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// Builds a snapshot.
 #[derive(Default)]
