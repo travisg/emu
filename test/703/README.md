@@ -188,6 +188,13 @@ loader's records, which `tools/reload703.py` decodes, but the run stops
 short of the last record and its END code: what that wants is not yet
 known. `P` (PREP) and `X` (a bootstrap) have not been tried.
 
+Off the teletype's reader (`CT`) it assembles PTIOS as it does off the
+high speed reader. Both readers keep their frame time under `--fast-io`,
+which is what lets SYM I's driver disconnect behind a card's carriage
+return before the next frame arrives; a frame on the next instruction would
+raise the level first, and the driver's next read would take that pulse and
+lose a card.
+
 ## Where things stand
 
 Both listings are transcribed in full and reconcile against their own trailers.

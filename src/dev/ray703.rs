@@ -203,6 +203,15 @@ pub struct Tty703 {
     /// arrive one per poll and keystrokes still queue behind an uncollected
     /// frame, only the time is gone.
     char_cycles: u32,
+    /// Cycles per frame from the reader, the same ten a second, which
+    /// `--fast-io` leaves alone. A program that reads a record with a
+    /// collecting DIN and disconnects on its carriage return has the time
+    /// the next frame takes to do it; a frame on the next poll would raise
+    /// the level first, the pulse would wait in the cpu's latch, and the
+    /// program's next read would take it -- SYM I's driver loses every
+    /// other card of its source that way. A typist is never that quick, so
+    /// the keyboard keeps `char_cycles`.
+    tape_cycles: u32,
     /// `--fast-io`, held separately from the zero it puts in `char_cycles` so
     /// that a pacing rate arriving afterwards cannot quietly put the teletype
     /// back to ten characters a second.
@@ -220,7 +229,8 @@ impl crate::snapshot::Snapshot for Tty703 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
         let Tty703 {
             console: _session, tape, tape_pos, level: _wiring, armed, echo, frame, tx_owed, tx_remaining,
-            rx_credit, char_cycles: _session_pacing, fast_io: _session_flag, irq,
+            rx_credit, char_cycles: _session_pacing, tape_cycles: _session_reader_pacing,
+            fast_io: _session_flag, irq,
         } = self;
         w.bytes(tape);
         w.u32(*tape_pos as u32);
@@ -263,6 +273,7 @@ impl Tty703 {
             // waiting, so the first character in is free.
             rx_credit: TTY_CHAR_CYCLES,
             char_cycles: TTY_CHAR_CYCLES,
+            tape_cycles: TTY_CHAR_CYCLES,
             fast_io: false,
             irq: false,
         }
@@ -289,8 +300,10 @@ impl Tty703 {
     /// Pace the character time against `pacing_hz` cycles to the second, so
     /// that ten characters a second is ten of wall clock rather than ten per
     /// 571,429 emulated cycles. `--fast-io` outranks it: a device asked to run
-    /// at host speed stays there whatever the cpu is paced to.
+    /// at host speed stays there whatever the cpu is paced to, all but the
+    /// reader (see `tape_cycles`).
     pub fn set_pacing_hz(&mut self, pacing_hz: u64) {
+        self.tape_cycles = tty_char_cycles(pacing_hz);
         if self.fast_io {
             return;
         }
@@ -417,8 +430,12 @@ impl Tty703 {
         // Credit accrues whether or not anyone is listening -- the operator
         // was typing at a machine that had not asked yet -- but never past one
         // character, so a burst cannot be delivered as a burst.
-        self.rx_credit = self.rx_credit.saturating_add(elapsed).min(self.char_cycles);
-        if self.armed && self.frame.is_none() && self.rx_credit >= self.char_cycles {
+        // The ceiling is the reader's frame, which `--fast-io` leaves at its
+        // ten a second; the keyboard needs only its own character time.
+        self.rx_credit = self.rx_credit.saturating_add(elapsed).min(self.tape_cycles);
+        let from_tape = self.tape_pos < self.tape.len();
+        let due = if from_tape { self.tape_cycles } else { self.char_cycles };
+        if self.armed && self.frame.is_none() && self.rx_credit >= due {
             // The reader's frame as punched, or the keyboard's character
             // with the eighth bit the Model 33 sends marking.
             let next = match self.tape.get(self.tape_pos) {
@@ -1776,12 +1793,34 @@ mod tests {
         tty.load_tape(vec![0x00, 0x7f, 0x8a]);
         tty.dot(FN_READ, 0);
         for frame in [0x00, 0x7f, 0x8a] {
-            assert_eq!(tty.poll(0), 1);
+            assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
             assert_eq!(tty.din(FN_COLLECT), frame);
         }
         tty.poll(0);
         assert_eq!(tty.din(FN_COLLECT), 0x80 | b'K' as u16, "the keyboard, marking");
         assert!(printed.0.lock().unwrap().is_empty(), "function 9 does not print what it reads");
+    }
+
+    /// Under `--fast-io` the reader still takes a character time a frame, so
+    /// a program can disconnect behind a record's carriage return before
+    /// the next frame comes; the keyboard is instant.
+    #[test]
+    fn the_teletypes_reader_keeps_its_rate_under_fast_io() {
+        let (mut tty, _) = tty_capturing(b"K");
+        tty.set_fast_io();
+        tty.load_tape(vec![0x8d, 0xb1]);
+        tty.dot(FN_READ, 0);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 1);
+        assert_eq!(tty.din(FN_COLLECT), 0x8d, "the carriage return, and the next read asked for");
+        assert_eq!(tty.poll(20), 0, "the next frame is still a character time off");
+        tty.dot(FN_DISCONNECT, 0);
+        assert_eq!(tty.poll(TTY_CHAR_CYCLES), 0, "and a disconnect means it never comes");
+        tty.dot(FN_READ, 0);
+        assert_eq!(tty.poll(0), 1, "the frame after the carriage return, once read again");
+        assert_eq!(tty.din(FN_TAKE), 0xb1);
+        tty.dot(FN_READ, 0);
+        assert_eq!(tty.poll(0), 1, "the tape out, the keyboard is instant");
+        assert_eq!(tty.din(FN_TAKE), 0x80 | b'K' as u16);
     }
 
     /// Function B collects with F, not D -- see the FN_ constants above.
