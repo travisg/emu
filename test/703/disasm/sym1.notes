@@ -1,0 +1,7 @@
+# Notes on SYM I/PREP, read by tools/dis703.py when it writes sym1.asm:
+# names, comments and code/data hints by the tape's address (see Notes in
+# the tool). Say how each thing is known: seen in a run, or read from the
+# code only.
+0800 > Where SYM I starts: the tape's last record is 8800.
+06F2 data ; the print routine's linkage constant, which the IXS in front skips: only a runaway print, its index gone negative, runs it (seen in the range and expression sessions)
+0EA6 data ; the checksum's running sum, which the IXS in front skips: an empty object runs the loop until the index turns and then runs the sum (seen in the range and expression sessions)

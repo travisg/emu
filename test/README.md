@@ -48,12 +48,13 @@ the terminal, and which opens a pty of its own with python's `pty`.
     make -C test ray703-math-test    # Raytheon's math library, against the host's arithmetic
     make -C test ray703-fortran-test # Conversational FORTRAN, through the reader and the punch
     make -C test ray703-sym-test     # SYM I assembles PTIOS's source back into its binary tape
+    make -C test ray703-disasm-test  # the disassembled period programs, held to their tapes
     make -C test snapshot-test       # save states, restored mid-flight
 
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
-The two Altair IRQ ones, the CTC one and the 703 ones but the four that run
+The two Altair IRQ ones, the CTC one and the 703 ones but the five that run
 Raytheon's tapes need nothing outside the repo, and CI runs them; the 6809 one, the Altair 8800 BASIC one, the
 RC2014 BASIC, CP/M and exerciser ones and the Kaypro's need images from
 outside it and run locally. The snapshot one is both: CI runs its cases

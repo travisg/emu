@@ -193,8 +193,9 @@ and the tape's check word, the image's byte sum folded once, which
 
 `S ` lists the program from word 0 and punches relocatable text in the 1968
 loader's records, which `tools/reload703.py` decodes, but the run stops
-short of the last record and its END code: what that wants is not yet
-known. `P` (PREP) and `X` (a bootstrap) have not been tried.
+short of the last record and its END code, with or without `--fast-io`:
+what that wants is not yet known. `P` (PREP) checks each card as it is
+typed and punches the source; `X` and `XH` punch a bootstrap and halt.
 
 Off the teletype's reader (`CT`) it assembles PTIOS as it does off the
 high speed reader. Both readers keep their frame time under `--fast-io`,
@@ -202,6 +203,14 @@ which is what lets SYM I's driver disconnect behind a card's carriage
 return before the next frame arrives; a frame on the next instruction would
 raise the level first, and the driver's next read would take that pulse and
 lose a card.
+
+## Disassemblies
+
+    make -C test ray703-disasm-test
+
+`disasm/` holds PTIOS and SYM I as decks that assemble back to their tapes,
+written by `../../tools/dis703.py` from the tape, traced runs and a notes
+file; its README says how they are made and kept.
 
 ## Where things stand
 

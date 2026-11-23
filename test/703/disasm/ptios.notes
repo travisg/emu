@@ -1,0 +1,6 @@
+# Notes on PTIOS, read by tools/dis703.py when it writes ptios.asm: names,
+# comments and code/data hints by the tape's address (see Notes in the tool).
+# PTIOS's own SYM source is on the museum's PTIOS_SYM tape, so its names
+# are to be had from there rather than made up.
+0080 > The Paper Tape I/O System, as the museum's site ran it in place of X-RAY.
+0080 > It copies its words from X'E2' on to word 0 and runs them there.
