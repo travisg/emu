@@ -1134,7 +1134,50 @@ BYTES   TEXT    "ABCD"
     check('...unless its page is selected', not errors_of(r) and not warnings_of(r), (errors_of(r), warnings_of(r)))
 
 
+def sym1():
+    """SYM I's dialect, as its source of PTIOS has it, against the same deck
+    in asm703's own terms: comment cards begun with an asterisk, the byte
+    form of a data word, which doubles the locations in it and not the
+    constants, and NOP as SYM I assembles it under --sym1. Then the tape
+    -a punches, read back."""
+    sym = """\
+* A COMMENT CARD
+         ORIG  X'80'
+SIZE     EQU   X'130'
+A        CLR
+         NOP
+B        D     /SIZE+SIZE-A
+         D     /B+1,B
+         END   A
+"""
+    hand = """\
+        ORG     X'80'
+A       CLR
+        SRA     0
+B       WORD    X'130'+X'130'-X'100'
+        WORD    X'104'+1,X'82'
+        END     A
+"""
+    same('sym1 comment cards and the byte form', sym, hand)
+    asm703.use_sym1()
+    try:
+        same('sym1 NOP is SRL 0', sym, hand.replace('SRA     0', 'SRL     0'))
+        r = build(sym)
+    finally:
+        asm703.GEN_ALIAS['NOP'] = 0x0900
+    check('sym1 NOP put back', build('        NOP\n')['core'][0] == 0x0900)
+
+    import tape703
+    tape = asm703.absolute_tape(r['core'], r['start'])
+    origin, image, last = tape703.read_tape(tape)
+    check('absolute tape origin and start', (origin, last) == (0x80, 0x8080), (hex(origin), last))
+    check('absolute tape image', image[:-2] == b''.join(w.to_bytes(2, 'big') for w in words(r)),
+          image.hex())
+    check('absolute tape check word', tape703.check_word(image), image[-2:].hex())
+
+
 def main():
+    sym1()
     literals()
     forward_literals()
     macros()

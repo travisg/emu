@@ -15,7 +15,9 @@ one-pass assembler for a 4K machine (DN 390470, 7/10/70), the SYM source of
 PTIOS (DN 393954, 1981), and the PTIOS binary tape the museum ran. SYM I
 assembles the source off the high speed reader and punches an absolute tape;
 that tape has to be the binary tape, frame for frame from its first record
-to its last, and the listing has to show every word of it.
+to its last, and the listing has to show every word of it. Then asm703.py
+--sym1 -a, given the same cards, has to punch the same tape: two assemblers,
+twenty years apart in their writing, agreeing to the frame.
 
 SYM I is written into core at its origin and started at word X'800', where
 its last record points. It owns the machine: its own interrupt-driven driver
@@ -48,19 +50,21 @@ read (`X'6FC'`), stepped on to its wait so the teletype is listening before a
 key goes in; its pause (`X'7B7'`), where SENSE 3 goes up; and the pause's
 wait for the switch to come down (`X'7D1'`).
 
-The binary tape's last word, X'16A', is in no card of the listing. SYM I
-punches the same word there, so it is the program's own, a check word of
-some kind; it is compared with the rest of the tape.
+The binary tape's last word, X'16A', is in no card of the listing: it is
+the tape's check word, the image's byte sum folded once (tools/tape703.py),
+compared with the rest of the tape.
 
 Negative controls, each of which must FAIL: SYM_CONTROL=source (one card's
-operand changed) and =tape (one frame of SYM I's tape changed, in its
-mnemonic table, so that LDX assembles as LDW).
+operand changed), =tape (one frame of SYM I's tape changed, in its
+mnemonic table, so that LDX assembles as LDW) and =nop (asm703 without
+--sym1, whose NOP is the 1968 listings' 0900 rather than SYM I's 0A00).
 """
 
 import os
 import queue
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -77,7 +81,7 @@ EMU_BIN = os.path.abspath(os.environ.get('EMU_BIN', os.path.join(ROOT, 'target',
 TAPE_DIR = os.path.abspath(os.environ.get('TAPE_DIR', os.path.join(ROOT, 'roms', '703', 'tapes')))
 LOG_FILE = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.join(HERE, 'ray703_sym_test.log')
 CONTROL = os.environ.get('SYM_CONTROL', '')
-CONTROLS = ('source', 'tape')
+CONTROLS = ('source', 'tape', 'nop')
 TIMEOUT = float(os.environ.get('SYM_TIMEOUT', '120'))
 
 SYM, SOURCE, BINARY = '390470.BIN', 'PTIOS_SYM.bin', 'PTIOS.bin'
@@ -236,6 +240,20 @@ def run(workdir, log):
         if records(frames) != records(binary):
             raise Failed('the punched tape\'s records are not the binary tape\'s: %d frames, not %d'
                          % (len(records(frames)), len(records(binary))))
+
+        # and asm703 --sym1, given the same cards, punches the same tape
+        cards = os.path.join(workdir, 'source.sym')
+        with open(cards, 'w') as f:
+            f.write('\n'.join(tape703.read_source(source)) + '\n')
+        ours = os.path.join(workdir, 'asm703.tape')
+        dialect = [] if CONTROL == 'nop' else ['--sym1']
+        r = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'asm703.py')] + dialect + [cards,
+                            '-a', ours], capture_output=True, text=True)
+        if r.returncode:
+            raise Failed('asm703 --sym1 does not assemble the source: %s' % (r.stdout + r.stderr).strip())
+        with open(ours, 'rb') as f:
+            if records(f.read()) != records(frames):
+                raise Failed('asm703 punches another tape than SYM I does')
         return len(listed), len(records(frames))
     finally:
         if emu.child.poll() is None:
@@ -277,7 +295,8 @@ def main():
     finally:
         os.chdir(HERE)
         shutil.rmtree(workdir, ignore_errors=True)
-    print('PASS: ray703 sym test, PTIOS assembled by SYM I: %d words listed, %d frames punched as on its binary tape (%s)'
+    print('PASS: ray703 sym test, PTIOS assembled by SYM I: %d words listed, %d frames punched as on its binary tape '
+          'and by asm703 --sym1 (%s)'
           % (listed, frames, EMU_BIN))
     return 0
 

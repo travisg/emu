@@ -16,12 +16,17 @@ are a core image behind a twelve-frame header:
     00 00 00
     8A cc cc              line feed, and the number of frames that follow
     ...                   the image, two frames to a word, high half first
+    00 ss                 a check word, counted with the image
     8D
 
 and often a last record of two frames after it, which looks like where to
 start: its low fourteen bits are 26A on X-RAY's tape, 545 on the relocating
-loader's. That reading is this tool's; no Raytheon document at hand
-describes the record.
+loader's. SYM I punches X'8000' with its END card's address there (8080 on
+PTIOS's tape, 8800 on its own), and the check word: the image's byte sum
+folded once, (sum >> 8) + sum, in the low half. Fifteen of the museum's
+absolute tapes carry it; X-RAY's site copy, BRAINWASH and the SYM I/PREP
+rev F tape do not. The rest of that reading is this tool's; no Raytheon
+document at hand describes the format.
 
 The header is twelve frames because that is what the PTB bootstrap takes to
 rewrite itself (DN 390364), so the same tape loads with nothing in core:
@@ -68,6 +73,32 @@ def read_tape(frames):
     return origin, image, int.from_bytes(t.group(1), 'big') if t else None
 
 
+def check_word(image):
+    """Whether the image's last word is the check word of the rest: True,
+    False, or None for an image too short to have one."""
+    if len(image) < 4 or len(image) % 2:
+        return None
+    s = sum(image[:-2])
+    return image[-2] == 0 and image[-1] == ((s >> 8) + s) & 0xff
+
+
+def read_source(frames):
+    """The cards of a SYM source tape: each a record that opens on a line
+    feed and closes on a carriage return, bit 7 set throughout, with
+    whatever is punched between one record and the next -- PTIOS's tape
+    has the card number there -- left out."""
+    cards, at = [], 0
+    while True:
+        lf = frames.find(b'\x8a', at)
+        if lf < 0:
+            return cards
+        cr = frames.find(b'\x8d', lf)
+        if cr < 0:
+            return cards
+        cards.append(bytes(c & 0x7f for c in frames[lf + 1:cr]).decode('ascii', 'replace').rstrip())
+        at = cr + 1
+
+
 def main():
     ap = argparse.ArgumentParser(description='read a Raytheon 700-series absolute paper tape')
     ap.add_argument('tape')
@@ -86,6 +117,10 @@ def main():
     words = (len(image) + 1) // 2
     print(f'{args.tape}: words {origin:04X}-{origin + words - 1:04X}, {len(image)} frames; '
           f'PTB index {(origin * 2 - 12) & 0xffff:04X}')
+    check = check_word(image)
+    if check is not None:
+        print('last word %04X: %s' % (int.from_bytes(image[-2:], 'big'),
+                                      'the check word' if check else 'not a check word'))
     if last is not None:
         print(f'last record {last:04X}: start at {last & 0x3fff:04X}?')
 

@@ -94,6 +94,15 @@ reference, so don't end a file on one.
 Source format follows the period listings: a label starts in column 0, the
 mnemonic is indented, and `;` begins a comment.
 
+SYM I's source assembles as it stands (PTIOS's, off the museum's tape, comes
+out as its binary tape to the frame): a card that begins with `*` or `'` is
+a comment, and a data word written `/EXPR` is SYM's byte form, the
+locations in it doubled and the constants not, as in a byte instruction's
+operand. Two things differ between Raytheon's assemblers, and `--sym1`
+takes SYM I's side: NOP is 0A00, SRL 0, where the 1968 listings' assembler
+printed 0900. `-a` punches a deck as SYM I punches it, Raytheon's absolute
+tape with its check word and start record (see absolute_tape).
+
     ; a comment
             ORG     X'40'
     START   LDX     COUNT           ; direct
@@ -288,6 +297,17 @@ DATA_OPS = {'WORD', 'DATA', 'D', 'BYTE', 'TEXT', 'STR', 'RES', 'LPOOL'}
 # but only inside conditionals it did not assemble, so no object was ever
 # printed beside it there; the relocating loader's card 1074 prints 0900.
 GEN_ALIAS = {'SXP': 0x0400, 'SXM': 0x0500, 'NOP': 0x0900}
+
+# SYM I (DN 390470, 7/10/70) writes NOP as 0A00, `SRL 0`, a logical shift
+# by nothing rather than the arithmetic one: its listing of PTIOS has seven
+# of them, and the museum's PTIOS tape agrees. `--sym1` assembles as SYM I
+# does, so a SYM I source comes out as its binary.
+SYM1_NOP = 0x0a00
+
+
+def use_sym1():
+    """Assemble NOP as SYM I does."""
+    GEN_ALIAS['NOP'] = SYM1_NOP
 
 # Shift mnemonics that take a trailing D, L or R to name their double-length
 # and single-byte variants. Appendix B of the manual, and the listings, print
@@ -967,6 +987,10 @@ def parse(path, seq=None):
             # full of them, and it cannot be confused with a character literal
             # or an X'..' constant because those never start a line.
             if text.startswith("'"):
+                continue
+            # SYM I's comment card: an asterisk in column 1, as PTIOS's
+            # source has them. A label cannot begin with one.
+            if text.startswith('*'):
                 continue
             # strip comments, but not a ';' inside a string literal
             stripped, quoted = [], False
@@ -1747,6 +1771,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
     targets = {}
     listing = []
     entry = entry_seg = None
+    start = None
     # The page selection in force, as (byte page, the segment of the module
     # it is a location in -- which in a module is all that is known of such
     # a one -- or None for an address), or None.
@@ -1764,7 +1789,19 @@ def _assemble_deck(statements, origin, relocatable, errors):
     pools = []
 
     def data(part, at, lineno, what):
-        v, c = Expr(part, symbols, at, lineno, counts).reloc()
+        text = part.strip()
+        if text.startswith('/'):
+            # SYM's byte form of a data word: the locations in it doubled,
+            # the constants not -- the rule a byte instruction's operand
+            # has (see encode2). PTIOS's source writes `D /PYTECT+PYTECT-A`
+            # where PYTECT is an EQU and A a location, and SYM I punched
+            # 2*130 - 2*E2 = 009C.
+            doubled = {name: v * 2 if counts.get(name) else v for name, v in symbols.items()}
+            dcounts = {name: c * 2 for name, c in counts.items()}
+            v, c = Expr(text[1:], doubled, at * 2, lineno, dcounts,
+                        here_count=2 * Expr(text[1:], symbols, at, lineno, counts).here_count).reloc()
+        else:
+            v, c = Expr(part, symbols, at, lineno, counts).reloc()
         return (v & 0xffff, *data_kind(lineno, c, relocatable, what))
 
     # The lint's view of what has been emitted: the last two statements
@@ -1964,6 +2001,9 @@ def _assemble_deck(statements, origin, relocatable, errors):
                     if n != 1:
                         raise AsmError(lineno, f'entry {arg.strip()!r} is not a location in the module')
                     entry &= (1 << SEG_SHIFT) - 1
+                elif arg:
+                    # where an absolute tape says to start (see absolute_tape)
+                    start = Expr(arg, symbols, addr, lineno, counts).value()
                 words = []
             elif op == 'NTRY':
                 names = [n.strip() for n in operand_list(arg or '')]
@@ -2104,7 +2144,7 @@ def _assemble_deck(statements, origin, relocatable, errors):
     for word in (sorted(core) if relocatable else range(size)):
         image += core.get(word, 0).to_bytes(2, 'big')
     return {'image': bytes(image), 'listing': listing, 'symbols': symbols,
-            'core': core, 'kinds': kinds, 'size': size, 'entry': entry,
+            'core': core, 'kinds': kinds, 'size': size, 'entry': entry, 'start': start,
             'entry_seg': entry_seg, 'segments': segments, 'targets': targets,
             'sizeb': any(b for _, b in segments), 'warnings': warnings, 'scoped': scoped,
             'entries': [(lineno, [(name, symbols[name], *defined[name]) for name in names])
@@ -2195,6 +2235,30 @@ def punch_tape(image, origin):
     if origin * 2 > len(image):
         raise AsmError(0, f'nothing is assembled at or above word {origin:#x}')
     return bytes([0x00] * 8 + [0xff] * 12) + image[origin * 2:]
+
+
+def check_word(body):
+    """The word a Raytheon absolute tape ends its image with: the image's
+    byte sum, folded once, (sum >> 8) + sum, in the low half. SYM I puts it
+    there, and fifteen of the museum's absolute tapes carry it."""
+    s = sum(body)
+    return ((s >> 8) + s) & 0xff
+
+
+def absolute_tape(core, start=None):
+    """A deck as SYM I punches it, Raytheon's absolute tape (see
+    tools/tape703.py): leader; a record of the origin; the image and its
+    check word, counted; and a record of where to start, X'8000' with the
+    END card's address, when it has one. The frames between are SYM I's,
+    as its punched PTIOS has them."""
+    lo, hi = min(core), max(core)
+    body = b''.join((core.get(a, 0) & 0xffff).to_bytes(2, 'big') for a in range(lo, hi + 1))
+    body += bytes([0, check_word(body)])
+    tape = bytes(100) + b'\x8a\x00\x02' + lo.to_bytes(2, 'big') + b'\x8d\x00\x00\x00'
+    tape += b'\x8a' + len(body).to_bytes(2, 'big') + body + b'\x8d\x00\x87\x00'
+    if start is not None:
+        tape += b'\x8a\x00\x02' + (0x8000 | start).to_bytes(2, 'big') + b'\x8d'
+    return tape + bytes(100)
 
 
 def write_listing(path, listing, symbols, scoped=None):
@@ -2293,6 +2357,9 @@ def main():
     # that reassembling a transcribed listing and diffing it against the object
     # code the 1968 assembler printed is a plain `diff` of two sorted files.
     ap.add_argument('-m', '--map', help='write "addr word" lines, one per assembled word')
+    ap.add_argument('-a', '--absolute', help='also write a Raytheon absolute tape, as SYM I punches one')
+    ap.add_argument('--sym1', action='store_true',
+                    help='assemble as SYM I does: NOP is 0A00, SRL 0, not 0900')
     ap.add_argument('-t', '--tape', help='also write a PTB-loadable paper tape image')
     # Must agree with PTB_LOAD_ORIGIN in src/system/ray703.rs, which is where
     # the machine presets the index register. A tape is a bare run of frames
@@ -2303,9 +2370,13 @@ def main():
                     help='word the tape loads at; must match PTB_LOAD_ORIGIN '
                          'in src/system/ray703.rs (default 0x100)')
     args = ap.parse_args()
+    if args.sym1:
+        use_sym1()
 
-    if not (args.output or args.object or args.map or args.listing or args.exports):
-        ap.error('nothing to write: give -o, --object, -m, -l or -x')
+    if not (args.output or args.object or args.map or args.listing or args.exports or args.absolute):
+        ap.error('nothing to write: give -o, -a, --object, -m, -l or -x')
+    if args.object and args.absolute:
+        ap.error('an absolute tape is of an absolute build; a module is --object')
     if args.object and args.org != '0':
         ap.error('--org places an absolute build; a module is placed by the loader')
 
@@ -2357,6 +2428,12 @@ def main():
         with open(args.tape, 'wb') as f:
             f.write(tape)
         print(f'{deck}: {len(tape)} frames -> {args.tape}')
+
+    if args.absolute:
+        tape = absolute_tape(core, r['start'])
+        with open(args.absolute, 'wb') as f:
+            f.write(tape)
+        print(f'{deck}: {len(tape)} frames -> {args.absolute}')
 
     if args.map:
         with open(args.map, 'w', encoding='utf-8') as f:

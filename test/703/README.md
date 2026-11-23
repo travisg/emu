@@ -183,6 +183,14 @@ not yet resolved (`* 0100 87FF` for `LDW ONE` before `ONE` is defined; the
 final listing has it as `0100 8102`). SENSE 1 and 2 and the external sense
 line are tested nowhere in SYM I; SENSE 3 is the operator's continue.
 
+`../../tools/asm703.py --sym1` assembles the same cards to the same tape,
+frame for frame (`-a` punches it as SYM I does), and the harness requires
+that too. What it took: SYM I's comment cards (`*`), its byte form of a
+data word (`D /PYTECT+PYTECT-A`, the locations doubled and the constants
+not), its NOP (0A00, `SRL 0`, where the 1968 listings' assembler has 0900)
+and the tape's check word, the image's byte sum folded once, which
+`tape703.py` now checks on any absolute tape.
+
 `S ` lists the program from word 0 and punches relocatable text in the 1968
 loader's records, which `tools/reload703.py` decodes, but the run stops
 short of the last record and its END code: what that wants is not yet
