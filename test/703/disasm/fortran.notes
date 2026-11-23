@@ -1,0 +1,21 @@
+# Notes on the Conversational FORTRAN compiler, read by tools/dis703.py when
+# it writes fortran.asm: names, comments and code/data hints by the tape's
+# address (see Notes in the tool). Say how each thing is known: seen in a
+# run, or read from the code only.
+0080 > Where the compiler starts: PTIOS's loader enters it at X'80', the tape's last record being 8080.
+0080 > It runs over PTIOS's resident words, below X'80', and compiles into memory from X'D00' up.
+00A7 > The command, read off the teletype through PTIOS's X'44' and waited for at its X'46'. Its first letter is
+00A7 > I (start again at X'80'), P (PREP: statements typed at the keyboard, each checked as it comes, an error
+00A7 > printed with an arrow under its column; at END it pauses at 0B07, punches the statements it accepted and pauses
+00A7 > again), B (punches what has been compiled as an absolute tape, records from X'CFD' and from X'1EFD', where
+00A7 > the symbols are), E (to PTIOS's loader, through X'40') or G (compile from unit 2). L as the second letter, or
+00A7 > the third after C, lists the source as it is read; C reads on past END. The letters were seen in the runs'
+00A7 > sessions, but C, tried once by hand (the reader ran out of tape); what P and B punch was read off tapes torn
+00A7 > off in sessions by hand.
+0227 > The report of an error the compiler finds in a statement: a JSX with the code behind it. The errors session
+0227 > printed ID MR NA CN DD MX from here, and DN LA SL OP RT, which come from elsewhere.
+0846 > The names the compiler knows, four words each: a code byte and five characters of name, then a word the
+0846 > compiler takes when it finds that name. The functions IAND IOR IEOR NOT ABS IABS SIGN ISIGN EXP ALOG SIN COS
+0846 > SQRT ATAN ISWCH FLOAT IFIX; after the word at 088A, the statements COMMON DIMENSION LOCAT FORMAT END RETURN
+0846 > GO GOTO IF CONTINUE CALL DO PAUSE REWIND BACKSPACE ENDFILE READ WRITE PRINT SUBROUTINE STOP. Read from the tape.
+0B07 > The operator's pause: SENSE 3 up, then down. PREP comes here before it punches and after (errors session).

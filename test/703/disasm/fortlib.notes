@@ -1,0 +1,11 @@
+# Notes on the Conversational FORTRAN run-time library, read by
+# tools/dis703.py when it writes fortlib.asm: names, comments and code/data
+# hints by the tape's address (see Notes in the tool). Say how each thing is
+# known: seen in a run, or read from the code only.
+0080 > Where the library starts: PTIOS's loader enters it at X'80', the tape's last record being 8080.
+0080 > It is loaded over the compiler and runs the program the compiler left from X'D00' up.
+0080 > The program it runs is interpreted: it sits from X'CFD' up, where the compiler's B punches it from, and no word past
+0080 > the library's last ran while the library ran one (all the sessions).
+08F6 > STOP: prints the STOP at 0A46, then leaves through PTIOS's X'40' for its loader.
+08FF > PAUSE: prints the PAUS at 0A44 and waits for SENSE 3 up, then down (statements session).
+0A35 ; the message for a function the program refers to and the library does not have, such as TANH (errors session)

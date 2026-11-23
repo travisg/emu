@@ -208,7 +208,8 @@ lose a card.
 
     make -C test ray703-disasm-test
 
-`disasm/` holds PTIOS and SYM I as decks that assemble back to their tapes,
+`disasm/` holds PTIOS, SYM I and Conversational FORTRAN's compiler and
+library as decks that assemble back to their tapes,
 written by `../../tools/dis703.py` from the tape, traced runs and a notes
 file; its README says how they are made and kept.
 

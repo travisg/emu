@@ -64,11 +64,19 @@ SYM1_RUNS = ['sym1-' + name for name in (
     'ptios-sa', 'ptios-s', 'ptios-ss0', 'teletype', 'keyboard-sa', 'keyboard-s', 'keyboard-errors',
     'undefined', 'operation', 'expression', 'duplicate', 'range', 'external', 'prep', 'boot', 'boot-h')]
 
+FORTRAN_SESSIONS = ('harness', 'statements', 'errors')
+FORTRAN_RUNS = ['fortran-' + name for name in FORTRAN_SESSIONS]
+FORTLIB_RUNS = ['fortlib-' + name for name in FORTRAN_SESSIONS]
+
 DECKS = [
     # PTIOS copies its words from X'E2' on to word 0 and runs them there
     Deck('ptios', 'PTIOS.bin', 'PTIOS, the Paper Tape I/O System, DN 393954 (1981)',
          ['ptios-fortran'], aliases=['0-7F=E2']),
     Deck('sym1', '390470.BIN', 'SYM I/PREP, the one-pass assembler, DN 390470 (7/10/70)', SYM1_RUNS),
+    Deck('fortran', '393295B.bin', 'Conversational FORTRAN, the compiler for a 4K machine, DN 393295 rev B',
+         FORTRAN_RUNS),
+    Deck('fortlib', '394002B.bin', 'Conversational FORTRAN, the run-time library, DN 394002 rev B',
+         FORTLIB_RUNS),
 ]
 
 

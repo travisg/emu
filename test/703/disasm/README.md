@@ -9,6 +9,8 @@ commenting. The tapes stay out of git, in `roms/703/tapes`
 |---|---|---|
 | `ptios.asm` | `PTIOS.bin` | the Paper Tape I/O System, DN 393954 (1981), 0080-016A |
 | `sym1.asm` | `390470.BIN` | SYM I/PREP, the one-pass assembler, DN 390470 (7/10/70), 05B0-0FF5 |
+| `fortran.asm` | `393295B.bin` | Conversational FORTRAN, the compiler for a 4K machine, DN 393295 rev B, 0080-0D04 |
+| `fortlib.asm` | `394002B.bin` | Conversational FORTRAN, the run-time library, DN 394002 rev B, 0080-0CF6 |
 
     make -C test ray703-disasm          # write the decks again
     make -C test ray703-disasm-test     # hold them to their tapes
@@ -20,7 +22,7 @@ commenting. The tapes stay out of git, in `roms/703/tapes`
 - **the tape**, through `tools/tape703.py`;
 - **runs**: which words of the program ran, with which extension register,
   and where control went, from an `emu --trace` of sessions that work the
-  program. `runs.py` makes them (`runs.py ptios`, `runs.py sym1`) and its
+  program. `runs.py` makes them (`runs.py fortran`, `runs.py sym1`) and its
   module doc says what each session does; the run files in `runs/` are what
   is kept;
 - **notes**: what a person knows, in `NAME.notes`, by the tape's address --
@@ -75,6 +77,13 @@ and comparing with what the other fifteen executed.
   PTIOS assembly) reaches 237 of the 442 words they executed beyond it, and
   claims 120 more that none of the sixteen sessions ran. So `not run` means
   what it says: reached by reading, unconfirmed.
+- **Conversational FORTRAN**'s compiler and library load over PTIOS from
+  X'80' and over each other, so their runs come from one trace each, split
+  by which of the loader's entries into X'80' started the program in core.
+  Every word either ran is an instruction on the tape or a cell it plants
+  one in, as the library does with its shift counts. The library interprets
+  what the compiler makes: the compiled program sits from X'CFD' up, past
+  the library's last word, and no word there ran.
 
 ## Limits
 
@@ -91,5 +100,4 @@ and comparing with what the other fifteen executed.
 ## Not yet
 
 Pass 1 for each program -- routine boundaries, a call graph, a name and a
-line for every routine -- and then the FORTRAN compiler and library, which
-want a run of their own, without PTIOS's.
+line for every routine.

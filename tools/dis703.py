@@ -13,12 +13,15 @@ Two steps. The first reduces an emulator trace of a run that works the
 program to what the disassembly needs from it -- which words were executed,
 and the extension register each one ran with:
 
-    dis703.py trace TRACE -o RUN.json [--until HI START]
+    dis703.py trace TRACE -o RUN.json [--program HI START N[,N...]]
 
 TRACE is `emu --trace` output, which may be a fifo: a run of any length
-reduces to a few thousand lines. `--until` is for a program another loads
-over: words from HI up count only until START has been entered twice, the
-second time being the loader starting what it loaded there.
+reduces to a few thousand lines. `--program` is for programs a loader
+loads over each other: words from HI up count only while the program
+started by the Nth entry into START is in core, an entry being a transfer
+to START from below HI (the loader's), so that a program's own jumps to its
+start do not count. Entries are numbered from 1, and a trace that begins
+at START begins with the first.
 
 The second writes the deck:
 
@@ -89,34 +92,40 @@ SKIPPERS = asm703.SKIPPERS
 TWO_WORD = set(asm703.GEN_TWOWORD)
 
 
-def reduce_trace(path, out, until=None):
+def reduce_trace(path, outs):
     """From a trace: the extension registers each executed word ran with,
     and every transfer other than to the next word or the one after (a
-    skip) -- branches, calls, returns and interrupt entries as seen."""
-    seen = collections.defaultdict(set)
-    flow = set()
-    hi, start = (until if until else (None, None))
-    entries, prev = 0, None
+    skip) -- branches, calls, returns and interrupt entries as seen.
+
+    `outs` is [(RUN.json, program)], all reduced in one pass; a program is
+    None or (HI, START, entries) as `--program` says. Returned, for each:
+    how many words ran, and how many entries into START there were."""
+    seen = [collections.defaultdict(set) for _ in outs]
+    flow = [set() for _ in outs]
+    entries, prev = [0] * len(outs), None
     with open(path) as f:
         for line in f:
             if not line.startswith('PC=') or len(line) < 29:
                 continue
             pc, ex = int(line[3:7], 16), int(line[27:29], 16)
             last, prev = prev, pc
-            if hi is not None:
-                if pc == start and last != start:
-                    entries += 1
-                if entries >= 2 and pc >= hi:
-                    continue
-            seen[pc].add(ex)
-            if last is not None and pc not in (last, last + 1, last + 2):
-                # a transfer from code another program loaded over this one
-                # is kept: it says who calls in, not what this one is
-                flow.add((last, pc))
-    with open(out, 'w') as f:
-        json.dump({'ran': {'%04X' % pc: sorted(v) for pc, v in sorted(seen.items())},
-                   'flow': ['%04X %04X' % e for e in sorted(flow)]}, f, indent=0)
-    return len(seen)
+            for k, (_, program) in enumerate(outs):
+                if program is not None:
+                    hi, start, which = program
+                    if pc == start and (last is None or last < hi):
+                        entries[k] += 1
+                    if pc >= hi and entries[k] not in which:
+                        continue
+                seen[k][pc].add(ex)
+                if last is not None and pc not in (last, last + 1, last + 2):
+                    # a transfer from code another program loaded over this
+                    # one is kept: it says who calls in, not what this one is
+                    flow[k].add((last, pc))
+    for (out, _), ran, edges in zip(outs, seen, flow):
+        with open(out, 'w') as f:
+            json.dump({'ran': {'%04X' % pc: sorted(v) for pc, v in sorted(ran.items())},
+                       'flow': ['%04X %04X' % e for e in sorted(edges)]}, f, indent=0)
+    return [(len(ran), n) for ran, n in zip(seen, entries)]
 
 
 def emulator_text(origin, words):
@@ -596,7 +605,7 @@ def main():
     t = sub.add_parser('trace', help='reduce an emulator trace')
     t.add_argument('trace')
     t.add_argument('-o', '--output', required=True)
-    t.add_argument('--until', nargs=2, metavar=('HI', 'START'))
+    t.add_argument('--program', nargs=3, metavar=('HI', 'START', 'N'))
     d = sub.add_parser('deck', help='write a deck for a tape')
     d.add_argument('tape')
     d.add_argument('--run', action='append', default=[], help='a reduced trace')
@@ -621,8 +630,11 @@ def main():
         return 0
 
     if args.cmd == 'trace':
-        until = tuple(int(x, 16) for x in args.until) if args.until else None
-        n = reduce_trace(args.trace, args.output, until)
+        program = None
+        if args.program:
+            hi, start, which = args.program
+            program = (int(hi, 16), int(start, 16), set(int(n) for n in which.split(',')))
+        (n, _), = reduce_trace(args.trace, [(args.output, program)])
         print('%s: %d words executed' % (args.output, n))
         return 0
 
