@@ -90,6 +90,8 @@
 //! output away from an earlier one.
 
 pub mod protocol;
+// a Unix socket: not in a wasm build
+#[cfg(not(target_arch = "wasm32"))]
 pub mod server;
 pub mod watch;
 

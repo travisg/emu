@@ -13,5 +13,8 @@ pub mod altair8800;
 pub mod kaypro;
 pub mod ray703;
 pub mod rc2014;
+// The command line's factory: it opens ROM and disk files and serial
+// lines and reads the host's clock. A page builds its machine itself.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod registry;
 pub mod sys09;

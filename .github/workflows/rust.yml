@@ -26,6 +26,14 @@ jobs:
     - name: Clippy
       run: cargo clippy --all-targets -- -D warnings
 
+    # The library minus its host frontends, and the 703 module for a page
+    # (web/); this fails when something host-only reaches the machines.
+    - name: Clippy for wasm32
+      run: |
+        rustup target add wasm32-unknown-unknown
+        cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
+        cargo clippy --manifest-path web/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+
     # the whole suite runs here: it needs no ROM images and no external
     # binaries -- see the Test section of AGENTS.md
     - name: Test

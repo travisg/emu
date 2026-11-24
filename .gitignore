@@ -13,6 +13,7 @@ __pycache__/
 
 # cargo
 /target
+/web/target
 
 # assembler outputs and end-to-end test logs in test/
 /test/*.log

@@ -17,7 +17,7 @@ The **8080 and the Altair 8800 are not ports either**: the core is written from 
 Prerequisites:
 
 - A Rust toolchain (`cargo`, edition 2021)
-- SDL2 development package (`libsdl2-dev` / `sdl2`) — the `sdl2` crate links it dynamically, and it is a hard dependency even for the terminal-only systems
+- SDL2 development package (`libsdl2-dev` / `sdl2`) — the `sdl2` crate links it dynamically, and it is a hard dependency even for the terminal-only systems (except in a wasm build, below)
 - `pkg-config` — the `sdl2` crate is built with `use-pkgconfig`, so SDL2 is located by `pkg-config sdl2` rather than by the linker's default search path. That is what makes a non-default prefix work (MacPorts' `/opt/local`, Homebrew's `/opt/homebrew` on Apple silicon); set `PKG_CONFIG_PATH` if SDL2 lives somewhere `pkg-config` doesn't already look
 
 ```bash
@@ -26,6 +26,8 @@ cargo build --release    # target/release/emu -- the interpreter cores are much 
 ```
 
 Dependencies are deliberately few: `ihex` (Intel HEX), `libc` (termios/poll), `sdl2`. Don't add more without a reason.
+
+**The library also builds for `wasm32-unknown-unknown`** (`cargo clippy --lib --target wasm32-unknown-unknown`, which CI runs): `libc` and `sdl2` are native-only dependencies, and the modules that need a host — the SDL and terminal frontends and the panels' drawing, serial lines, the launcher, the debug socket and the registry, which opens files and reads the host's clock — are left out of it, each `#[cfg]` saying why. What is left is the machines, the run loop and the models the frontends draw from (`PanelState`, `DiscRackState`, `Paper`). A host with no files builds a 703 from bytes (`Ray703::with_core_image`, `mount_disc_bytes`, `press_load`), and one that calls in once a frame runs it with `Emulator::run_cycles`, the run loop's own body with a cycle budget that returns rather than blocking on a halted machine. `web/` is that host: a package of its own (`emu703-web`, a `cdylib` importing nothing) exporting the 703 as a panel machine to a page — boot from a core image or from a platter with LOAD, the RUN/HALT/SINGLE/RESET switches, keys in and teletype output out, the PC lamps' duties and the rack's lamps; its module doc is the reference. `make -C web check` (needs the target, node, `roms/703/basic.bin` and `rex/build/rex.img`) drives it under node with no browser: Tiny BASIC runs a program, and REX boots off its platter through RUN, holds its PC on HALT, and runs a program off the disc. `WEB_CONTROL=no-run` is its negative control. There is no page yet.
 
 ## Run
 

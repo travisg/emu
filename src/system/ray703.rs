@@ -127,15 +127,7 @@ impl Ray703 {
         // It powers up stopped at zero, as the hardware does; the factory
         // stands in for the operator who set and started it
         // (`set_time_of_day`).
-        let mut sys = Ray703 {
-            core: Memory::new(CORE_BYTES),
-            tty: Tty703::new(console, 0),
-            mux: Mux703::new(0, unplugged),
-            reader: TapeReader703::new(0),
-            punch: TapePunch703::new(0),
-            disc: Disc74601::new(1),
-            tod: TodClock703::at_power_on(2),
-        };
+        let mut sys = Self::bare(console);
 
         match subsystem {
             "" => {
@@ -196,6 +188,39 @@ impl Ray703 {
         }
 
         Ok(sys)
+    }
+
+    /// The machine at power-on with nothing in core: the devices on their
+    /// levels, as `new` documents.
+    pub fn bare(console: ConsoleEndpoint) -> Self {
+        Ray703 {
+            core: Memory::new(CORE_BYTES),
+            tty: Tty703::new(console, 0),
+            mux: Mux703::new(0, unplugged),
+            reader: TapeReader703::new(0),
+            punch: TapePunch703::new(0),
+            disc: Disc74601::new(1),
+            tod: TodClock703::at_power_on(2),
+        }
+    }
+
+    /// A flat core image from word 0, for a host with no files.
+    pub fn with_core_image(image: &[u8], console: ConsoleEndpoint) -> Self {
+        let mut sys = Self::bare(console);
+        sys.core.load_at(0, image);
+        sys
+    }
+
+    /// Mount a platter from bytes, kept in memory; false if it is not
+    /// exactly one platter.
+    pub fn mount_disc_bytes(&mut self, unit: usize, data: Vec<u8>) -> bool {
+        self.disc.load_bytes(unit, data)
+    }
+
+    /// The controller's LOAD button: unit 0's sector 0, track 0 into words
+    /// 0-46. False with nothing on unit 0.
+    pub fn press_load(&mut self) -> bool {
+        self.disc.press_load(&mut self.core)
     }
 
     /// `--fast-io`: run the teletype, the punch and the disc at host speed
@@ -394,8 +419,8 @@ mod tests {
         Ray703::new(rom, ConsoleEndpoint::new(rx, Box::new(Vec::new())), subsystem)
     }
 
-    /// A path that exists and holds `bytes`. These constructors take a path
-    /// rather than bytes, so there is no way to test them without a file.
+    /// A path that exists and holds `bytes`: `new` takes a path rather than
+    /// bytes, so its tests need a file.
     fn scratch_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
         // The pid keeps two people running the suite on one machine from
         // fighting over the same file.
@@ -403,6 +428,13 @@ mod tests {
         let path = std::env::temp_dir().join(format!("emu-ray703-{pid}-{name}"));
         std::fs::write(&path, bytes).unwrap();
         path
+    }
+
+    #[test]
+    fn a_core_image_from_bytes_loads_at_word_0() {
+        let (_tx, rx) = mpsc::channel();
+        let m = Ray703::with_core_image(&[0x12, 0x34], ConsoleEndpoint::new(rx, Box::new(Vec::new())));
+        assert_eq!((m.peek8(0), m.peek8(1), m.peek8(2)), (Some(0x12), Some(0x34), Some(0)));
     }
 
     /// All of core is peekable -- the devices live on the DIO channel --

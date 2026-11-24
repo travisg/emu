@@ -1,0 +1,17 @@
+# The 703 as a WebAssembly module for a page to drive; see src/lib.rs.
+# A package of its own rather than a member of the emulator's, so the
+# emulator's build, tests and clippy are exactly what they are without it.
+[package]
+name = "emu703-web"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+emu = { path = ".." }
+
+[profile.release]
+opt-level = 3

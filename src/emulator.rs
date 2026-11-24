@@ -310,7 +310,11 @@ impl Emulator {
 
     pub fn run(&mut self) -> ExitReason {
         let reason = self.run_inner();
+        self.finish(reason)
+    }
 
+    /// Everything a run does once it has ended, however it was driven.
+    fn finish(&mut self, reason: ExitReason) -> ExitReason {
         // the debugger hears why before the flag pulls the process down
         if let Some(sink) = &self.sink {
             sink.event(DebugEvent::Exit(reason));
@@ -331,17 +335,18 @@ impl Emulator {
 
     /// Whether the machine is sitting still: halted with no step budget
     /// left. This is when the run loop waits on the channel instead of
-    /// polling it.
+    /// polling it, or, called in slices, returns.
     fn waiting(&self) -> bool {
         self.run_state == RunState::Halted && self.pending_steps == 0
     }
 
-    /// Drain pending commands. While waiting this blocks on the channel
-    /// (with a timeout so the shutdown flag stays responsive); otherwise it
+    /// Drain pending commands. While waiting, and if it may `block`, this
+    /// blocks on the channel (with a timeout so the shutdown flag stays
+    /// responsive), as `run` does; otherwise, as for `run_cycles`, it
     /// only picks up what has already arrived. `Err(())` means every sender
     /// has dropped -- without that, a halted wait would spin hot on
     /// Disconnected until the shutdown flag caught up.
-    fn pump_commands(&mut self) -> Result<(), ()> {
+    fn pump_commands(&mut self, block: bool) -> Result<(), ()> {
         loop {
             // The command is moved out of this scoped match before any
             // handler runs, ending the borrow of self.control: a
@@ -349,7 +354,7 @@ impl Emulator {
             // conflict with the handlers' `&mut self`.
             let cmd = {
                 let rx = self.control.as_ref().unwrap();
-                if self.waiting() {
+                if block && self.waiting() {
                     match rx.recv_timeout(Duration::from_millis(100)) {
                         Ok(c) => Some(c),
                         Err(RecvTimeoutError::Timeout) => None,
@@ -688,19 +693,40 @@ impl Emulator {
     }
 
     fn run_inner(&mut self) -> ExitReason {
+        self.run_until(None).expect("an unbounded run only returns to exit")
+    }
+
+    /// Run about `cycles` machine cycles and return `None`, never blocking:
+    /// for a host that calls in once a frame. A halted machine returns at
+    /// once. `Some` is the run ending, with what `run` would have returned
+    /// and done.
+    pub fn run_cycles(&mut self, cycles: u64) -> Option<ExitReason> {
+        let reason = self.run_until(Some(cycles))?;
+        Some(self.finish(reason))
+    }
+
+    fn run_until(&mut self, mut budget: Option<u64>) -> Option<ExitReason> {
+        let block = budget.is_none();
         loop {
+            if budget == Some(0) {
+                return None;
+            }
             if self.shutdown.load(Ordering::SeqCst) {
-                return ExitReason::Shutdown;
+                return Some(ExitReason::Shutdown);
             }
 
             if self.control.is_some() {
                 // every sender is gone: the frontend's shutdown store is in flight
-                if self.pump_commands().is_err() {
-                    return ExitReason::Shutdown;
+                if self.pump_commands(block).is_err() {
+                    return Some(ExitReason::Shutdown);
                 }
                 if self.waiting() {
                     // Halted: no limit decrement, no trace line, no step.
-                    // Loop to wait on the channel again.
+                    // Loop to wait on the channel again, or hand the
+                    // frame back to a host that calls in.
+                    if !block {
+                        return None;
+                    }
                     continue;
                 }
                 // A step budget falls through and executes one instruction
@@ -717,7 +743,7 @@ impl Emulator {
                     *limit -= 1;
                     if *limit == 0 {
                         println!("cycle limit reached, exiting");
-                        return ExitReason::CycleLimit;
+                        return Some(ExitReason::CycleLimit);
                     }
                 }
             }
@@ -738,7 +764,7 @@ impl Emulator {
             self.executed += 1;
             let stopped = match (result, self.stop_policy) {
                 (StepResult::Ok, _) => false,
-                (StepResult::Halted, StopPolicy::Exit) => return ExitReason::Halted,
+                (StepResult::Halted, StopPolicy::Exit) => return Some(ExitReason::Halted),
                 (StepResult::Halted, StopPolicy::Halt) => {
                     // There is a RUN switch, so a HLT halts to it instead
                     // of ending the process.
@@ -746,7 +772,7 @@ impl Emulator {
                     self.stop(StopReason::Hlt);
                     true
                 }
-                (StepResult::BadOpcode, StopPolicy::Exit) => return ExitReason::BadOpcode,
+                (StepResult::BadOpcode, StopPolicy::Exit) => return Some(ExitReason::BadOpcode),
                 (StepResult::BadOpcode, StopPolicy::Halt) => {
                     // Halting makes a mistyped hand entry recoverable
                     // instead of fatal.
@@ -755,7 +781,7 @@ impl Emulator {
                     true
                 }
                 // Headless this is the nothing-can-ever-change exit.
-                (StepResult::InfiniteLoop, StopPolicy::Exit) => return ExitReason::InfiniteLoop,
+                (StepResult::InfiniteLoop, StopPolicy::Exit) => return Some(ExitReason::InfiniteLoop),
                 (StepResult::InfiniteLoop, StopPolicy::Halt) => false,
             };
 
@@ -777,6 +803,10 @@ impl Emulator {
                 } else if self.run_state == RunState::Running && self.at_breakpoint() {
                     self.stop(StopReason::Break);
                 }
+            }
+
+            if let Some(b) = budget.as_mut() {
+                *b = b.saturating_sub(self.cpu.last_step_cycles().max(1) as u64);
             }
 
             if self.throttle.is_some() {
@@ -970,6 +1000,24 @@ mod tests {
     /// mpsc delivers everything queued before the sender dropped, so most
     /// tests pre-queue commands, drop the sender, and let Disconnected end
     /// the run with ExitReason::Shutdown deterministically.
+    /// A slice runs to its budget, a cycle a step for a core that counts
+    /// none, and comes back without the run ending.
+    #[test]
+    fn run_cycles_returns_at_its_budget() {
+        let (mut emu, steps) = emulator_with(None);
+        assert_eq!(emu.run_cycles(10), None);
+        assert_eq!(steps.load(Ordering::SeqCst), 10);
+        assert_eq!(emu.run_cycles(5), None);
+        assert_eq!(steps.load(Ordering::SeqCst), 15);
+    }
+
+    #[test]
+    fn run_cycles_reports_the_run_ending() {
+        let (mut emu, steps) = emulator_with(Some(3));
+        assert_eq!(emu.run_cycles(100), Some(ExitReason::Halted));
+        assert_eq!(steps.load(Ordering::SeqCst), 3);
+    }
+
     struct ScriptedCpu {
         steps: Arc<std::sync::atomic::AtomicU64>,
         resets: Arc<std::sync::atomic::AtomicU64>,
@@ -1357,6 +1405,24 @@ mod tests {
         assert_eq!(steps.load(Ordering::SeqCst), 1);
         drop(tx);
         assert_eq!(runner.join().unwrap(), ExitReason::Shutdown);
+    }
+
+    /// A halted machine hands a slice straight back rather than waiting on
+    /// the channel, and the switches still work between slices.
+    #[test]
+    fn a_halted_slice_returns_at_once_and_takes_the_switches() {
+        let PanelRig { mut emu, tx, steps, panel, .. } = ScriptedCpu::build(vec![]);
+        assert_eq!(emu.run_cycles(1000), None);
+        assert_eq!(steps.load(Ordering::SeqCst), 0, "halted at power-on");
+        tx.send(Control::Panel(PanelCommand::Run)).unwrap();
+        assert_eq!(emu.run_cycles(5), None);
+        assert_eq!(steps.load(Ordering::SeqCst), 5);
+        assert!(!panel.halted());
+        tx.send(Control::Panel(PanelCommand::Halt)).unwrap();
+        tx.send(Control::Panel(PanelCommand::SingleCommand)).unwrap();
+        assert_eq!(emu.run_cycles(1000), None);
+        assert_eq!(steps.load(Ordering::SeqCst), 6, "HALT, then the one SINGLE COMMAND");
+        assert!(panel.halted());
     }
 
     #[test]

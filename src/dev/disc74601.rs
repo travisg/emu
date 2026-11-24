@@ -366,13 +366,23 @@ impl Disc74601 {
         true
     }
 
-    /// A zeroed drive with no backing file, for tests.
-    pub fn mount_blank(&mut self, unit: usize) {
-        self.units[unit] =
-            Some(DiscUnit { data: vec![0; IMAGE_BYTES], file: None, write_inhibit: None, result: 0 });
+    /// Mount an image held in memory, with no file under it, for a host
+    /// with no files: writes stay in the session. The wrong size is refused,
+    /// as `load_image` refuses it.
+    pub fn load_bytes(&mut self, unit: usize, data: Vec<u8>) -> bool {
+        if data.len() != IMAGE_BYTES {
+            return false;
+        }
+        self.units[unit] = Some(DiscUnit { data, file: None, write_inhibit: None, result: 0 });
         if let Some(r) = &self.rack {
             r.set_online(unit, true);
         }
+        true
+    }
+
+    /// A zeroed drive with no backing file, for tests.
+    pub fn mount_blank(&mut self, unit: usize) {
+        self.load_bytes(unit, vec![0; IMAGE_BYTES]);
     }
 
     /// Set a unit's WRITE INHIBIT switch: `Some(n)` protects tracks 0..=n,
@@ -687,6 +697,19 @@ mod tests {
     /// Poll with a whole transfer's worth of cycles at once.
     fn finish(d: &mut Disc74601, core: &mut Memory) -> u16 {
         d.poll(u32::MAX, core)
+    }
+
+    #[test]
+    fn a_platter_from_bytes_must_be_whole_and_boots_like_a_file() {
+        let (mut d, mut m) = (Disc74601::new(LEVEL), core());
+        assert!(!d.load_bytes(0, vec![0; IMAGE_BYTES - 1]), "a short platter");
+        assert_eq!(d.din(0), ST_NOT_READY);
+        let mut image = vec![0; IMAGE_BYTES];
+        image[..2].copy_from_slice(&[0x12, 0x34]);
+        assert!(d.load_bytes(0, image));
+        assert_eq!(d.din(0), 0);
+        assert!(d.press_load(&mut m));
+        assert_eq!((m.read_byte(0), m.read_byte(1)), (0x12, 0x34), "LOAD read its sector 0");
     }
 
     #[test]

@@ -22,6 +22,9 @@ pub mod cpu;
 pub mod debug;
 pub mod dev;
 pub mod emulator;
+// The command line's own: the menu needs a terminal. A wasm build is the
+// machines alone, for a page to drive (web/).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod launcher;
 pub mod rom;
 pub mod snapshot;

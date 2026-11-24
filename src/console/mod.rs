@@ -29,15 +29,26 @@ use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+// The frontends draw with SDL and drive a terminal, so a wasm build has
+// none of them; the models they draw from (panel, rack, paper) stay.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod altair8800;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lamps;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod panel703;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod panel8800;
 pub mod paper;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod ray703;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sdl;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod serial;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod terminal;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tty703;
 pub mod tty33_font;
 
@@ -755,15 +766,17 @@ impl DiskImage {
 
     /// The whole disk, as a snapshot embeds it.
     pub fn contents(&self) -> io::Result<Vec<u8>> {
-        use std::os::unix::fs::FileExt;
         match (&self.copy, &self.file) {
             (Some(c), _) => Ok(c.clone()),
+            // no positioned reads on wasm32, and no files to read there
+            #[cfg(not(target_arch = "wasm32"))]
             (None, Some(f)) => {
+                use std::os::unix::fs::FileExt;
                 let mut bytes = vec![0; f.metadata()?.len() as usize];
                 f.read_exact_at(&mut bytes, 0)?;
                 Ok(bytes)
             }
-            (None, None) => Err(io::ErrorKind::NotFound.into()),
+            _ => Err(io::ErrorKind::NotFound.into()),
         }
     }
 
