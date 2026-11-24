@@ -6,19 +6,17 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-//! What the front panel windows share: the duty cycle a lamp shows over a
-//! frame, from the monotonic accumulators a core feeds, and drawing with
-//! filled rectangles alone -- circles as stacks of horizontal spans, text
-//! from a 5x7 font -- so no panel needs a texture, an image file or a font.
+//! What the front panels share: the duty cycle a lamp shows over a frame,
+//! from the monotonic accumulators a core feeds, and drawing with filled
+//! rectangles alone -- circles as stacks of horizontal spans, text from a
+//! 5x7 font -- so no panel needs a texture, an image file or a font, and
+//! any [`Surface`] will do.
 //!
 //! How a duty looks is each panel's own: the 703's lamps are filaments
 //! with a thermal lag, the Altair 8800's are LEDs with none.
 
+use super::surface::{Color, Surface};
 use super::LampSnapshot;
-use sdl2::pixels::Color;
-use sdl2::rect::Rect;
-use sdl2::render::Canvas;
-use sdl2::video::Window;
 
 /// Per-indicator duty cycles between two snapshots of one lamp source.
 /// While the machine is halted no cycles accrue, and the point-sampled
@@ -38,29 +36,28 @@ pub(crate) fn duties(now: &LampSnapshot, prev: &LampSnapshot, halted_value: u16)
 }
 
 /// A filled circle as one fill_rect span per scanline.
-pub(crate) fn circle(canvas: &mut Canvas<Window>, cx: i32, cy: i32, r: i32, color: Color) {
-    canvas.set_draw_color(color);
+pub(crate) fn circle(s: &mut dyn Surface, cx: i32, cy: i32, r: i32, color: Color) {
     for dy in -r..=r {
         let half = ((r * r - dy * dy) as f32).sqrt() as i32;
-        let _ = canvas.fill_rect(Rect::new(cx - half, cy + dy, (2 * half + 1) as u32, 1));
+        s.fill_rect(cx - half, cy + dy, (2 * half + 1) as u32, 1, color);
     }
 }
 
 /// 5x7 text, scaled up `scale` times. Unknown characters draw as space.
-pub(crate) fn text(canvas: &mut Canvas<Window>, x: i32, y: i32, scale: u32, s: &str, color: Color) {
-    canvas.set_draw_color(color);
+pub(crate) fn text(surface: &mut dyn Surface, x: i32, y: i32, scale: u32, s: &str, color: Color) {
     let mut cx = x;
     for c in s.chars() {
         if let Some(glyph) = glyph(c) {
             for (row, bits) in glyph.iter().enumerate() {
                 for col in 0..5 {
                     if bits & (0x10 >> col) != 0 {
-                        let _ = canvas.fill_rect(Rect::new(
+                        surface.fill_rect(
                             cx + col * scale as i32,
                             y + row as i32 * scale as i32,
                             scale,
                             scale,
-                        ));
+                            color,
+                        );
                     }
                 }
             }
@@ -75,8 +72,8 @@ pub(crate) fn text_width(scale: u32, s: &str) -> i32 {
 }
 
 /// Text centered on `cx`.
-pub(crate) fn text_centered(canvas: &mut Canvas<Window>, cx: i32, y: i32, scale: u32, s: &str, color: Color) {
-    text(canvas, cx - text_width(scale, s) / 2, y, scale, s, color);
+pub(crate) fn text_centered(surface: &mut dyn Surface, cx: i32, y: i32, scale: u32, s: &str, color: Color) {
+    text(surface, cx - text_width(scale, s) / 2, y, scale, s, color);
 }
 
 /// A 5x7 font covering the panels' labels: digits, upper-case letters, the

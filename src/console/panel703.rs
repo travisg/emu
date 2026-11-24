@@ -29,30 +29,31 @@
 //! describes the disc cabinet -- but the bulbs obey the same thermal
 //! model as the console's own.
 //!
-//! This is one window of the 703's frontend: [`super::ray703`] owns the
-//! SDL context and the event loop and routes this window's events here.
-//! Keystrokes into the panel window are deliberately *not* forwarded to
-//! the guest -- the real panel has no keyboard, and a second keyboard
-//! would ride SDL's text-input CR/LF conventions rather than the raw
-//! mode whose preserved CR-versus-LF distinction the 703's software
-//! depends on.
+//! The panel itself is [`PanelView`], which knows nothing of SDL: it draws
+//! on any [`Surface`] and takes clicks and keys in its own pixels. The SDL
+//! window around it, [`PanelWindow`], is one window of the 703's frontend:
+//! [`super::ray703`] owns the SDL context and the event loop and routes
+//! this window's events here. The web page is the other host, drawing the
+//! view into a [`super::surface::Framebuffer`]. Keystrokes into the panel
+//! are deliberately *not* forwarded to the guest -- the real panel has no
+//! keyboard, and a second keyboard would ride the host's text-input CR/LF
+//! conventions rather than the raw mode whose preserved CR-versus-LF
+//! distinction the 703's software depends on.
 //!
 //! Everything is drawn with filled rectangles -- circles as stacks of
 //! horizontal spans, text from the 5x7 font in [`super::lamps`] -- so there
 //! are no textures, image files or font dependencies.
+//!
+//! The lamps' thermal filter and the rack's completion wink advance once
+//! per [`PanelView::render`], and are tuned for sixty renders a second.
 
 use super::{
     DiscRackState, LampSnapshot, PanelCommand, PanelControl, PanelDisplay, PanelState, RackSnapshot,
     Selector,
 };
 use super::lamps::{self, duties};
+use super::surface::{Color, Surface};
 use crate::console::RACK_UNITS;
-use sdl2::keyboard::Keycode;
-use sdl2::mouse::MouseButton;
-use sdl2::pixels::Color;
-use sdl2::rect::Rect;
-use sdl2::render::Canvas;
-use sdl2::video::Window;
 
 const WINDOW_W: u32 = 1120;
 const WINDOW_H: u32 = 480;
@@ -202,8 +203,9 @@ fn selector_angle(i: usize) -> f32 {
     (210.0 - 48.0 * i as f32).to_radians()
 }
 
-pub(crate) struct PanelWindow {
-    id: u32,
+/// The front panel and the disc rack: their state, their drawing and
+/// their hit-testing, on no particular host.
+pub struct PanelView {
     panel: PanelState,
     /// Switch actuations to the run loop. Send errors are ignored
     /// throughout: a dead CPU thread means shutdown is already in flight.
@@ -227,29 +229,19 @@ pub(crate) struct PanelWindow {
     write_filters: [LampFilter; RACK_UNITS],
     read_blip: [u8; RACK_UNITS],
     write_blip: [u8; RACK_UNITS],
-    canvas: Canvas<Window>,
 }
 
-impl PanelWindow {
-    pub(crate) fn new(
-        video: &sdl2::VideoSubsystem,
-        title: &str,
-        display: PanelDisplay,
-    ) -> Result<Self, String> {
+impl PanelView {
+    /// The view's size in pixels.
+    pub const WIDTH: u32 = WINDOW_W;
+    pub const HEIGHT: u32 = WINDOW_H;
+
+    pub fn new(display: PanelDisplay) -> Self {
         let PanelDisplay { panel, control, rack } = display;
-        let window = video
-            .window(title, WINDOW_W, WINDOW_H)
-            .position_centered()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut canvas = window.into_canvas().accelerated().build().map_err(|e| e.to_string())?;
-        // the lamp glow halos draw with alpha
-        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
         // MB is the boot-procedure position ("turn the display selector to
         // MB before following the operating procedure" -- the PTB drawing),
         // and it is also the busiest lamp row on an idle machine.
-        Ok(PanelWindow {
-            id: canvas.window().id(),
+        PanelView {
             panel,
             control,
             rack,
@@ -263,13 +255,7 @@ impl PanelWindow {
             write_filters: [LampFilter::default(); RACK_UNITS],
             read_blip: [0; RACK_UNITS],
             write_blip: [0; RACK_UNITS],
-            canvas,
-        })
-    }
-
-    /// The SDL window id the frontend routes events by.
-    pub(crate) fn window_id(&self) -> u32 {
-        self.id
+        }
     }
 
     fn cycle_selector(&mut self, dir: i32) {
@@ -279,53 +265,38 @@ impl PanelWindow {
 
     // -- drawing -----------------------------------------------------------
 
-    fn circle(&mut self, cx: i32, cy: i32, r: i32, color: Color) {
-        lamps::circle(&mut self.canvas, cx, cy, r, color);
-    }
-
-    fn text(&mut self, x: i32, y: i32, scale: u32, s: &str, color: Color) {
-        lamps::text(&mut self.canvas, x, y, scale, s, color);
-    }
-
-    fn text_centered(&mut self, cx: i32, y: i32, scale: u32, s: &str, color: Color) {
-        lamps::text_centered(&mut self.canvas, cx, y, scale, s, color);
-    }
-
     /// A caption between two rules, like the row headings in figure 5-1.
-    fn caption(&mut self, y: i32, label: &str) {
+    fn caption(s: &mut dyn Surface, y: i32, label: &str) {
         let w = (label.chars().count() as i32 * 6 - 1) * 2;
         let (left, right) = (lamp_x(0) - LAMP_R, lamp_x(15) + LAMP_R);
         let cx = (left + right) / 2;
-        self.canvas.set_draw_color(PANEL_INK);
-        let _ = self.canvas.fill_rect(Rect::new(left, y + 6, (cx - w / 2 - 8 - left) as u32, 1));
-        let _ =
-            self.canvas.fill_rect(Rect::new(cx + w / 2 + 8, y + 6, (right - cx - w / 2 - 8) as u32, 1));
-        self.text_centered(cx, y, 2, label, PANEL_INK);
+        s.fill_rect(left, y + 6, (cx - w / 2 - 8 - left) as u32, 1, PANEL_INK);
+        s.fill_rect(cx + w / 2 + 8, y + 6, (right - cx - w / 2 - 8) as u32, 1, PANEL_INK);
+        lamps::text_centered(s, cx, y, 2, label, PANEL_INK);
     }
 
     /// One row of lamps at the given brightnesses, indicator 0 (the MSB, as
     /// everywhere on this machine) leftmost. `first` skips leading
     /// indicators: the PROGRAM COUNTER row starts at 1 because the PCR is
     /// 15 bits.
-    fn lamp_row(&mut self, y: i32, brightness: &[f32; 16], first: i32) {
+    fn lamp_row(s: &mut dyn Surface, y: i32, brightness: &[f32; 16], first: i32) {
         for i in first..16 {
             let x = lamp_x(i);
             let t = perceived(brightness[i as usize]);
-            // a bright bulb glows past its bezel; alpha needs the canvas
-            // blend mode set in new()
+            // a bright bulb glows past its bezel
             if t > 0.25 {
                 let alpha = (90.0 * (t - 0.25) / 0.75) as u8;
                 let glow = Color::RGBA(LAMP_GLOW.r, LAMP_GLOW.g, LAMP_GLOW.b, alpha);
-                self.circle(x, y, LAMP_R + 7, glow);
+                lamps::circle(s, x, y, LAMP_R + 7, glow);
             }
-            self.circle(x, y, LAMP_R + 3, LAMP_BEZEL);
-            self.circle(x, y, LAMP_R, lamp_color(t));
+            lamps::circle(s, x, y, LAMP_R + 3, LAMP_BEZEL);
+            lamps::circle(s, x, y, LAMP_R, lamp_color(t));
             let label = i.to_string();
-            self.text_centered(x, y - LAMP_R - 15, 1, &label, PANEL_INK);
+            lamps::text_centered(s, x, y - LAMP_R - 15, 1, &label, PANEL_INK);
         }
     }
 
-    fn draw_buttons(&mut self) {
+    fn draw_buttons(&self, s: &mut dyn Surface) {
         for (x, label) in BUTTONS {
             // HALT is a red light -- figure 5-1's one dark circle is its
             // lens -- so it renders as a switch-indicator like ENTER and
@@ -337,7 +308,7 @@ impl PanelWindow {
             let face = if label == "HALT" {
                 if self.panel.halted() {
                     let glow = Color::RGBA(HALT_GLOW.r, HALT_GLOW.g, HALT_GLOW.b, 80);
-                    self.circle(x, CONTROLS_Y, BUTTON_R + 7, glow);
+                    lamps::circle(s, x, CONTROLS_Y, BUTTON_R + 7, glow);
                     HALT_LIT
                 } else {
                     HALT_UNLIT
@@ -345,70 +316,69 @@ impl PanelWindow {
             } else {
                 Color::RGB(0x8a, 0x8a, 0x84)
             };
-            self.circle(x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
-            self.circle(x, CONTROLS_Y, BUTTON_R, face);
-            self.text_centered(x, CONTROLS_Y - BUTTON_R - 20, 1, label, PANEL_INK);
+            lamps::circle(s, x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
+            lamps::circle(s, x, CONTROLS_Y, BUTTON_R, face);
+            lamps::text_centered(s, x, CONTROLS_Y - BUTTON_R - 20, 1, label, PANEL_INK);
         }
 
         // ENTER and DISPLAY are switch-indicators, illuminated when the
         // selector sits on MB (5-3) -- the position their workflow serves.
         let lit = self.selector == Selector::Mb;
         for (x, label) in [(ENTER_X, "ENTER"), (DISPLAY_X, "DISPLAY")] {
-            self.circle(x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
-            self.circle(x, CONTROLS_Y, BUTTON_R, if lit { LAMP_LIT } else { LAMP_UNLIT });
-            self.text_centered(x, CONTROLS_Y - BUTTON_R - 20, 1, label, PANEL_INK);
+            lamps::circle(s, x, CONTROLS_Y, BUTTON_R + 2, LAMP_BEZEL);
+            lamps::circle(s, x, CONTROLS_Y, BUTTON_R, if lit { LAMP_LIT } else { LAMP_UNLIT });
+            lamps::text_centered(s, x, CONTROLS_Y - BUTTON_R - 20, 1, label, PANEL_INK);
         }
 
         // one CLEAR at the head of each lamp row
         for y in [PC_LAMPS_Y, SD_LAMPS_Y] {
-            self.circle(CLEAR_X, y, CLEAR_R + 2, LAMP_BEZEL);
-            self.circle(CLEAR_X, y, CLEAR_R, Color::RGB(0x8a, 0x8a, 0x84));
-            self.text_centered(CLEAR_X, y - LAMP_R - 15, 1, "CLEAR", PANEL_INK);
+            lamps::circle(s, CLEAR_X, y, CLEAR_R + 2, LAMP_BEZEL);
+            lamps::circle(s, CLEAR_X, y, CLEAR_R, Color::RGB(0x8a, 0x8a, 0x84));
+            lamps::text_centered(s, CLEAR_X, y - LAMP_R - 15, 1, "CLEAR", PANEL_INK);
         }
     }
 
-    fn draw_toggles(&mut self) {
+    fn draw_toggles(&self, s: &mut dyn Surface) {
         // a local caption over just the four toggles -- the full-width rule
         // would run through the button labels sharing this row
         let cx = (toggle_x(0) + toggle_x(3)) / 2;
-        self.text_centered(cx, CONTROLS_Y - TOGGLE_H as i32 / 2 - 34, 1, "SENSE", PANEL_INK);
-        self.canvas.set_draw_color(PANEL_INK);
-        let _ = self.canvas.fill_rect(Rect::new(toggle_x(0) - 12, CONTROLS_Y - TOGGLE_H as i32 / 2 - 31, (cx - 22 - toggle_x(0) + 12) as u32, 1));
-        let _ = self.canvas.fill_rect(Rect::new(cx + 22, CONTROLS_Y - TOGGLE_H as i32 / 2 - 31, (toggle_x(3) + 12 - cx - 22) as u32, 1));
+        lamps::text_centered(s, cx, CONTROLS_Y - TOGGLE_H as i32 / 2 - 34, 1, "SENSE", PANEL_INK);
+        s.fill_rect(toggle_x(0) - 12, CONTROLS_Y - TOGGLE_H as i32 / 2 - 31, (cx - 22 - toggle_x(0) + 12) as u32, 1, PANEL_INK);
+        s.fill_rect(cx + 22, CONTROLS_Y - TOGGLE_H as i32 / 2 - 31, (toggle_x(3) + 12 - cx - 22) as u32, 1, PANEL_INK);
         for i in 0..4 {
             let x = toggle_x(i);
             let up = self.panel.sense(i as u8);
-            self.canvas.set_draw_color(LAMP_BEZEL);
-            let _ = self.canvas.fill_rect(Rect::new(
+            s.fill_rect(
                 x - TOGGLE_W as i32 / 2,
                 CONTROLS_Y - TOGGLE_H as i32 / 2,
                 TOGGLE_W,
                 TOGGLE_H,
-            ));
+                LAMP_BEZEL,
+            );
             let ky = if up { CONTROLS_Y - TOGGLE_H as i32 / 2 } else { CONTROLS_Y + TOGGLE_H as i32 / 2 };
-            self.circle(x, ky, 10, PANEL_INK);
-            self.circle(x, ky, 8, Color::RGB(0x90, 0x90, 0x90));
-            self.text_centered(x, CONTROLS_Y - TOGGLE_H as i32 / 2 - 24, 1, &i.to_string(), PANEL_INK);
+            lamps::circle(s, x, ky, 10, PANEL_INK);
+            lamps::circle(s, x, ky, 8, Color::RGB(0x90, 0x90, 0x90));
+            lamps::text_centered(s, x, CONTROLS_Y - TOGGLE_H as i32 / 2 - 24, 1, &i.to_string(), PANEL_INK);
         }
     }
 
-    fn draw_selector(&mut self) {
-        self.text_centered(KNOB_X, KNOB_Y - KNOB_R - 42, 1, "DISPLAY", PANEL_INK);
-        self.text_centered(KNOB_X, KNOB_Y - KNOB_R - 32, 1, "SELECTOR", PANEL_INK);
-        self.circle(KNOB_X, KNOB_Y, KNOB_R + 3, LAMP_BEZEL);
-        self.circle(KNOB_X, KNOB_Y, KNOB_R, Color::RGB(0x30, 0x30, 0x30));
+    fn draw_selector(&self, s: &mut dyn Surface) {
+        lamps::text_centered(s, KNOB_X, KNOB_Y - KNOB_R - 42, 1, "DISPLAY", PANEL_INK);
+        lamps::text_centered(s, KNOB_X, KNOB_Y - KNOB_R - 32, 1, "SELECTOR", PANEL_INK);
+        lamps::circle(s, KNOB_X, KNOB_Y, KNOB_R + 3, LAMP_BEZEL);
+        lamps::circle(s, KNOB_X, KNOB_Y, KNOB_R, Color::RGB(0x30, 0x30, 0x30));
         for (i, name) in SELECTOR_NAMES.iter().enumerate() {
             let a = selector_angle(i);
             let lx = KNOB_X + ((KNOB_R + 18) as f32 * a.cos()) as i32;
             let ly = KNOB_Y - ((KNOB_R + 18) as f32 * a.sin()) as i32;
-            self.text_centered(lx, ly - 3, 1, name, PANEL_INK);
+            lamps::text_centered(s, lx, ly - 3, 1, name, PANEL_INK);
         }
         // the pointer: a pale dot on the knob's rim at the active position
         let i = SELECTOR_ORDER.iter().position(|&s| s == self.selector).unwrap();
         let a = selector_angle(i);
         let px = KNOB_X + ((KNOB_R - 8) as f32 * a.cos()) as i32;
         let py = KNOB_Y - ((KNOB_R - 8) as f32 * a.sin()) as i32;
-        self.circle(px, py, 4, Color::RGB(0xe8, 0xe8, 0xe8));
+        lamps::circle(s, px, py, 4, Color::RGB(0xe8, 0xe8, 0xe8));
     }
 
     /// Advance the lamp filters one frame from fresh accumulator snapshots
@@ -478,24 +448,23 @@ impl PanelWindow {
 
     /// The invented disc cabinet: a captioned band of four bays, each a
     /// thin bezel with the unit number and its three bulbs.
-    fn draw_rack(&mut self) {
+    fn draw_rack(&mut self, s: &mut dyn Surface) {
         let (read, write) = self.update_rack();
         let online = self.prev_rack.online;
 
-        self.caption(RACK_CAPTION_Y, "74601 DISC MEMORY");
+        Self::caption(s, RACK_CAPTION_Y, "74601 DISC MEMORY");
         for u in 0..RACK_UNITS {
             let cx = rack_bay_x(u);
             let (left, w) = (cx - RACK_LAMP_PITCH - 44, (2 * RACK_LAMP_PITCH + 88) as u32);
-            self.canvas.set_draw_color(LAMP_BEZEL);
             for (bx, by, bw, bh) in [
                 (left, RACK_BAY_Y, w, 1u32),
                 (left, RACK_BAY_Y + RACK_BAY_H as i32, w, 1),
                 (left, RACK_BAY_Y, 1, RACK_BAY_H),
                 (left + w as i32, RACK_BAY_Y, 1, RACK_BAY_H + 1),
             ] {
-                let _ = self.canvas.fill_rect(Rect::new(bx, by, bw, bh));
+                s.fill_rect(bx, by, bw, bh, LAMP_BEZEL);
             }
-            self.text_centered(cx, RACK_BAY_Y + 7, 1, &format!("UNIT {u}"), PANEL_INK);
+            lamps::text_centered(s, cx, RACK_BAY_Y + 7, 1, &format!("UNIT {u}"), PANEL_INK);
             for (i, (label, t)) in [
                 // ONLINE is a steady state, not a duty: spindles don't flicker
                 ("ONLINE", if online[u] { 1.0 } else { 0.0 }),
@@ -510,47 +479,47 @@ impl PanelWindow {
                 if t > 0.25 {
                     let alpha = (90.0 * (t - 0.25) / 0.75) as u8;
                     let glow = Color::RGBA(LAMP_GLOW.r, LAMP_GLOW.g, LAMP_GLOW.b, alpha);
-                    self.circle(x, RACK_LAMP_Y, RACK_LAMP_R + 5, glow);
+                    lamps::circle(s, x, RACK_LAMP_Y, RACK_LAMP_R + 5, glow);
                 }
-                self.circle(x, RACK_LAMP_Y, RACK_LAMP_R + 3, LAMP_BEZEL);
-                self.circle(x, RACK_LAMP_Y, RACK_LAMP_R, lamp_color(t));
-                self.text_centered(x, RACK_LAMP_Y + RACK_LAMP_R + 8, 1, label, PANEL_INK);
+                lamps::circle(s, x, RACK_LAMP_Y, RACK_LAMP_R + 3, LAMP_BEZEL);
+                lamps::circle(s, x, RACK_LAMP_Y, RACK_LAMP_R, lamp_color(t));
+                lamps::text_centered(s, x, RACK_LAMP_Y + RACK_LAMP_R + 8, 1, label, PANEL_INK);
             }
         }
     }
 
-    pub(crate) fn render(&mut self) {
+    /// Draw a frame, advancing the lamps' filters by one.
+    pub fn render(&mut self, s: &mut dyn Surface) {
         let (pc, sd) = self.update_lamps();
 
-        self.canvas.set_draw_color(PANEL_BG);
-        self.canvas.clear();
+        s.clear(PANEL_BG);
 
-        self.caption(PC_CAPTION_Y, "PROGRAM COUNTER");
-        self.lamp_row(PC_LAMPS_Y, &pc, 1);
+        Self::caption(s, PC_CAPTION_Y, "PROGRAM COUNTER");
+        Self::lamp_row(s, PC_LAMPS_Y, &pc, 1);
 
-        self.caption(SD_CAPTION_Y, "SELECTED DISPLAY");
-        self.lamp_row(SD_LAMPS_Y, &sd, 0);
+        Self::caption(s, SD_CAPTION_Y, "SELECTED DISPLAY");
+        Self::lamp_row(s, SD_LAMPS_Y, &sd, 0);
 
-        self.draw_buttons();
-        self.draw_toggles();
-        self.draw_selector();
-        self.draw_rack();
+        self.draw_buttons(s);
+        self.draw_toggles(s);
+        self.draw_selector(s);
+        self.draw_rack(s);
 
-        self.text(LAMPS_X - LAMP_R, WINDOW_H as i32 - 34, 2, "703  CENTRAL PROCESSOR", PANEL_INK);
-        self.text_centered(
+        lamps::text(s, LAMPS_X - LAMP_R, WINDOW_H as i32 - 34, 2, "703  CENTRAL PROCESSOR", PANEL_INK);
+        lamps::text_centered(s, 
             KNOB_X,
             WINDOW_H as i32 - 34,
             2,
             "RAYTHEON",
             Color::RGB(0x8a, 0x1f, 0x1f),
         );
-
-        self.canvas.present();
     }
 
     // -- input -------------------------------------------------------------
 
-    pub(crate) fn click(&mut self, x: i32, y: i32, button: MouseButton) {
+    /// A click at (x, y) in the view's pixels; `back` is the other mouse
+    /// button, which turns the knob the other way.
+    pub fn click(&mut self, x: i32, y: i32, back: bool) {
         let hit_circle = |cx: i32, cy: i32, r: i32| {
             let (dx, dy) = (x - cx, y - cy);
             dx * dx + dy * dy <= r * r
@@ -635,25 +604,86 @@ impl PanelWindow {
         // the knob itself cycles: left click clockwise, right back
         let (dx, dy) = (x - KNOB_X, y - KNOB_Y);
         if dx * dx + dy * dy <= (KNOB_R + 6) * (KNOB_R + 6) {
-            self.cycle_selector(if button == MouseButton::Right { -1 } else { 1 });
+            self.cycle_selector(if back { -1 } else { 1 });
         }
     }
 
-    /// A key pressed with this window focused. Ctrl-D is the frontend's
-    /// business and never arrives here; everything unhandled is
-    /// deliberately ignored -- the guest's keyboard is the teletype, not
-    /// this window.
-    pub(crate) fn key_down(&mut self, key: Keycode) {
+    /// A key pressed at the panel: Tab turns the knob, 1 to 4 flip the
+    /// SENSE toggles. Everything else is deliberately ignored -- the
+    /// guest's keyboard is the teletype, not this panel.
+    pub fn key(&mut self, key: char) {
         match key {
-            Keycode::Tab => self.cycle_selector(1),
-            Keycode::Num1 => self.panel.toggle_sense(0),
-            Keycode::Num2 => self.panel.toggle_sense(1),
-            Keycode::Num3 => self.panel.toggle_sense(2),
-            Keycode::Num4 => self.panel.toggle_sense(3),
+            '\t' => self.cycle_selector(1),
+            '1'..='4' => self.panel.toggle_sense(key as u8 - b'1'),
             _ => {}
         }
     }
 }
+
+/// The panel in an SDL window of its own.
+#[cfg(not(target_arch = "wasm32"))]
+mod window {
+    use super::{PanelDisplay, PanelView, WINDOW_H, WINDOW_W};
+    use sdl2::keyboard::Keycode;
+    use sdl2::mouse::MouseButton;
+    use sdl2::render::Canvas;
+    use sdl2::video::Window;
+
+    pub(crate) struct PanelWindow {
+        id: u32,
+        view: PanelView,
+        canvas: Canvas<Window>,
+    }
+
+    impl PanelWindow {
+        pub(crate) fn new(
+            video: &sdl2::VideoSubsystem,
+            title: &str,
+            display: PanelDisplay,
+        ) -> Result<Self, String> {
+            let window = video
+                .window(title, WINDOW_W, WINDOW_H)
+                .position_centered()
+                .build()
+                .map_err(|e| e.to_string())?;
+            let mut canvas = window.into_canvas().accelerated().build().map_err(|e| e.to_string())?;
+            // the lamp glow halos draw with alpha
+            canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+            Ok(PanelWindow { id: canvas.window().id(), view: PanelView::new(display), canvas })
+        }
+
+        /// The SDL window id the frontend routes events by.
+        pub(crate) fn window_id(&self) -> u32 {
+            self.id
+        }
+
+        pub(crate) fn render(&mut self) {
+            self.view.render(&mut self.canvas);
+            self.canvas.present();
+        }
+
+        pub(crate) fn click(&mut self, x: i32, y: i32, button: MouseButton) {
+            self.view.click(x, y, button == MouseButton::Right);
+        }
+
+        /// A key pressed with this window focused. Ctrl-D is the
+        /// frontend's business and never arrives here.
+        pub(crate) fn key_down(&mut self, key: Keycode) {
+            let c = match key {
+                Keycode::Tab => '\t',
+                Keycode::Num1 => '1',
+                Keycode::Num2 => '2',
+                Keycode::Num3 => '3',
+                Keycode::Num4 => '4',
+                _ => return,
+            };
+            self.view.key(c);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use window::PanelWindow;
 
 #[cfg(test)]
 mod tests {
@@ -679,6 +709,62 @@ mod tests {
         assert!((perceived(0.5) - 0.5f32.powf(0.85)).abs() < 1e-6);
         assert!(perceived(0.5) > 0.5);
         assert_eq!(perceived(7.0), 1.0);
+    }
+
+    /// The view draws the same pixels on a framebuffer as on SDL's
+    /// software renderer, glows and all, which is what lets the web page
+    /// show the panel the window shows. Frames with lamps at part duty, the
+    /// HALT lens lit and not, the knob turned and the rack winking.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_framebuffer_draws_what_sdl_draws() {
+        use crate::console::surface::Framebuffer;
+        use crate::console::{DiscRackState, PanelControl};
+        std::env::set_var("SDL_VIDEODRIVER", "dummy");
+        std::env::set_var("SDL_RENDER_DRIVER", "software");
+        let sdl = sdl2::init().unwrap();
+        let window = sdl.video().unwrap().window("panel", WINDOW_W, WINDOW_H).build().unwrap();
+        let mut canvas = window.into_canvas().software().build().unwrap();
+        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
+        let mut fb = Framebuffer::new(WINDOW_W, WINDOW_H);
+
+        // two views over one machine, so both see the same accumulators
+        let (panel, rack) = (PanelState::new(), DiscRackState::new());
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let display = || PanelDisplay { panel: panel.clone(), control: PanelControl(tx.clone()), rack: rack.clone() };
+        let (mut on_sdl, mut on_fb) = (PanelView::new(display()), PanelView::new(display()));
+        rack.set_online(0, true);
+        for (frame, pcr) in [0x1234u16, 0x04c2, 0x7fff, 0x2468].into_iter().enumerate() {
+            panel.set_registers(pcr, !pcr, pcr >> 3, 0x8421);
+            panel.set_memory(pcr << 1, pcr ^ 0x5a5a);
+            panel.accumulate(300);
+            panel.set_registers(pcr ^ 0x0f0f, pcr, !pcr, 0x0001);
+            panel.accumulate(700);
+            panel.set_halted(frame % 2 == 0);
+            match frame {
+                1 => {
+                    rack.charge(0, false, 500);
+                    rack.advance(1000);
+                    panel.toggle_sense(1);
+                }
+                2 => rack.complete(0, true),
+                _ => {}
+            }
+            for v in [&mut on_sdl, &mut on_fb] {
+                v.key('\t');
+            }
+            on_sdl.render(&mut canvas);
+            on_fb.render(&mut fb);
+            let sdl_px = canvas.read_pixels(None, sdl2::pixels::PixelFormatEnum::RGB24).unwrap();
+            let fb_px: Vec<u8> = fb.pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+            assert_eq!(sdl_px.len(), fb_px.len());
+            let differ = sdl_px.chunks(3).zip(fb_px.chunks(3)).filter(|(a, b)| a != b).count();
+            assert_eq!(differ, 0, "frame {frame}: {differ} pixels differ");
+            // and the frame is a panel, not two blank surfaces agreeing --
+            // by the last, with the bulbs warmed up, glows and all
+            let colors = fb_px.chunks(3).collect::<std::collections::HashSet<_>>().len();
+            assert!(colors > if frame == 3 { 40 } else { 10 }, "frame {frame}: only {colors} colors");
+        }
     }
 
     #[test]

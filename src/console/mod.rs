@@ -33,9 +33,7 @@ use std::sync::{Arc, Mutex};
 // none of them; the models they draw from (panel, rack, paper) stay.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod altair8800;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lamps;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod panel703;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod panel8800;
@@ -46,6 +44,7 @@ pub mod ray703;
 pub mod sdl;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod serial;
+pub mod surface;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod terminal;
 #[cfg(not(target_arch = "wasm32"))]

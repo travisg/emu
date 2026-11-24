@@ -37,7 +37,7 @@ use super::{
     ALTAIR_STATUS,
 };
 use sdl2::mouse::MouseButton;
-use sdl2::pixels::Color;
+use super::surface::Color;
 use sdl2::rect::Rect;
 use sdl2::render::Canvas;
 use sdl2::video::Window;
