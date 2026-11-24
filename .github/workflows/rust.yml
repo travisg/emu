@@ -81,6 +81,11 @@ jobs:
     - name: REX
       run: make -C rex all modules reloc-check test
 
+    # The 703 as the web page drives it, under node: its guests are the
+    # Tiny BASIC and the REX platter the steps above built.
+    - name: Web page check
+      run: make -C web check
+
     # Re-assembles a 1968 listing transcript and diffs it against the object
     # code printed beside it. Pure python; the X-RAY half is a known fail and
     # the makefile ignores it.

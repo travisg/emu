@@ -171,6 +171,16 @@ only as a Ctrl-D exit path.
 ./target/debug/emu -s ray703 --fast-io                # skip the teletype's real 10 chars/sec
 ```
 
+The panel and the teletype also run in a web page, the same emulator built for WebAssembly
+(`web/`): REX off its disc or Tiny BASIC, the panel above the paper. It is static files, served
+over http:
+
+```bash
+rustup target add wasm32-unknown-unknown              # once
+make -C rex && make -C test ray703-basic              # the software it offers
+make -C web serve                                     # then open http://127.0.0.1:8703/
+```
+
 The disc is a Raytheon 74601 fixed-head unit, and its controller's LOAD button boots from it.
 REX, a multitasking executive with a shell on every teletype, is booted that way (`rex/README.md`):
 

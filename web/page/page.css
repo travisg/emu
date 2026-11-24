@@ -1,0 +1,83 @@
+/* vim: ts=4:sw=4:expandtab:
+ * Copyright (c) 2026 Travis Geiselbrecht; MIT, see LICENSE. */
+
+:root {
+    --bg: #1d1f21;
+    --fg: #d8d4ca;
+    --dim: #9a968c;
+    --accent: #e0a04a;
+    --line: #3a3c3e;
+    color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+header, #controls, main, .help {
+    max-width: 1120px;
+    margin: 0 auto;
+}
+
+h1 {
+    margin: 8px 0 0;
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+
+.sub { margin: 2px 0 16px; color: var(--dim); }
+
+#controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 20px;
+    padding: 10px 0 14px;
+    border-top: 1px solid var(--line);
+}
+
+select, button {
+    font: inherit;
+    color: var(--fg);
+    background: #2a2c2e;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 4px 10px;
+    margin-left: 6px;
+}
+
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+.check input { margin: 0 4px 0 0; }
+
+#status { color: var(--accent); }
+
+main {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+canvas {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 3px;
+}
+
+canvas:focus { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+#paper { box-shadow: 0 2px 14px rgba(0, 0, 0, 0.5); }
+
+.help { margin-top: 24px; color: var(--dim); }
+.help h2 { font-size: 17px; color: var(--fg); margin: 0 0 6px; }
+.help ul { margin: 0; padding-left: 20px; }
+.help b, .help code { color: var(--fg); }
