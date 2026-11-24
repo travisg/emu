@@ -38,6 +38,7 @@ pub mod panel703;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod panel8800;
 pub mod paper;
+pub mod paper_view;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ray703;
 #[cfg(not(target_arch = "wasm32"))]

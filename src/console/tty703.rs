@@ -9,9 +9,10 @@
 //! The 703's teletype window: an ASR33's roll of paper.
 //!
 //! One window of [`super::ray703`]'s frontend, drawing the [`Paper`] the
-//! machine's serial output feeds -- 72 columns of the Model 33 typewheel
-//! on a paper-colored page, the last lines visible and the mouse wheel
-//! rolling the platen back through the scrollback. Glyphs come from the
+//! machine's serial output feeds as its [`PaperView`] lays it out -- 72
+//! columns of the Model 33 typewheel on a paper-colored page, the last
+//! lines visible and the mouse wheel rolling the platen back through the
+//! scrollback. Glyphs come from the
 //! atlas in [`tty33_font`], rasterized offline from a photograph-derived
 //! recreation of the real typewheel -- the one deliberate font asset in a
 //! tree that otherwise draws its text from hand-drawn tables (the panel's
@@ -24,31 +25,16 @@
 //! the machine has no backspace. CR and LF stay distinct end to end, which
 //! is the property the 703's software cannot live without.
 
-use super::paper::{fold_to_typebox, Paper, PAPER_COLS};
+use super::paper_view::{PaperView, INK, PAPER_BG};
 use super::sdl::control_code;
 use super::tty33_font as font;
 use super::TtyDisplay;
 use sdl2::keyboard::{Keycode, Mod};
-use sdl2::pixels::{Color, PixelFormatEnum};
+use sdl2::pixels::PixelFormatEnum;
 use sdl2::rect::Rect;
 use sdl2::render::{BlendMode, Canvas, Texture, TextureCreator};
 use sdl2::video::{Window, WindowContext, WindowPos};
 use std::sync::mpsc::Sender;
-
-/// Lines of paper above the platen.
-const VISIBLE_LINES: usize = 25;
-/// Line pitch in pixels; the glyph cell is shorter, the rest is the
-/// Model 33's generous single-space leading.
-const LINE_PITCH: i32 = 20;
-const MARGIN: i32 = 24;
-const WINDOW_W: u32 =
-    ((PAPER_COLS - 1) * font::ADVANCE + font::GLYPH_W) as u32 + 2 * MARGIN as u32;
-const WINDOW_H: u32 = VISIBLE_LINES as u32 * LINE_PITCH as u32 + 2 * MARGIN as u32;
-
-/// Teletype paper: not white -- a warm newsprint.
-const PAPER_BG: Color = Color::RGB(0xf2, 0xee, 0xe2);
-/// The ribbon's ink, a soft black.
-const INK: Color = Color::RGB(0x30, 0x2c, 0x28);
 
 /// Glyphs per row in the texture atlas grid (64 glyphs, 8x8).
 const ATLAS_PER_ROW: usize = 8;
@@ -57,12 +43,7 @@ pub(crate) struct TtyWindow {
     id: u32,
     /// Keystrokes to the machine -- the same channel the terminal feeds.
     tx: Sender<u8>,
-    paper: Paper,
-    /// Lines rolled back from the live end of the paper.
-    scroll: usize,
-    /// The paper's dirty flag covers printing; this covers everything else
-    /// (the first frame, a scroll). Starts true to paint the blank page.
-    needs_redraw: bool,
+    view: PaperView,
     canvas: Canvas<Window>,
 }
 
@@ -80,7 +61,7 @@ impl TtyWindow {
             Some((n, keys)) => (format!("{title} Teletype {n}"), n, keys),
         };
         let mut window =
-            video.window(&name, WINDOW_W, WINDOW_H).position_centered().build().map_err(|e| e.to_string())?;
+            video.window(&name, PaperView::WIDTH, PaperView::HEIGHT).position_centered().build().map_err(|e| e.to_string())?;
         // each terminal's paper down and across from the last, so none
         // lands squarely on another
         if n > 0 {
@@ -89,14 +70,7 @@ impl TtyWindow {
             window.set_position(WindowPos::Positioned(x + step), WindowPos::Positioned(y + step));
         }
         let canvas = window.into_canvas().accelerated().build().map_err(|e| e.to_string())?;
-        Ok(TtyWindow {
-            id: canvas.window().id(),
-            tx,
-            paper: display.paper,
-            scroll: 0,
-            needs_redraw: true,
-            canvas,
-        })
+        Ok(TtyWindow { id: canvas.window().id(), tx, view: PaperView::new(display.paper), canvas })
     }
 
     /// The SDL window id the frontend routes events by.
@@ -145,15 +119,9 @@ impl TtyWindow {
         Ok(tex)
     }
 
-    /// Redraw when the page changed under the print head (snapping the view
-    /// back to the live end -- the platen moved) or the view itself did.
+    /// Redraw when the page or the view of it changed.
     pub(crate) fn render_if_needed(&mut self, font_tex: &Texture) {
-        if self.paper.take_dirty() {
-            self.scroll = 0;
-            self.needs_redraw = true;
-        }
-        if self.needs_redraw {
-            self.needs_redraw = false;
+        if self.view.take_redraw() {
             self.render(font_tex);
         }
     }
@@ -162,46 +130,28 @@ impl TtyWindow {
         self.canvas.set_draw_color(PAPER_BG);
         self.canvas.clear();
         let canvas = &mut self.canvas;
-        self.paper.with_lines(|lines, _col| {
-            // A part-filled page reads from the top, as a fresh roll does;
-            // once full, the last VISIBLE_LINES (less the scrollback
-            // offset) are shown.
-            let end = lines.len() - self.scroll.min(lines.len().saturating_sub(VISIBLE_LINES));
-            let start = end.saturating_sub(VISIBLE_LINES);
-            for (row, line) in lines.iter().skip(start).take(end - start).enumerate() {
-                let y = MARGIN + row as i32 * LINE_PITCH;
-                for (col, &c) in line.iter().enumerate() {
-                    if c == b' ' {
-                        continue;
-                    }
-                    let g = (fold_to_typebox(c) - font::FIRST_CHAR) as usize;
-                    let src = Rect::new(
-                        ((g % ATLAS_PER_ROW) * font::GLYPH_W) as i32,
-                        ((g / ATLAS_PER_ROW) * font::GLYPH_H) as i32,
-                        font::GLYPH_W as u32,
-                        font::GLYPH_H as u32,
-                    );
-                    let dst = Rect::new(
-                        MARGIN + (col * font::ADVANCE) as i32,
-                        y,
-                        font::GLYPH_W as u32,
-                        font::GLYPH_H as u32,
-                    );
-                    let _ = canvas.copy(font_tex, src, dst);
-                }
-            }
+        self.view.glyphs(|g, x, y| {
+            let src = Rect::new(
+                ((g % ATLAS_PER_ROW) * font::GLYPH_W) as i32,
+                ((g / ATLAS_PER_ROW) * font::GLYPH_H) as i32,
+                font::GLYPH_W as u32,
+                font::GLYPH_H as u32,
+            );
+            let _ = canvas.copy(font_tex, src, Rect::new(x, y, font::GLYPH_W as u32, font::GLYPH_H as u32));
         });
         self.canvas.present();
     }
 
     /// Roll the platen: wheel up (positive y) is back into the scrollback.
     pub(crate) fn wheel(&mut self, dy: i32) {
-        let max = self.paper.with_lines(|l, _| l.len().saturating_sub(VISIBLE_LINES));
-        let s = (self.scroll as i64 + dy as i64 * 3).clamp(0, max as i64) as usize;
-        if s != self.scroll {
-            self.scroll = s;
-            self.needs_redraw = true;
-        }
+        self.view.wheel(dy);
+    }
+
+    /// The window's pixels, RGB, for the test that holds them to a
+    /// framebuffer's.
+    #[cfg(test)]
+    pub(crate) fn pixels(&self) -> Vec<u8> {
+        self.canvas.read_pixels(None, PixelFormatEnum::RGB24).unwrap()
     }
 
     /// SDL text input: the printable characters, upcased -- the Model 33

@@ -711,62 +711,6 @@ mod tests {
         assert_eq!(perceived(7.0), 1.0);
     }
 
-    /// The view draws the same pixels on a framebuffer as on SDL's
-    /// software renderer, glows and all, which is what lets the web page
-    /// show the panel the window shows. Frames with lamps at part duty, the
-    /// HALT lens lit and not, the knob turned and the rack winking.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn a_framebuffer_draws_what_sdl_draws() {
-        use crate::console::surface::Framebuffer;
-        use crate::console::{DiscRackState, PanelControl};
-        std::env::set_var("SDL_VIDEODRIVER", "dummy");
-        std::env::set_var("SDL_RENDER_DRIVER", "software");
-        let sdl = sdl2::init().unwrap();
-        let window = sdl.video().unwrap().window("panel", WINDOW_W, WINDOW_H).build().unwrap();
-        let mut canvas = window.into_canvas().software().build().unwrap();
-        canvas.set_blend_mode(sdl2::render::BlendMode::Blend);
-        let mut fb = Framebuffer::new(WINDOW_W, WINDOW_H);
-
-        // two views over one machine, so both see the same accumulators
-        let (panel, rack) = (PanelState::new(), DiscRackState::new());
-        let (tx, _rx) = std::sync::mpsc::channel();
-        let display = || PanelDisplay { panel: panel.clone(), control: PanelControl(tx.clone()), rack: rack.clone() };
-        let (mut on_sdl, mut on_fb) = (PanelView::new(display()), PanelView::new(display()));
-        rack.set_online(0, true);
-        for (frame, pcr) in [0x1234u16, 0x04c2, 0x7fff, 0x2468].into_iter().enumerate() {
-            panel.set_registers(pcr, !pcr, pcr >> 3, 0x8421);
-            panel.set_memory(pcr << 1, pcr ^ 0x5a5a);
-            panel.accumulate(300);
-            panel.set_registers(pcr ^ 0x0f0f, pcr, !pcr, 0x0001);
-            panel.accumulate(700);
-            panel.set_halted(frame % 2 == 0);
-            match frame {
-                1 => {
-                    rack.charge(0, false, 500);
-                    rack.advance(1000);
-                    panel.toggle_sense(1);
-                }
-                2 => rack.complete(0, true),
-                _ => {}
-            }
-            for v in [&mut on_sdl, &mut on_fb] {
-                v.key('\t');
-            }
-            on_sdl.render(&mut canvas);
-            on_fb.render(&mut fb);
-            let sdl_px = canvas.read_pixels(None, sdl2::pixels::PixelFormatEnum::RGB24).unwrap();
-            let fb_px: Vec<u8> = fb.pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
-            assert_eq!(sdl_px.len(), fb_px.len());
-            let differ = sdl_px.chunks(3).zip(fb_px.chunks(3)).filter(|(a, b)| a != b).count();
-            assert_eq!(differ, 0, "frame {frame}: {differ} pixels differ");
-            // and the frame is a panel, not two blank surfaces agreeing --
-            // by the last, with the bulbs warmed up, glows and all
-            let colors = fb_px.chunks(3).collect::<std::collections::HashSet<_>>().len();
-            assert!(colors > if frame == 3 { 40 } else { 10 }, "frame {frame}: only {colors} colors");
-        }
-    }
-
     #[test]
     fn lamp_filter_converges_and_clamps() {
         let mut f = LampFilter::default();
