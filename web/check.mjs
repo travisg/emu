@@ -5,7 +5,9 @@
 // panel's switches pressed by clicking their pixels, the panel and paper
 // rendered every frame, and the verdicts read off the pixels as well as
 // the teletype's output. Tiny BASIC from a core image, then REX off its
-// platter. Every check fails the run; WEB_CONTROL=no-run leaves RUN
+// platter, then the module's own limits: an empty core refused, the
+// platen's stops, and the kept output bounded for a page that never
+// drains it. Every check fails the run; WEB_CONTROL=no-run leaves RUN
 // unpressed, and must FAIL.
 //
 //   node web/check.mjs WASM BASIC_BIN REX_IMG
@@ -25,30 +27,33 @@ function check(ok, what) {
 }
 
 // One machine per module instance, as a page has.
-async function machine(imagePath, kind) {
-    const { instance } = await WebAssembly.instantiate(bytes, {});
-    const e = instance.exports;
+async function instance() {
+    return (await WebAssembly.instantiate(bytes, {})).instance.exports;
+}
+
+async function machine(imagePath, kind, fastIO = 0) {
+    const e = await instance();
     const image = fs.readFileSync(imagePath);
-    const p = e.staging(image.length);
+    const p = e.staging(image.length) >>> 0;
     new Uint8Array(e.memory.buffer, p, image.length).set(image);
-    check(e[kind](0, 0) === 1, `${kind} took ${imagePath}`);
+    check(e[kind](0, fastIO) === 1, `${kind} took ${imagePath}`);
     const slice = Math.round(e.clock_hz() / 60);
     const pw = e.panel_width(), ph = e.panel_height();
     const m = { e, out: '', panel: null, paper: null };
     m.frame = () => {
         if (e.run(slice) !== 0) check(false, 'the run went on');
-        const ptr = e.panel_render();
+        const ptr = e.panel_render() >>> 0;
         m.panel = new Uint8Array(e.memory.buffer, ptr, pw * ph * 4).slice();
-        const pp = e.paper_render();
+        const pp = e.paper_render() >>> 0;
         if (pp) m.paper = new Uint8Array(e.memory.buffer, pp, e.paper_width() * e.paper_height() * 4).slice();
         const n = e.drain();
-        if (n) m.out += Buffer.from(new Uint8Array(e.memory.buffer, e.drained_ptr(), n)).toString('latin1');
+        if (n) m.out += Buffer.from(new Uint8Array(e.memory.buffer, e.drained_ptr() >>> 0, n)).toString('latin1');
     };
     m.frames = n => { for (let i = 0; i < n; i++) m.frame(); };
     m.click = ([x, y]) => e.panel_click(x, y, 0);
     m.pixel = ([x, y]) => Array.from(m.panel.subarray((y * pw + x) * 4, (y * pw + x) * 4 + 3));
-    // the guest's characters carry bit 7 and its lines end CR LF
-    m.text = () => m.out.replace(/[\x80-\xff]/g, c => String.fromCharCode(c.charCodeAt(0) & 0x7f)).replace(/\r/g, '');
+    // the guest's lines end CR LF
+    m.text = () => m.out.replace(/\r/g, '');
     // Pace on the guest falling silent for a second: a 703 drops keys
     // typed while it is busy (AGENTS.md, Tiny BASIC).
     m.quiet = (limit = 60) => {
@@ -80,8 +85,18 @@ basic.quiet();
 check(basic.text().includes('TINY BASIC'), 'BASIC prints its banner');
 check(!lensLit(basic.pixel(HALT)), 'running: the HALT lens is out');
 check(basic.ink() > 500, `the banner is on the paper (${basic.ink()} pixels of ink)`);
-for (const l of ['10 FOR I=1 TO 5\r', '20 PRINT I*I\r', '30 NEXT I\r', 'RUN\r']) basic.type(l);
-check(/RUN\n1\n4\n9\n16\n25\n/.test(basic.text()), 'the program prints the squares');
+check(basic.e.paper_can_roll(1) === 0 && basic.e.paper_wheel(1) === 0, 'a short page has nowhere to roll');
+for (const l of ['10 FOR I=1 TO 30\r', '20 PRINT I*I\r', '30 NEXT I\r', 'RUN\r']) basic.type(l);
+check(/RUN\n1\n4\n9\n16\n25\n/.test(basic.text()) && basic.text().includes('\n900\n'), 'the program prints the squares');
+{
+    const b = basic.e;
+    check(b.paper_can_roll(-1) === 0 && b.paper_wheel(-1) === 0, 'at the live end the platen rolls no further forward');
+    check(b.paper_can_roll(1) === 1 && b.paper_wheel(1) === 1, 'a full page rolls back');
+    let rolls = 0;
+    while (b.paper_wheel(1)) rolls++;
+    check(rolls > 0 && rolls < 100 && b.paper_can_roll(1) === 0, `and stops at its first line (${rolls} more notches)`);
+    check(b.paper_can_roll(-1) === 1, 'from where it rolls forward again');
+}
 
 const rex = await machine(rexPath, 'boot_disc');
 const e = rex.e;
@@ -101,4 +116,32 @@ check(e.halted() === 1, 'SINGLE COMMAND steps and stays halted');
 rex.click(RUN); rex.frames(30);
 rex.type('RUN HELLO\r');
 check(/RUN HELLO\nHELLO FROM WORD \d+\n/.test(rex.text()), 'a program off the disc runs');
+
+// The knob, both ways from MB: ENTER and DISPLAY light only on MB.
+const ENTER = [800, 252];
+const entryLit = () => rex.pixel(ENTER)[0] > 0xe0;
+check(entryLit(), 'the knob starts on MB, ENTER lit');
+e.panel_knob(1); rex.frames(1);
+check(!entryLit(), 'the knob turns off MB');
+e.panel_knob(-1); rex.frames(1);
+check(entryLit(), 'and back onto it');
+
+// An empty core is no machine.
+check((await instance()).boot_core(0, 0) === 0, 'boot_core refuses an empty core');
+
+// A page never drains: under Fast I/O, a loop printing for a few seconds
+// with nothing drained leaves the kept output at its cap.
+const loop = await machine(basicPath, 'boot_core', 1);
+loop.click(RUN); loop.quiet();
+for (const l of ['10 PRINT "THE QUICK BROWN FOX"\r', '20 GOTO 10\r']) loop.type(l);
+for (const c of 'RUN\r') loop.e.key(c.charCodeAt(0));
+const slice = Math.round(loop.e.clock_hz() / 60);
+// twenty seconds for the kept output to reach its cap and the allocator to
+// settle, then thirty more that must not grow the memory
+for (let i = 0; i < 1200; i++) loop.e.run(slice);
+const memory = loop.e.memory.buffer.byteLength;
+for (let i = 0; i < 1800; i++) loop.e.run(slice);
+const kept = loop.e.drain();
+check(kept === 64 * 1024, `the kept output stops at its cap (${kept} bytes)`);
+check(loop.e.memory.buffer.byteLength === memory, 'and the memory stops growing');
 console.log('PASS');

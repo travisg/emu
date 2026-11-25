@@ -144,7 +144,8 @@ impl TtyWindow {
 
     /// Roll the platen: wheel up (positive y) is back into the scrollback.
     pub(crate) fn wheel(&mut self, dy: i32) {
-        self.view.wheel(dy);
+        // the window scrolls nothing else, so a roll at a stop goes nowhere
+        let _ = self.view.wheel(dy);
     }
 
     /// The window's pixels, RGB, for the test that holds them to a

@@ -59,15 +59,28 @@ impl PaperView {
         std::mem::take(&mut self.needs_redraw)
     }
 
-    /// Roll the platen: up (positive) is back into the scrollback, three
-    /// lines a notch.
-    pub fn wheel(&mut self, dy: i32) {
+    /// Where `dy` notches would leave the platen: up (positive) is back
+    /// into the scrollback, three lines a notch, pinned at either end.
+    fn rolled(&self, dy: i32) -> usize {
         let max = self.paper.with_lines(|l, _| l.len().saturating_sub(VISIBLE_LINES));
-        let s = (self.scroll as i64 + dy as i64 * 3).clamp(0, max as i64) as usize;
-        if s != self.scroll {
+        (self.scroll as i64 + dy as i64 * 3).clamp(0, max as i64) as usize
+    }
+
+    /// Roll the platen `dy` notches; whether it moved, which a host whose
+    /// page scrolls too uses to hand the wheel on at either end.
+    pub fn wheel(&mut self, dy: i32) -> bool {
+        let s = self.rolled(dy);
+        let moved = s != self.scroll;
+        if moved {
             self.scroll = s;
             self.needs_redraw = true;
         }
+        moved
+    }
+
+    /// Whether a roll in `dy`'s direction would move the platen at all.
+    pub fn can_roll(&self, dy: i32) -> bool {
+        self.rolled(dy.signum()) != self.scroll
     }
 
     /// Each glyph showing, as its index in the atlas and the top left of
@@ -120,12 +133,35 @@ mod tests {
             }
         }
         assert!(v.take_redraw());
-        v.wheel(1);
+        assert!(!v.can_roll(-1) && !v.wheel(-1), "already at the live end");
+        assert!(v.can_roll(1) && v.wheel(1));
         assert!(v.take_redraw(), "a roll back redraws");
         assert_eq!(v.scroll, 3);
         paper.feed(b'X');
         assert!(v.take_redraw());
         assert_eq!(v.scroll, 0, "the print head brings the paper back");
+    }
+
+    /// A page shorter than the window has nowhere to roll, and a full one
+    /// stops at its first line: either way the wheel says it did not move.
+    #[test]
+    fn the_platen_stops_at_both_ends() {
+        let paper = Paper::new();
+        let mut v = PaperView::new(paper.clone());
+        for b in *b"SHORT\r\n" {
+            paper.feed(b);
+        }
+        assert!(!v.can_roll(1) && !v.wheel(1), "less than a window of paper");
+        for _ in 0..VISIBLE_LINES + 4 {
+            for b in *b"LINE\r\n" {
+                paper.feed(b);
+            }
+        }
+        let max = paper.with_lines(|l, _| l.len()) - VISIBLE_LINES;
+        assert!(v.wheel(100));
+        assert_eq!(v.scroll, max, "pinned at the first line");
+        assert!(!v.can_roll(1) && !v.wheel(1));
+        assert!(v.can_roll(-1));
     }
 
     #[test]

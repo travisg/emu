@@ -506,7 +506,7 @@ impl PanelView {
         self.draw_rack(s);
 
         lamps::text(s, LAMPS_X - LAMP_R, WINDOW_H as i32 - 34, 2, "703  CENTRAL PROCESSOR", PANEL_INK);
-        lamps::text_centered(s, 
+        lamps::text_centered(s,
             KNOB_X,
             WINDOW_H as i32 - 34,
             2,
@@ -608,6 +608,12 @@ impl PanelView {
         }
     }
 
+    /// Turn the DISPLAY SELECTOR a position: clockwise for a positive
+    /// `dir`, back for a negative one.
+    pub fn turn_knob(&mut self, dir: i32) {
+        self.cycle_selector(dir.signum());
+    }
+
     /// A key pressed at the panel: Tab turns the knob, 1 to 4 flip the
     /// SENSE toggles. Everything else is deliberately ignored -- the
     /// guest's keyboard is the teletype, not this panel.
@@ -667,9 +673,12 @@ mod window {
         }
 
         /// A key pressed with this window focused. Ctrl-D is the
-        /// frontend's business and never arrives here.
+        /// frontend's business and never arrives here. The arrows turn the
+        /// knob as they do on the web page, where Tab moves the focus.
         pub(crate) fn key_down(&mut self, key: Keycode) {
             let c = match key {
+                Keycode::Left => return self.view.turn_knob(-1),
+                Keycode::Right => return self.view.turn_knob(1),
                 Keycode::Tab => '\t',
                 Keycode::Num1 => '1',
                 Keycode::Num2 => '2',

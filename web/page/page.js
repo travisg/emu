@@ -9,6 +9,9 @@
 const FRAME_MS = 1000 / 60;
 // a hidden tab or a stall runs no faster than this to catch up
 const MAX_FRAMES_PER_TICK = 6;
+// a mouse wheel's notch in pixels: a trackpad's run of small deltas adds
+// up to notches, three lines of paper each
+const NOTCH_PX = 40;
 
 const SOFTWARE = {
     rex: { file: 'rex.img', boot: 'boot_disc' },
@@ -21,16 +24,22 @@ const panelCtx = panelCanvas.getContext('2d');
 const paperCtx = paperCanvas.getContext('2d');
 const status = document.getElementById('status');
 
+// The status line is a live region: write it only when it changes.
+function setStatus(msg) {
+    if (status.textContent !== msg) status.textContent = msg;
+}
+
 async function fetchBytes(name) {
     const r = await fetch(name);
     if (!r.ok) throw new Error(`${name}: ${r.status} ${r.statusText}`);
     return new Uint8Array(await r.arrayBuffer());
 }
 
-const wasm = await fetchBytes('emu703.wasm');
+let wasm = null;    // the compiled module, one for every power-on
 const images = {};
 let e = null;       // the running machine's exports
 let slice = 0;      // machine cycles in a frame
+let last = null, owed = 0;
 
 // The time-of-day clock's count: tenths of a millisecond since local
 // midnight, what the operator set it to.
@@ -41,14 +50,19 @@ function timeOfDay() {
 }
 
 async function powerOn() {
+    // the old machine stops now, so nothing writes over what this says
+    e = null;
+    last = null;
     const which = SOFTWARE[document.getElementById('software').value];
-    status.textContent = 'Loading...';
+    setStatus('Loading...');
+    // compiled from bytes, so a server that doesn't know application/wasm
+    // still serves it
+    wasm ??= await WebAssembly.compile(await fetchBytes('emu703.wasm'));
     images[which.file] ??= await fetchBytes(which.file);
     const image = images[which.file];
     // a fresh instance is a fresh machine
-    const { instance } = await WebAssembly.instantiate(wasm, {});
-    const x = instance.exports;
-    const p = x.staging(image.length);
+    const x = (await WebAssembly.instantiate(wasm, {})).exports;
+    const p = x.staging(image.length) >>> 0;
     new Uint8Array(x.memory.buffer, p, image.length).set(image);
     if (!x[which.boot](timeOfDay(), document.getElementById('fastio').checked ? 1 : 0)) {
         throw new Error(`${which.file} did not boot`);
@@ -65,10 +79,9 @@ async function powerOn() {
 
 function put(ctx, ptr, w, h) {
     // a view straight onto the module's memory, used before the next call
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(e.memory.buffer, ptr, w * h * 4), w, h), 0, 0);
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(e.memory.buffer, ptr >>> 0, w * h * 4), w, h), 0, 0);
 }
 
-let last = null, owed = 0;
 function tick(now) {
     requestAnimationFrame(tick);
     if (!e) return;
@@ -84,7 +97,7 @@ function tick(now) {
     if (panel) put(panelCtx, panel, panelCanvas.width, panelCanvas.height);
     const paper = e.paper_render();
     if (paper) put(paperCtx, paper, paperCanvas.width, paperCanvas.height);
-    status.textContent = e.halted() ? 'Halted. Press RUN on the panel.' : '';
+    setStatus(e.halted() ? 'Halted. Press RUN on the panel.' : '');
 }
 
 // -- the panel --------------------------------------------------------------
@@ -103,12 +116,18 @@ panelCanvas.addEventListener('mousedown', ev => {
     e.panel_click(x, y, ev.button === 2 ? 1 : 0);
 });
 panelCanvas.addEventListener('contextmenu', ev => ev.preventDefault());
+// The arrows turn the knob and 1 to 4 flip the SENSE switches. Tab is the
+// browser's, to move the focus on to the paper.
 panelCanvas.addEventListener('keydown', ev => {
     if (!e || ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    if (ev.key === 'Tab' || ('1' <= ev.key && ev.key <= '4')) {
-        e.panel_key(ev.key === 'Tab' ? 9 : ev.key.charCodeAt(0));
-        ev.preventDefault();
+    if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+        e.panel_knob(ev.key === 'ArrowRight' ? 1 : -1);
+    } else if ('1' <= ev.key && ev.key <= '4') {
+        e.panel_key(ev.key.charCodeAt(0));
+    } else {
+        return;
     }
+    ev.preventDefault();
 });
 
 // -- the teletype -----------------------------------------------------------
@@ -142,11 +161,25 @@ paperCanvas.addEventListener('keydown', ev => {
     e.key(c);
     ev.preventDefault();
 });
+// The wheel rolls the platen a notch at a time, deltas added up into
+// notches, and wheel up is back into the scrollback. At either stop the
+// wheel is the page's again.
+let wheelPx = 0;
 paperCanvas.addEventListener('wheel', ev => {
     if (!e || ev.deltaY === 0) return;
-    // wheel up rolls the platen back into the scrollback
-    e.paper_wheel(ev.deltaY < 0 ? 1 : -1);
+    if (!e.paper_can_roll(ev.deltaY < 0 ? 1 : -1)) {
+        wheelPx = 0;
+        return;
+    }
     ev.preventDefault();
+    if (Math.sign(wheelPx) === -Math.sign(ev.deltaY)) wheelPx = 0;   // reversed
+    const px = ev.deltaMode === 1 ? NOTCH_PX / 3 : ev.deltaMode === 2 ? NOTCH_PX * 8 : 1;
+    wheelPx += ev.deltaY * px;
+    const notches = Math.trunc(wheelPx / NOTCH_PX);
+    if (notches) {
+        e.paper_wheel(-notches);
+        wheelPx -= notches * NOTCH_PX;
+    }
 }, { passive: false });
 paperCanvas.addEventListener('mousedown', () => paperCanvas.focus());
 
@@ -157,13 +190,13 @@ document.getElementById('controls').addEventListener('submit', async ev => {
     try {
         await powerOn();
     } catch (err) {
-        status.textContent = String(err);
+        setStatus(String(err));
     }
 });
 
+requestAnimationFrame(tick);
 try {
     await powerOn();
 } catch (err) {
-    status.textContent = String(err);
+    setStatus(String(err));
 }
-requestAnimationFrame(tick);

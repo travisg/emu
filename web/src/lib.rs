@@ -51,6 +51,12 @@ pub extern "C" fn clock_hz() -> u32 {
     emu::cpu::ray703::CLOCK_HZ as u32
 }
 
+/// The most console output kept for `drain`: the newest, the oldest
+/// dropped first. A page that never drains -- the page doesn't -- stays
+/// bounded however long a guest prints; a host that drains every frame
+/// never comes near it, even under Fast I/O.
+const KEPT_CAP: usize = 64 * 1024;
+
 /// The console's output: printed on the paper, and kept for `drain` too.
 #[derive(Clone)]
 struct Console {
@@ -61,7 +67,10 @@ struct Console {
 impl Write for Console {
     fn write(&mut self, b: &[u8]) -> io::Result<usize> {
         self.paper.write_all(b)?;
-        self.kept.lock().unwrap().extend_from_slice(b);
+        let mut kept = self.kept.lock().unwrap();
+        kept.extend_from_slice(b);
+        let over = kept.len().saturating_sub(KEPT_CAP);
+        kept.drain(..over);
         Ok(b.len())
     }
     fn flush(&mut self) -> io::Result<()> {
@@ -150,11 +159,12 @@ fn boot(make: impl FnOnce(ConsoleEndpoint) -> Option<Ray703>, time_of_day: u32, 
     1
 }
 
-/// The staged bytes as a flat core image from word 0.
+/// The staged bytes as a flat core image from word 0. 0 if nothing was
+/// staged: an empty core has nothing to run, as `Ray703::new` says too.
 #[no_mangle]
 pub extern "C" fn boot_core(time_of_day: u32, fast_io: u32) -> u32 {
     let image = STAGE.with_borrow_mut(std::mem::take);
-    boot(|c| Some(Ray703::with_core_image(&image, c)), time_of_day, fast_io)
+    boot(|c| (!image.is_empty()).then(|| Ray703::with_core_image(&image, c)), time_of_day, fast_io)
 }
 
 /// The staged bytes as the platter on unit 0, and LOAD pressed: how REX
@@ -209,10 +219,16 @@ pub extern "C" fn panel_click(x: i32, y: i32, back: u32) {
     with(|m| m.view.click(x, y, back != 0));
 }
 
-/// A key at the panel: Tab turns the knob, 1 to 4 flip the SENSE toggles.
+/// A key at the panel: 1 to 4 flip the SENSE toggles.
 #[no_mangle]
 pub extern "C" fn panel_key(c: u32) {
     with(|m| m.view.key(char::from_u32(c).unwrap_or('\0')));
+}
+
+/// Turn the DISPLAY SELECTOR: positive clockwise, negative back.
+#[no_mangle]
+pub extern "C" fn panel_knob(dir: i32) {
+    with(|m| m.view.turn_knob(dir));
 }
 
 // -- the paper --------------------------------------------------------------
@@ -239,10 +255,18 @@ pub extern "C" fn paper_render() -> *const u8 {
     })
 }
 
-/// Roll the platen: positive is back into the scrollback.
+/// Roll the platen `dy` notches, positive back into the scrollback; 1 if
+/// it moved, 0 at a stop.
 #[no_mangle]
-pub extern "C" fn paper_wheel(dy: i32) {
-    with(|m| m.paper.wheel(dy));
+pub extern "C" fn paper_wheel(dy: i32) -> u32 {
+    with(|m| m.paper.wheel(dy) as u32)
+}
+
+/// 1 if a roll in `dy`'s direction would move the platen: the host hands
+/// the wheel on to its page when it would not.
+#[no_mangle]
+pub extern "C" fn paper_can_roll(dy: i32) -> u32 {
+    with(|m| m.paper.can_roll(dy) as u32)
 }
 
 // -- for a host checking the machine ---------------------------------------
