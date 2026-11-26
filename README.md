@@ -143,7 +143,7 @@ core image and starts it.
 make -C test ray703                                   # build the guests first
 
 ./target/debug/emu -s ray703                          # a demo: banner, then echoes what you type
-./target/debug/emu -s ray703 -r roms/703/basic.bin    # Tiny BASIC, ~1300 words, written for it
+./target/debug/emu -s ray703 -r roms/703/basic.bin    # Tiny BASIC, ~1,850 words, written for it
 ./target/debug/emu -s ray703 -r roms/703/xray.bin     # X-RAY EXEC, transcribed from a 1968 listing
 ```
 
@@ -201,6 +201,11 @@ by hand in `test/703/listings/` and assembled back into running code; the scans 
 so every card was read off the page. `test/703/README.md` is the index and the to-do list, and the
 comments in `src/cpu/ray703.rs` cite the manual's own section numbers.
 
+The rest of the period software is the University of Stuttgart's computer museum's: the paper tapes
+it read off its 704 (<ftp://ftp.informatik.uni-stuttgart.de/pub/cm/ray704/papertapes/>) —
+Raytheon's diagnostics, which the core passes, and the Paper Tape I/O System, Conversational FORTRAN,
+the math library and the SYM I assembler, which run here. `tools/fetch-roms.py` fetches them.
+
 ### Other emulators of this machine
 
 Darwin Geiselbrecht, who wrote a lot of assembly for 703s when they were current hardware, has
@@ -234,24 +239,31 @@ ASxxxx's own assembler tests, which `tools/fetch-asxxxx.py` fetches (`cargo test
 t8080`). The end-to-end scripts do: the 6809 one needs
 `roms/6809/BASIC.HEX` and python3, driving the emulator over its debug port as the Raytheon 703
 demo test (`make -C test ray703-test`) does, which needs only python3; and the
-other 703 scripts need `script(1)` and python3. `AGENTS.md` covers them all.
+three 703 shell scripts (Tiny BASIC, the disc, the LOAD button) need `script(1)` and python3. Raytheon's
+own diagnostics, math library, Conversational FORTRAN and SYM I assembler run off their paper tapes
+(`tools/fetch-roms.py`) under harnesses of their own. `AGENTS.md` covers them all.
 
 ## Project Structure
 
 - `src/cpu/`: CPU cores (6800, 6809, Z80, 8080, Raytheon 703), each implementing the `Cpu` trait against a `Bus`.
 - `src/system/`: one file per machine (the bus, address decode, devices, ROM loading) and the
   registry that describes them.
-- `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO, WD1793 floppy controller.
+- `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO and CTC, WD1793 floppy controller, the
+  RC2014's compact flash, and the 703's teletype, paper tape, multiplexer, clock and disc.
 - `src/console/`: the terminal and SDL2 frontends — the Kaypro screen, the 703's front panel and
   teletype-paper windows, the Altair 8800's front panel — and the channel/handles that connect them
   to the CPU thread.
 - `src/launcher/`: `--launch`, the terminal menu of what there is to run.
+- `src/debug/`: the debug port. `src/snapshot.rs`: save states.
 - `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
-- `tests/`: the one integration test. `test/`: the end-to-end regression scripts and the guest
+- `web/`: the 703 built for WebAssembly, and the page that runs it.
+- `rex/`: REX, the 703's executive — its own project, with its own README.
+- `tests/`: the two integration tests. `test/`: the end-to-end regression scripts and the guest
   programs they drive, by machine — `test/6809/` and `test/703/` (the latter including a Tiny
   BASIC and transcriptions of two 1968 program listings). See `test/README.md`.
-- `tools/`: development tools — the 703 assembler, the listing transcription workflow, the
-  ROM fetcher, and syntax highlighting for 703 assembly in vim and VS Code (`tools/editor/`).
+- `tools/`: development tools — the 703 assembler, disassembler, relocating loader and tape
+  reader, the debug port's client, the listing transcription workflow, the ROM and test-data
+  fetchers, and syntax highlighting for 703 assembly in vim and VS Code (`tools/editor/`).
 - `roms/`, `disks/`: where the images the machines boot and mount go. Untracked; see the README
   in each.
 - `AGENTS.md`: the full guide — build, run, test, architecture, and the deliberate quirks.

@@ -1,8 +1,8 @@
 # test
 
 The tests that live outside the Rust crate. The bulk of the emulator's cover is
-in-module `mod tests` under `src/`, and `tests/machine_boot.rs` is the one cargo
-integration test; what is here is the end-to-end harnesses and the guest
+in-module `mod tests` under `src/`, and `tests/machine_boot.rs` and
+`tests/debug_port.rs` are the cargo integration tests; what is here is the end-to-end harnesses and the guest
 programs they drive.
 
 ## Layout
@@ -54,7 +54,7 @@ the terminal, and which opens a pty of its own with python's `pty`.
     make -C test ray703-boot-disc    # a disc that boots, in disks/
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
-The two Altair IRQ ones, the CTC one and the 703 ones but the five that run
+The two Altair IRQ ones, the CTC one, the launcher's and the 703 ones but the five that run
 Raytheon's tapes need nothing outside the repo, and CI runs them; the 6809 one, the Altair 8800 BASIC one, the
 RC2014 BASIC, CP/M and exerciser ones and the Kaypro's need images from
 outside it and run locally. The snapshot one is both: CI runs its cases

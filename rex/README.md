@@ -44,6 +44,9 @@ terminal opens a menu, and once the platter is built it is listed there
 under the Raytheon 703's "boot disc via LOAD", beside the windows, the
 serial ports and `--fast-io` to switch on.
 
+REX also boots in a web browser, off the same platter: `make -C web serve`
+from the repository root (the [root README](../README.md) has the steps).
+
 ## A first session
 
 Return ends a line, and what is typed is folded to upper case. Backspace
