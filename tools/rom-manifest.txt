@@ -27,6 +27,13 @@ roms/rc2014/24886009.BIN        db0312ada33065281781fc9b0f6c85ac0f987265c11cd51a
 # The original source is a 680b manual, which has a copy of the PROM listing.
 roms/mits680b/mits680b.bin      5269c2ea17282e6d77d3294ecd345b75223e5f9d67f0ed239eed3af2b5ddd201  https://github.com/travisg/emu/releases/download/v0.0.1-assets/mits680b.bin
 
+# VTL-2, the Very Tiny Language, as MITS shipped it in three 1702A proms at
+# 0xfc00, and Altair 680 BASIC 1.1 rev 3.2 as the paper tape the monitor's
+# L command loads: S1 records, the first and last setting the monitor's echo
+# flag off and on again. Both from Mike Douglas's archive at deramp.com.
+roms/mits680b/vtl2.bin          d13bb55080a846c09861f82252de4b43be15d22ac7ef544b008cb8c9cccccf1d  https://deramp.com/downloads/altair/software/altair_680/VTL-2%20(Very%20Tiny%20Language)/VTL2.BIN
+roms/mits680b/basic680.s19      3786080be98f83850f0f6677ac8381800b2e37e6d3d6eeb5516d6e4164b04cc6  https://deramp.com/downloads/altair/software/altair_680/BASIC/Paper%20BASIC%20V1.1%20R3.2.S19
+
 # MITS Altair 8800: Microsoft's BASIC 4.0 for it, as paper tape images (the
 # bytes off the tape, leader and checksum loader included) from Mike
 # Douglas's archive at deramp.com. `emu -s altair8800` keys in the 2SIO

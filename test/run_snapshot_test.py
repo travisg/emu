@@ -51,8 +51,8 @@ import run_altair680_irq_test as altair_irq  # noqa: E402
 import run_altair8800_irq_test as altair8800_irq  # noqa: E402
 import run_rc2014_ctc_test as rc2014_ctc  # noqa: E402
 
-EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu'))
-LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'snapshot_test.log')
+EMU_BIN = os.path.abspath(os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu')))
+LOG_FILE = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'snapshot_test.log'))
 STEPS = 2000
 
 
@@ -112,6 +112,20 @@ def altair8800_tape(workdir, log):
     loader running, the tape read to a point the save must keep. Nothing
     is typed, so the load is the same every time. Needs the tape."""
     emu = Emu.spawn([EMU_BIN, '-s', 'altair8800', '--no-throttle'], log=log)
+    emu.step(60000)
+
+    def elsewhere():
+        emu.step(90000)
+    return emu, elsewhere, 30000
+
+
+def altair680_tape(workdir, log):
+    """680 BASIC part way through loading off its paper tape through the
+    prom monitor: the tape read to a point the save must keep, the echo
+    flag the tape's first record set holding the load quiet. Nothing is
+    typed, so the load is the same every time. Needs the monitor and the
+    tape."""
+    emu = Emu.spawn([EMU_BIN, '-s', 'altair680-basic', '--no-throttle'], log=log)
     emu.step(60000)
 
     def elsewhere():
@@ -427,7 +441,7 @@ def ray703_disc(workdir, log):
 
 
 MACHINES = {
-    'altair680': altair680, 'altair8800': altair8800, 'altair8800-tape': altair8800_tape, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
+    'altair680': altair680, 'altair680-tape': altair680_tape, 'altair8800': altair8800, 'altair8800-tape': altair8800_tape, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
     'rc2014-cpm': rc2014_cpm, 'kaypro': kaypro, 'ray703': ray703_demo, 'rex': rex, 'ray703-disc': ray703_disc,
 }
 DEFAULT = ['altair680', 'altair8800', 'rc2014-ctc', 'ray703', 'ray703-disc', 'rex']
@@ -501,6 +515,9 @@ def main():
         print('build first with: cargo build', file=sys.stderr)
         return 1
     names = os.environ.get('SNAPSHOT_MACHINES', ','.join(DEFAULT)).split(',')
+    # the machines' default roms are relative to the top of the tree, as
+    # for a run of the emulator; `make -C test` starts this in test/
+    os.chdir(ROOT)
     with tempfile.TemporaryDirectory(prefix='snapshot-') as workdir, open(LOG_FILE, 'wb') as log:
         try:
             for name in names:

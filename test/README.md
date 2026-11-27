@@ -29,6 +29,7 @@ need no pty and no `script(1)` -- except the launcher's, whose subject is
 the terminal, and which opens a pty of its own with python's `pty`.
 
     make -C test altair680-irq-test  # the 6800's IRQ through the ACIA, written into RAM
+    make -C test altair680-basic-test # 680 BASIC off its paper tape through the monitor, and a program on it
     make -C test altair8800-irq-test # the 8080's EI; HLT woken by the 2SIO into RST 7
     make -C test altair8800-basic-test # 8K BASIC off its paper tape, and a program on it
     make -C test basic6809-test      # boots 6809 BASIC, runs 6809/lang_test.bas
@@ -55,11 +56,11 @@ the terminal, and which opens a pty of its own with python's `pty`.
     make -C test ray703-blank-disc   # a blank platter on unit 0
 
 The two Altair IRQ ones, the CTC one, the launcher's and the 703 ones but the five that run
-Raytheon's tapes need nothing outside the repo, and CI runs them; the 6809 one, the Altair 8800 BASIC one, the
+Raytheon's tapes need nothing outside the repo, and CI runs them; the 6809 one, both Altairs' BASIC ones, the
 RC2014 BASIC, CP/M and exerciser ones and the Kaypro's need images from
 outside it and run locally. The snapshot one is both: CI runs its cases
 whose guests the tree builds, and `SNAPSHOT_MACHINES` adds the 6809,
-Altair 8800 tape, RC2014 and Kaypro ones, which need the images. REX's session is
+both Altairs' tape, RC2014 and Kaypro ones, which need the images. REX's session is
 `make -C rex test`, under its own directory. The 703 diagnostics, math
 library, FORTRAN and SYM I are Raytheon's paper tapes, `roms/703/diag` and
 `roms/703/tapes` from `tools/fetch-roms.py`, and run locally. The 6809 one

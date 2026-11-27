@@ -187,16 +187,20 @@ pub fn fmt_hz(hz: u64) -> String {
     format!("{} {unit}", n.trim_end_matches('0').trim_end_matches('.'))
 }
 
-fn build_altair680(rom: &Path, console: ConsoleEndpoint, _sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
+fn build_altair680(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
     Ok(Machine {
         cpu: Box::new(crate::cpu::m6800::Cpu6800::new()),
-        bus: Box::new(altair680::Altair680::new(rom, console)?),
+        bus: Box::new(altair680::Altair680::new(rom, console, sub)?),
         display: None,
         throttle_hz: None,
         control: None,
         panel: None,
     })
 }
+
+/// The 680 ran its 6800 at 500 kHz -- MITS shipped it slow to suit the
+/// memory it came with.
+const ALTAIR680_CLOCK_HZ: u64 = 500_000;
 
 fn build_altair8800(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
     // "panel" opens the front panel window, beside whatever the rest of the
@@ -477,25 +481,51 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
     },
     SystemDescriptor {
         name: "altair680",
-        title: "MITS Altair 680 and its rom monitor",
+        title: "MITS Altair 680b: its prom monitor, and VTL-2 at FC00",
         cpu: "6800",
         default_rom: altair680::DEFAULT_ROM,
         factory: build_altair680,
-        // The 680 ran its 6800 at 500 kHz -- MITS shipped it slow to suit
-        // the memory it came with.
-        clock_hz: Some(500_000),
+        clock_hz: Some(ALTAIR680_CLOCK_HZ),
         serial_ports: &[],
         disks: None,
-        variants: &[],
+        variants: &[
+            ("basic", "loads 680 BASIC off its paper tape: -r roms/mits680b/basic680.s19"),
+            ("noterm", "strapped for no terminal: reset jumps to 0"),
+        ],
         launch: Launch {
             name: "MITS Altair 680",
-            modes: &[LaunchMode {
-                variant: "",
-                what: "monitor rom",
-                media: Media::Rom(Files { dirs: &["roms/mits680b"], exts: &["bin"], name_has: "", size: FileSize::Any }),
-                fetch: FETCH_ROMS,
-            }],
-            needs: &[],
+            modes: &[
+                LaunchMode {
+                    variant: "",
+                    what: "monitor rom",
+                    media: Media::Rom(Files {
+                        dirs: &["roms/mits680b"],
+                        exts: &["bin"],
+                        name_has: "mits680b",
+                        size: FileSize::Any,
+                    }),
+                    fetch: FETCH_ROMS,
+                },
+                LaunchMode {
+                    variant: "basic",
+                    what: "BASIC tape",
+                    media: Media::Rom(Files {
+                        dirs: &["roms/mits680b"],
+                        exts: &["s19"],
+                        name_has: "basic",
+                        size: FileSize::Any,
+                    }),
+                    fetch: FETCH_ROMS,
+                },
+                LaunchMode {
+                    variant: "noterm",
+                    what: "front panel only, reset to 0",
+                    media: Media::Fixed,
+                    fetch: FETCH_ROMS,
+                },
+            ],
+            // the tape loads through the monitor
+            needs: &[altair680::DEFAULT_ROM],
             windows: &[],
             serial_window: false,
         },
