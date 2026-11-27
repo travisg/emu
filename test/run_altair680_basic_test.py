@@ -31,7 +31,10 @@ stops on, so BASIC never loads whole and never asks its first question.
 ALTAIR680_BASIC_PANEL=1 runs the same session on `altair680-basic-panel`,
 the window on SDL's dummy driver: with a panel every bus access the core
 makes goes through the lamps' tap, a word as two bytes, so this is the
-whole session over that path.
+whole session over that path. ALTAIR680_BASIC_TTY=1 puts the console on
+the teletype window's paper instead of the terminal (`-tty`), the session
+read from the debug port's tap, which the paper does not replace; the two
+compose.
 
 Needs `roms/mits680b/mits680b.bin` and `roms/mits680b/basic680.s19`
 (tools/fetch-roms.py), so it runs locally rather than in CI.
@@ -54,6 +57,7 @@ TAPE_FILE = os.path.abspath(os.environ.get('TAPE_FILE', os.path.join(ROOT, 'roms
 LOG_FILE = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'altair680_basic_test.log'))
 CONTROL = os.environ.get('ALTAIR680_BASIC_CONTROL', '')
 PANEL = os.environ.get('ALTAIR680_BASIC_PANEL', '') not in ('', '0')
+TTY = os.environ.get('ALTAIR680_BASIC_TTY', '') not in ('', '0')
 
 PROGRAM = [
     '10 E=0:S=0',
@@ -114,6 +118,9 @@ def main():
         system = 'altair680-basic'
         if PANEL:
             system += '-panel'
+        if TTY:
+            system += '-tty'
+        if PANEL or TTY:
             os.environ['SDL_VIDEODRIVER'] = 'dummy'
             os.environ['SDL_RENDER_DRIVER'] = 'software'
         try:
@@ -157,7 +164,7 @@ def main():
             print('FAIL: altair680 basic test (see %s)' % LOG_FILE, file=sys.stderr)
             return 1
 
-    print('PASS: altair680 basic test (%s%s)' % (EMU_BIN, ', with the panel' if PANEL else ''))
+    print('PASS: altair680 basic test (%s)' % ', '.join([EMU_BIN] + [w for w, on in [('panel', PANEL), ('tty', TTY)] if on]))
     return 0
 
 

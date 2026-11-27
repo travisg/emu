@@ -211,7 +211,7 @@ mod tests {
         use crate::console::panel703::PanelView;
         use crate::console::paper::Paper;
         use crate::console::paper_view::{PaperView, PAPER_BG};
-        use crate::console::tty703::TtyWindow;
+        use crate::console::tty33::TtyWindow;
         use crate::console::{DiscRackState, PanelControl, PanelDisplay, PanelState, TtyDisplay};
         std::env::set_var("SDL_VIDEODRIVER", "dummy");
         std::env::set_var("SDL_RENDER_DRIVER", "software");

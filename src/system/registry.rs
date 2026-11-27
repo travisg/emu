@@ -187,32 +187,52 @@ pub fn fmt_hz(hz: u64) -> String {
     format!("{} {unit}", n.trim_end_matches('0').trim_end_matches('.'))
 }
 
-fn build_altair680(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
-    // "panel" opens the front panel window, beside whatever the rest of the
-    // subsystem picks, in either order: altair680-panel, -noterm-panel
+/// An Altair's window tokens, taken out of its subsystem: "panel" the
+/// front panel, "tty" the console's teletype, each beside whatever the
+/// rest picks and in any order (altair680-basic-tty-panel). What is left
+/// goes to the machine, a duplicated token included, which it refuses.
+fn altair_windows(sub: &str) -> (bool, bool, String) {
     let mut tokens: Vec<&str> = sub.split('-').filter(|t| !t.is_empty()).collect();
-    let panel = tokens.iter().position(|&t| t == "panel").map(|i| tokens.remove(i)).is_some();
-    let sub = tokens.join("-");
+    let mut take = |name: &str| tokens.iter().position(|&t| t == name).map(|i| tokens.remove(i)).is_some();
+    let (panel, tty) = (take("panel"), take("tty"));
+    (panel, tty, tokens.join("-"))
+}
 
+/// The console's teletype in a window: the paper is the endpoint's sink
+/// from here on, the debug port's tap surviving the change. No pacing of
+/// its own: the Altairs' ACIAs have no baud rate here, so it prints as fast
+/// as the guest writes.
+fn altair_tty(console: &mut ConsoleEndpoint) -> crate::console::TtyDisplay {
+    let paper = crate::console::Paper::new();
+    console.set_output(Box::new(paper.clone()));
+    crate::console::TtyDisplay { paper, line: None }
+}
+
+/// An Altair's front panel: the lamps' state, the switches' channel to the
+/// run loop and the run lamp.
+fn altair_panel(state: &crate::console::AltairPanel) -> (crate::console::AltairPanelDisplay, ControlChannel, Box<dyn crate::console::RunLamp>) {
+    let (ctl_tx, ctl_rx) = mpsc::channel();
+    let display =
+        crate::console::AltairPanelDisplay { panel: state.clone(), control: crate::console::PanelControl(ctl_tx.clone()) };
+    (display, ControlChannel { tx: ctl_tx, rx: ctl_rx }, Box::new(state.clone()))
+}
+
+fn build_altair680(rom: &Path, mut console: ConsoleEndpoint, sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
+    let (panel, tty, sub) = altair_windows(sub);
+    let tty = tty.then(|| altair_tty(&mut console));
     let bus = altair680::Altair680::new(rom, console, &sub)?;
     let mut cpu = crate::cpu::m6800::Cpu6800::new();
-    let (mut display, mut control, mut run_lamp, mut throttle_hz) = (None, None, None, None);
+    let (mut panel_display, mut control, mut run_lamp, mut throttle_hz) = (None, None, None, None);
     if panel {
         let state = crate::console::AltairPanel::new();
         cpu.attach_panel(state.clone());
-        let (ctl_tx, ctl_rx) = mpsc::channel();
-        display = Some(Display::Altair680 {
-            title: "MITS Altair 680b",
-            panel: crate::console::AltairPanelDisplay {
-                panel: state.clone(),
-                control: crate::console::PanelControl(ctl_tx.clone()),
-            },
-        });
-        control = Some(ControlChannel { tx: ctl_tx, rx: ctl_rx });
-        run_lamp = Some(Box::new(state) as Box<dyn crate::console::RunLamp>);
+        let (d, c, l) = altair_panel(&state);
+        (panel_display, control, run_lamp) = (Some(d), Some(c), Some(l));
         // a live panel wants real time, as the 703's and the 8800's do
         throttle_hz = Some(ALTAIR680_CLOCK_HZ);
     }
+    let display = (panel || tty.is_some())
+        .then_some(Display::Altair680 { title: "MITS Altair 680b", panel: panel_display, tty });
     Ok(Machine { cpu: Box::new(cpu), bus: Box::new(bus), display, throttle_hz, control, panel: run_lamp })
 }
 
@@ -220,36 +240,26 @@ fn build_altair680(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &Mach
 /// memory it came with.
 const ALTAIR680_CLOCK_HZ: u64 = 500_000;
 
-fn build_altair8800(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
-    // "panel" opens the front panel window, beside whatever the rest of the
-    // subsystem picks, in either order: altair8800-panel, -4k-panel
-    let mut tokens: Vec<&str> = sub.split('-').filter(|t| !t.is_empty()).collect();
-    let panel = tokens.iter().position(|&t| t == "panel").map(|i| tokens.remove(i)).is_some();
-    let sub = tokens.join("-");
-
+fn build_altair8800(rom: &Path, mut console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
+    let (panel, tty, sub) = altair_windows(sub);
+    let tty = tty.then(|| altair_tty(&mut console));
     let mut bus = altair8800::Altair8800::new(rom, console, &sub)?;
     if let Some(line) = open_serial(opts, &[altair8800::SERIAL_PORT])?.pop() {
         bus.attach_serial(line);
     }
     let mut cpu = crate::cpu::i8080::Cpu8080::new();
-    let (mut display, mut control, mut run_lamp, mut throttle_hz) = (None, None, None, None);
+    let (mut panel_display, mut control, mut run_lamp, mut throttle_hz) = (None, None, None, None);
     if panel {
         let state = crate::console::AltairPanel::new();
         cpu.attach_panel(state.clone());
         bus.attach_panel(state.clone());
-        let (ctl_tx, ctl_rx) = mpsc::channel();
-        display = Some(Display::Altair8800 {
-            title: "MITS Altair 8800",
-            panel: crate::console::AltairPanelDisplay {
-                panel: state.clone(),
-                control: crate::console::PanelControl(ctl_tx.clone()),
-            },
-        });
-        control = Some(ControlChannel { tx: ctl_tx, rx: ctl_rx });
-        run_lamp = Some(Box::new(state) as Box<dyn crate::console::RunLamp>);
+        let (d, c, l) = altair_panel(&state);
+        (panel_display, control, run_lamp) = (Some(d), Some(c), Some(l));
         // a live panel wants real time, as the 703's does
         throttle_hz = Some(altair8800::CLOCK_HZ);
     }
+    let display = (panel || tty.is_some())
+        .then_some(Display::Altair8800 { title: "MITS Altair 8800", panel: panel_display, tty });
     Ok(Machine { cpu: Box::new(cpu), bus: Box::new(bus), display, throttle_hz, control, panel: run_lamp })
 }
 
@@ -510,6 +520,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ("basic", "loads 680 BASIC off its paper tape: -r roms/mits680b/basic680.s19"),
             ("noterm", "strapped for no terminal: reset jumps to 0"),
             ("panel", "the front panel in a window; starts halted"),
+            ("tty", "the console's teletype in a window"),
         ],
         launch: Launch {
             name: "MITS Altair 680",
@@ -545,7 +556,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ],
             // the tape loads through the monitor
             needs: &[altair680::DEFAULT_ROM],
-            windows: &[("panel", "front panel window; starts halted")],
+            windows: &[("panel", "front panel window; starts halted"), ("tty", "teletype in a window")],
             serial_window: false,
         },
     },
@@ -563,6 +574,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ("ext", "for Extended BASIC 4.x, its tape given with -r"),
             ("image", "-r is a memory image, run from address 0"),
             ("panel", "the front panel in a window; starts stopped"),
+            ("tty", "the console's teletype in a window"),
         ],
         // A tape is for the loader its BASIC's size keys, which nothing in
         // the file says, so each loader lists the tapes named for it.
@@ -595,7 +607,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
                 },
             ],
             needs: &[],
-            windows: &[("panel", "front panel window; starts stopped")],
+            windows: &[("panel", "front panel window; starts stopped"), ("tty", "teletype in a window")],
             serial_window: false,
         },
     },
@@ -930,6 +942,51 @@ mod tests {
         // DOT 14,E with 'A': the device's write function, straight to paper
         m.bus.io_write16(0xee, 0x8000 | b'A' as u16);
         tty.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A'));
+    }
+
+    /// An Altair built through its factory over an image in a scratch file:
+    /// the 8800's `image` subsystem, or the 680's monitor rom.
+    fn build_altair(name: &str, sub: &str) -> io::Result<Machine> {
+        let dir = std::env::temp_dir().join(format!("emu-registry-{name}-{sub}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rom = dir.join("image.bin");
+        std::fs::write(&rom, [0u8; 256]).unwrap();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let console = ConsoleEndpoint::new(rx, Box::new(Vec::new()));
+        let m = (find(name).unwrap().factory)(&rom, console, sub, &MachineOpts::default());
+        std::fs::remove_dir_all(&dir).ok();
+        m
+    }
+
+    /// Either Altair's `tty` puts the console on a paper, with or without
+    /// a panel and in any order, and a teletype alone asks for no clock of
+    /// its own; a second `tty` is refused.
+    #[test]
+    fn an_altair_tty_is_the_consoles_paper() {
+        for sub in ["image-tty", "tty-image", "tty-image-panel", "panel-tty-image"] {
+            let mut m = build_altair("altair8800", sub).unwrap();
+            let Some(Display::Altair8800 { panel, tty: Some(tty), .. }) = m.display else {
+                panic!("{sub}: an 8800 teletype expected");
+            };
+            assert_eq!(panel.is_some(), sub.contains("panel"), "{sub}");
+            assert_eq!(m.throttle_hz.is_some(), sub.contains("panel"), "{sub}");
+            m.bus.io_write8(0x11, b'A');
+            tty.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'A', "{sub}"));
+        }
+        for sub in ["tty", "noterm-tty", "tty-panel"] {
+            let mut m = build_altair("altair680", sub).unwrap();
+            let Some(Display::Altair680 { panel, tty: Some(tty), .. }) = m.display else {
+                panic!("{sub}: a 680 teletype expected");
+            };
+            assert_eq!(panel.is_some(), sub.contains("panel"), "{sub}");
+            m.bus.write8(0xf000, 0x15); // out of master reset
+            m.bus.write8(0xf001, b'Z');
+            tty.paper.with_lines(|lines, _| assert_eq!(lines[0][0], b'Z', "{sub}"));
+        }
+        assert!(build_altair("altair8800", "image").unwrap().display.is_none());
+        assert!(build_altair("altair680", "").unwrap().display.is_none());
+        assert!(build_altair("altair8800", "image-tty-tty").is_err());
+        assert!(build_altair("altair680", "tty-tty").is_err());
     }
 
     /// `--serial window` is teletype 1's line: a paper of its own for what

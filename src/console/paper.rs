@@ -69,8 +69,11 @@ impl Paper {
         Self::default()
     }
 
-    /// CPU-side: one byte of serial output reaches the print mechanism.
+    /// CPU-side: one byte of serial output reaches the print mechanism,
+    /// which reads seven levels of the eight: the eighth is parity, or
+    /// marking, to a Model 33, and selects nothing.
     pub fn feed(&self, byte: u8) {
+        let byte = byte & 0x7f;
         let mut p = self.0.inner.lock().unwrap();
         match byte {
             // CR returns the carriage; the paper does not move.
@@ -224,6 +227,16 @@ mod tests {
         });
         assert_eq!(line_str(&p, 0), "");
         assert!(!p.take_dirty(), "nothing visible changed");
+    }
+
+    #[test]
+    fn the_eighth_level_selects_nothing() {
+        let p = Paper::new();
+        for &b in &[b'A' | 0x80, 0x8d, 0x8a, b'B' | 0x80] {
+            p.feed(b);
+        }
+        assert_eq!(line_str(&p, 0), "A");
+        assert_eq!(line_str(&p, 1), "B");
     }
 
     #[test]

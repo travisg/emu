@@ -11,6 +11,9 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 - **MITS Altair 8800 (Intel 8080)**: no ROM: keys in MITS's bootstrap loader and loads Altair BASIC
   4.0 off its paper tape, as an operator at the front panel did — and `-s altair8800-panel` draws
   that front panel, lamps, toggles, EXAMINE and DEPOSIT and all.
+
+  On either Altair a `tty` token puts the console on a teletype's paper in a window of its own,
+  the 703's (below), instead of the terminal.
 - **RC2014 (Zilog Z80)**: boots the factory ROM image — Grant Searle's monitor into Microsoft
   BASIC 4.7b — on the terminal, over an interrupt-driven serial port.
 - **Kaypro II (Zilog Z80)**: boots CP/M 2.2 from a floppy image into an SDL2 window, with a
@@ -94,6 +97,7 @@ Run a system:
 ./target/debug/emu -s altair680-basic-panel    # 680 BASIC, with the front panel in a window
 ./target/debug/emu -s altair8800               # loads 8K BASIC off paper tape, then MEMORY SIZE?
 ./target/debug/emu -s altair8800-panel         # ...with the front panel: press RUN
+./target/debug/emu -s altair8800-panel-tty     # ...and the console on a teletype's paper
 ./target/debug/emu -s kaypro                # opens a window; also loads disks/mbasic-games.img
 ./target/debug/emu -s kaypro --disk my.img  # a floppy of your own, which keeps what CP/M saves
 ./target/debug/emu -s rc2014-cpm --serial tcp:2323   # SIO channel B on localhost:2323 (nc localhost 2323)

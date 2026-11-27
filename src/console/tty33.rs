@@ -6,9 +6,10 @@
  * license that can be found in the LICENSE file or at
  * https://opensource.org/licenses/MIT
  */
-//! The 703's teletype window: an ASR33's roll of paper.
+//! A teletype window: an ASR33's roll of paper, the console of the 703 or
+//! of either Altair.
 //!
-//! One window of [`super::ray703`]'s frontend, drawing the [`Paper`] the
+//! One window of [`super::windows`]'s frontend, drawing the [`Paper`] the
 //! machine's serial output feeds as its [`PaperView`] lays it out -- 72
 //! columns of the Model 33 typewheel on a paper-colored page, the last
 //! lines visible and the mouse wheel rolling the platen back through the
@@ -22,8 +23,9 @@
 //! conventions on top: letters upcase (the keyboard has no lowercase),
 //! Return is CARRIAGE RETURN, shift-Return the LINE FEED key (X-RAY's
 //! Ctrl-J convention still works too), and Backspace/Delete send RUBOUT --
-//! the machine has no backspace. CR and LF stay distinct end to end, which
-//! is the property the 703's software cannot live without.
+//! the Model 33 has no backspace. CR and LF stay distinct end to end, which
+//! is the property the 703's software cannot live without. (The Altair
+//! 680's ACIA hands RUBOUT on to its BASIC as `_`, the erase it knows.)
 
 use super::paper_view::{PaperView, INK, PAPER_BG};
 use super::sdl::control_code;

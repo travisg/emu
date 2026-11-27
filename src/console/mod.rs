@@ -31,16 +31,12 @@ use std::sync::{Arc, Mutex};
 
 // The frontends draw with SDL and drive a terminal, so a wasm build has
 // none of them; the models they draw from (panel, rack, paper) stay.
-#[cfg(not(target_arch = "wasm32"))]
-pub mod altair;
 pub(crate) mod lamps;
 pub mod panel680;
 pub mod panel703;
 pub mod panel8800;
 pub mod paper;
 pub mod paper_view;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod ray703;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sdl;
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,8 +45,10 @@ pub mod surface;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod terminal;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod tty703;
+pub mod tty33;
 pub mod tty33_font;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod windows;
 
 pub use paper::Paper;
 
@@ -92,8 +90,8 @@ impl ConsoleEndpoint {
 
     /// Replace the output sink. The endpoint is built in `main` -- before
     /// the factory has parsed the subsystem tokens -- with stdout as its
-    /// sink; a factory that routes the serial output somewhere else (the
-    /// 703's teletype window) swaps its sink in here before the machine
+    /// sink; a factory that routes the serial output somewhere else (a
+    /// teletype window) swaps its sink in here before the machine
     /// consumes the endpoint. The tap, if any, stays.
     pub fn set_output(&mut self, out: Box<dyn Write + Send>) {
         self.out = out;
@@ -916,7 +914,7 @@ pub enum Display {
         drives: DriveBayDisplay,
     },
     /// The 703's windows, rendered together by one
-    /// [`ray703::Ray703Frontend`]: SDL allows one context and one event
+    /// [`windows::WindowsFrontend`]: SDL allows one context and one event
     /// pump per process, so however many windows the subsystem tokens ask
     /// for must share a frontend, and the composition lives in this variant
     /// rather than in `main`. There is at least one window -- a machine with
@@ -928,11 +926,11 @@ pub enum Display {
         tty: Option<TtyDisplay>,
         terminals: Vec<TtyDisplay>,
     },
-    /// The Altair 8800's front panel, rendered by
-    /// [`altair::AltairFrontend`] beside the terminal.
-    Altair8800 { title: &'static str, panel: AltairPanelDisplay },
-    /// The Altair 680b's front panel, the same way.
-    Altair680 { title: &'static str, panel: AltairPanelDisplay },
+    /// The Altair 8800's windows, the same way: its front panel, its
+    /// console's teletype, or both, at least one of them.
+    Altair8800 { title: &'static str, panel: Option<AltairPanelDisplay>, tty: Option<TtyDisplay> },
+    /// The Altair 680b's, the same way.
+    Altair680 { title: &'static str, panel: Option<AltairPanelDisplay>, tty: Option<TtyDisplay> },
 }
 
 /// An Altair panel window's share of [`Display::Altair8800`] or
@@ -943,11 +941,11 @@ pub struct AltairPanelDisplay {
     pub control: PanelControl,
 }
 
-/// A teletype window's share of [`Display::Ray703`]: the paper the
-/// teletype prints onto (the factory has already made it the
-/// `ConsoleEndpoint`'s sink), and for a terminal other than the console its
-/// number and its own keyboard -- the console's is the channel `main`
-/// gives the frontend.
+/// A teletype window's share of a [`Display`]: the paper the teletype
+/// prints onto (the factory has already made it the `ConsoleEndpoint`'s
+/// sink), and for a terminal other than the console its number and its
+/// own keyboard -- the console's is the channel `main` gives the
+/// frontend.
 pub struct TtyDisplay {
     pub paper: Paper,
     pub line: Option<(usize, Sender<u8>)>,

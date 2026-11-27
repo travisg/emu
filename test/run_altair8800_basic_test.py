@@ -29,6 +29,12 @@ program's checks wrong (it prints its FAIL line), and =tape loads a copy
 of the tape with one byte of BASIC changed (the checksum loader stops with
 its C error before BASIC starts).
 
+ALTAIR8800_BASIC_PANEL=1 runs the same session on `altair8800-panel` and
+ALTAIR8800_BASIC_TTY=1 on `altair8800-tty`, the windows on SDL's dummy
+driver: the panel's lamps charged every machine cycle, and the console on
+the teletype's paper rather than the terminal, the session read from the
+debug port's tap, which the paper does not replace. The two compose.
+
 Needs `roms/altair8800/basic8k40.tap` (tools/fetch-roms.py), so it runs
 locally rather than in CI.
 """
@@ -49,6 +55,8 @@ EMU_BIN = os.environ.get('EMU_BIN', os.path.join(ROOT, 'target', 'debug', 'emu')
 TAPE_FILE = os.environ.get('TAPE_FILE', os.path.join(ROOT, 'roms', 'altair8800', 'basic8k40.tap'))
 LOG_FILE = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'altair8800_basic_test.log')
 CONTROL = os.environ.get('ALTAIR8800_BASIC_CONTROL', '')
+PANEL = os.environ.get('ALTAIR8800_BASIC_PANEL', '') not in ('', '0')
+TTY = os.environ.get('ALTAIR8800_BASIC_TTY', '') not in ('', '0')
 
 PROGRAM = [
     '10 E=0:S=0',
@@ -93,8 +101,12 @@ def main():
             tape = os.path.join(workdir, 'corrupt.tap')
             with open(tape, 'wb') as f:
                 f.write(data)
+        system = 'altair8800' + ('-panel' if PANEL else '') + ('-tty' if TTY else '')
+        if PANEL or TTY:
+            os.environ['SDL_VIDEODRIVER'] = 'dummy'
+            os.environ['SDL_RENDER_DRIVER'] = 'software'
         try:
-            emu = Emu.spawn([EMU_BIN, '-s', 'altair8800', '-r', tape, '--no-throttle'], log=log)
+            emu = Emu.spawn([EMU_BIN, '-s', system, '-r', tape, '--no-throttle'], log=log)
             emu.run()
             at = emu.wait_for_output(b'MEMORY SIZE? ', timeout=30).end()
             at = type_line(emu, '', at)
@@ -132,7 +144,7 @@ def main():
             print('FAIL: altair8800 basic test (see %s)' % LOG_FILE, file=sys.stderr)
             return 1
 
-    print('PASS: altair8800 basic test (%s)' % EMU_BIN)
+    print('PASS: altair8800 basic test (%s)' % ', '.join([EMU_BIN] + [w for w, on in [('panel', PANEL), ('tty', TTY)] if on]))
     return 0
 
 

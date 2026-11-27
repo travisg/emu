@@ -9,7 +9,7 @@
 //! A teletype's [`Paper`] as it is seen: which lines of the roll show, and
 //! where each typewheel glyph lands in pixels -- 72 columns on a page of
 //! newsprint, the last lines visible and the platen rolled back through
-//! the scrollback on request. The SDL window ([`super::tty703`]) prints
+//! the scrollback on request. The SDL window ([`super::tty33`]) prints
 //! the glyphs from a texture; [`PaperView::render`] prints them into a
 //! [`Framebuffer`] from the same atlas, which is how the web page shows
 //! the paper.

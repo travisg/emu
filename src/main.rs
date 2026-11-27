@@ -9,11 +9,10 @@
 //! Entry point: parse args, build the machine, run the CPU on its own thread
 //! while the console frontend owns the main thread.
 
-use emu::console::altair::AltairFrontend;
-use emu::console::ray703::Ray703Frontend;
 use emu::console::sdl::SdlFrontend;
 use emu::console::serial::SerialSpec;
 use emu::console::terminal::TerminalFrontend;
+use emu::console::windows::WindowsFrontend;
 use emu::console::{ConsoleEndpoint, ConsoleFrontend};
 use emu::debug::server::{spawn_unix, DebugServer};
 use emu::debug::{DebugSink, TapWriter};
@@ -377,24 +376,14 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some(display @ emu::console::Display::Ray703 { .. }) => {
-            match Ray703Frontend::new(tx, display) {
-                Ok(f) => Box::new(f),
-                Err(e) => {
-                    eprintln!("error initializing SDL: {e}");
-                    return ExitCode::FAILURE;
-                }
+        // a panel, teletypes or both, in windows of their own
+        Some(display) => match WindowsFrontend::new(tx, display) {
+            Ok(f) => Box::new(f),
+            Err(e) => {
+                eprintln!("error initializing SDL: {e}");
+                return ExitCode::FAILURE;
             }
-        }
-        Some(display @ (emu::console::Display::Altair8800 { .. } | emu::console::Display::Altair680 { .. })) => {
-            match AltairFrontend::new(tx, display) {
-                Ok(f) => Box::new(f),
-                Err(e) => {
-                    eprintln!("error initializing SDL: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
+        },
         None => Box::new(TerminalFrontend::new(tx)),
     };
 
