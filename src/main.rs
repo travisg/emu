@@ -50,8 +50,9 @@ struct Args {
     /// compose (a real-time CPU with an instant terminal is the useful panel
     /// combination) and fast-io outranks a pacing rate.
     fast_io: bool,
-    /// `--disk PATH`: the disk image, in place of the fixed name under disks/.
-    disk: Option<PathBuf>,
+    /// `--disk PATH`, once per drive: the disk images, in place of the
+    /// fixed name under disks/, the first drive's first.
+    disks: Vec<PathBuf>,
     /// `--serial SPEC`, given once per spare serial port: their host ends.
     serial: Vec<SerialSpec>,
     /// `--debug PATH`: listen on a Unix socket for a debugger.
@@ -94,7 +95,7 @@ fn usage(argv0: &str) -> String {
         ("--throttle [HZ]", "pace to HZ; bare, the machine's own clock (default)"),
         ("--no-throttle", "run flat out"),
         ("--fast-io", "devices finish i/o at once, not at real speed"),
-        ("--disk FILE", "mount FILE in place of the default disk (above)"),
+        ("--disk FILE", "mount FILE in place of the default disk (above); again for the next drive"),
         ("--serial pty|tcp:PORT", "a spare serial port (above) on a pty or localhost port; once per port"),
         ("--serial window", "a 703 teletype's port in a teletype window of its own"),
         ("--debug SOCKET", "debug port on a unix socket, for tools/emudbg.py"),
@@ -125,7 +126,7 @@ fn parse_args(argv: Vec<String>) -> Result<Args, ()> {
         trace: None,
         throttle: ThrottleArg::Unset,
         fast_io: false,
-        disk: None,
+        disks: Vec::new(),
         serial: Vec::new(),
         debug: None,
         halt: false,
@@ -236,7 +237,7 @@ fn parse_args(argv: Vec<String>) -> Result<Args, ()> {
             "--disk" => {
                 let v = value(&mut i).ok_or(())?;
                 println!("disk option: '{v}'");
-                args.disk = Some(PathBuf::from(v));
+                args.disks.push(PathBuf::from(v));
             }
             "--serial" => {
                 let v = value(&mut i).ok_or(())?;
@@ -352,7 +353,7 @@ fn main() -> ExitCode {
     let (_, subsystem) = registry::split_name(&args.system);
     let opts = registry::MachineOpts {
         fast_io: args.fast_io,
-        disk: args.disk,
+        disks: args.disks,
         serial: args.serial,
     };
     let mut machine = match (desc.factory)(&rom, endpoint, subsystem, &opts) {

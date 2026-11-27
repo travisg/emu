@@ -107,6 +107,88 @@ def altair8800(workdir, log):
     return emu, elsewhere
 
 
+# A program that reads the disk sector after sector, round and round,
+# printing a character made of each sector's tenth byte: the Burcon BIOS's
+# two-bytes-a-pass read loop. DISK_READ is just past its second read, taken
+# without asking NRDA, so the next thing the loop does is ask it: whether
+# the byte under the head has been taken is the controller's to remember.
+DISK_READ = 0x0040
+DISK_PROGRAM = bytes([
+    0x31, 0x00, 0x10,               # 0000 lxi sp,1000h
+    0x3e, 0x03, 0xd3, 0x10,         # 0003 mvi a,3; out 10h    ACIA reset
+    0x3e, 0x15, 0xd3, 0x10,         # 0007 mvi a,15h; out 10h  8N1
+    0xaf, 0xd3, 0x08,               # 000b xra a; out 08h      drive 0
+    0x3e, 0x04, 0xd3, 0x09,         # 000e mvi a,4; out 09h    head load
+    0xdb, 0x08, 0xe6, 0x04,         # 0012 in 08h; ani 4       settled?
+    0xc2, 0x12, 0x00,               # 0016 jnz 0012h
+    0x1e, 0x00,                     # 0019 mvi e,0
+    0xdb, 0x09, 0x1f,               # 001b in 09h; rar         sector true?
+    0xda, 0x1b, 0x00,               # 001e jc 001bh
+    0xe6, 0x1f, 0xbb,               # 0021 ani 1fh; cmp e
+    0xc2, 0x1b, 0x00,               # 0024 jnz 001bh
+    0x21, 0x00, 0x20,               # 0027 lxi h,2000h
+    0x0e, 137,                      # 002a mvi c,137
+    0xdb, 0x08, 0xb7,               # 002c in 08h; ora a       NRDA?
+    0xfa, 0x2c, 0x00,               # 002f jm 002ch
+    0xdb, 0x0a, 0x77, 0x23,         # 0032 in 0ah; mov m,a; inx h
+    0x0d, 0xca, 0x43, 0x00,         # 0036 dcr c; jz 0043h
+    0x0d, 0x00,                     # 003a dcr c; nop
+    0xdb, 0x0a, 0x77, 0x23,         # 003c in 0ah; mov m,a; inx h
+    0xc2, 0x2c, 0x00,               # 0040 jnz 002ch
+    0x3a, 0x0a, 0x20,               # 0043 lda 200ah
+    0xe6, 0x3f, 0xc6, 0x20,         # 0046 ani 3fh; adi 20h
+    0xd3, 0x11,                     # 004a out 11h
+    0x1c, 0x7b, 0xe6, 0x1f, 0x5f,   # 004c inr e; mov a,e; ani 1fh; mov e,a
+    0xc3, 0x1b, 0x00,               # 0051 jmp 001bh
+])
+DISK_BYTES = 77 * 32 * 137
+
+
+def altair8800_disk(workdir, log):
+    """The 88-DCDD part way through a sector: DISK_PROGRAM, under
+    altair8800-image-disk, stopped in its read loop with two bytes
+    taken and the rest of the sector still to come off a patterned
+    scratch disk. The disk's position under the head is the machine's
+    cycle count, so the save must keep it, and which byte was taken."""
+    image = os.path.join(workdir, 'altair8800-disk.bin')
+    with open(image, 'wb') as f:
+        f.write(DISK_PROGRAM)
+    disk = os.path.join(workdir, 'altair8800.dsk')
+    with open(disk, 'wb') as f:
+        f.write(bytes((i * 7 + (i >> 8)) & 0xff for i in range(DISK_BYTES)))
+    emu = Emu.spawn([EMU_BIN, '-s', 'altair8800-image-disk', '-r', image, '--disk', disk, '--no-throttle'], log=log)
+    emu.add_break(DISK_READ)
+    emu.run()
+    stop = emu.wait_stopped()
+    if stop.pc != DISK_READ:
+        raise AssertionError('altair8800-disk: stopped at %04x, not in the read loop' % stop.pc)
+    emu.remove_break(DISK_READ)
+
+    def elsewhere():
+        at = len(emu.output)
+        emu.run()
+        emu.wait_for_output(re.compile(rb'.{40}', re.S), start=at)
+        emu.halt()
+    return emu, elsewhere, 3000
+
+
+def altair8800_cpm(workdir, log):
+    """CP/M part way through booting off its floppy through the disk boot
+    loader PROM: a fixed count of steps in, nothing typed, so the boot is
+    the same every time. Needs the PROM and the disk."""
+    disk = os.path.join(workdir, 'altair8800-cpm.dsk')
+    shutil.copyfile(os.path.join(ROOT, 'disks', 'altair8800-cpm.dsk'), disk)
+    emu = Emu.spawn([EMU_BIN, '-s', 'altair8800-disk', '--disk', disk, '--no-throttle'], log=log)
+    # the banner comes about 320,000 steps in; this is the loader reading
+    emu.step(200000)
+    if emu.output:
+        raise AssertionError('altair8800-cpm: CP/M is already up at S1: %r' % bytes(emu.output))
+
+    def elsewhere():
+        emu.step(600000)
+    return emu, elsewhere, 60000
+
+
 def altair8800_tape(workdir, log):
     """8K BASIC part way through loading off its paper tape: the checksum
     loader running, the tape read to a point the save must keep. Nothing
@@ -441,10 +523,11 @@ def ray703_disc(workdir, log):
 
 
 MACHINES = {
-    'altair680': altair680, 'altair680-tape': altair680_tape, 'altair8800': altair8800, 'altair8800-tape': altair8800_tape, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
+    'altair680': altair680, 'altair680-tape': altair680_tape, 'altair8800': altair8800, 'altair8800-tape': altair8800_tape,
+    'altair8800-disk': altair8800_disk, 'altair8800-cpm': altair8800_cpm, '6809': system09, 'rc2014-ctc': rc2014_ctc_case, 'rc2014': rc2014_basic,
     'rc2014-cpm': rc2014_cpm, 'kaypro': kaypro, 'ray703': ray703_demo, 'rex': rex, 'ray703-disc': ray703_disc,
 }
-DEFAULT = ['altair680', 'altair8800', 'rc2014-ctc', 'ray703', 'ray703-disc', 'rex']
+DEFAULT = ['altair680', 'altair8800', 'altair8800-disk', 'rc2014-ctc', 'ray703', 'ray703-disc', 'rex']
 
 
 def snap(emu, path):

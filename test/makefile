@@ -9,7 +9,7 @@ LINKFLAGS := -ni
 # C++ tree; objcopy does the same job for a contiguous image.
 OBJCOPY   := objcopy
 
-.PHONY: all clean launcher-test altair680-basic-test altair680-irq-test altair8800-basic-test altair8800-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test snapshot-test
+.PHONY: all clean launcher-test altair680-basic-test altair680-irq-test altair8800-basic-test altair8800-cpm-test altair8800-irq-test basic6809-test kaypro-zex-test rc2014-basic-test rc2014-cpm-test rc2014-ctc-test rc2014-zex-test snapshot-test
 
 # The 6809 sources, all built in place under 6809/. memtest is the only one
 # meant to run; the other two exist to be assembled. README.md says which is
@@ -70,6 +70,12 @@ altair8800-irq-test:
 # program run on it. Needs roms/altair8800/basic8k40.tap (tools/fetch-roms.py).
 altair8800-basic-test:
 	./run_altair8800_basic_test.py
+
+# CP/M 2.2 booted off the 88-DCDD floppies by the disk boot loader PROM,
+# MBASIC run off drive A and a file saved on drive B. Needs
+# roms/altair8800/dbl.hex and disks/altair8800-cpm.dsk (tools/fetch-roms.py).
+altair8800-cpm-test:
+	./run_altair8800_cpm_test.py
 
 # Save states: snapshot a machine with a device mid-flight, move it on,
 # restore, and require the same state and output again. SNAPSHOT_MACHINES

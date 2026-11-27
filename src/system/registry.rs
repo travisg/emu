@@ -63,10 +63,12 @@ pub struct MachineOpts {
     /// Meaningful only on machines that model device timing at all --
     /// currently the 703's teletype; everywhere else it is already true.
     pub fast_io: bool,
-    /// `--disk PATH`: the image for the machine's disk drive, in place of
-    /// the fixed name under `disks/`. The Kaypro's floppy takes it; the 703
-    /// mounts four units by name and ignores it.
-    pub disk: Option<PathBuf>,
+    /// `--disk PATH`, once per drive: the images for the machine's disk
+    /// drives in turn, the first in place of the fixed name under `disks/`.
+    /// The Kaypro's floppies, the RC2014's card and the Altair 8800's
+    /// floppies take them, each machine refusing more than it has drives;
+    /// the 703 mounts four units by name and ignores them.
+    pub disks: Vec<PathBuf>,
     /// `--serial SPEC`, once per spare serial port: the host ends, in the
     /// order of the descriptor's `serial_ports`. `main` refuses more than a
     /// machine has.
@@ -85,6 +87,15 @@ fn open_serial(opts: &MachineOpts, ports: &[&str]) -> io::Result<Vec<ConsoleEndp
             Ok(endpoint)
         })
         .collect()
+}
+
+/// The one `--disk` of a machine with one drive, refusing a second.
+fn only_disk(opts: &MachineOpts, why: &str) -> io::Result<Option<PathBuf>> {
+    match opts.disks.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        _ => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{why}: one --disk"))),
+    }
 }
 
 /// `subsystem` is the part after the dash in e.g. `6809-obc`, or "".
@@ -147,8 +158,9 @@ pub enum Media {
     Fixed,
     /// The file goes to `-r`.
     Rom(Files),
-    /// The file goes to `--disk`; the rom is the `default_rom`.
-    Disk(Files),
+    /// The file goes to `--disk`, and the machine runs the rom named: its
+    /// `default_rom`, or the one its factory runs for this mode instead.
+    Disk(Files, &'static str),
 }
 
 /// Where a mode's files are looked for: the plain files in `dirs` (relative
@@ -240,10 +252,48 @@ fn build_altair680(rom: &Path, mut console: ConsoleEndpoint, sub: &str, _opts: &
 /// memory it came with.
 const ALTAIR680_CLOCK_HZ: u64 = 500_000;
 
+/// Each `--disk` in its drive in turn, drive 0 the default floppy when
+/// none is named. A default that is not there leaves the drive empty, and
+/// the boot loader waiting for it, as a machine with its door open would.
+fn mount_altair8800_disks(bus: &mut altair8800::Altair8800, opts: &MachineOpts) -> io::Result<()> {
+    if !bus.has_disk_controller() {
+        if !opts.disks.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "this 8800 has no disk drive; altair8800-disk has"));
+        }
+        return Ok(());
+    }
+    if opts.disks.len() > crate::dev::dcdd::DRIVES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("the controller has {} drives: at most that many --disk", crate::dev::dcdd::DRIVES),
+        ));
+    }
+    if opts.disks.is_empty() {
+        let default = Path::new(altair8800::DEFAULT_DISK);
+        if default.exists() {
+            bus.mount_disk(0, default)?;
+        } else {
+            println!("88-DCDD: drive 0 is empty: {} is not there (tools/fetch-roms.py)", default.display());
+        }
+    }
+    for (drive, path) in opts.disks.iter().enumerate() {
+        bus.mount_disk(drive, path)?;
+    }
+    Ok(())
+}
+
 fn build_altair8800(rom: &Path, mut console: ConsoleEndpoint, sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
     let (panel, tty, sub) = altair_windows(sub);
     let tty = tty.then(|| altair_tty(&mut console));
+    // the disk machine's -r is its boot PROM, not BASIC's tape
+    let rom = if altair8800::Altair8800::boots_from_prom(&sub) && rom == Path::new(altair8800::DEFAULT_ROM) {
+        println!("boot prom is {}", altair8800::DBL_ROM);
+        Path::new(altair8800::DBL_ROM)
+    } else {
+        rom
+    };
     let mut bus = altair8800::Altair8800::new(rom, console, &sub)?;
+    mount_altair8800_disks(&mut bus, opts)?;
     if let Some(line) = open_serial(opts, &[altair8800::SERIAL_PORT])?.pop() {
         bus.attach_serial(line);
     }
@@ -271,7 +321,7 @@ fn build_rc2014(rom: &Path, console: ConsoleEndpoint, sub: &str, opts: &MachineO
     // The card mounts like the Kaypro's floppy: `--disk` or the fixed name
     // under disks/, non-fatal, gitignored. Only the cpm build has the slot.
     if bus.has_compact_flash() {
-        let card = opts.disk.clone().unwrap_or_else(|| PathBuf::from(rc2014::DEFAULT_CF));
+        let card = only_disk(opts, "the RC2014 has one card slot")?.unwrap_or_else(|| PathBuf::from(rc2014::DEFAULT_CF));
         bus.mount_compact_flash(&card);
     }
     if let Some(line) = open_serial(opts, &[rc2014::SERIAL_PORT])?.pop() {
@@ -447,7 +497,10 @@ fn build_ray703(
 }
 
 fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &MachineOpts) -> io::Result<Machine> {
-    let floppy = opts.disk.clone().unwrap_or_else(|| PathBuf::from(kaypro::DEFAULT_FLOPPY));
+    if opts.disks.len() > 2 {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "the Kaypro II has two drives: at most two --disk"));
+    }
+    let floppy = opts.disks.first().cloned().unwrap_or_else(|| PathBuf::from(kaypro::DEFAULT_FLOPPY));
     // The window's drive doors reach the machine over the run loop's
     // control channel, as the 703's panel switches do: the window holds
     // the sender inside the display, the run loop gets the receiver.
@@ -466,6 +519,12 @@ fn build_kaypro(rom: &Path, console: ConsoleEndpoint, _sub: &str, opts: &Machine
     )?;
     if opts.fast_io {
         bus.set_fast_io();
+    }
+    // a second --disk is drive B, through the door a disk changes by, which
+    // judges it as it would any
+    if let Some(b) = opts.disks.get(1) {
+        let image = crate::console::DiskImage::open(b.clone()).map_err(io::Error::other)?;
+        bus.change_disk(1, Some(image)).map_err(io::Error::other)?;
     }
     if let Some(line) = open_serial(opts, &[kaypro::SERIAL_PORT])?.pop() {
         bus.attach_serial(line);
@@ -568,11 +627,12 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         factory: build_altair8800,
         clock_hz: Some(altair8800::CLOCK_HZ),
         serial_ports: &[altair8800::SERIAL_PORT],
-        disks: None,
+        disks: Some("disk: floppy drives 0-3 in turn, drive 0 default disks/altair8800-cpm.dsk"),
         variants: &[
             ("4k", "for 4K BASIC: -r roms/altair8800/basic4k40.tap"),
             ("ext", "for Extended BASIC 4.x, its tape given with -r"),
             ("image", "-r is a memory image, run from address 0"),
+            ("disk", "88-DCDD floppies; boots drive 0 by the DBL PROM, -r roms/altair8800/dbl.hex"),
             ("panel", "the front panel in a window; starts stopped"),
             ("tty", "the console's teletype in a window"),
         ],
@@ -600,6 +660,20 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
                     fetch: "a tape of your own, in roms/altair8800",
                 },
                 LaunchMode {
+                    variant: "disk",
+                    what: "floppy in drive 0",
+                    media: Media::Disk(
+                        Files {
+                            dirs: &["disks"],
+                            exts: &["dsk"],
+                            name_has: "",
+                            size: FileSize::AtLeast(crate::dev::dcdd::IMAGE_BYTES),
+                        },
+                        altair8800::DBL_ROM,
+                    ),
+                    fetch: FETCH_ROMS,
+                },
+                LaunchMode {
                     variant: "image",
                     what: "memory image",
                     media: Media::Rom(Files { dirs: &["roms/altair8800"], exts: &["bin"], name_has: "", size: FileSize::Any }),
@@ -620,7 +694,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         // The stock Kaypro II Z80 rate (the 5 MHz machines came later).
         clock_hz: Some(kaypro::CLOCK_HZ),
         serial_ports: &[kaypro::SERIAL_PORT],
-        disks: Some("drive A, default disks/mbasic-games.img"),
+        disks: Some("drive A, default disks/mbasic-games.img; a second is drive B"),
         variants: &[],
         launch: Launch {
             name: "Kaypro II",
@@ -632,7 +706,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
                     exts: &["img"],
                     name_has: "",
                     size: FileSize::Exactly(crate::dev::wd1793::IMAGE_SIZE),
-                }),
+                }, kaypro::DEFAULT_ROM),
                 fetch: FETCH_ROMS,
             }],
             needs: &[kaypro::VIDEO_ROM],
@@ -709,7 +783,10 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
                 LaunchMode {
                     variant: "cpm",
                     what: "CP/M card",
-                    media: Media::Disk(Files { dirs: &["disks"], exts: &["img"], name_has: "", size: FileSize::AtLeast(1 << 20) }),
+                    media: Media::Disk(
+                        Files { dirs: &["disks"], exts: &["img"], name_has: "", size: FileSize::AtLeast(1 << 20) },
+                        rc2014::DEFAULT_ROM,
+                    ),
                     fetch: FETCH_ROMS,
                 },
             ],

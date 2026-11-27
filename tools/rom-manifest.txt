@@ -42,6 +42,18 @@ roms/mits680b/basic680.s19      3786080be98f83850f0f6677ac8381800b2e37e6d3d6eeb5
 roms/altair8800/basic8k40.tap   e610937291d20860ff12068e5bb41edecdd7473097e1344cf504046e120cbb6a  https://deramp.com/downloads/altair/software/papertape_cassette/8K%20BASIC%20Ver%204-0.tap
 roms/altair8800/basic4k40.tap   1a55167cc55d252a350b2f40a661559b2b09a423dabc7f4d36f4bdd81c5389ca  https://deramp.com/downloads/altair/software/papertape_cassette/4K%20BASIC%20Ver%204-0.tap
 
+# The Altair 8800 with its 88-DCDD floppies: MITS's disk boot loader, DBL
+# 4.1, as Intel HEX at 0xff00 (Martin Eberhard read it off the EPROM of a
+# MITS Turnkey board), and Burcon CP/M 2.2 sized for 56K on an 8-inch disk
+# image -- 77 tracks of 32 sectors of 137 bytes, the raw bytes as they pass
+# the head. Both from Mike Douglas's archive at deramp.com. `emu -s
+# altair8800-disk` runs the loader, which boots CP/M off drive 0.
+roms/altair8800/dbl.hex         71c4d830ffc915427c43e83794f0ea823d4a2ee818b8298014468376e8bc3b70  https://deramp.com/downloads/altair/software/roms/orginal_roms/DBL.HEX
+disks/altair8800-cpm.dsk        21598ab22d09a19ed95cdcdc219bba0636602a435eb470ec40f987aeba01e347  https://deramp.com/downloads/altair/software/8_inch_floppy/CPM/CPM%202.2/Burcon%20CPM/cpm56k.dsk
+# Zork I-III on a bootable Burcon CP/M disk, from the same archive: boot it
+# with --disk, or put it in drive 1 beside the CP/M disk and run ZORK1 on B:.
+disks/altair8800-zork.dsk       daa4daed556523b2c2537603bd7842a6d9dd77c7da3e0943c88f0a45f70e1772  https://deramp.com/downloads/altair/software/8_inch_floppy/CPM/CPM%202.2/Zork/zork.dsk
+
 # Raytheon 703: Raytheon's own 1970 diagnostics for the 700 series, as the
 # paper tapes the University of Stuttgart's computer museum read off its 704
 # (its labels.txt beside them has what is written on each). They are tapes,

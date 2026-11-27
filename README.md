@@ -11,6 +11,8 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 - **MITS Altair 8800 (Intel 8080)**: no ROM: keys in MITS's bootstrap loader and loads Altair BASIC
   4.0 off its paper tape, as an operator at the front panel did — and `-s altair8800-panel` draws
   that front panel, lamps, toggles, EXAMINE and DEPOSIT and all. It runs in a web page too.
+  `-s altair8800-disk` adds the 88-DCDD floppy drives and MITS's disk boot loader, and boots
+  CP/M 2.2 off an 8-inch disk; Disk BASIC, Altair DOS and the rest of the Altair disks boot too.
 
   On either Altair a `tty` token puts the console on a teletype's paper in a window of its own,
   the 703's (below), instead of the terminal.
@@ -98,6 +100,7 @@ Run a system:
 ./target/debug/emu -s altair8800               # loads 8K BASIC off paper tape, then MEMORY SIZE?
 ./target/debug/emu -s altair8800-panel         # ...with the front panel: press RUN
 ./target/debug/emu -s altair8800-panel-tty     # ...and the console on a teletype's paper
+./target/debug/emu -s altair8800-disk          # CP/M 2.2 off its floppy; --disk again for drive B
 ./target/debug/emu -s kaypro                # opens a window; also loads disks/mbasic-games.img
 ./target/debug/emu -s kaypro --disk my.img  # a floppy of your own, which keeps what CP/M saves
 ./target/debug/emu -s rc2014-cpm --serial tcp:2323   # SIO channel B on localhost:2323 (nc localhost 2323)
@@ -258,7 +261,7 @@ own diagnostics, math library, Conversational FORTRAN and SYM I assembler run of
 - `src/cpu/`: CPU cores (6800, 6809, Z80, 8080, Raytheon 703), each implementing the `Cpu` trait against a `Bus`.
 - `src/system/`: one file per machine (the bus, address decode, devices, ROM loading) and the
   registry that describes them.
-- `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO and CTC, WD1793 floppy controller, the
+- `src/dev/`: devices — memory banks, MC6850 ACIA, Z80 SIO and CTC, WD1793 and 88-DCDD floppy controllers, the
   RC2014's compact flash, and the 703's teletype, paper tape, multiplexer, clock and disc.
 - `src/console/`: the terminal and SDL2 frontends — the Kaypro screen, the 703's front panel and
   teletype-paper windows, the Altair 8800's front panel — and the channel/handles that connect them

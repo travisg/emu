@@ -22,6 +22,17 @@ tracked**, for the same reason as `roms/` — see that README and
   (128 MB, out of a small zip), `--disk PATH` mounts another card, and
   writes go through to it — what CP/M saves stays saved, so keep a copy if
   that matters. `test/run_rc2014_cpm_test.py` works on a scratch copy.
+- `altair8800-cpm.dsk` — the Altair 8800's floppy, mounted in drive 0 by
+  `emu -s altair8800-disk`: Burcon CP/M 2.2 for 56K, from Mike Douglas's
+  archive at deramp.com, where many more Altair 8-inch disks are (Disk
+  BASIC, Altair DOS, CP/M 1.4, 2.2B and 3, Zork, the games disk), all of
+  which boot. `tools/fetch-roms.py` puts it here. Each `--disk PATH` fills
+  the next of the four drives, the first in place of this one. An image is
+  77 tracks of 32 sectors of 137 bytes, 337,568 bytes, or that padded by
+  less than a sector (337,664 is common). Writes go through to the image —
+  keep a copy if that matters; `test/run_altair8800_cpm_test.py` works on
+  scratch copies. `altair8800-zork.dsk` beside it is Zork I-III on a
+  bootable CP/M disk, also from deramp and the fetch script.
 - `cpm/` — CP/M programs to put on a Kaypro floppy: the Z80 instruction
   exercisers `zexdoc.com` and `zexall.com` and the `prelim.com` in front of
   them, which `test/run_kaypro_zex_test.py` runs. `tools/fetch-roms.py`

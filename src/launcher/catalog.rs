@@ -49,10 +49,15 @@ fn scan_one(root: &Path, desc: &'static SystemDescriptor) -> Entry {
     let absent: Vec<&str> =
         desc.launch.needs.iter().copied().filter(|f| !root.join(f).is_file()).collect();
     for mode in desc.launch.modes {
-        // a mode that picks no rom runs the default one, so needs it
+        // a mode that picks no rom runs one of its own, so needs it
         let mut wants: Vec<&str> = absent.clone();
-        if !matches!(mode.media, Media::Rom(_)) && !root.join(desc.default_rom).is_file() {
-            wants.push(desc.default_rom);
+        let runs = match mode.media {
+            Media::Rom(_) => None,
+            Media::Fixed => Some(desc.default_rom),
+            Media::Disk(_, rom) => Some(rom),
+        };
+        if let Some(rom) = runs.filter(|r| !root.join(r).is_file()) {
+            wants.push(rom);
         }
         if !wants.is_empty() {
             missing.push(format!("{}: needs {} ({})", mode.what, wants.join(", "), mode.fetch));
@@ -61,7 +66,7 @@ fn scan_one(root: &Path, desc: &'static SystemDescriptor) -> Entry {
         let item = |rom, disk, is_default| Item { variant: mode.variant, what: mode.what, rom, disk, is_default };
         match &mode.media {
             Media::Fixed => items.push(item(None, None, mode.variant.is_empty())),
-            Media::Rom(files) | Media::Disk(files) => {
+            Media::Rom(files) | Media::Disk(files, _) => {
                 let found = find(root, files);
                 if found.is_empty() {
                     missing.push(format!("{}: none in {} ({})", mode.what, describe(files), mode.fetch));
