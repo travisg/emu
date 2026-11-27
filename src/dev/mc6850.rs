@@ -24,7 +24,8 @@
 //! preserved deliberately on the chip `new` makes: incoming LF is remapped
 //! to CR, lowercase is folded to upper case, and bit 7 is dropped from
 //! what is sent. `raw` makes one without them, which a binary paper tape
-//! needs in either direction.
+//! needs in either direction. `with_rubout_as` turns the keyboard's DEL
+//! into another erase character, for a guest that has no use for DEL.
 
 use crate::bus::MemoryDevice;
 use crate::console::ConsoleEndpoint;
@@ -49,19 +50,27 @@ pub struct Mc6850 {
     /// The 680 monitor's LF-to-CR and upper-casing of what arrives, and
     /// seven-bit sending.
     fold: bool,
+    /// What a DEL from the keyboard arrives as, if not itself.
+    rubout: Option<u8>,
 }
 
 impl Mc6850 {
     pub fn new(console: ConsoleEndpoint) -> Self {
         // Powers up in master reset, as the data sheet asks software to
         // assume: no interrupt until the guest programs it.
-        Mc6850 { console, rx: None, control: CTRL_MASTER_RESET, fold: true }
+        Mc6850 { console, rx: None, control: CTRL_MASTER_RESET, fold: true, rubout: None }
     }
 
     /// The chip with nothing folded: every byte arrives as it was sent, and
     /// goes out as the guest wrote it.
     pub fn raw(console: ConsoleEndpoint) -> Self {
         Mc6850 { fold: false, ..Mc6850::new(console) }
+    }
+
+    /// The chip with a DEL typed at the console arriving as `erase`; a
+    /// byte through `receive`, a paper tape's, is left alone.
+    pub fn with_rubout_as(self, erase: u8) -> Self {
+        Mc6850 { rubout: Some(erase), ..self }
     }
 
     fn in_master_reset(&self) -> bool {
@@ -74,6 +83,10 @@ impl Mc6850 {
     pub fn poll(&mut self) {
         if self.can_receive() {
             if let Some(c) = self.console.try_next_char() {
+                let c = match self.rubout {
+                    Some(erase) if c == 0x7f => erase,
+                    _ => c,
+                };
                 self.receive(c);
             }
         }
@@ -121,7 +134,7 @@ impl Mc6850 {
 
 impl crate::snapshot::Snapshot for Mc6850 {
     fn save(&self, w: &mut crate::snapshot::Writer) {
-        let Mc6850 { console: _session, rx, control, fold: _wiring } = self;
+        let Mc6850 { console: _session, rx, control, fold: _wiring, rubout: _keyboard } = self;
         w.opt(rx, |w, c| w.u8(*c));
         w.u8(*control);
     }
@@ -274,6 +287,20 @@ mod tests {
         assert_eq!(read_data(&mut u), b'A');
         assert_eq!(read_data(&mut u), b'B');
         assert_eq!(read_data(&mut u), b'Z');
+    }
+
+    #[test]
+    fn a_typed_rubout_arrives_as_the_erase_asked_for() {
+        let mut u = uart_with_input(b"\x7f");
+        assert_eq!(u.read_byte(1), 0x7f, "left alone unless asked");
+        let (tx, rx) = mpsc::channel();
+        tx.send(0x7f).unwrap();
+        let mut u = Mc6850::new(ConsoleEndpoint::new(rx, Box::new(Vec::new()))).with_rubout_as(b'_');
+        u.write_byte(0, 0x15);
+        u.poll();
+        assert_eq!(u.read_byte(1), b'_');
+        u.receive(0x7f);
+        assert_eq!(u.read_byte(1), 0x7f, "a tape's bytes are not the keyboard's");
     }
 
     #[test]

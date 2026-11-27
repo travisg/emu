@@ -32,6 +32,9 @@
 //!   as fast as the guest takes them; the keyboard has the line once the
 //!   stream has run out. `-r` is the tape, in the monitor's S1 format; the
 //!   monitor is always the default one.
+//! - **DEL** typed at the terminal arrives as `_`, the erase key of MITS's
+//!   BASIC (an ASR-33 prints it as a back-arrow), which ignores DEL; a
+//!   host keyboard's Delete key then erases as it does everywhere else.
 
 use crate::bus::{Bus, IntStatus, MemoryDevice};
 use crate::console::ConsoleEndpoint;
@@ -51,6 +54,9 @@ const VTL_ROM_SIZE: usize = 768;
 
 /// `0xf002`'s bit 7, jumper 5 high: no terminal.
 pub const STRAP_NO_TERMINAL: u8 = 0x80;
+
+/// What a DEL typed at the terminal arrives as: BASIC's erase.
+const RUBOUT: u8 = b'_';
 
 /// What the operator types around the tape: the monitor's load command
 /// before it, and the jump to BASIC's cold start after.
@@ -143,7 +149,7 @@ impl Altair680 {
             Tape { bytes, pos: 0 }
         });
 
-        Ok(Altair680 { ram: Memory::new(32 * 1024), rom_monitor, rom_vtl, uart: Mc6850::new(console), straps, tape })
+        Ok(Altair680 { ram: Memory::new(32 * 1024), rom_monitor, rom_vtl, uart: Mc6850::new(console).with_rubout_as(RUBOUT), straps, tape })
     }
 
     /// The ACIA's next character: off the tape while there is any, then
