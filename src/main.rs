@@ -9,7 +9,7 @@
 //! Entry point: parse args, build the machine, run the CPU on its own thread
 //! while the console frontend owns the main thread.
 
-use emu::console::altair8800::Altair8800Frontend;
+use emu::console::altair::AltairFrontend;
 use emu::console::ray703::Ray703Frontend;
 use emu::console::sdl::SdlFrontend;
 use emu::console::serial::SerialSpec;
@@ -386,8 +386,8 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Some(display @ emu::console::Display::Altair8800 { .. }) => {
-            match Altair8800Frontend::new(tx, display) {
+        Some(display @ (emu::console::Display::Altair8800 { .. } | emu::console::Display::Altair680 { .. })) => {
+            match AltairFrontend::new(tx, display) {
                 Ok(f) => Box::new(f),
                 Err(e) => {
                     eprintln!("error initializing SDL: {e}");

@@ -7,7 +7,7 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
 - **System09 (Motorola 6809)**: boots the 6809 BASIC ROM to a prompt on the terminal.
 - **MITS Altair 680b (Motorola 6800)**: boots the MITS PROM monitor on the terminal, with VTL-2 in
   its PROM socket, and `-s altair680-basic` loads Altair 680 BASIC off its paper tape through the
-  monitor.
+  monitor — and `-s altair680-panel` draws the 680b's front panel, its lamps on the live bus.
 - **MITS Altair 8800 (Intel 8080)**: no ROM: keys in MITS's bootstrap loader and loads Altair BASIC
   4.0 off its paper tape, as an operator at the front panel did — and `-s altair8800-panel` draws
   that front panel, lamps, toggles, EXAMINE and DEPOSIT and all.
@@ -91,7 +91,7 @@ Run a system:
 ```bash
 ./target/debug/emu -s 6809                  # the default system, which bare emu runs off a terminal
 ./target/debug/emu -s altair680
-./target/debug/emu -s altair680-basic          # 680 BASIC off its paper tape, then MEMORY SIZE?
+./target/debug/emu -s altair680-basic-panel    # 680 BASIC, with the front panel in a window
 ./target/debug/emu -s altair8800               # loads 8K BASIC off paper tape, then MEMORY SIZE?
 ./target/debug/emu -s altair8800-panel         # ...with the front panel: press RUN
 ./target/debug/emu -s kaypro                # opens a window; also loads disks/mbasic-games.img

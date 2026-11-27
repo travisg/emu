@@ -25,15 +25,16 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, SendError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
 // The frontends draw with SDL and drive a terminal, so a wasm build has
 // none of them; the models they draw from (panel, rack, paper) stay.
 #[cfg(not(target_arch = "wasm32"))]
-pub mod altair8800;
+pub mod altair;
 pub(crate) mod lamps;
+pub mod panel680;
 pub mod panel703;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod panel8800;
@@ -443,9 +444,11 @@ pub mod altair_status {
     pub const INT: u16 = 1 << 6;
 }
 
-/// The Altair 8800's front panel wiring: the lamps the 8080 core feeds,
-/// one charge per machine cycle, and the sixteen address/data toggles the
-/// window flips -- A15-A8 the sense switches `IN 0xFF` reads.
+/// An Altair front panel's wiring: the lamps the core feeds and the
+/// toggles the window flips. The 8800's 8080 charges one per machine
+/// cycle, its sixteen address/data toggles A15-A8 the sense switches `IN
+/// 0xFF` reads; the 680b's 6800 one per bus access, with eight data
+/// toggles of its own beside the sixteen address ones.
 ///
 /// Same shape as [`PanelState`]: a `Clone` handle over relaxed atomics,
 /// monotonic accumulators the frontend diffs a frame at a time. The core
@@ -462,7 +465,7 @@ struct AltairPanelInner {
     /// address, the byte there, and its status -- the 8080 sits in the
     /// wait state of that M1 cycle, which is what STOP does to it.
     stopped: [AtomicU16; 3],
-    switches: AtomicU16,
+    switches: AtomicU32,
     halted: AtomicBool,
 }
 
@@ -492,15 +495,17 @@ impl AltairPanel {
         self.0.stopped[ALTAIR_STATUS].store(status, Ordering::Relaxed);
     }
 
-    /// The sixteen toggles, bit n = An, set = up.
-    pub fn switches(&self) -> u16 {
+    /// The toggles, set = up: bit n is An, for n up to 15, and bits
+    /// 16-23 the 680b's data toggles D0-D7.
+    pub fn switches(&self) -> u32 {
         self.0.switches.load(Ordering::Relaxed)
     }
 
     // -- the frontend side -------------------------------------------------
 
+    /// Flip toggle `n`, numbered as [`switches`](Self::switches) has them.
     pub fn toggle_switch(&self, n: u8) {
-        self.0.switches.fetch_xor(1 << (n & 15), Ordering::Relaxed);
+        self.0.switches.fetch_xor(1 << (n & 31), Ordering::Relaxed);
     }
 
     pub fn snapshot(&self, src: usize) -> LampSnapshot {
@@ -887,6 +892,14 @@ pub enum PanelCommand {
     Deposit,
     /// DEPOSIT NEXT: the program counter on by one, then a DEPOSIT.
     DepositNext,
+    /// The Altair 680b's RESET, which its RUN/HALT flip-flop gates: the
+    /// reset line on a halted machine, nothing on a running one (Theory of
+    /// Operation 10A). The machine stays halted, at the reset vector.
+    ResetWhenHalted,
+    /// A toggle moved. The 680b's panel shows the location its address
+    /// toggles select whenever the 6800 has given up the bus, so the core
+    /// looks again.
+    Switches,
 }
 
 /// What a machine hands the frontend when it has something to show. Built
@@ -917,12 +930,15 @@ pub enum Display {
         terminals: Vec<TtyDisplay>,
     },
     /// The Altair 8800's front panel, rendered by
-    /// [`altair8800::Altair8800Frontend`] beside the terminal.
+    /// [`altair::AltairFrontend`] beside the terminal.
     Altair8800 { title: &'static str, panel: AltairPanelDisplay },
+    /// The Altair 680b's front panel, the same way.
+    Altair680 { title: &'static str, panel: AltairPanelDisplay },
 }
 
-/// The Altair 8800 panel window's share of [`Display::Altair8800`]: the
-/// lamps and toggles, and the switch actuations back to the run loop.
+/// An Altair panel window's share of [`Display::Altair8800`] or
+/// [`Display::Altair680`]: the lamps and toggles, and the switch
+/// actuations back to the run loop.
 pub struct AltairPanelDisplay {
     pub panel: AltairPanel,
     pub control: PanelControl,

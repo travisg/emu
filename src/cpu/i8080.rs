@@ -700,7 +700,7 @@ impl Cpu for Cpu8080 {
         if !t.panel.halted() {
             return;
         }
-        let switches = t.panel.switches();
+        let switches = t.panel.switches() as u16;
         match cmd {
             PanelCommand::Examine => self.pc = switches,
             PanelCommand::ExamineNext => self.pc = self.pc.wrapping_add(1),

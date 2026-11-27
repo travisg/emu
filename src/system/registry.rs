@@ -188,14 +188,32 @@ pub fn fmt_hz(hz: u64) -> String {
 }
 
 fn build_altair680(rom: &Path, console: ConsoleEndpoint, sub: &str, _opts: &MachineOpts) -> io::Result<Machine> {
-    Ok(Machine {
-        cpu: Box::new(crate::cpu::m6800::Cpu6800::new()),
-        bus: Box::new(altair680::Altair680::new(rom, console, sub)?),
-        display: None,
-        throttle_hz: None,
-        control: None,
-        panel: None,
-    })
+    // "panel" opens the front panel window, beside whatever the rest of the
+    // subsystem picks, in either order: altair680-panel, -noterm-panel
+    let mut tokens: Vec<&str> = sub.split('-').filter(|t| !t.is_empty()).collect();
+    let panel = tokens.iter().position(|&t| t == "panel").map(|i| tokens.remove(i)).is_some();
+    let sub = tokens.join("-");
+
+    let bus = altair680::Altair680::new(rom, console, &sub)?;
+    let mut cpu = crate::cpu::m6800::Cpu6800::new();
+    let (mut display, mut control, mut run_lamp, mut throttle_hz) = (None, None, None, None);
+    if panel {
+        let state = crate::console::AltairPanel::new();
+        cpu.attach_panel(state.clone());
+        let (ctl_tx, ctl_rx) = mpsc::channel();
+        display = Some(Display::Altair680 {
+            title: "MITS Altair 680b",
+            panel: crate::console::AltairPanelDisplay {
+                panel: state.clone(),
+                control: crate::console::PanelControl(ctl_tx.clone()),
+            },
+        });
+        control = Some(ControlChannel { tx: ctl_tx, rx: ctl_rx });
+        run_lamp = Some(Box::new(state) as Box<dyn crate::console::RunLamp>);
+        // a live panel wants real time, as the 703's and the 8800's do
+        throttle_hz = Some(ALTAIR680_CLOCK_HZ);
+    }
+    Ok(Machine { cpu: Box::new(cpu), bus: Box::new(bus), display, throttle_hz, control, panel: run_lamp })
 }
 
 /// The 680 ran its 6800 at 500 kHz -- MITS shipped it slow to suit the
@@ -491,6 +509,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
         variants: &[
             ("basic", "loads 680 BASIC off its paper tape: -r roms/mits680b/basic680.s19"),
             ("noterm", "strapped for no terminal: reset jumps to 0"),
+            ("panel", "the front panel in a window; starts halted"),
         ],
         launch: Launch {
             name: "MITS Altair 680",
@@ -526,7 +545,7 @@ pub static SYSTEMS: &[SystemDescriptor] = &[
             ],
             // the tape loads through the monitor
             needs: &[altair680::DEFAULT_ROM],
-            windows: &[],
+            windows: &[("panel", "front panel window; starts halted")],
             serial_window: false,
         },
     },

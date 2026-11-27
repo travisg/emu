@@ -16,9 +16,14 @@
 //! clear, between instructions, each stacking everything (PC, X, A, B, CC)
 //! and setting I. WAI stacks everything and then waits, so the interrupt
 //! that ends it only vectors. Reset sets I.
+//!
+//! Every bus access goes through `rd`/`wr` (and `rd16`/`wr16`), which
+//! charge an Altair 680b front panel's lamps when one is attached
+//! (`attach_panel`); without one they are the bus's own accesses.
 
 use super::{Cpu, Register, StepResult};
 use crate::bus::{Bus, Endian};
+use crate::console::{AltairPanel, PanelCommand};
 use std::io::Write;
 
 const CC_C: u8 = 0x01;
@@ -466,6 +471,51 @@ pub struct Cpu6800 {
     nmi_line: bool,
     /// Clock cycles the last `step()` consumed, for `last_step_cycles`.
     cycles: u32,
+    /// The front panel's lamps, when there is one.
+    panel: Option<Box<PanelTap>>,
+}
+
+/// Bus accesses a [`PanelTap`] counts before it flushes them to the panel.
+const PANEL_FLUSH: u32 = 128;
+
+/// The core's end of an [`AltairPanel`]: the address and data lines of
+/// each bus access, counted per lamp. The duty is by access: the cycles in
+/// which the 6800 drives no valid address (VMA low) charge nothing.
+struct PanelTap {
+    panel: AltairPanel,
+    /// The address row and the data row, D7-D0 in indicators 8-15, as
+    /// [`AltairPanel`] keeps them; its status row is the 8800's and stays
+    /// dark.
+    counts: [[u32; 16]; 3],
+    accesses: u32,
+}
+
+impl PanelTap {
+    fn access(&mut self, addr: u16, data: u8) {
+        for (row, value) in self.counts.iter_mut().zip([addr, data as u16]) {
+            let mut bits = value;
+            while bits != 0 {
+                let i = bits.leading_zeros() as usize;
+                row[i] += 1;
+                bits &= !(0x8000 >> i);
+            }
+        }
+        self.accesses += 1;
+        if self.accesses >= PANEL_FLUSH {
+            self.panel.flush(&self.counts, self.accesses);
+            self.counts = [[0; 16]; 3];
+            self.accesses = 0;
+        }
+    }
+
+    /// The location the address toggles select, which is on the bus
+    /// whenever the 6800 has given it up -- halted, or waiting in WAI --
+    /// and the byte there, dark where no memory answers: the ACIA is
+    /// selected only with VMA, which a cpu off the bus holds low.
+    fn selected(&self, bus: &dyn Bus) -> (u16, u8) {
+        let addr = self.panel.switches() as u16;
+        (addr, bus.peek8(addr as u32).unwrap_or(0))
+    }
 }
 
 impl Default for Cpu6800 {
@@ -476,7 +526,72 @@ impl Default for Cpu6800 {
 
 impl Cpu6800 {
     pub fn new() -> Self {
-        Cpu6800 { a: 0, b: 0, ix: 0, pc: 0, sp: 0, cc: 0, waiting: false, nmi_line: false, cycles: 0 }
+        Cpu6800 { a: 0, b: 0, ix: 0, pc: 0, sp: 0, cc: 0, waiting: false, nmi_line: false, cycles: 0, panel: None }
+    }
+
+    /// Feed a front panel's lamps from here on.
+    pub fn attach_panel(&mut self, panel: AltairPanel) {
+        self.panel = Some(Box::new(PanelTap { panel, counts: [[0; 16]; 3], accesses: 0 }));
+    }
+
+    /// One bus access onto the panel's lamps. The charge itself is out of
+    /// line, as the 8080's is, so a run with no panel pays only the test.
+    #[inline(always)]
+    fn tap(&mut self, addr: u16, data: u8) {
+        if self.panel.is_some() {
+            self.tap_panel(addr, data);
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn tap_panel(&mut self, addr: u16, data: u8) {
+        if let Some(t) = &mut self.panel {
+            t.access(addr, data);
+        }
+    }
+
+    /// A waiting step, off the bus: the toggles' location is on it.
+    #[cold]
+    #[inline(never)]
+    fn tap_waiting(&mut self, bus: &dyn Bus) {
+        if let Some(t) = &mut self.panel {
+            let (addr, data) = t.selected(bus);
+            t.access(addr, data);
+        }
+    }
+
+    #[inline(always)]
+    fn rd(&mut self, bus: &mut dyn Bus, addr: u16) -> u8 {
+        let v = bus.read8(addr as u32);
+        self.tap(addr, v);
+        v
+    }
+
+    #[inline(always)]
+    fn wr(&mut self, bus: &mut dyn Bus, addr: u16, val: u8) {
+        bus.write8(addr as u32, val);
+        self.tap(addr, val);
+    }
+
+    /// A big-endian word: the bus's own wide read without a panel, two
+    /// byte reads the lamps see with one.
+    #[inline(always)]
+    fn rd16(&mut self, bus: &mut dyn Bus, addr: u16) -> u16 {
+        if self.panel.is_none() {
+            return bus.read16(addr as u32, Endian::Big);
+        }
+        let hi = self.rd(bus, addr) as u16;
+        (hi << 8) | self.rd(bus, addr.wrapping_add(1)) as u16
+    }
+
+    #[inline(always)]
+    fn wr16(&mut self, bus: &mut dyn Bus, addr: u16, val: u16) {
+        if self.panel.is_none() {
+            return bus.write16(addr as u32, val, Endian::Big);
+        }
+        self.wr(bus, addr, (val >> 8) as u8);
+        self.wr(bus, addr.wrapping_add(1), val as u8);
     }
 
     fn get_reg(&self, r: Reg) -> u16 {
@@ -603,22 +718,22 @@ impl Cpu6800 {
 
     fn push8(&mut self, bus: &mut dyn Bus, val: u8) {
         let sp = self.sp;
-        bus.write8(sp as u32, val);
+        self.wr(bus, sp, val);
         self.sp = sp.wrapping_sub(1);
     }
 
     fn pull8(&mut self, bus: &mut dyn Bus) -> u8 {
         let sp = self.sp.wrapping_add(1);
         self.sp = sp;
-        bus.read8(sp as u32)
+        self.rd(bus, sp)
     }
 
     fn push16(&mut self, bus: &mut dyn Bus, val: u16) {
         // low byte at the higher address, then high byte -- stack grows down
         let mut sp = self.sp;
-        bus.write8(sp as u32, (val & 0xff) as u8);
+        self.wr(bus, sp, (val & 0xff) as u8);
         sp = sp.wrapping_sub(1);
-        bus.write8(sp as u32, (val >> 8) as u8);
+        self.wr(bus, sp, (val >> 8) as u8);
         sp = sp.wrapping_sub(1);
         self.sp = sp;
     }
@@ -646,7 +761,7 @@ impl Cpu6800 {
         }
         self.waiting = false;
         self.cc |= CC_I;
-        self.pc = bus.read16(vector as u32, Endian::Big);
+        self.pc = self.rd16(bus, vector);
     }
 
     /// Decimal adjust A after a BCD add: +6 for a low digit past 9 or a
@@ -675,9 +790,9 @@ impl Cpu6800 {
     fn pull16(&mut self, bus: &mut dyn Bus) -> u16 {
         let mut sp = self.sp;
         sp = sp.wrapping_add(1);
-        let hi = bus.read8(sp as u32) as u16;
+        let hi = self.rd(bus, sp) as u16;
         sp = sp.wrapping_add(1);
-        let lo = bus.read8(sp as u32) as u16;
+        let lo = self.rd(bus, sp) as u16;
         self.sp = sp;
         (hi << 8) | lo
     }
@@ -688,7 +803,7 @@ impl Cpu6800 {
         if op.mode == AddrMode::Implied {
             self.get_reg(op.target) as u8
         } else {
-            bus.read8(arg as u32)
+            self.rd(bus, arg as u16)
         }
     }
 
@@ -699,7 +814,7 @@ impl Cpu6800 {
             self.put_reg(op.target, val as u16);
         } else {
             debug_assert_eq!(op.width, 1);
-            bus.write8(arg as u32, val);
+            self.wr(bus, arg as u16, val);
         }
     }
 }
@@ -717,7 +832,7 @@ impl Cpu for Cpu6800 {
         // The C++ defers this to the first Run() iteration via an EXC_RESET
         // bit; doing it here is equivalent and keeps the trace lines aligned,
         // since the C++ emits its first trace line after that fixup.
-        self.pc = bus.read16(0xfffe, Endian::Big);
+        self.pc = self.rd16(bus, 0xfffe);
     }
 
     fn step(&mut self, bus: &mut dyn Bus) -> StepResult {
@@ -737,10 +852,13 @@ impl Cpu for Cpu6800 {
         if self.waiting {
             // a cycle at a time, so a paced run keeps its clock
             self.cycles = 1;
+            if self.panel.is_some() {
+                self.tap_waiting(bus);
+            }
             return StepResult::Ok;
         }
 
-        let opcode = bus.read8(self.pc as u32);
+        let opcode = self.rd(bus, self.pc);
         self.pc = self.pc.wrapping_add(1);
 
         let op = OPS[opcode as usize];
@@ -757,57 +875,57 @@ impl Cpu for Cpu6800 {
             AddrMode::Implied => {}
             AddrMode::Immediate => {
                 if op.width == 1 {
-                    arg = bus.read8(self.pc as u32) as i32;
+                    arg = self.rd(bus, self.pc) as i32;
                     self.pc = self.pc.wrapping_add(1);
                 } else {
-                    arg = bus.read16(self.pc as u32, Endian::Big) as i32;
+                    arg = self.rd16(bus, self.pc) as i32;
                     self.pc = self.pc.wrapping_add(2);
                 }
             }
             AddrMode::Direct => {
-                let addr = bus.read8(self.pc as u32) as u16;
+                let addr = self.rd(bus, self.pc) as u16;
                 self.pc = self.pc.wrapping_add(1);
                 arg = if op.calcaddr {
                     addr as i32
                 } else if op.width == 1 {
-                    bus.read8(addr as u32) as i32
+                    self.rd(bus, addr) as i32
                 } else {
                     // The high byte is at addr+1 with no wrap back into the
                     // zero page, so `ldx $ff` reads $00ff and $0100 -- page one
                     // is reachable from direct mode, by exactly one byte.
-                    bus.read16(addr as u32, Endian::Big) as i32
+                    self.rd16(bus, addr) as i32
                 };
             }
             AddrMode::Extended => {
-                let addr = bus.read16(self.pc as u32, Endian::Big);
+                let addr = self.rd16(bus, self.pc);
                 self.pc = self.pc.wrapping_add(2);
                 arg = if op.calcaddr {
                     addr as i32
                 } else if op.width == 1 {
-                    bus.read8(addr as u32) as i32
+                    self.rd(bus, addr) as i32
                 } else {
-                    bus.read16(addr as u32, Endian::Big) as i32
+                    self.rd16(bus, addr) as i32
                 };
             }
             AddrMode::Branch => {
                 if op.width == 1 {
-                    arg = bus.read8(self.pc as u32) as i8 as i32;
+                    arg = self.rd(bus, self.pc) as i8 as i32;
                     self.pc = self.pc.wrapping_add(1);
                 } else {
-                    arg = bus.read16(self.pc as u32, Endian::Big) as i16 as i32;
+                    arg = self.rd16(bus, self.pc) as i16 as i32;
                     self.pc = self.pc.wrapping_add(2);
                 }
             }
             AddrMode::Indexed => {
-                let off = bus.read8(self.pc as u32) as u16;
+                let off = self.rd(bus, self.pc) as u16;
                 self.pc = self.pc.wrapping_add(1);
                 let addr = self.ix.wrapping_add(off);
                 arg = if op.calcaddr {
                     addr as i32
                 } else if op.width == 1 {
-                    bus.read8(addr as u32) as i32
+                    self.rd(bus, addr) as i32
                 } else {
-                    bus.read16(addr as u32, Endian::Big) as i32
+                    self.rd16(bus, addr) as i32
                 };
             }
         }
@@ -1064,11 +1182,11 @@ impl Cpu for Cpu6800 {
             Op::St => {
                 if op.width == 1 {
                     let v = self.get_reg(op.target) as u8;
-                    bus.write8(arg as u32, v);
+                    self.wr(bus, arg as u16, v);
                     self.set_nz1(v as u32);
                 } else {
                     let v = self.get_reg(op.target);
-                    bus.write16(arg as u32, v, Endian::Big);
+                    self.wr16(bus, arg as u16, v);
                     self.set_nz2(v as u32);
                 }
                 self.set_cc(CC_V, false);
@@ -1119,7 +1237,7 @@ impl Cpu for Cpu6800 {
             Op::Swi => {
                 self.stack_state(bus);
                 self.cc |= CC_I;
-                self.pc = bus.read16(VEC_SWI as u32, Endian::Big);
+                self.pc = self.rd16(bus, VEC_SWI);
             }
 
             Op::Rti => {
@@ -1146,6 +1264,31 @@ impl Cpu for Cpu6800 {
         result
     }
 
+    /// The Altair 680b's panel. DEPOSIT puts the data toggles into the
+    /// location the address toggles select, and acts only while the 6800
+    /// is off the bus, halted or in WAI: its switch drivers are enabled by
+    /// Bus Available (Theory of Operation, sheet 4). As the drivers reach
+    /// only memory, a location no ram or prom answers takes nothing, and a
+    /// prom's own byte stands. Either command, and a toggle moving, has the
+    /// data lamps show the selected location again.
+    fn panel_command(&mut self, bus: &mut dyn Bus, cmd: &PanelCommand) {
+        let Some(t) = &self.panel else { return };
+        let off_the_bus = t.panel.halted() || self.waiting;
+        match cmd {
+            PanelCommand::Deposit if off_the_bus => {
+                let switches = t.panel.switches();
+                let addr = switches as u16;
+                if bus.peek8(addr as u32).is_some() {
+                    bus.write8(addr as u32, (switches >> 16) as u8);
+                }
+            }
+            PanelCommand::Deposit | PanelCommand::Switches => {}
+            _ => return,
+        }
+        let (addr, data) = t.selected(bus);
+        t.panel.set_stopped(addr, data, 0);
+    }
+
     fn last_step_cycles(&self) -> u32 {
         self.cycles
     }
@@ -1155,7 +1298,7 @@ impl Cpu for Cpu6800 {
     }
 
     fn save_state(&self, w: &mut crate::snapshot::Writer) -> Result<(), String> {
-        let Cpu6800 { a, b, ix, pc, sp, cc, waiting, nmi_line, cycles } = self;
+        let Cpu6800 { a, b, ix, pc, sp, cc, waiting, nmi_line, cycles, panel: _session } = self;
         w.u8(*a);
         w.u8(*b);
         w.u16(*ix);
@@ -1613,6 +1756,91 @@ mod tests {
         run_steps(&mut cpu, &mut bus, 1);
         assert_eq!((cpu.pc, cpu.sp, cpu.cc, cpu.last_step_cycles()), (0x2000, 0x80f8, CC_I, 5));
         assert!(!cpu.waiting);
+    }
+
+    /// With a panel, every bus access charges the lamps its address and
+    /// data lines: `BRA *` at 0xe001 reads its opcode there and its offset
+    /// at 0xe002, so over its loop A15 is lit throughout, A0 and A1 half
+    /// the time each, D5 (in 0x20 and 0xfe) throughout and D7 half.
+    #[test]
+    fn a_panel_sees_each_bus_access() {
+        use crate::console::{AltairPanel, ALTAIR_ADDRESS, ALTAIR_DATA};
+        let (mut cpu, mut bus) = boot(&[0x0e, 0x20, 0xfe]); // cli; bra *
+        run_steps(&mut cpu, &mut bus, 1);
+        let panel = AltairPanel::new();
+        cpu.attach_panel(panel.clone());
+        run_steps(&mut cpu, &mut bus, PANEL_FLUSH as usize); // two accesses a step: two flushes
+        let address = panel.snapshot(ALTAIR_ADDRESS);
+        let n = PANEL_FLUSH as u64;
+        assert_eq!(address.cycles, 2 * n);
+        let lit = |snap: &crate::console::LampSnapshot, bit: u32| snap.bits[15 - bit as usize];
+        assert_eq!((lit(&address, 15), lit(&address, 2), lit(&address, 1), lit(&address, 0)), (2 * n, 0, n, n));
+        let data = panel.snapshot(ALTAIR_DATA);
+        assert_eq!((lit(&data, 7), lit(&data, 5), lit(&data, 0)), (n, 2 * n, 0));
+    }
+
+    /// A wide access with a panel is two byte accesses the lamps see, in
+    /// the bus's own order: the same bytes as the bus's wide access moves.
+    #[test]
+    fn with_a_panel_a_word_is_two_bytes_in_order() {
+        use crate::console::AltairPanel;
+        // ldx #$1234; stx $0040; ldx $0040
+        let prog = [0xce, 0x12, 0x34, 0xdf, 0x40, 0xde, 0x40];
+        let (mut plain, mut plain_bus) = boot(&prog);
+        let (mut tapped, mut tapped_bus) = boot(&prog);
+        tapped.attach_panel(AltairPanel::new());
+        run_steps(&mut plain, &mut plain_bus, 3);
+        run_steps(&mut tapped, &mut tapped_bus, 3);
+        assert_eq!(&tapped_bus.mem[0x40..0x42], &[0x12, 0x34]);
+        assert_eq!(&plain_bus.mem[0x40..0x42], &tapped_bus.mem[0x40..0x42]);
+        assert_eq!((tapped.ix, tapped.pc), (plain.ix, plain.pc));
+    }
+
+    /// In WAI the 6800 is off the bus and the panel's address toggles are
+    /// on it, so a waiting step charges their location and its byte.
+    #[test]
+    fn waiting_the_lamps_see_the_toggles_location() {
+        use crate::console::{AltairPanel, ALTAIR_ADDRESS, ALTAIR_DATA};
+        let (mut cpu, mut bus) = boot(&[0x3e]); // wai
+        cpu.sp = 0x80ff;
+        run_steps(&mut cpu, &mut bus, 1);
+        let panel = AltairPanel::new();
+        cpu.attach_panel(panel.clone());
+        bus.mem[0x0081] = 0x81;
+        for bit in [7, 0] {
+            panel.toggle_switch(bit); // 0x0081
+        }
+        run_steps(&mut cpu, &mut bus, PANEL_FLUSH as usize);
+        let lit = |snap: &crate::console::LampSnapshot, bit: u32| snap.bits[15 - bit as usize];
+        let (address, data) = (panel.snapshot(ALTAIR_ADDRESS), panel.snapshot(ALTAIR_DATA));
+        let n = PANEL_FLUSH as u64;
+        assert_eq!((lit(&address, 7), lit(&address, 0), lit(&address, 15)), (n, n, 0));
+        assert_eq!((lit(&data, 7), lit(&data, 0), lit(&data, 1)), (n, n, 0));
+    }
+
+    /// DEPOSIT writes the data toggles at the address toggles, only with
+    /// the 6800 off the bus, and has the lamps show the location; a
+    /// toggle moving has them look again.
+    #[test]
+    fn deposit_acts_only_off_the_bus() {
+        use crate::console::{AltairPanel, RunLamp, ALTAIR_ADDRESS, ALTAIR_DATA};
+        let (mut cpu, mut bus) = boot(&[0x01]);
+        let panel = AltairPanel::new();
+        cpu.attach_panel(panel.clone());
+        for bit in [13, 4, 16 + 7, 16 + 1] {
+            panel.toggle_switch(bit); // address 0x2010, data 0x82
+        }
+        cpu.panel_command(&mut bus, &PanelCommand::Deposit);
+        assert_eq!(bus.mem[0x2010], 0, "running: ignored");
+        panel.set_halted(true);
+        cpu.panel_command(&mut bus, &PanelCommand::Deposit);
+        assert_eq!(bus.mem[0x2010], 0x82);
+        assert_eq!((panel.stopped(ALTAIR_ADDRESS), panel.stopped(ALTAIR_DATA)), (0x2010, 0x82));
+        bus.mem[0x2011] = 0x5a;
+        panel.toggle_switch(0);
+        cpu.panel_command(&mut bus, &PanelCommand::Switches);
+        assert_eq!((panel.stopped(ALTAIR_ADDRESS), panel.stopped(ALTAIR_DATA)), (0x2011, 0x5a));
+        assert_eq!(bus.mem[0x2011], 0x5a, "looking writes nothing");
     }
 
     /// A branch to self ends the run only with I set; otherwise it is a

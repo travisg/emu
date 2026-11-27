@@ -206,7 +206,7 @@ impl PanelWindow8800 {
         }
 
         // the toggles
-        let switches = self.panel.switches();
+        let switches = self.panel.switches() as u16;
         lamps::text_centered(&mut self.canvas, (col_x(0) + col_x(7)) / 2, lower + 4, 1, "SENSE SW", LOWER_INK);
         lamps::text_centered(&mut self.canvas, (col_x(8) + col_x(15)) / 2, lower + 4, 1, "DATA", LOWER_INK);
         for i in 0..16 {

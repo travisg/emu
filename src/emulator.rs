@@ -453,6 +453,11 @@ impl Emulator {
             PanelCommand::SingleCommand => self.step(1),
             PanelCommand::Reset => self.reset_and_halt(),
             PanelCommand::ResetLine => self.reset_in_place(),
+            PanelCommand::ResetWhenHalted => {
+                if self.run_state == RunState::Halted {
+                    self.reset_in_place();
+                }
+            }
             // Everything else is data entry the core owns.
             cmd => self.cpu.panel_command(&mut *self.bus, cmd),
         }
@@ -1482,6 +1487,24 @@ mod tests {
         assert_eq!(emu.run(), ExitReason::Shutdown);
         assert_eq!(resets.load(Ordering::SeqCst), 1);
         assert_eq!(steps.load(Ordering::SeqCst), 0);
+    }
+
+    /// The 680b's RESET resets a halted machine and leaves it halted; on a
+    /// running one it does nothing.
+    #[test]
+    fn reset_when_halted_is_gated_by_the_run_state() {
+        let PanelRig { mut emu, tx, steps, resets, .. } = ScriptedCpu::build(vec![]);
+        tx.send(Control::Panel(PanelCommand::ResetWhenHalted)).unwrap();
+        drop(tx);
+        assert_eq!(emu.run(), ExitReason::Shutdown);
+        assert_eq!((resets.load(Ordering::SeqCst), steps.load(Ordering::SeqCst)), (1, 0));
+
+        let PanelRig { mut emu, tx, resets, .. } = ScriptedCpu::build(vec![]);
+        tx.send(Control::Panel(PanelCommand::Run)).unwrap();
+        tx.send(Control::Panel(PanelCommand::ResetWhenHalted)).unwrap();
+        drop(tx);
+        assert_eq!(emu.run(), ExitReason::Shutdown);
+        assert_eq!(resets.load(Ordering::SeqCst), 0, "running: ignored");
     }
 
     /// Data-entry commands reach the core's panel_command with the bus.
