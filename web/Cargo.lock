@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "emu703-web"
+name = "emu-web"
 version = "0.1.0"
 dependencies = [
  "emu",

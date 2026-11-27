@@ -105,7 +105,13 @@ fn unplugged() -> ConsoleEndpoint {
 
 impl Altair8800 {
     pub fn new(rom_path: &Path, console: ConsoleEndpoint, subsystem: &str) -> io::Result<Self> {
-        let image = rom::load_binary(rom_path)?;
+        Self::from_image(rom::load_binary(rom_path)?, console, subsystem)
+    }
+
+    /// The machine around `image` -- the tape, or under `image` the
+    /// memory image -- from bytes rather than a file, for a host with no
+    /// files.
+    pub fn from_image(image: Vec<u8>, console: ConsoleEndpoint, subsystem: &str) -> io::Result<Self> {
         let mut m = Altair8800 {
             ram: Memory::new(0x10000),
             sio: [Mc6850::raw(console), Mc6850::raw(unplugged())],
@@ -133,9 +139,8 @@ impl Altair8800 {
         };
         if image.first() != Some(&LEADER) {
             eprintln!(
-                "altair8800: {} does not start with the 4.x leader ({LEADER:#04x}); \
-                 the bootstrap will take it for the checksum loader",
-                rom_path.display()
+                "altair8800: the tape does not start with the 4.x leader ({LEADER:#04x}); \
+                 the bootstrap will take it for the checksum loader"
             );
         }
         let mut boot = BOOTSTRAP;

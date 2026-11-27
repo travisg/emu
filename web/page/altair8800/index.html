@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- vim: ts=4:sw=4:expandtab:
+     Copyright (c) 2026 Travis Geiselbrecht; MIT, see LICENSE.
+     The Altair 8800 in a page: its front panel and console teletype over
+     the emulator built for wasm (web/src/lib.rs). page.js drives it, on
+     machine.js. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MITS Altair 8800</title>
+<link rel="stylesheet" href="page.css">
+</head>
+<body>
+<header>
+    <h1>MITS Altair 8800</h1>
+    <p class="sub">The 1975 Intel 8080 kit computer, emulated, with Altair BASIC on its paper tape. Its front panel above, its teletype below.</p>
+</header>
+
+<form id="controls">
+    <span class="what">8K BASIC 4.0, off paper tape</span>
+    <button type="submit">Power on</button>
+    <span id="status" role="status"></span>
+</form>
+
+<main>
+    <canvas id="panel" tabindex="0" aria-label="The Altair 8800's front panel"></canvas>
+    <div class="teletype">
+        <div id="teletypes" role="tablist" aria-label="Teletypes" hidden></div>
+        <canvas id="paper" tabindex="0" aria-label="The console teletype's paper"></canvas>
+    </div>
+</main>
+
+<section class="help">
+    <h2>Operating it</h2>
+    <ul>
+        <li>The machine powers on stopped, WAIT lit, with MITS's bootstrap loader keyed into the bottom of memory and BASIC's tape in the reader. Press <b>RUN</b> (the bottom of STOP/RUN) and the tape loads in about a second.</li>
+        <li>Click the paper, then type. BASIC asks <code>MEMORY SIZE?</code>, <code>TERMINAL WIDTH?</code> and <code>WANT SIN-COS-TAN-ATN?</code>: Return for the first two takes all of memory and the full width, and <code>Y</code> keeps the functions.</li>
+        <li>The Model 33 has capitals only, which is all BASIC reads. Backspace sends RUBOUT, which BASIC echoes between backslashes as it deletes; <code>@</code> throws the line away.</li>
+        <li>The switches are clicked above or below their pivot. STOP halts the machine, SINGLE STEP runs one instruction, EXAMINE shows the byte at the address the sixteen toggles set and EXAMINE NEXT the one after it, and DEPOSIT writes the low eight toggles there. RESET is the 8080's reset line, which sends it to address 0 and leaves STOP/RUN as it was.</li>
+        <li>A15 to A8 are the sense switches too, which <code>INP(255)</code> reads.</li>
+    </ul>
+</section>
+
+<script type="module" src="page.js"></script>
+</body>
+</html>

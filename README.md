@@ -10,7 +10,7 @@ A terminal-driven emulator for several vintage computer systems, written in Rust
   monitor — and `-s altair680-panel` draws the 680b's front panel, its lamps on the live bus.
 - **MITS Altair 8800 (Intel 8080)**: no ROM: keys in MITS's bootstrap loader and loads Altair BASIC
   4.0 off its paper tape, as an operator at the front panel did — and `-s altair8800-panel` draws
-  that front panel, lamps, toggles, EXAMINE and DEPOSIT and all.
+  that front panel, lamps, toggles, EXAMINE and DEPOSIT and all. It runs in a web page too.
 
   On either Altair a `tty` token puts the console on a teletype's paper in a window of its own,
   the 703's (below), instead of the terminal.
@@ -178,13 +178,16 @@ only as a Ctrl-D exit path.
 ./target/debug/emu -s ray703 --fast-io                # skip the teletype's real 10 chars/sec
 ```
 
-The panel and the teletype also run in a web page, the same emulator built for WebAssembly
-(`web/`): REX off its disc or Tiny BASIC, the panel above the paper. It is static files, served
-over http:
+The panel and the teletypes also run in a web page, the same emulator built for WebAssembly
+(`web/`): REX off its disc or Tiny BASIC, the panel above the paper, and under REX a tab for each
+of the three teletypes on the multiplexer beside the console's. The Altair 8800 has a page of its
+own, its panel above its teletype, BASIC off the paper tape. They are static files, served over
+http:
 
 ```bash
 rustup target add wasm32-unknown-unknown              # once
-make -C rex && make -C test ray703-basic              # the software it offers
+make -C rex && make -C test ray703-basic              # the 703's software
+tools/fetch-roms.py                                   # the 8800's BASIC tape
 make -C web serve                                     # then open http://127.0.0.1:8703/
 ```
 
@@ -263,7 +266,7 @@ own diagnostics, math library, Conversational FORTRAN and SYM I assembler run of
 - `src/launcher/`: `--launch`, the terminal menu of what there is to run.
 - `src/debug/`: the debug port. `src/snapshot.rs`: save states.
 - `src/emulator.rs`, `src/bus.rs`, `src/rom.rs`, `src/main.rs`.
-- `web/`: the 703 built for WebAssembly, and the page that runs it.
+- `web/`: the 703 and the Altair 8800 built for WebAssembly, and the pages that run them.
 - `rex/`: REX, the 703's executive — its own project, with its own README.
 - `tests/`: the two integration tests. `test/`: the end-to-end regression scripts and the guest
   programs they drive, by machine — `test/6809/` and `test/703/` (the latter including a Tiny

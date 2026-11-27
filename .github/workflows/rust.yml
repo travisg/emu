@@ -26,8 +26,8 @@ jobs:
     - name: Clippy
       run: cargo clippy --all-targets -- -D warnings
 
-    # The library minus its host frontends, and the 703 module for a page
-    # (web/); this fails when something host-only reaches the machines.
+    # The library minus its host frontends, and the module for the web
+    # pages (web/); this fails when something host-only reaches the machines.
     - name: Clippy for wasm32
       run: |
         rustup target add wasm32-unknown-unknown
@@ -82,8 +82,10 @@ jobs:
     - name: REX
       run: make -C rex all modules reloc-check test
 
-    # The 703 as the web page drives it, under node: its guests are the
-    # Tiny BASIC and the REX platter the steps above built.
+    # The 703 and the Altair 8800 as the web pages drive them, under node:
+    # the 703's guests are the Tiny BASIC and the REX platter the steps
+    # above built, the 8800's a program the check assembles (its BASIC tape
+    # is third-party, so that part runs only locally).
     - name: Web page check
       run: make -C web check
 

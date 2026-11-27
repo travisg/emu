@@ -1,49 +1,21 @@
 <!doctype html>
 <!-- vim: ts=4:sw=4:expandtab:
      Copyright (c) 2026 Travis Geiselbrecht; MIT, see LICENSE.
-     The Raytheon 703 in a page: its front panel and console teletype over
-     the emulator built for wasm (web/src/lib.rs). page.js drives it. -->
+     The site's front door: one link to each machine's page. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Raytheon 703</title>
-<link rel="stylesheet" href="page.css">
+<title>Emulated machines</title>
+<link rel="stylesheet" href="ray703/page.css">
 </head>
 <body>
 <header>
-    <h1>Raytheon 703</h1>
-    <p class="sub">A 1967 sixteen-bit computer, emulated. Its front panel above, its teletype below.</p>
-</header>
-
-<form id="controls">
-    <label>Software
-        <select id="software">
-            <option value="rex">REX, the executive, off its disc</option>
-            <option value="basic">Tiny BASIC, loaded into core</option>
-        </select>
-    </label>
-    <label class="check"><input type="checkbox" id="fastio"> Fast I/O</label>
-    <button type="submit">Power on</button>
-    <span id="status" role="status"></span>
-</form>
-
-<main>
-    <canvas id="panel" tabindex="0" aria-label="The 703's front panel"></canvas>
-    <canvas id="paper" tabindex="0" aria-label="The console teletype's paper"></canvas>
-</main>
-
-<section class="help">
-    <h2>Operating it</h2>
+    <h1>Emulated machines</h1>
     <ul>
-        <li>The machine powers on halted, the HALT lens lit. Press <b>RUN</b> on the panel.</li>
-        <li>Click the paper, then type. The Model 33 has capitals only. Return is CARRIAGE RETURN, shift-Return is LINE FEED, and Backspace sends RUBOUT.</li>
-        <li>It types at ten characters a second, as the teletype did, and a key typed while the machine is busy can be lost, as it was. Fast I/O makes the teletype and the disc instant.</li>
-        <li>Under REX, <code>HELP</code> lists the commands, <code>DIR 0:</code> the programs on the disc, and <code>RUN BASIC</code> starts Tiny BASIC.</li>
-        <li>On the panel, HALT and SINGLE COMMAND stop and step the machine. The lamps are switches too: click one to key in that bit. The knob picks the register in the lower row: click it, or with the panel focused press the left and right arrows. Keys 1 to 4 flip the SENSE switches.</li>
+        <li><a href="ray703/">The Raytheon 703</a>, a 1967 sixteen-bit computer, running REX or Tiny BASIC.</li>
+        <li><a href="altair8800/">The MITS Altair 8800</a>, running Altair BASIC off its paper tape.</li>
     </ul>
-</section>
-
-<script type="module" src="page.js"></script>
+</header>
 </body>
 </html>
