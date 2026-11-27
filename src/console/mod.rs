@@ -36,7 +36,6 @@ pub mod altair;
 pub(crate) mod lamps;
 pub mod panel680;
 pub mod panel703;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod panel8800;
 pub mod paper;
 pub mod paper_view;

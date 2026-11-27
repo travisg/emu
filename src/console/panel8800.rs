@@ -30,17 +30,16 @@
 //! bus's external clear, the RAM has no protect circuit (PROT stays
 //! dark), and the AUX switches were wired to nothing at the factory.
 //! Keystrokes into this window go nowhere -- the console is the terminal.
+//!
+//! [`PanelView8800`] is the panel on no particular host, drawing on any
+//! [`Surface`]: an SDL window's canvas, or the web page's framebuffer.
 
 use super::lamps::{self, duties};
+use super::surface::{Color, Surface};
 use super::{
     AltairPanel, AltairPanelDisplay, LampSnapshot, PanelCommand, PanelControl, ALTAIR_ADDRESS, ALTAIR_DATA,
     ALTAIR_STATUS,
 };
-use sdl2::mouse::MouseButton;
-use super::surface::Color;
-use sdl2::rect::Rect;
-use sdl2::render::Canvas;
-use sdl2::video::Window;
 
 const WINDOW_W: u32 = 1140;
 const WINDOW_H: u32 = 430;
@@ -110,8 +109,9 @@ fn led_color(duty: f32) -> Color {
     Color::RGB(mix(LED_OFF.r, LED_ON.r), mix(LED_OFF.g, LED_ON.g), mix(LED_OFF.b, LED_ON.b))
 }
 
-pub(crate) struct PanelWindow8800 {
-    id: u32,
+/// The panel: its lamps, its toggles and its hit-testing, on no
+/// particular host.
+pub struct PanelView8800 {
     panel: AltairPanel,
     /// Commands to the run loop. Send errors are ignored: a dead CPU
     /// thread means shutdown is already in flight.
@@ -119,42 +119,41 @@ pub(crate) struct PanelWindow8800 {
     prev: [LampSnapshot; 3],
     /// Frames left to draw each command switch pressed, and which way.
     pressed: [(u8, bool); 8],
-    canvas: Canvas<Window>,
 }
 
-impl PanelWindow8800 {
-    pub(crate) fn new(video: &sdl2::VideoSubsystem, title: &str, display: AltairPanelDisplay) -> Result<Self, String> {
+impl PanelView8800 {
+    /// The view's size in pixels.
+    pub const WIDTH: u32 = WINDOW_W;
+    pub const HEIGHT: u32 = WINDOW_H;
+
+    pub fn new(display: AltairPanelDisplay) -> Self {
         let AltairPanelDisplay { panel, control } = display;
-        let window = video.window(title, WINDOW_W, WINDOW_H).position_centered().build().map_err(|e| e.to_string())?;
-        let id = window.id();
-        let canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
         let prev = [ALTAIR_ADDRESS, ALTAIR_DATA, ALTAIR_STATUS].map(|src| panel.snapshot(src));
-        Ok(PanelWindow8800 { id, panel, control, prev, pressed: [(0, false); 8], canvas })
+        PanelView8800 { panel, control, prev, pressed: [(0, false); 8] }
     }
 
-    pub(crate) fn window_id(&self) -> u32 {
-        self.id
-    }
-
-    fn led(&mut self, cx: i32, cy: i32, duty: f32) {
-        lamps::circle(&mut self.canvas, cx, cy, LED_R + 3, LED_BEZEL);
-        lamps::circle(&mut self.canvas, cx, cy, LED_R, led_color(duty));
+    fn led(s: &mut dyn Surface, cx: i32, cy: i32, duty: f32) {
+        lamps::circle(s, cx, cy, LED_R + 3, LED_BEZEL);
+        lamps::circle(s, cx, cy, LED_R, led_color(duty));
     }
 
     /// A bat-handle toggle, its lever up, down or (0) level with its nut.
-    fn toggle(&mut self, cx: i32, cy: i32, way: i32) {
-        lamps::circle(&mut self.canvas, cx, cy, 9, CHROME_DARK);
-        lamps::circle(&mut self.canvas, cx, cy, 6, CHROME);
-        self.canvas.set_draw_color(CHROME);
+    fn toggle(s: &mut dyn Surface, cx: i32, cy: i32, way: i32) {
+        lamps::circle(s, cx, cy, 9, CHROME_DARK);
+        lamps::circle(s, cx, cy, 6, CHROME);
         let half = TOGGLE_W as i32 / 2;
         let (top, len) = match way {
             1 => (cy - TOGGLE_LEVER, TOGGLE_LEVER),
             -1 => (cy, TOGGLE_LEVER),
             _ => (cy - 4, 8),
         };
-        let _ = self.canvas.fill_rect(Rect::new(cx - half, top, TOGGLE_W, len as u32));
-        let tip = if way == 1 { cy - TOGGLE_LEVER } else { cy + if way == -1 { TOGGLE_LEVER } else { 0 } };
-        lamps::circle(&mut self.canvas, cx, tip, half + 1, CHROME);
+        s.fill_rect(cx - half, top, TOGGLE_W, len as u32, CHROME);
+        let tip = match way {
+            1 => cy - TOGGLE_LEVER,
+            -1 => cy + TOGGLE_LEVER,
+            _ => cy,
+        };
+        lamps::circle(s, cx, tip, half + 1, CHROME);
     }
 
     fn update_duties(&mut self) -> [[f32; 16]; 3] {
@@ -167,60 +166,58 @@ impl PanelWindow8800 {
         out
     }
 
-    pub(crate) fn render(&mut self) {
+    pub fn render(&mut self, s: &mut dyn Surface) {
         let [address, data, status] = self.update_duties();
         let halted = self.panel.halted();
-        self.canvas.set_draw_color(PANEL_BG);
-        self.canvas.clear();
-        self.canvas.set_draw_color(PANEL_LOWER);
+        s.clear(PANEL_BG);
         let lower = ADDRESS_Y + 26;
-        let _ = self.canvas.fill_rect(Rect::new(0, lower, WINDOW_W, WINDOW_H - lower as u32));
+        s.fill_rect(0, lower, WINDOW_W, WINDOW_H - lower as u32, PANEL_LOWER);
 
-        lamps::text(&mut self.canvas, 40, TITLE_Y, 3, "MITS ALTAIR 8800", PANEL_INK);
-        lamps::text(&mut self.canvas, 360, TITLE_Y + 6, 2, "COMPUTER", PANEL_INK);
+        lamps::text(s, 40, TITLE_Y, 3, "MITS ALTAIR 8800", PANEL_INK);
+        lamps::text(s, 360, TITLE_Y + 6, 2, "COMPUTER", PANEL_INK);
 
         // the status row and D7-D0 over the low eight columns
         for (i, name) in STATUS_NAMES.iter().enumerate() {
             let x = status_x(i as i32);
-            lamps::text_centered(&mut self.canvas, x, STATUS_Y - 28, 1, name, PANEL_INK);
-            self.led(x, STATUS_Y, status[i]);
+            lamps::text_centered(s, x, STATUS_Y - 28, 1, name, PANEL_INK);
+            Self::led(s, x, STATUS_Y, status[i]);
         }
-        lamps::text_centered(&mut self.canvas, (col_x(8) + col_x(15)) / 2, STATUS_Y - 44, 2, "DATA", PANEL_INK);
+        lamps::text_centered(s, (col_x(8) + col_x(15)) / 2, STATUS_Y - 44, 2, "DATA", PANEL_INK);
         for i in 8..16 {
             let x = col_x(i);
-            lamps::text_centered(&mut self.canvas, x, STATUS_Y - 24, 1, &format!("D{}", 15 - i), PANEL_INK);
-            self.led(x, STATUS_Y, data[i as usize]);
+            lamps::text_centered(s, x, STATUS_Y - 24, 1, &format!("D{}", 15 - i), PANEL_INK);
+            Self::led(s, x, STATUS_Y, data[i as usize]);
         }
 
         // WAIT and HLDA, then the address lamps
         for (i, (name, lit)) in [("WAIT", halted), ("HLDA", false)].into_iter().enumerate() {
             let x = status_x(i as i32);
-            lamps::text_centered(&mut self.canvas, x, ADDRESS_Y - 28, 1, name, PANEL_INK);
-            self.led(x, ADDRESS_Y, if lit { 1.0 } else { 0.0 });
+            lamps::text_centered(s, x, ADDRESS_Y - 28, 1, name, PANEL_INK);
+            Self::led(s, x, ADDRESS_Y, if lit { 1.0 } else { 0.0 });
         }
-        lamps::text_centered(&mut self.canvas, (col_x(0) + col_x(15)) / 2, ADDRESS_Y - 44, 2, "ADDRESS", PANEL_INK);
+        lamps::text_centered(s, (col_x(0) + col_x(15)) / 2, ADDRESS_Y - 44, 2, "ADDRESS", PANEL_INK);
         for i in 0..16 {
             let x = col_x(i);
-            lamps::text_centered(&mut self.canvas, x, ADDRESS_Y - 24, 1, &format!("A{}", 15 - i), PANEL_INK);
-            self.led(x, ADDRESS_Y, address[i as usize]);
+            lamps::text_centered(s, x, ADDRESS_Y - 24, 1, &format!("A{}", 15 - i), PANEL_INK);
+            Self::led(s, x, ADDRESS_Y, address[i as usize]);
         }
 
         // the toggles
         let switches = self.panel.switches() as u16;
-        lamps::text_centered(&mut self.canvas, (col_x(0) + col_x(7)) / 2, lower + 4, 1, "SENSE SW", LOWER_INK);
-        lamps::text_centered(&mut self.canvas, (col_x(8) + col_x(15)) / 2, lower + 4, 1, "DATA", LOWER_INK);
+        lamps::text_centered(s, (col_x(0) + col_x(7)) / 2, lower + 4, 1, "SENSE SW", LOWER_INK);
+        lamps::text_centered(s, (col_x(8) + col_x(15)) / 2, lower + 4, 1, "DATA", LOWER_INK);
         for i in 0..16 {
             let x = col_x(i);
-            lamps::text_centered(&mut self.canvas, x, lower + 16, 2, &format!("{}", 15 - i), LOWER_INK);
+            lamps::text_centered(s, x, lower + 16, 2, &format!("{}", 15 - i), LOWER_INK);
             let up = switches >> (15 - i) & 1 != 0;
-            self.toggle(x, TOGGLE_Y, if up { 1 } else { -1 });
+            Self::toggle(s, x, TOGGLE_Y, if up { 1 } else { -1 });
         }
 
         // the command switches
         for (i, (above, below, _, _)) in COMMANDS.iter().enumerate() {
             let x = command_x(i as i32);
-            lamps::text_centered(&mut self.canvas, x, COMMAND_Y - 40, 1, above, LOWER_INK);
-            lamps::text_centered(&mut self.canvas, x, COMMAND_Y + 34, 1, below, LOWER_INK);
+            lamps::text_centered(s, x, COMMAND_Y - 40, 1, above, LOWER_INK);
+            lamps::text_centered(s, x, COMMAND_Y + 34, 1, below, LOWER_INK);
             let (frames, up) = self.pressed[i];
             let way = if frames == 0 {
                 0
@@ -229,16 +226,13 @@ impl PanelWindow8800 {
             } else {
                 -1
             };
-            self.toggle(x, COMMAND_Y, way);
+            Self::toggle(s, x, COMMAND_Y, way);
             self.pressed[i].0 = frames.saturating_sub(1);
         }
-        self.canvas.present();
     }
 
-    pub(crate) fn click(&mut self, x: i32, y: i32, button: MouseButton) {
-        if button != MouseButton::Left {
-            return;
-        }
+    /// A click at (x, y) in the view's pixels.
+    pub fn click(&mut self, x: i32, y: i32) {
         for i in 0..16 {
             if (x - col_x(i)).abs() <= COL_PITCH / 2 - 4 && (y - TOGGLE_Y).abs() <= TOGGLE_LEVER + 8 {
                 self.panel.toggle_switch(15 - i as u8);
@@ -257,6 +251,47 @@ impl PanelWindow8800 {
         }
     }
 }
+
+/// The panel in an SDL window of its own.
+#[cfg(not(target_arch = "wasm32"))]
+mod window {
+    use super::{AltairPanelDisplay, PanelView8800, WINDOW_H, WINDOW_W};
+    use sdl2::mouse::MouseButton;
+    use sdl2::render::Canvas;
+    use sdl2::video::Window;
+
+    pub(crate) struct PanelWindow8800 {
+        id: u32,
+        view: PanelView8800,
+        canvas: Canvas<Window>,
+    }
+
+    impl PanelWindow8800 {
+        pub(crate) fn new(video: &sdl2::VideoSubsystem, title: &str, display: AltairPanelDisplay) -> Result<Self, String> {
+            let window = video.window(title, WINDOW_W, WINDOW_H).position_centered().build().map_err(|e| e.to_string())?;
+            let canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
+            Ok(PanelWindow8800 { id: canvas.window().id(), view: PanelView8800::new(display), canvas })
+        }
+
+        pub(crate) fn window_id(&self) -> u32 {
+            self.id
+        }
+
+        pub(crate) fn render(&mut self) {
+            self.view.render(&mut self.canvas);
+            self.canvas.present();
+        }
+
+        pub(crate) fn click(&mut self, x: i32, y: i32, button: MouseButton) {
+            if button == MouseButton::Left {
+                self.view.click(x, y);
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use window::PanelWindow8800;
 
 #[cfg(test)]
 mod tests {
